@@ -4,6 +4,7 @@
 # PCIe Screamer with FT601 TX lanes duplicated to PCIe RX lanes for sniffing FT601 --> Host comm
 
 from migen import *
+from migen.genlib.misc import WaitTimer
 
 from litex.build.generic_platform import *
 from litex.build.xilinx import XilinxPlatform
@@ -142,6 +143,23 @@ class USB3Sniffer(SoCMini):
         self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 1024, clock_domain="sys",
             csr_csv="analyzer.csv")
         self.add_csr("analyzer")
+
+        # Led (Set Led0 if continuous K28.5 are detected) ------------------------------------------
+        def K(x, y):
+            return (y << 5) | x
+        k28_5_timer = WaitTimer(int(250e6*1e-1))
+        k28_5_timer = ClockDomainsRenamer("rx")(k28_5_timer)
+        self.submodules += k28_5_timer
+        self.comb += [
+            k28_5_timer.wait.eq(1),
+            If(gtp.source.ctrl[0] & (gtp.source.data[:8] == K(28, 5)),
+                k28_5_timer.wait.eq(0)
+            ),
+            If(gtp.source.ctrl[1] & (gtp.source.data[8:] == K(28, 5)),
+                k28_5_timer.wait.eq(0)
+            ),
+            platform.request("user_led", 0).eq(~k28_5_timer.done)
+        ]
 
 # Build --------------------------------------------------------------------------------------------
 
