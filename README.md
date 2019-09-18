@@ -1,6 +1,6 @@
-# High Speed Transceiver PIPE Wrapper
+# High Speed Transceiver PIPE Wrapper Experiments
 
-This repository contains a library which adapts [the High Speed Transceiver (SERDES) parts](https://en.wikipedia.org/wiki/Multi-gigabit_transceiver) found in popular FPGAs to a rough approximation of [the PIPE standard](https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/phy-interface-pci-express-sata-usb30-architectures-3.1.pdf).
+The aim of this project is to experiment with [High Speed Transceivers (SERDES)](https://en.wikipedia.org/wiki/Multi-gigabit_transceiver) of popular FPGAs to create a [USB3.0 PIPE interface](https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/phy-interface-pci-express-sata-usb30-architectures-3.1.pdf).
 
 ## Targets
 
@@ -9,7 +9,7 @@ While we hope this wrapper will eventually support multiple protocols through th
 It currently targets the following FPGA parts;
  - [ ] Xilinx Kintex 7
  - [ ] Lattice ECP5-5G
- 
+
 It is hoped to eventually expand the support beyond these initial parts to;
  - [ ] Xilinx Artix 7
  - [ ] Xilinx Ultrascale/Ultrascale+ line
@@ -23,7 +23,7 @@ One of the following boards;
  - [KONDOR AX](https://www.latticesemi.com/en/Products/DevelopmentBoardsAndKits/KONDORAX)
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
 
-paired with 
+paired with
  - [3-Port USB 3 FMC Module from HiTechGlobal](https://hitechglobal.us/index.php?route=product/product&path=18_81&product_id=233).
 
 These boards have been previously shown to work with [the Daisho Core](https://github.com/enjoy-digital/daisho) and the [TI TUSB1310A - SuperSpeed 5 Gbps USB 3.0 Transceiver with PIPE and ULPI Interfaces](http://www.ti.com/product/TUSB1310A).
@@ -33,7 +33,7 @@ These boards have been previously shown to work with [the Daisho Core](https://g
 This project targets;
   - [ ] Xilinx Vivado for Kintex 7 support
   - [ ] Yosys + nextpnr for ECP5 support
- 
+
 There will also be a demo showing how to use a harness to expose the PIPE interface to the SymbiFlow Yosys + VPR flow.
 
 
