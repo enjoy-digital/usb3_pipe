@@ -15,7 +15,7 @@ from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.uart import UARTWishboneBridge
 
-from liteiclink.transceiver.gtp_7series import GTPQuadPLL, GTP
+from gtp_7series import GTPQuadPLL, GTP
 
 from litescope import LiteScopeAnalyzer
 
@@ -128,6 +128,33 @@ class USB3Sniffer(SoCMini):
             i_RXELECIDLEMODE = 0b00,
             o_RXELECIDLE     = rxelecidle)
         self.comb += platform.request("user_gpio", 0).eq(rxelecidle)
+
+        # LFPS Polling generation ------------------------------------------------------------------
+        # 5Gbps linerate / 4ns per words
+        # 25MHz burst can be generated with 5 all ones / 5 all zeroes cycles.
+        txelecidle = Signal()
+        lfps_polling_pattern = Signal(20)
+        lfps_polling_count   = Signal(4)
+        self.sync.tx += [
+            lfps_polling_count.eq(lfps_polling_count + 1),
+            If(lfps_polling_count == 4,
+                lfps_polling_count.eq(0),
+                lfps_polling_pattern.eq(~lfps_polling_pattern),
+            )
+        ]
+        lfps_burst_timer  = WaitTimer(int(1e-6*sys_clk_freq))
+        lfps_repeat_timer = WaitTimer(int(10e-6*sys_clk_freq))
+        self.submodules += lfps_burst_timer, lfps_repeat_timer
+        self.comb += [
+            lfps_burst_timer.wait.eq(~lfps_repeat_timer.done),
+            lfps_repeat_timer.wait.eq(~lfps_repeat_timer.done),
+        ]
+
+        self.comb += gtp.tx_produce_pattern.eq(1)
+        self.comb += gtp.tx_pattern.eq(lfps_polling_pattern)
+        self.comb += txelecidle.eq(lfps_burst_timer.done)
+        gtp.gtp_params.update(i_TXELECIDLE=txelecidle) # FIXME: check TX OOB settings
+        self.comb += platform.request("user_gpio", 1).eq(txelecidle)
 
         # Analyzer ---------------------------------------------------------------------------------
         analyzer_signals = [rxelecidle]
