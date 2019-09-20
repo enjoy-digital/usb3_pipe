@@ -4,7 +4,6 @@
 # PCIe Screamer with PCIe Riser connected to a Host
 
 from migen import *
-from migen.genlib.misc import WaitTimer
 
 from litex.build.generic_platform import *
 from litex.build.xilinx import XilinxPlatform
@@ -17,7 +16,7 @@ from litex.soc.cores.uart import UARTWishboneBridge
 
 from gtp_7series import GTPQuadPLL, GTP
 
-from usb3_pipe.lfps import LFPSReceiver
+from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
 
 from litescope import LiteScopeAnalyzer
 
@@ -78,9 +77,9 @@ class _CRG(Module):
         pll.create_clkout(self.cd_sys, sys_clk_freq)
         pll.create_clkout(self.cd_clk125, 125e6)
 
-# USB3Sniffer --------------------------------------------------------------------------------------
+# USB3LFPS -----------------------------------------------------------------------------------------
 
-class USB3Sniffer(SoCMini):
+class USB3LFPS(SoCMini):
     def __init__(self, platform):
         sys_clk_freq = int(100e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3LFPS", ident_version=True)
@@ -121,55 +120,47 @@ class USB3Sniffer(SoCMini):
             self.crg.cd_sys.clk,
             gtp.cd_rx.clk)
 
-        # Redirect RXELECIDLE to GPIO (for scope observation) and Analyzer -------------------------
+        # Override GTP parameters/signals for LFPS -------------------------------------------------
+        txelecidle = Signal()
         rxelecidle = Signal()
         gtp.gtp_params.update(
-            p_PCS_RSVD_ATTR  = 0x000000000100, # bit 8 enable OOB detection
+            p_PCS_RSVD_ATTR  = 0x000000000100, # bit 8 enable OOB
             p_RXOOB_CLK_CFG  = "PMA",
             p_RXOOB_CFG      = 0b0000110,
             i_RXELECIDLEMODE = 0b00,
-            o_RXELECIDLE     = rxelecidle)
+            o_RXELECIDLE     = rxelecidle,
+            i_TXELECIDLE     = txelecidle)
+
+        # Redirect Elec Idle signals to GPIOs --s----------------------------------------------------
         self.comb += platform.request("user_gpio", 0).eq(rxelecidle)
+        self.comb += platform.request("user_gpio", 1).eq(txelecidle)
 
         # LFPS Polling Receive ---------------------------------------------------------------------
-        lfps_receiver = LFPSReceiver(sys_clk_freq)
+        lfps_receiver = LFPSReceiver(sys_clk_freq=sys_clk_freq)
         self.submodules += lfps_receiver
         self.comb += lfps_receiver.idle.eq(rxelecidle)
 
         # LFPS Polling Transmit --------------------------------------------------------------------
-        # 5Gbps linerate / 4ns per words
-        # 25MHz burst can be generated with 5 all ones / 5 all zeroes cycles.
-        txelecidle = Signal()
-        lfps_polling_pattern = Signal(20)
-        lfps_polling_count   = Signal(4)
-        self.sync.tx += [
-            lfps_polling_count.eq(lfps_polling_count + 1),
-            If(lfps_polling_count == 4,
-                lfps_polling_count.eq(0),
-                lfps_polling_pattern.eq(~lfps_polling_pattern),
-            )
-        ]
-        lfps_burst_timer  = WaitTimer(int(1e-6*sys_clk_freq))
-        lfps_repeat_timer = WaitTimer(int(10e-6*sys_clk_freq))
-        self.submodules += lfps_burst_timer, lfps_repeat_timer
+        lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
+        self.submodules += lfps_transmitter
         self.comb += [
-            lfps_burst_timer.wait.eq(~lfps_repeat_timer.done),
-            lfps_repeat_timer.wait.eq(~lfps_repeat_timer.done),
+            txelecidle.eq(lfps_transmitter.idle),
+            gtp.tx_produce_pattern.eq(~lfps_transmitter.idle),
+            gtp.tx_pattern.eq(lfps_transmitter.pattern)
         ]
-
-        self.comb += gtp.tx_produce_pattern.eq(1)
-        self.comb += gtp.tx_pattern.eq(lfps_polling_pattern)
-        self.comb += txelecidle.eq(lfps_burst_timer.done)
-        gtp.gtp_params.update(i_TXELECIDLE=txelecidle) # FIXME: check TX OOB settings
-        self.comb += platform.request("user_gpio", 1).eq(txelecidle)
 
         # Analyzer ---------------------------------------------------------------------------------
         analyzer_signals = [
             rxelecidle,
+            txelecidle,
+
             lfps_receiver.polling,
             lfps_receiver.count,
             lfps_receiver.found,
             lfps_receiver.fsm,
+
+            lfps_transmitter.idle,
+            lfps_transmitter.pattern
         ]
         self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="sys",
             csr_csv="analyzer.csv")
@@ -179,7 +170,7 @@ class USB3Sniffer(SoCMini):
 
 def main():
     platform = Platform()
-    soc = USB3Sniffer(platform)
+    soc = USB3LFPS(platform)
     builder = Builder(soc, output_dir="build", csr_csv="csr.csv")
     vns = builder.build()
 

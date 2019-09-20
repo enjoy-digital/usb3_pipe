@@ -2,10 +2,12 @@ from math import ceil
 
 from migen import *
 from migen.genlib.cdc import MultiReg
+from migen.genlib.misc import WaitTimer
 
 # Constants/Helpers --------------------------------------------------------------------------------
 
-lfps_period_range = {20e-9, 100e-9}
+lfps_clk_freq_min = 1/100e-9
+lfps_clk_freq_max = 1/20e-9
 
 class LFPSTiming:
     def __init__(self, t_typ=None, t_min=None, t_max=None):
@@ -55,8 +57,8 @@ U3WakeupLFPS      = LFPS(burst=U3WakeupLFPSBurst)
 
 class LFPSReceiver(Module):
     def __init__(self, sys_clk_freq):
-        self.idle    = Signal()
-        self.polling = Signal()
+        self.idle    = Signal() # i
+        self.polling = Signal() # o
 
         # # #
 
@@ -95,3 +97,38 @@ class LFPSReceiver(Module):
                 NextState("TBURST")
             )
         )
+
+# LFPS Transmitter ---------------------------------------------------------------------------------
+
+class LFPSTransmitter(Module):
+    def __init__(self, sys_clk_freq, lfps_clk_freq):
+        self.idle            = Signal()   # o
+        self.pattern         = Signal(20) # o
+
+        # # #
+
+        # Burst clock generation -------------------------------------------------------------------
+        assert lfps_clk_freq >= lfps_clk_freq_min
+        assert lfps_clk_freq <= lfps_clk_freq_max
+        clk = Signal()
+        clk_timer = WaitTimer(ceil(sys_clk_freq/(2*lfps_clk_freq)) - 1)
+        self.submodules += clk_timer
+        self.comb += clk_timer.wait.eq(~clk_timer.done)
+        self.sync += If(clk_timer.done, clk.eq(~clk))
+
+        # Polling LFPS generation ------------------------------------------------------------------
+        burst_cycles  = ns_to_cycles(sys_clk_freq, PollingLFPS.burst.t_typ)
+        repeat_cycles = ns_to_cycles(sys_clk_freq, PollingLFPS.repeat.t_typ)
+        burst_timer   = WaitTimer(burst_cycles)
+        repeat_timer  = WaitTimer(repeat_cycles)
+        self.submodules += burst_timer, repeat_timer
+        self.comb += [
+            burst_timer.wait.eq(~repeat_timer.done),
+            repeat_timer.wait.eq(~repeat_timer.done),
+        ]
+
+        # Output -----------------------------------------------------------------------------------
+        self.comb += [
+            self.idle.eq(burst_timer.done),
+            self.pattern.eq(Replicate(clk, 20)),
+        ]
