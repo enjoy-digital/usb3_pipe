@@ -20,9 +20,9 @@ from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
 
 from litescope import LiteScopeAnalyzer
 
-# IOs ----------------------------------------------------------------------------------------------
+# PCIe Screamer IOs ----------------------------------------------------------------------------------------------
 
-_io = [
+_io_pcie_screamer = [
     ("clk100", 0, Pins("R4"), IOStandard("LVCMOS33")),
 
     ("user_led", 0, Pins("AB1"), IOStandard("LVCMOS33")),
@@ -51,11 +51,44 @@ _io = [
     ),
 ]
 
-# Platform -----------------------------------------------------------------------------------------
+# PCIe Screamer Platform -----------------------------------------------------------------------------------------
 
-class Platform(XilinxPlatform):
+class PCIeScreamerPlatform(XilinxPlatform):
     def __init__(self):
-        XilinxPlatform.__init__(self, "xc7a35t-fgg484-2", _io, toolchain="vivado")
+        XilinxPlatform.__init__(self, "xc7a35t-fgg484-2", _io_pcie_screamer, toolchain="vivado")
+
+# USBSniffer IOs ----------------------------------------------------------------------------------------------
+
+_io_usb_sniffer = [
+    ("clk100", 0, Pins("J19"), IOStandard("LVCMOS33")),
+
+    ("user_gpio", 0, Pins("U21"), IOStandard("LVCMOS33")),
+    ("user_gpio", 1, Pins("T21"), IOStandard("LVCMOS33")),
+
+    ("serial", 0,
+        Subsignal("tx", Pins("J16")),
+        Subsignal("rx", Pins("H13")),
+        IOStandard("LVCMOS33"),
+    ),
+
+    ("switch", 0, Pins("AA3"), IOStandard("LVCMOS33")),
+
+    ("pcie_tx", 0,
+        Subsignal("p", Pins("B6")),
+        Subsignal("n", Pins("A6")),
+    ),
+
+    ("pcie_rx", 0,
+        Subsignal("p", Pins("B10")),
+        Subsignal("n", Pins("A10")),
+    ),
+]
+
+# USBSniffer Platform -----------------------------------------------------------------------------------------
+
+class USBSnifferPlatform(XilinxPlatform):
+    def __init__(self):
+        XilinxPlatform.__init__(self, "xc7a50t-fgg484-2", _io_usb_sniffer, toolchain="vivado")
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -120,6 +153,9 @@ class USB3LFPS(SoCMini):
             self.crg.cd_sys.clk,
             gtp.cd_rx.clk)
 
+        if isinstance(platform, PCIeScreamerPlatform):
+            self.comb += platform.request("switch").eq(0)
+
         # Override GTP parameters/signals for LFPS -------------------------------------------------
         txelecidle = Signal()
         rxelecidle = Signal()
@@ -169,7 +205,8 @@ class USB3LFPS(SoCMini):
 # Build --------------------------------------------------------------------------------------------
 
 def main():
-    platform = Platform()
+    platform = PCIeScreamerPlatform()
+    #platform = USBSnifferPlatform()
     soc = USB3LFPS(platform)
     builder = Builder(soc, output_dir="build", csr_csv="csr.csv")
     vns = builder.build()
