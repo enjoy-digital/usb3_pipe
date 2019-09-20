@@ -17,6 +17,8 @@ from litex.soc.cores.uart import UARTWishboneBridge
 
 from gtp_7series import GTPQuadPLL, GTP
 
+from usb3_pipe.lfps import LFPSReceiver
+
 from litescope import LiteScopeAnalyzer
 
 # IOs ----------------------------------------------------------------------------------------------
@@ -129,7 +131,12 @@ class USB3Sniffer(SoCMini):
             o_RXELECIDLE     = rxelecidle)
         self.comb += platform.request("user_gpio", 0).eq(rxelecidle)
 
-        # LFPS Polling generation ------------------------------------------------------------------
+        # LFPS Polling Receive ---------------------------------------------------------------------
+        lfps_receiver = LFPSReceiver(sys_clk_freq)
+        self.submodules += lfps_receiver
+        self.comb += lfps_receiver.idle.eq(rxelecidle)
+
+        # LFPS Polling Transmit --------------------------------------------------------------------
         # 5Gbps linerate / 4ns per words
         # 25MHz burst can be generated with 5 all ones / 5 all zeroes cycles.
         txelecidle = Signal()
@@ -157,7 +164,13 @@ class USB3Sniffer(SoCMini):
         self.comb += platform.request("user_gpio", 1).eq(txelecidle)
 
         # Analyzer ---------------------------------------------------------------------------------
-        analyzer_signals = [rxelecidle]
+        analyzer_signals = [
+            rxelecidle,
+            lfps_receiver.polling,
+            lfps_receiver.count,
+            lfps_receiver.found,
+            lfps_receiver.fsm,
+        ]
         self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="sys",
             csr_csv="analyzer.csv")
         self.add_csr("analyzer")

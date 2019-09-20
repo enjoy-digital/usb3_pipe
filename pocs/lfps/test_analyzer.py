@@ -32,8 +32,8 @@ while (wb.regs.gtp_rx_ready.read() == 0):
 # Analyzer dump ------------------------------------------------------------------------------------
 analyzer = LiteScopeAnalyzerDriver(wb.regs, "analyzer", debug=True)
 analyzer.configure_subsampler(1)
-analyzer.configure_trigger(cond={"rxelecidle": 0})
-analyzer.run(offset=32, length=4096)
+analyzer.configure_trigger(cond={"lfps_receiver_polling": 1})
+analyzer.run(offset=32, length=256)
 analyzer.wait_done()
 analyzer.upload()
 analyzer.save("analyzer.vcd")
