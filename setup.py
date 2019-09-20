@@ -13,7 +13,7 @@ setup(
     name="ubs3_pipe",
     version="0.1.dev",
     description="Experiments with USB3.0 PIPE interface and FPGAs",
-    long_description=open("README").read(),
+    long_description=open("README.md").read(),
     author="Florent Kermarrec",
     author_email="florent@enjoy-digital.fr",
     url="http://enjoy-digital.fr",
