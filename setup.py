@@ -14,6 +14,7 @@ setup(
     version="0.1.dev",
     description="Experiments with USB3.0 PIPE interface and FPGAs",
     long_description=open("README.md").read(),
+    long_description_content_type='text/markdown',    
     author="Florent Kermarrec",
     author_email="florent@enjoy-digital.fr",
     url="http://enjoy-digital.fr",
