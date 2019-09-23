@@ -104,6 +104,8 @@ class USB3Sniffer(SoCMini):
             rx_buffer_enable=True)
         gtp.add_stream_endpoints()
         gtp.add_controls()
+        gtp._tx_enable.storage.reset = 1 # Enabled by default
+        gtp._rx_enable.storage.reset = 1 # Enabled by default
         self.add_csr("gtp")
         gtp.cd_tx.clk.attr.add("keep")
         gtp.cd_rx.clk.attr.add("keep")

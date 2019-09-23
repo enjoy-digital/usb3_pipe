@@ -142,6 +142,8 @@ class USB3LFPS(SoCMini):
         gtp.add_stream_endpoints()
         gtp.add_controls()
         self.add_csr("gtp")
+        gtp._tx_enable.storage.reset = 1 # Enabled by default
+        gtp._rx_enable.storage.reset = 1 # Enabled by default
         gtp.cd_tx.clk.attr.add("keep")
         gtp.cd_rx.clk.attr.add("keep")
         platform.add_period_constraint(gtp.cd_tx.clk, 1e9/gtp.tx_clk_freq)
@@ -153,7 +155,7 @@ class USB3LFPS(SoCMini):
             self.crg.cd_sys.clk,
             gtp.cd_rx.clk)
 
-        if isinstance(platform, PCIeScreamerPlatform):
+        if isinstance(platform, USBSnifferPlatform):
             self.comb += platform.request("switch").eq(0)
 
         # Override GTP parameters/signals for LFPS -------------------------------------------------
