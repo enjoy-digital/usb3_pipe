@@ -15,7 +15,8 @@ from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.uart import UARTWishboneBridge
 
-from liteiclink.transceiver.gtp_7series import GTPQuadPLL, GTP
+from usb3_pipe.gtp_7series import GTPQuadPLL, GTP
+from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
 
 from litescope import LiteScopeAnalyzer
 

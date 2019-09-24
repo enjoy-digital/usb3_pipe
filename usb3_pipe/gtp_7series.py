@@ -2,6 +2,8 @@
 # This file is Copyright (c) 2017 Sebastien Bourdeauducq <sb@m-labs.hk>
 # License: BSD
 
+# FIXME: Extracted from LiteICLink, re-integrate when changes required for USB3 will be known.
+
 from migen import *
 from migen.genlib.cdc import MultiReg, PulseSynchronizer
 from migen.genlib.resetsync import AsyncResetSynchronizer
