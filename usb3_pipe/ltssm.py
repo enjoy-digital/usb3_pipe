@@ -2,6 +2,92 @@ from migen import *
 
 # Note: Currently just FSM skeletons with states/transitions.
 
+# Link Training and Status State Machine -----------------------------------------------------------
+
+@ResetInserter()
+class LTSSM(FSM):
+    """Link Training and Status State Machine (section 7.5)"""
+    def __init__(self):
+        # FSM --------------------------------------------------------------------------------------
+        FSM.__init__(self, reset_state="SS-INACTIVE")
+
+        # SSInactive State -------------------------------------------------------------------------
+        self.act("SS-INACTIVE",
+            NextState("RX-DETECT"), # Warm reset, far-end termination absent.
+        )
+
+        # SSDisabled State -------------------------------------------------------------------------
+        self.act("SS-DISABLED",
+            NextState("RX-DETECT"), # Directed, PowerOn reset, USB2 bus reset
+        )
+
+        # RXDetect State ---------------------------------------------------------------------------
+        self.act("RX-DETECT",
+            NextState("SS-DISABLED"), # RXDetect events over limit (Dev) or directed (DS).
+        )
+
+        # Polling State ----------------------------------------------------------------------------
+        self.act("POLLING",
+            NextState("U0"),               # Idle symbol handshake.
+            NextState("HOT-RESET"),        # Directed.
+            NextState("LOOPBACK"),         # Directed.
+            NextState("COMPLIANCE-MODE"),  # First LFPS timeout.
+            NextState("SSDisabled"),       # Timeout, directed
+        )
+
+        # U0 State ---------------------------------------------------------------------------------
+        self.act("U0",
+            NextState("U1"),       # LGO_U1
+            NextState("U2"),       # LGO_U2
+            NextState("U3"),       # LGO_U3
+            NextState("RECOVERY"), # Error, directed.
+        )
+
+        # U1 State ---------------------------------------------------------------------------------
+        self.act("U1",
+            NextState("U2"),          # Timeout.
+            NextState("SS-INACTIVE"), # LFPS timeout.
+        )
+
+        # U2 State ---------------------------------------------------------------------------------
+        self.act("U2",
+            NextState("SS-INACTIVE"), # LFPS timeout.
+            NextState("RECOVERY"),    # LTPS handshake.
+        )
+
+        # U3 State ---------------------------------------------------------------------------------
+        self.act("U3",
+            NextState("RECOVERY"), # LTPS handshake.
+        )
+
+        # Compliance Mode State --------------------------------------------------------------------
+        self.act("COMPLIANCE-MODE",
+            NextState("RX-DETECT"),  # Warm reset, PowerOn reset.
+        )
+
+        # Loopback State ---------------------------------------------------------------------------
+        self.act("LOOPBACK",
+            NextState("SS-INACTIVE"), # Timeout.
+            NextState("RX-DETECT"),   # LFPS handshake.
+        )
+
+        # Hot Reset State --------------------------------------------------------------------------
+        self.act("HOT-RESET",
+            NextState("SS-INACTIVE"), # Timeout.
+            NextState("U0"),          # Idle symbol handshake.
+        )
+
+        # Recovery ---------------------------------------------------------------------------------
+        self.act("RECOVERY",
+            NextState("U0"),          # Training.
+            NextState("HOT-RESET"),   # Directed.
+            NextState("SS-INACTIVE"), # Timeout.
+            NextState("LOOPBACK"),    # Directed.
+        )
+
+        # End State --------------------------------------------------------------------------------
+        self.act("END")
+
 # SSInactive Finite State Machine  -----------------------------------------------------------------
 
 @ResetInserter()
