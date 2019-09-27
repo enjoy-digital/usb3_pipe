@@ -2,6 +2,36 @@ from migen import *
 
 # Note: Currently just FSM skeletons with states/transitions.
 
+# SSInactive Finite State Machine  -----------------------------------------------------------------
+
+@ResetInserter()
+class SSInactiveFSM(FSM):
+    """SSInactive Finite State Machine (section 7.5.2)"""
+    def __init__(self):
+        self.exit_to_ss_disabled = Signal()
+        self.exit_to_rx_detect   = Signal()
+
+        # FSM --------------------------------------------------------------------------------------
+        FSM.__init__(self, reset_state="QUIET")
+
+        # QUIET State ------------------------------------------------------------------------------
+        self.act("QUIET",
+            NextState("DETECT"),             # Timeout
+            self.exit_to_ss_disabled.eq(1),  # Directed (DS).
+            self.exit_to_rx_detect.eq(1),    # Warm reset.
+            NextState("END"),                # On any exit case.
+        )
+
+        # DETECT State -----------------------------------------------------------------------------
+        self.act("DETECT",
+            NextState("QUIET"),              # Far-end termination present.
+            self.exit_to_rx_detect.eq(1),    # Far-end termination absent.
+            NextState("END"),                # On any exit case.
+        )
+
+        # End State --------------------------------------------------------------------------------
+        self.act("END")
+
 # RXDetect Finite State Machine  -------------------------------------------------------------------
 
 @ResetInserter()
