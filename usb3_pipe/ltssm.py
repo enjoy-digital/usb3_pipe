@@ -2,6 +2,43 @@ from migen import *
 
 # Note: Currently just FSM skeletons with states/transitions.
 
+# RXDetect Finite State Machine  -------------------------------------------------------------------
+
+@ResetInserter()
+class RXDetectFSM(FSM):
+    """RxDetect Finite State Machine (section 7.5.3)"""
+    def __init__(self):
+        self.exit_to_ss_disabled = Signal()
+        self.exit_to_polling     = Signal()
+
+        # FSM --------------------------------------------------------------------------------------
+        FSM.__init__(self, reset_state="RESET")
+
+        # Reset State ------------------------------------------------------------------------------
+        self.act("RESET",
+            NextState("ACTIVE"),             # Warm reset de-asserted.
+            self.exit_to_ss_disabled.eq(1),  # Directed (DS).
+            NextState("END"),                # On any exit case.
+        )
+
+        # Detect State -----------------------------------------------------------------------------
+        self.act("ACTIVE",
+            NextState("QUIET"),              # Far-end termination not detected.
+            self.exit_to_polling.eq(1),      # Far-end termination detected.
+            self.exit_to_ss_disabled.eq(1),  # RXDetect events over limit (Dev) or directed (DS).
+            NextState("END"),                # On any exit case.
+        )
+
+        # Quiet State -----------------------------------------------------------------------------
+        self.act("QUIET",
+            NextState("ACTIVE"),             # Timeout.
+            self.exit_to_ss_disabled.eq(1),  # Directed (DS).
+            NextState("END"),                # On any exit case.
+        )
+
+        # End State -------------------------------------------------------------------------------
+        self.act("END")
+
 # Polling Finite State Machine  --------------------------------------------------------------------
 
 @ResetInserter()
