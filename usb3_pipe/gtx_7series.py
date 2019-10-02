@@ -253,6 +253,7 @@ class GTX(Module, AutoCSR):
 
         # Control/Status CDC
         tx_produce_square_wave = Signal()
+        tx_produce_pattern = Signal()
         tx_prbs_config = Signal(2)
 
         rx_prbs_config = Signal(2)
