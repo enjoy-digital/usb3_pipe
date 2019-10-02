@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from migen import *
+from migen.genlib.misc import WaitTimer
 
 from litex.build.generic_platform import *
 
@@ -53,7 +54,9 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, with_etherbone=False, mac_address=0x10e2d5000000, ip_address="192.168.1.50"):
+    def __init__(self, platform,
+        with_etherbone=False, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
+        with_analyzer=False):
 
         sys_clk_freq = int(156.5e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -152,32 +155,38 @@ class USB3SoC(SoCMini):
         self.comb += lfps_receiver.idle.eq(rxelecidle)
 
         # LFPS Polling Transmit --------------------------------------------------------------------
-        if True:
-            lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
-            self.submodules += lfps_transmitter
-            self.comb += [
-                txelecidle.eq(lfps_transmitter.idle),
-                gtx.tx_produce_pattern.eq(~lfps_transmitter.idle),
-                gtx.tx_pattern.eq(lfps_transmitter.pattern)
-            ]
+        lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
+        self.submodules += lfps_transmitter
+        self.comb += [
+            txelecidle.eq(lfps_transmitter.idle),
+            gtx.tx_produce_pattern.eq(~lfps_transmitter.idle),
+            gtx.tx_pattern.eq(lfps_transmitter.pattern),
+        ]
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(gtx.tx_ready)
         self.comb += platform.request("user_led", 1).eq(gtx.rx_ready)
         self.comb += platform.request("user_led", 7).eq(rxelecidle)
+        polling_timer = WaitTimer(int(sys_clk_freq*1e-1))
+        self.submodules += polling_timer
+        self.comb += [
+            polling_timer.wait.eq(~lfps_receiver.polling),
+            platform.request("user_led", 2).eq(~polling_timer.done)
+        ]
 
         # Analyzer ---------------------------------------------------------------------------------
-        analyzer_signals = [
-            rxelecidle,
-            txelecidle,
+        if with_analyzer:
+            analyzer_signals = [
+                rxelecidle,
+                txelecidle,
 
-            lfps_receiver.polling,
-            lfps_receiver.count,
-            lfps_receiver.found,
-            lfps_receiver.fsm,
-        ]
-        self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 32768, csr_csv="analyzer.csv")
-        self.add_csr("analyzer")
+                lfps_receiver.polling,
+                lfps_receiver.count,
+                lfps_receiver.found,
+                lfps_receiver.fsm,
+            ]
+            self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 32768, csr_csv="analyzer.csv")
+            self.add_csr("analyzer")
 
 # Build --------------------------------------------------------------------------------------------
 
