@@ -103,7 +103,7 @@ class LFPSReceiver(Module):
 class LFPSTransmitter(Module):
     def __init__(self, sys_clk_freq, lfps_clk_freq):
         self.idle            = Signal()   # o
-        self.pattern         = Signal(20) # o
+        self.pattern         = Signal(40) # o
 
         # # #
 
@@ -130,5 +130,5 @@ class LFPSTransmitter(Module):
         # Output -----------------------------------------------------------------------------------
         self.comb += [
             self.idle.eq(burst_timer.done),
-            self.pattern.eq(Replicate(clk, 20)),
+            self.pattern.eq(Replicate(clk, 40)),
         ]

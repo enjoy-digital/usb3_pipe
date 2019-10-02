@@ -53,7 +53,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, mac_address=0x10e2d5000000, ip_address="192.168.1.50"):
+    def __init__(self, platform, with_etherbone=False, mac_address=0x10e2d5000000, ip_address="192.168.1.50"):
 
         sys_clk_freq = int(156.5e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -62,33 +62,34 @@ class USB3SoC(SoCMini):
         self.submodules.crg = _CRG(platform, sys_clk_freq)
 
         # Ethernet <--> Wishbone -------------------------------------------------------------------
-        # phy
-        self.submodules.eth_phy = LiteEthPHY(
-            clock_pads = platform.request("eth_clocks"),
-            pads       = platform.request("eth"),
-            clk_freq   = sys_clk_freq)
-        self.add_csr("eth_phy")
-        # core
-        self.submodules.eth_core = LiteEthUDPIPCore(
-            phy         = self.eth_phy,
-            mac_address = mac_address,
-            ip_address  = convert_ip(ip_address),
-            clk_freq    = sys_clk_freq)
-        # etherbone
-        self.submodules.etherbone = LiteEthEtherbone(self.eth_core.udp, 1234)
-        self.add_wb_master(self.etherbone.wishbone.bus)
+        if with_etherbone:
+            # phy
+            self.submodules.eth_phy = LiteEthPHY(
+                clock_pads = platform.request("eth_clocks"),
+                pads       = platform.request("eth"),
+                clk_freq   = sys_clk_freq)
+            self.add_csr("eth_phy")
+            # core
+            self.submodules.eth_core = LiteEthUDPIPCore(
+                phy         = self.eth_phy,
+                mac_address = mac_address,
+                ip_address  = convert_ip(ip_address),
+                clk_freq    = sys_clk_freq)
+            # etherbone
+            self.submodules.etherbone = LiteEthEtherbone(self.eth_core.udp, 1234)
+            self.add_wb_master(self.etherbone.wishbone.bus)
 
-        # timing constraints
-        self.crg.cd_sys.clk.attr.add("keep")
-        self.eth_phy.crg.cd_eth_rx.clk.attr.add("keep")
-        self.eth_phy.crg.cd_eth_tx.clk.attr.add("keep")
-        self.platform.add_period_constraint(self.crg.cd_sys.clk, 1e9/156.5e6)
-        self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
-        self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
-        self.platform.add_false_path_constraints(
-            self.crg.cd_sys.clk,
-            self.eth_phy.crg.cd_eth_rx.clk,
-            self.eth_phy.crg.cd_eth_tx.clk)
+            # timing constraints
+            self.crg.cd_sys.clk.attr.add("keep")
+            self.eth_phy.crg.cd_eth_rx.clk.attr.add("keep")
+            self.eth_phy.crg.cd_eth_tx.clk.attr.add("keep")
+            self.platform.add_period_constraint(self.crg.cd_sys.clk, 1e9/156.5e6)
+            self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
+            self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
+            self.platform.add_false_path_constraints(
+                self.crg.cd_sys.clk,
+                self.eth_phy.crg.cd_eth_rx.clk,
+                self.eth_phy.crg.cd_eth_tx.clk)
 
         # Transceiver ------------------------------------------------------------------------------
         # refclk
@@ -151,7 +152,7 @@ class USB3SoC(SoCMini):
         self.comb += lfps_receiver.idle.eq(rxelecidle)
 
         # LFPS Polling Transmit --------------------------------------------------------------------
-        if False:
+        if True:
             lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
             self.submodules += lfps_transmitter
             self.comb += [
