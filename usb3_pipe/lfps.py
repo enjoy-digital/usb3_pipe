@@ -53,8 +53,6 @@ LoopbackExitLFPS  = U2LFPS
 U3WakeupLFPSBurst = LFPSTiming(t_typ=None, t_min=80.0e-3, t_max=10.0e-3)
 U3WakeupLFPS      = LFPS(burst=U3WakeupLFPSBurst)
 
-LFPSBursts = {PollingLFPSBurst, PingLFPSBurst, ResetLFPSBurst, U1ExitLFPSBurst, U2LFPSBurst, U3WakeupLFPSBurst}
-
 # LFPS Receiver ------------------------------------------------------------------------------------
 
 class LFPSReceiver(Module):
@@ -156,34 +154,45 @@ class LFPSBurstTransmitter(Module):
 # LFPS Transmitter ---------------------------------------------------------------------------------
 
 class LFPSTransmitter(Module):
+    """LFPS Transmitter
+
+    Generate LFPS signals on the TX lanes from simple user controls (User just have to sets LFPS
+    control signal to 1 to generate a specific LFPS, this module will handle LFPS clock genration,
+    LFPS Burst length and repeat).
+    """
     def __init__(self, sys_clk_freq, lfps_clk_freq):
-        self.idle            = Signal()   # o
-        self.pattern         = Signal(40) # o
+        # Control
+        self.polling = Signal()      # i
+
+        # Transceiver
+        self.tx_idle    = Signal()   # o
+        self.tx_pattern = Signal(40) # o
 
         # # #
 
-        # Burst clock generation -------------------------------------------------------------------
-        assert lfps_clk_freq >= lfps_clk_freq_min
-        assert lfps_clk_freq <= lfps_clk_freq_max
-        clk = Signal()
-        clk_timer = WaitTimer(ceil(sys_clk_freq/(2*lfps_clk_freq)) - 1)
-        self.submodules += clk_timer
-        self.comb += clk_timer.wait.eq(~clk_timer.done)
-        self.sync += If(clk_timer.done, clk.eq(~clk))
+        # Burst Transmitter ------------------------------------------------------------------------
+        burst_transmitter = LFPSBurstTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=lfps_clk_freq)
+        self.submodules += burst_transmitter
 
-        # Polling LFPS generation ------------------------------------------------------------------
-        burst_cycles  = ns_to_cycles(sys_clk_freq, PollingLFPS.burst.t_typ)
-        repeat_cycles = ns_to_cycles(sys_clk_freq, PollingLFPS.repeat.t_typ)
-        burst_timer   = WaitTimer(burst_cycles)
-        repeat_timer  = WaitTimer(repeat_cycles)
-        self.submodules += burst_timer, repeat_timer
-        self.comb += [
-            burst_timer.wait.eq(~repeat_timer.done),
-            repeat_timer.wait.eq(~repeat_timer.done),
-        ]
-
-        # Output -----------------------------------------------------------------------------------
-        self.comb += [
-            self.idle.eq(burst_timer.done),
-            self.pattern.eq(Replicate(clk, 40)),
-        ]
+        # Burst Generation -------------------------------------------------------------------------
+        burst_repeat_count = Signal(32)
+        self.submodules.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            self.tx_idle.eq(0),
+            If(self.polling,
+                self.tx_idle.eq(1),
+                NextValue(burst_transmitter.start, 1),
+                NextValue(burst_transmitter.length, int(sys_clk_freq*PollingLFPSBurst.t_typ)),
+                NextValue(burst_repeat_count,       int(sys_clk_freq*PollingLFPSRepeat.t_typ)),
+                NextState("RUN")
+            )
+        )
+        fsm.act("RUN",
+            NextValue(burst_transmitter.start, 0),
+            self.tx_idle.eq(burst_transmitter.tx_idle),
+            self.tx_pattern.eq(burst_transmitter.tx_pattern),
+            NextValue(burst_repeat_count, burst_repeat_count - 1),
+            If(burst_repeat_count == 0,
+                NextState("IDLE")
+            ),
+        )
