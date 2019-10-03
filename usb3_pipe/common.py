@@ -42,6 +42,15 @@ class OrderedSet(list):
         self.description = description
         list.__init__(self, values)
 
+    def to_bytes(self):
+        r = bytes()
+        for e in self:
+            if isinstance(e, Symbol):
+                r += bytes([e.value])
+            else:
+                r += bytes([e])
+        return r
+
 TSEQ = OrderedSet("TSEQ",
     [COM,      D(31, 7), D(23, 0), D( 0, 6)] +
     [D(20, 0), D(18, 5), D( 7, 7), D( 2, 0)] +
