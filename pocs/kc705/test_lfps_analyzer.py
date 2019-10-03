@@ -30,7 +30,7 @@ while (wb.regs.gtx_rx_ready.read() == 0):
 	pass
 
 # Analyzer dump ------------------------------------------------------------------------------------
-analyzer = LiteScopeAnalyzerDriver(wb.regs, "analyzer", debug=True)
+analyzer = LiteScopeAnalyzerDriver(wb.regs, "lfps_analyzer", debug=True)
 analyzer.configure_subsampler(1)
 analyzer.configure_trigger(cond={"soc_lfps_receiver_polling": 1})
 #analyzer.configure_trigger(cond={"soc_rxelecidle": 0})
