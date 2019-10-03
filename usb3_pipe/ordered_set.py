@@ -8,8 +8,14 @@ from usb3_pipe.common import TSEQ, TS1, TS2
 
 class OrderedSetReceiver(Module):
     def __init__(self, ordered_set, n_ordered_sets, data_width):
+        assert data_width in [16, 32]
         self.sink     = stream.Endpoint([("data", data_width), ("ctrl", data_width//8)])
-        self.detected = Signal()
+        self.detected = Signal() # o
+
+        if ordered_set.name in ["TS1", "TS2"]:
+            self.reset      = Signal() # o
+            self.loopback   = Signal() # o
+            self.scrambling = Signal() # o
 
         # # #
 
@@ -23,22 +29,50 @@ class OrderedSetReceiver(Module):
         self.specials += mem, port
 
         # Error detection --------------------------------------------------------------------------
-        error = Signal()
+        error      = Signal()
+        error_mask = Signal(data_width, reset=2**data_width-1)
+        if ordered_set.name in ["TS1", "TS2"]:
+            first_ctrl = 2**(data_width//8) - 1
+            if data_width == 32:
+                self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
+            else:
+                self.comb += If(port.adr == 2, error_mask.eq(0x00ff))
+        else:
+            first_ctrl = 1
         self.comb += [
             If(self.sink.valid,
-                # Check COM
-                If((port.adr == 0) & (self.sink.ctrl[0] != 1),
+                # Check Comma
+                If((port.adr == 0) & (self.sink.ctrl != first_ctrl),
                     error.eq(1)
                 ),
-                If((port.adr != 0) & (self.sink.ctrl[0] == 1),
+                If((port.adr != 0) & (self.sink.ctrl != 0),
                     error.eq(1)
                 ),
                 # Check Word
-                If(self.sink.data != port.dat_r,
+                If((self.sink.data & error_mask) != (port.dat_r & error_mask),
                     error.eq(1)
                 )
             )
         ]
+
+        # Link Config ------------------------------------------------------------------------------
+        if ordered_set.name in ["TS1", "TS2"]:
+            if data_width == 32:
+                self.sync += [
+                    If(self.sink.valid & (port.adr == 1),
+                        self.reset.eq(      self.sink.data[ 8]),
+                        self.loopback.eq(   self.sink.data[10]),
+                        self.scrambling.eq(~self.sink.data[11])
+                    )
+                ]
+            else:
+                self.sync += [
+                    If(self.sink.valid & (port.adr == 2),
+                        self.reset.eq(      self.sink.data[ 8]),
+                        self.loopback.eq(   self.sink.data[10]),
+                        self.scrambling.eq(~self.sink.data[11])
+                    )
+                ]
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [

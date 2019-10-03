@@ -7,9 +7,9 @@ def D(x, y):
     return (y << 5) | x
 
 def LinkConfig(reset=0, loopback=0, scrambling=1):
-    value  = (      reset << 0)
-    value |= (   loopback << 2)
-    value |= (~scrambling << 3)
+    value  = (      reset   << 0)
+    value |= (   loopback   << 2)
+    value |= ((not scrambling) << 3)
     return value
 
 # Symbols ------------------------------------------------------------------------------------------
