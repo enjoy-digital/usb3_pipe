@@ -19,8 +19,10 @@ from litex.boards.platforms import kc705
 
 from litescope import LiteScopeAnalyzer
 
+from usb3_pipe.common import TSEQ, TS1
 from usb3_pipe.gtx_7series import GTXChannelPLL, GTX
 from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
+from usb3_pipe.ordered_set import OrderedSetReceiver
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -165,6 +167,18 @@ class USB3SoC(SoCMini):
             gtx.tx_pattern.eq(lfps_transmitter.tx_pattern),
         ]
 
+        # TSEQ Receiver ----------------------------------------------------------------------------
+        tseq_receiver = OrderedSetReceiver(ordered_set=TSEQ, n_ordered_sets=1024, data_width=32)
+        tseq_receiver = ClockDomainsRenamer("rx")(tseq_receiver)
+        self.submodules += tseq_receiver
+        self.comb += gtx.source.connect(tseq_receiver.sink)
+
+        # TS1 Receiver ----------------------------------------------------------------------------
+        ts1_receiver = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=1, data_width=32)
+        ts1_receiver = ClockDomainsRenamer("rx")(ts1_receiver)
+        self.submodules += ts1_receiver
+        self.comb += gtx.source.connect(ts1_receiver.sink)
+
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(gtx.tx_ready)
         self.comb += platform.request("user_led", 1).eq(gtx.rx_ready)
@@ -176,7 +190,7 @@ class USB3SoC(SoCMini):
             platform.request("user_led", 2).eq(~polling_timer.done)
         ]
 
-        # LFPS Analyzer ---------------------------------------------------------------------------------
+        # LFPS Analyzer ----------------------------------------------------------------------------
         if with_lfps_analyzer:
             analyzer_signals = [
                 rxelecidle,
@@ -192,7 +206,14 @@ class USB3SoC(SoCMini):
 
         # RX Analyzer ---------------------------------------------------------------------------------
         if with_rx_analyzer:
-            analyzer_signals = [gtx.source]
+            analyzer_signals = [
+                gtx.source,
+                tseq_receiver.detected,
+                ts1_receiver.detected,
+                ts1_receiver.reset,
+                ts1_receiver.loopback,
+                ts1_receiver.scrambling,
+            ]
             self.submodules.rx_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="rx", csr_csv="rx_analyzer.csv")
             self.add_csr("rx_analyzer")
 
