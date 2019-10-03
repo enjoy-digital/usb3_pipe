@@ -55,8 +55,9 @@ class _CRG(Module):
 
 class USB3SoC(SoCMini):
     def __init__(self, platform,
-        with_etherbone=False, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
-        with_analyzer=False):
+        with_etherbone=True, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
+        with_lfps_analyzer=False,
+        with_rx_analyzer=True):
 
         sys_clk_freq = int(156.5e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -158,9 +159,10 @@ class USB3SoC(SoCMini):
         lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
         self.submodules += lfps_transmitter
         self.comb += [
-            txelecidle.eq(lfps_transmitter.idle),
-            gtx.tx_produce_pattern.eq(~lfps_transmitter.idle),
-            gtx.tx_pattern.eq(lfps_transmitter.pattern),
+            lfps_transmitter.polling.eq(1), # Always generate Polling LFPS for now to receive TSEQ/TS1
+            txelecidle.eq(lfps_transmitter.tx_idle),
+            gtx.tx_produce_pattern.eq(~lfps_transmitter.tx_idle),
+            gtx.tx_pattern.eq(lfps_transmitter.tx_pattern),
         ]
 
         # Leds -------------------------------------------------------------------------------------
@@ -174,8 +176,8 @@ class USB3SoC(SoCMini):
             platform.request("user_led", 2).eq(~polling_timer.done)
         ]
 
-        # Analyzer ---------------------------------------------------------------------------------
-        if with_analyzer:
+        # LFPS Analyzer ---------------------------------------------------------------------------------
+        if with_lfps_analyzer:
             analyzer_signals = [
                 rxelecidle,
                 txelecidle,
@@ -185,8 +187,14 @@ class USB3SoC(SoCMini):
                 lfps_receiver.found,
                 lfps_receiver.fsm,
             ]
-            self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 32768, csr_csv="analyzer.csv")
-            self.add_csr("analyzer")
+            self.submodules.lfps_analyzer = LiteScopeAnalyzer(analyzer_signals, 32768, clock_domain="sys", csr_csv="lfps_analyzer.csv")
+            self.add_csr("lfps_analyzer")
+
+        # RX Analyzer ---------------------------------------------------------------------------------
+        if with_rx_analyzer:
+            analyzer_signals = [gtx.source]
+            self.submodules.rx_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="rx", csr_csv="rx_analyzer.csv")
+            self.add_csr("rx_analyzer")
 
 # Build --------------------------------------------------------------------------------------------
 
