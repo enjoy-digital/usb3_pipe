@@ -6,7 +6,7 @@ import unittest
 from migen import *
 
 from usb3_pipe.common import TSEQ, TS1
-from usb3_pipe.ordered_set import OrderedSetReceiver
+from usb3_pipe.ordered_set import OrderedSetReceiver, OrderedSetTransmitter
 
 
 class TestOrderedSet(unittest.TestCase):
@@ -38,7 +38,7 @@ class TestOrderedSet(unittest.TestCase):
             generator(dut, n_loops=32),
             checker(dut, n_loops=32, n_ordered_sets=4),
         ]
-        run_simulation(dut, generators, vcd_name="tseq.vcd")
+        run_simulation(dut, generators)
 
 
     def test_ts1_receiver(self):
@@ -72,4 +72,75 @@ class TestOrderedSet(unittest.TestCase):
             generator(dut, n_loops=32),
             checker(dut, n_loops=32, n_ordered_sets=4),
         ]
-        run_simulation(dut, generators, vcd_name="ts1.vcd")
+        run_simulation(dut, generators)
+
+    def test_tseq_transmitter(self):
+        tseq_length = len(TSEQ.to_bytes())//4
+        tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little") for i in range(tseq_length)]
+        def generator(dut, n_loops):
+            for i in range(n_loops):
+                yield dut.send.eq(1)
+                yield
+                yield dut.send.eq(0)
+                yield
+                while not (yield dut.done):
+                    yield
+                yield
+            for i in range(128):
+                yield
+            dut.run = False
+
+        def checker(dut, n_loops, n_ordered_sets):
+            words = []
+            yield dut.source.ready.eq(1)
+            yield
+            while dut.run:
+                if (yield dut.source.valid):
+                    words.append((yield dut.source.data))
+                yield
+            self.assertEqual(words, tseq_words*n_loops*n_ordered_sets)
+
+        dut = OrderedSetTransmitter(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
+        dut.run = True
+        generators = [
+            generator(dut, n_loops=32),
+            checker(dut, n_loops=32, n_ordered_sets=4),
+        ]
+        run_simulation(dut, generators)
+
+    def test_ts1_transmitter(self):
+        ts1_length = len(TS1.to_bytes())//4
+        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        def generator(dut, n_loops):
+            for i in range(n_loops):
+                yield dut.send.eq(1)
+                yield dut.reset.eq(0)
+                yield dut.loopback.eq(0)
+                yield dut.scrambling.eq(1)
+                yield
+                yield dut.send.eq(0)
+                yield
+                while not (yield dut.done):
+                    yield
+                yield
+            for i in range(128):
+                yield
+            dut.run = False
+
+        def checker(dut, n_loops, n_ordered_sets):
+            words = []
+            yield dut.source.ready.eq(1)
+            yield
+            while dut.run:
+                if (yield dut.source.valid):
+                    words.append((yield dut.source.data))
+                yield
+            self.assertEqual(words, ts1_words*n_loops*n_ordered_sets)
+
+        dut = OrderedSetTransmitter(ordered_set=TS1, n_ordered_sets=4, data_width=32)
+        dut.run = True
+        generators = [
+            generator(dut, n_loops=32),
+            checker(dut, n_loops=32, n_ordered_sets=4),
+        ]
+        run_simulation(dut, generators)
