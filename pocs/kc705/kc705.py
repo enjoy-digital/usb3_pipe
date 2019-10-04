@@ -21,6 +21,7 @@ from litex.boards.platforms import kc705
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe.common import TSEQ, TS1, TS2
+from usb3_pipe.scrambler import Scrambler
 from usb3_pipe.gtx_7series import GTXChannelPLL, GTX
 from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
 from usb3_pipe.ordered_set import OrderedSetReceiver, OrderedSetTransmitter
@@ -197,28 +198,32 @@ class USB3SoC(SoCMini):
         ts2_transmitter = ClockDomainsRenamer("tx")(ts2_transmitter)
         self.submodules += ts2_transmitter
 
+        # Scrambler --------------------------------------------------------------------------------
+        scrambler = Scrambler()
+        scrambler = ClockDomainsRenamer("tx")(scrambler)
+        self.submodules += scrambler
+
         # Hacky Startup FSM (just to experiment on hardware) ---------------------------------------
-        tseq_det_sync = PulseSynchronizer("rx", "sys")
-        ts1_det_sync  = PulseSynchronizer("rx", "sys")
-        ts2_det_sync  = PulseSynchronizer("rx", "sys")
-        ts2_send_sync = PulseSynchronizer("sys", "tx")
-        ts2_done      = Signal()
-        self.submodules += tseq_det_sync, ts1_det_sync, ts2_det_sync, ts2_send_sync
+        tseq_det_sync = PulseSynchronizer("rx", "tx")
+        ts1_det_sync  = PulseSynchronizer("rx", "tx")
+        ts2_det_sync  = PulseSynchronizer("rx", "tx")
+        self.submodules += tseq_det_sync, ts1_det_sync, ts2_det_sync
         self.comb += [
             tseq_det_sync.i.eq(tseq_receiver.detected),
             ts1_det_sync.i.eq(ts1_receiver.detected),
             ts2_det_sync.i.eq(ts2_receiver.detected),
-            ts2_transmitter.send.eq(ts2_send_sync.o),
         ]
-        self.specials += MultiReg(ts2_transmitter.done, ts2_done)
 
         fsm = FSM(reset_state="POLLING-LFPS")
+        fsm = ClockDomainsRenamer("tx")(fsm)
         fsm = ResetInserter()(fsm)
         self.submodules += fsm
         self.comb += fsm.reset.eq(lfps_receiver.polling)
         fsm.act("POLLING-LFPS",
+            scrambler.reset.eq(1),
             gtx.rx_align.eq(1),
             lfps_transmitter.polling.eq(1),
+            NextValue(ts2_transmitter.send, 0),
             NextState("WAIT-TSEQ"),
         )
         fsm.act("WAIT-TSEQ",
@@ -233,21 +238,29 @@ class USB3SoC(SoCMini):
             gtx.rx_align.eq(0),
             gtx.source.connect(ts1_receiver.sink),
             If(ts1_det_sync.o,
-                ts2_send_sync.i.eq(1),
+                NextValue(ts2_transmitter.send, 1),
                 NextState("SEND-TS2-WAIT-TS2")
             )
         )
+        ts2_det = Signal()
         fsm.act("SEND-TS2-WAIT-TS2",
             gtx.rx_align.eq(0),
-            ts2_send_sync.i.eq(ts2_done),
             gtx.source.connect(ts2_receiver.sink),
             ts2_transmitter.source.connect(gtx.sink),
-            If(ts2_det_sync.o,
-                NextState("READY")
+            NextValue(ts2_det, ts2_det | ts2_det_sync.o),
+            NextValue(ts2_transmitter.send, 0),
+            If(ts2_transmitter.done,
+                If(ts2_det,
+                    NextState("READY")
+                ).Else(
+                    NextValue(ts2_transmitter.send, 1)
+                )
             )
         )
         fsm.act("READY",
-            gtx.rx_align.eq(0)
+            gtx.rx_align.eq(0),
+            scrambler.sink.valid.eq(1),
+            scrambler.source.connect(gtx.sink),
         )
 
         # Leds -------------------------------------------------------------------------------------
@@ -311,8 +324,6 @@ class USB3SoC(SoCMini):
                 tseq_det_sync.o,
                 ts1_det_sync.o,
                 ts2_det_sync.o,
-                ts2_send_sync.i,
-                ts2_done
             ]
             self.submodules.fsm_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="sys", csr_csv="fsm_analyzer.csv")
             self.add_csr("fsm_analyzer")
