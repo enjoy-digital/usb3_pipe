@@ -2,6 +2,7 @@
 
 from migen import *
 from migen.genlib.misc import WaitTimer
+from migen.genlib.cdc import PulseSynchronizer, MultiReg
 
 from litex.build.generic_platform import *
 
@@ -19,10 +20,10 @@ from litex.boards.platforms import kc705
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe.common import TSEQ, TS1
+from usb3_pipe.common import TSEQ, TS1, TS2
 from usb3_pipe.gtx_7series import GTXChannelPLL, GTX
 from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
-from usb3_pipe.ordered_set import OrderedSetReceiver
+from usb3_pipe.ordered_set import OrderedSetReceiver, OrderedSetTransmitter
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -59,7 +60,9 @@ class USB3SoC(SoCMini):
     def __init__(self, platform,
         with_etherbone=True, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
         with_lfps_analyzer=False,
-        with_rx_analyzer=True):
+        with_rx_analyzer=True,
+        with_tx_analyzer=True,
+        with_fsm_analyzer=True):
 
         sys_clk_freq = int(156.5e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -161,23 +164,88 @@ class USB3SoC(SoCMini):
         lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
         self.submodules += lfps_transmitter
         self.comb += [
-            lfps_transmitter.polling.eq(1), # Always generate Polling LFPS for now to receive TSEQ/TS1
-            txelecidle.eq(lfps_transmitter.tx_idle),
-            gtx.tx_produce_pattern.eq(~lfps_transmitter.tx_idle),
-            gtx.tx_pattern.eq(lfps_transmitter.tx_pattern),
+            If(lfps_transmitter.polling,
+                txelecidle.eq(lfps_transmitter.tx_idle),
+                gtx.tx_produce_pattern.eq(~lfps_transmitter.tx_idle),
+                gtx.tx_pattern.eq(lfps_transmitter.tx_pattern)
+            ).Else(
+                txelecidle.eq(0),
+                gtx.tx_produce_pattern.eq(0)
+
+            )
         ]
 
         # TSEQ Receiver ----------------------------------------------------------------------------
         tseq_receiver = OrderedSetReceiver(ordered_set=TSEQ, n_ordered_sets=1024, data_width=32)
         tseq_receiver = ClockDomainsRenamer("rx")(tseq_receiver)
         self.submodules += tseq_receiver
-        self.comb += gtx.source.connect(tseq_receiver.sink)
 
-        # TS1 Receiver ----------------------------------------------------------------------------
-        ts1_receiver = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=1, data_width=32)
+        # TS1 Receiver -----------------------------------------------------------------------------
+        ts1_receiver = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=16, data_width=32)
         ts1_receiver = ClockDomainsRenamer("rx")(ts1_receiver)
         self.submodules += ts1_receiver
-        self.comb += gtx.source.connect(ts1_receiver.sink)
+
+        # TS2 Receiver -----------------------------------------------------------------------------
+        ts2_receiver = OrderedSetReceiver(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
+        ts2_receiver = ClockDomainsRenamer("rx")(ts2_receiver)
+        self.submodules += ts2_receiver
+
+        # TS2 Transmitter --------------------------------------------------------------------------
+        ts2_transmitter = OrderedSetTransmitter(ordered_set=TS2, n_ordered_sets=32768, data_width=32)
+        ts2_transmitter = ClockDomainsRenamer("tx")(ts2_transmitter)
+        self.submodules += ts2_transmitter
+
+        # Hacky Startup FSM (just to experiment on hardware) ---------------------------------------
+        tseq_det_sync = PulseSynchronizer("rx", "sys")
+        ts1_det_sync  = PulseSynchronizer("rx", "sys")
+        ts2_det_sync  = PulseSynchronizer("rx", "sys")
+        ts2_send_sync = PulseSynchronizer("sys", "tx")
+        ts2_done      = Signal()
+        self.submodules += tseq_det_sync, ts1_det_sync, ts2_det_sync, ts2_send_sync
+        self.comb += [
+            tseq_det_sync.i.eq(tseq_receiver.detected),
+            ts1_det_sync.i.eq(ts1_receiver.detected),
+            ts2_det_sync.i.eq(ts2_receiver.detected),
+            ts2_transmitter.send.eq(ts2_send_sync.o),
+        ]
+        self.specials += MultiReg(ts2_transmitter.done, ts2_done)
+
+        fsm = FSM(reset_state="POLLING-LFPS")
+        fsm = ResetInserter()(fsm)
+        self.submodules += fsm
+        self.comb += fsm.reset.eq(lfps_receiver.polling)
+        fsm.act("POLLING-LFPS",
+            gtx.rx_align.eq(1),
+            lfps_transmitter.polling.eq(1),
+            NextState("WAIT-TSEQ"),
+        )
+        fsm.act("WAIT-TSEQ",
+            gtx.rx_align.eq(1),
+            lfps_transmitter.polling.eq(1),
+            gtx.source.connect(tseq_receiver.sink),
+            If(tseq_det_sync.o,
+                NextState("SEND-POLLING-LFPS-WAIT-TS1")
+            )
+        )
+        fsm.act("SEND-POLLING-LFPS-WAIT-TS1",
+            gtx.rx_align.eq(0),
+            gtx.source.connect(ts1_receiver.sink),
+            If(ts1_det_sync.o,
+                ts2_send_sync.i.eq(1),
+                NextState("SEND-TS2-WAIT-TS2")
+            )
+        )
+        fsm.act("SEND-TS2-WAIT-TS2",
+            gtx.rx_align.eq(0),
+            gtx.source.connect(ts2_receiver.sink),
+            ts2_transmitter.source.connect(gtx.sink),
+            If(ts2_done & ts2_det_sync.o,
+                NextState("READY")
+            )
+        )
+        fsm.act("READY",
+            gtx.rx_align.eq(0)
+        )
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(gtx.tx_ready)
@@ -204,18 +272,43 @@ class USB3SoC(SoCMini):
             self.submodules.lfps_analyzer = LiteScopeAnalyzer(analyzer_signals, 32768, clock_domain="sys", csr_csv="lfps_analyzer.csv")
             self.add_csr("lfps_analyzer")
 
-        # RX Analyzer ---------------------------------------------------------------------------------
+        # RX Analyzer ------------------------------------------------------------------------------
         if with_rx_analyzer:
             analyzer_signals = [
+                fsm,
                 gtx.source,
                 tseq_receiver.detected,
                 ts1_receiver.detected,
                 ts1_receiver.reset,
                 ts1_receiver.loopback,
-                ts1_receiver.scrambling,
+                ts1_receiver.scrambling
             ]
             self.submodules.rx_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="rx", csr_csv="rx_analyzer.csv")
             self.add_csr("rx_analyzer")
+
+        # TX Analyzer ------------------------------------------------------------------------------
+        if with_tx_analyzer:
+            analyzer_signals = [
+                fsm,
+                gtx.sink,
+                ts2_transmitter.send,
+                ts2_transmitter.done,
+            ]
+            self.submodules.tx_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="tx", csr_csv="tx_analyzer.csv")
+            self.add_csr("tx_analyzer")
+
+        # FSM Analyzer -----------------------------------------------------------------------------
+        if with_fsm_analyzer:
+            analyzer_signals = [
+                fsm,
+                tseq_det_sync.o,
+                ts1_det_sync.o,
+                ts2_det_sync.o,
+                ts2_send_sync.i,
+                ts2_done
+            ]
+            self.submodules.fsm_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="sys", csr_csv="fsm_analyzer.csv")
+            self.add_csr("fsm_analyzer")
 
 # Build --------------------------------------------------------------------------------------------
 
