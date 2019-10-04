@@ -38,7 +38,18 @@ _usb3_io = [
         Subsignal("p", Pins("HPC:DP0_C2M_P")),
         Subsignal("n", Pins("HPC:DP0_C2M_N")),
     ),
+
+    # PCIe
+    ("pcie_rx", 0,
+        Subsignal("p", Pins("M6")),
+        Subsignal("n", Pins("M5")),
+    ),
+    ("pcie_tx", 0,
+        Subsignal("p", Pins("L4")),
+        Subsignal("n", Pins("L3")),
+    ),
 ]
+
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -58,7 +69,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform,
+    def __init__(self, platform, connector="usb3",
         with_etherbone=True, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
         with_lfps_analyzer=False,
         with_rx_analyzer=True,
@@ -120,8 +131,8 @@ class USB3SoC(SoCMini):
         self.submodules += pll
 
         # gtx
-        tx_pads = platform.request("usb3_tx")
-        rx_pads = platform.request("usb3_rx")
+        tx_pads = platform.request(connector + "_tx")
+        rx_pads = platform.request(connector + "_rx")
         self.submodules.gtx = gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
             data_width=40,
             clock_aligner=False,
