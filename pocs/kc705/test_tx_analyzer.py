@@ -36,6 +36,7 @@ while (wb.regs.gtx_rx_ready.read() == 0):
 analyzer = LiteScopeAnalyzerDriver(wb.regs, "tx_analyzer", debug=True)
 analyzer.configure_subsampler(1)
 analyzer.configure_trigger(cond={"soc_gtx0_sink_valid": 1})
+analyzer.configure_trigger(cond={})
 analyzer.run(offset=32, length=4096)
 analyzer.wait_done()
 analyzer.upload()

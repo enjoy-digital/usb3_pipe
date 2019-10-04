@@ -129,8 +129,10 @@ class USB3SoC(SoCMini):
         gtx.add_stream_endpoints()
         gtx.add_controls()
         self.add_csr("gtx")
-        gtx._tx_enable.storage.reset = 1 # Enabled by default
-        gtx._rx_enable.storage.reset = 1 # Enabled by default
+        gtx._tx_enable.storage.reset   = 1 # Enabled by default
+        gtx._rx_enable.storage.reset   = 1 # Enabled by default
+        gtx._tx_polarity.storage.reset = 1
+        gtx._rx_polarity.storage.reset = 1
         self.submodules += gtx
 
         # timing constraints
@@ -191,7 +193,7 @@ class USB3SoC(SoCMini):
         self.submodules += ts2_receiver
 
         # TS2 Transmitter --------------------------------------------------------------------------
-        ts2_transmitter = OrderedSetTransmitter(ordered_set=TS2, n_ordered_sets=32768, data_width=32)
+        ts2_transmitter = OrderedSetTransmitter(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
         ts2_transmitter = ClockDomainsRenamer("tx")(ts2_transmitter)
         self.submodules += ts2_transmitter
 
@@ -237,9 +239,10 @@ class USB3SoC(SoCMini):
         )
         fsm.act("SEND-TS2-WAIT-TS2",
             gtx.rx_align.eq(0),
+            ts2_send_sync.i.eq(ts2_done),
             gtx.source.connect(ts2_receiver.sink),
             ts2_transmitter.source.connect(gtx.sink),
-            If(ts2_done & ts2_det_sync.o,
+            If(ts2_det_sync.o,
                 NextState("READY")
             )
         )
@@ -281,7 +284,11 @@ class USB3SoC(SoCMini):
                 ts1_receiver.detected,
                 ts1_receiver.reset,
                 ts1_receiver.loopback,
-                ts1_receiver.scrambling
+                ts1_receiver.scrambling,
+                ts2_receiver.detected,
+                ts2_receiver.reset,
+                ts2_receiver.loopback,
+                ts2_receiver.scrambling
             ]
             self.submodules.rx_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="rx", csr_csv="rx_analyzer.csv")
             self.add_csr("rx_analyzer")
