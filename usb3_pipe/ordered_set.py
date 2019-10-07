@@ -158,9 +158,9 @@ class OrderedSetGenerator(Module):
             self.comb += If(port.adr == 1, self.source.data[8:16].eq(link_config))
 
         # Count ------------------------------------------------------------------------------------
-        count = Signal(max=mem_depth*n_ordered_sets)
+        count = Signal(max=mem_depth*n_ordered_sets, reset=mem_depth*n_ordered_sets - 1)
         self.sync += [
-            If(self.send,
+            If(self.send & self.done,
                 run.eq(1),
                 count.eq(0),
             ).Elif(self.done,
@@ -177,6 +177,13 @@ class OrderedSetGenerator(Module):
 
 class OrderedSetUnit(Module):
     def __init__(self, serdes):
+        self.rx_tseq = Signal() # o
+        self.rx_ts1  = Signal() # o
+        self.rx_ts2  = Signal() # o
+        self.tx_ts2  = SIgnal() # i
+
+        # # #
+
         # Ordered Set Checkers ---------------------------------------------------------------------
         tseq_checker    = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=8)
         ts1_checher     = OrderedSetChecker(ordered_set=TS1,  n_ordered_sets=8)
@@ -192,7 +199,8 @@ class OrderedSetUnit(Module):
         ts2_generator   = OrderedSetGenerator(ordered_set=TS2, n_ordered_sets=8)
         self.submodules += ts2_generator
         self.comb += [
-            If(ts2_generator.source.valid,
-                ts2_generator.source.connect(serdes)
-            )
+            If(self.tx_ts2,
+                ts2_generator.send.eq(1),
+                ts2_generator.source.connect(serdes.sink),
+            ),
         ]
