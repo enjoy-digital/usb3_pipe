@@ -20,9 +20,8 @@ from litex.boards.platforms import kc705
 
 from litescope import LiteScopeAnalyzer
 
-from liteiclink.transceiver.gtx_7series import GTXChannelPLL, GTX
-
 from usb3_pipe.common import TSEQ, TS1, TS2
+from usb3_pipe.serdes import K7USB3SerDes
 from usb3_pipe.scrambler import Scrambler
 from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
 from usb3_pipe.ordered_set import OrderedSetReceiver, OrderedSetTransmitter
@@ -57,7 +56,7 @@ _usb3_io = [
 class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys = ClockDomain()
-        self.clock_domains.cd_oob = ClockDomain()
+        self.clock_domains.cd_usb3_oob = ClockDomain()
 
         # # #
 
@@ -65,7 +64,7 @@ class _CRG(Module):
         self.comb += pll.reset.eq(platform.request("cpu_reset"))
         pll.register_clkin(platform.request("clk156"), 156.5e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_oob, sys_clk_freq/8)
+        pll.create_clkout(self.cd_usb3_oob, sys_clk_freq/8)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
@@ -113,80 +112,30 @@ class USB3SoC(SoCMini):
                 self.eth_phy.crg.cd_eth_rx.clk,
                 self.eth_phy.crg.cd_eth_tx.clk)
 
-        # Transceiver ------------------------------------------------------------------------------
-        # refclk
-        refclk = Signal()
-        refclk_pads = platform.request("sgmii_clock") # Use SGMII clock (FMC does not provide one)
-        self.specials += [
-            Instance("IBUFDS_GTE2",
-                i_CEB=0,
-                i_I=refclk_pads.p,
-                i_IB=refclk_pads.n,
-                o_O=refclk)
-        ]
-
-        # pll
-        pll_cls = GTXChannelPLL
-        pll = pll_cls(refclk, 125e6, 5e9)
-        print(pll)
-        self.submodules += pll
-
-        # gtx
-        tx_pads = platform.request(connector + "_tx")
-        rx_pads = platform.request(connector + "_rx")
-        self.submodules.gtx = gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
-            data_width=40,
-            clock_aligner=False,
-            tx_buffer_enable=True,
-            rx_buffer_enable=True)
-        gtx.add_stream_endpoints()
-        gtx.add_controls()
-        self.add_csr("gtx")
-        gtx._tx_enable.storage.reset   = 1 # Enabled by default
-        gtx._rx_enable.storage.reset   = 1 # Enabled by default
-        gtx._tx_polarity.storage.reset = 1
-        gtx._rx_polarity.storage.reset = 1
-        self.submodules += gtx
-
-        # timing constraints
-        gtx.cd_tx.clk.attr.add("keep")
-        gtx.cd_rx.clk.attr.add("keep")
-        platform.add_period_constraint(gtx.cd_tx.clk, 1e9/gtx.tx_clk_freq)
-        platform.add_period_constraint(gtx.cd_rx.clk, 1e9/gtx.rx_clk_freq)
-        self.platform.add_false_path_constraints(
-            self.crg.cd_sys.clk,
-            gtx.cd_tx.clk,
-            gtx.cd_rx.clk)
-
-        # Override GTX parameters/signals for LFPS -------------------------------------------------
-        txelecidle = Signal()
-        rxelecidle = Signal()
-        gtx.gtx_params.update(
-            p_PCS_RSVD_ATTR  = 0x000000000100, # bit 8 enable OOB
-            p_RXOOB_CFG      = 0b0000110,
-            i_RXOOBRESET     = 0,
-            i_CLKRSVD        = ClockSignal("oob"),
-            i_RXELECIDLEMODE = 0b00,
-            o_RXELECIDLE     = rxelecidle,
-            i_TXELECIDLE     = txelecidle)
+        # USB3 SerDes ------------------------------------------------------------------------------
+        usb3_serdes = K7USB3SerDes(platform,
+            sys_clk      = self.crg.cd_sys.clk,
+            sys_clk_freq = sys_clk_freq,
+            refclk_pads  = platform.request("sgmii_clock"),
+            refclk_freq  = 125e6,
+            tx_pads      = platform.request(connector + "_tx"),
+            rx_pads      = platform.request(connector + "_rx"))
+        self.submodules += usb3_serdes
 
         # LFPS Polling Receive ---------------------------------------------------------------------
         lfps_receiver = LFPSReceiver(sys_clk_freq=sys_clk_freq)
         self.submodules += lfps_receiver
-        self.comb += lfps_receiver.idle.eq(rxelecidle)
+        self.comb += lfps_receiver.idle.eq(usb3_serdes.rx_idle)
 
         # LFPS Polling Transmit --------------------------------------------------------------------
         lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
         self.submodules += lfps_transmitter
         self.comb += [
             If(lfps_transmitter.polling,
-                txelecidle.eq(lfps_transmitter.tx_idle),
-                gtx.tx_produce_pattern.eq(~lfps_transmitter.tx_idle),
-                gtx.tx_pattern.eq(lfps_transmitter.tx_pattern)
+                usb3_serdes.tx_idle.eq(lfps_transmitter.tx_idle),
+                usb3_serdes.tx_pattern.eq(lfps_transmitter.tx_pattern)
             ).Else(
-                txelecidle.eq(0),
-                gtx.tx_produce_pattern.eq(0)
-
+                 usb3_serdes.tx_idle.eq(0)
             )
         ]
 
@@ -233,22 +182,22 @@ class USB3SoC(SoCMini):
         self.comb += fsm.reset.eq(lfps_receiver.polling)
         fsm.act("POLLING-LFPS",
             scrambler.reset.eq(1),
-            gtx.rx_align.eq(1),
+            usb3_serdes.gtx.rx_align.eq(1),
             lfps_transmitter.polling.eq(1),
             NextValue(ts2_transmitter.send, 0),
             NextState("WAIT-TSEQ"),
         )
         fsm.act("WAIT-TSEQ",
-            gtx.rx_align.eq(1),
+            usb3_serdes.gtx.rx_align.eq(1),
             lfps_transmitter.polling.eq(1),
-            gtx.source.connect(tseq_receiver.sink),
+            usb3_serdes.source.connect(tseq_receiver.sink),
             If(tseq_det_sync.o,
                 NextState("SEND-POLLING-LFPS-WAIT-TS1")
             )
         )
         fsm.act("SEND-POLLING-LFPS-WAIT-TS1",
-            gtx.rx_align.eq(0),
-            gtx.source.connect(ts1_receiver.sink),
+            usb3_serdes.gtx.rx_align.eq(0),
+            usb3_serdes.source.connect(ts1_receiver.sink),
             If(ts1_det_sync.o,
                 NextValue(ts2_transmitter.send, 1),
                 NextState("SEND-TS2-WAIT-TS2")
@@ -256,9 +205,9 @@ class USB3SoC(SoCMini):
         )
         ts2_det = Signal()
         fsm.act("SEND-TS2-WAIT-TS2",
-            gtx.rx_align.eq(0),
-            gtx.source.connect(ts2_receiver.sink),
-            ts2_transmitter.source.connect(gtx.sink),
+            usb3_serdes.gtx.rx_align.eq(0),
+            usb3_serdes.source.connect(ts2_receiver.sink),
+            ts2_transmitter.source.connect(usb3_serdes.sink),
             NextValue(ts2_det, ts2_det | ts2_det_sync.o),
             NextValue(ts2_transmitter.send, 0),
             If(ts2_transmitter.done,
@@ -270,15 +219,15 @@ class USB3SoC(SoCMini):
             )
         )
         fsm.act("READY",
-            gtx.rx_align.eq(0),
+            usb3_serdes.gtx.rx_align.eq(0),
             scrambler.sink.valid.eq(1),
-            scrambler.source.connect(gtx.sink),
+            scrambler.source.connect(usb3_serdes.sink),
         )
 
         # Leds -------------------------------------------------------------------------------------
-        self.comb += platform.request("user_led", 0).eq(gtx.tx_ready)
-        self.comb += platform.request("user_led", 1).eq(gtx.rx_ready)
-        self.comb += platform.request("user_led", 7).eq(rxelecidle)
+        self.comb += platform.request("user_led", 0).eq(usb3_serdes.gtx.tx_ready)
+        self.comb += platform.request("user_led", 1).eq(usb3_serdes.gtx.rx_ready)
+        self.comb += platform.request("user_led", 7).eq(usb3_serdes.rx_idle)
         polling_timer = WaitTimer(int(sys_clk_freq*1e-1))
         self.submodules += polling_timer
         self.comb += [
@@ -304,7 +253,7 @@ class USB3SoC(SoCMini):
         if with_rx_analyzer:
             analyzer_signals = [
                 fsm,
-                gtx.source,
+                usb3_serdes.source,
                 tseq_receiver.detected,
                 ts1_receiver.detected,
                 ts1_receiver.reset,
@@ -322,7 +271,7 @@ class USB3SoC(SoCMini):
         if with_tx_analyzer:
             analyzer_signals = [
                 fsm,
-                gtx.sink,
+                usb3_serdes.sink,
                 ts2_transmitter.send,
                 ts2_transmitter.done,
             ]
