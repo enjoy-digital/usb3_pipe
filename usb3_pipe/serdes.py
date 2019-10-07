@@ -10,12 +10,14 @@ class K7USB3SerDes(Module):
         self.source = stream.Endpoint([("data", 16), ("ctrl", 4)])
 
         self.enable = Signal()
-        self.tx_polarity = Signal()
-        self.rx_polarity = Signal()
 
-        self.rx_idle     = Signal()
+        self.tx_polarity = Signal()
         self.tx_idle     = Signal()
         self.tx_pattern  = Signal(20)
+
+        self.rx_polarity = Signal()
+        self.rx_idle     = Signal()
+        self.rx_align    = Signal()
 
         # # #
 
@@ -53,6 +55,7 @@ class K7USB3SerDes(Module):
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
+            gtx.rx_align.eq(self.rx_align),
             self.sink.connect(gtx.sink),
             gtx.source.connect(self.source),
         ]

@@ -182,13 +182,13 @@ class USB3SoC(SoCMini):
         self.comb += fsm.reset.eq(lfps_receiver.polling)
         fsm.act("POLLING-LFPS",
             scrambler.reset.eq(1),
-            usb3_serdes.gtx.rx_align.eq(1),
+            usb3_serdes.rx_align.eq(1),
             lfps_transmitter.polling.eq(1),
             NextValue(ts2_transmitter.send, 0),
             NextState("WAIT-TSEQ"),
         )
         fsm.act("WAIT-TSEQ",
-            usb3_serdes.gtx.rx_align.eq(1),
+            usb3_serdes.rx_align.eq(1),
             lfps_transmitter.polling.eq(1),
             usb3_serdes.source.connect(tseq_receiver.sink),
             If(tseq_det_sync.o,
@@ -196,7 +196,7 @@ class USB3SoC(SoCMini):
             )
         )
         fsm.act("SEND-POLLING-LFPS-WAIT-TS1",
-            usb3_serdes.gtx.rx_align.eq(0),
+            usb3_serdes.rx_align.eq(0),
             usb3_serdes.source.connect(ts1_receiver.sink),
             If(ts1_det_sync.o,
                 NextValue(ts2_transmitter.send, 1),
@@ -205,7 +205,7 @@ class USB3SoC(SoCMini):
         )
         ts2_det = Signal()
         fsm.act("SEND-TS2-WAIT-TS2",
-            usb3_serdes.gtx.rx_align.eq(0),
+            usb3_serdes.rx_align.eq(0),
             usb3_serdes.source.connect(ts2_receiver.sink),
             ts2_transmitter.source.connect(usb3_serdes.sink),
             NextValue(ts2_det, ts2_det | ts2_det_sync.o),
@@ -219,7 +219,7 @@ class USB3SoC(SoCMini):
             )
         )
         fsm.act("READY",
-            usb3_serdes.gtx.rx_align.eq(0),
+            usb3_serdes.rx_align.eq(0),
             scrambler.sink.valid.eq(1),
             scrambler.source.connect(usb3_serdes.sink),
         )
