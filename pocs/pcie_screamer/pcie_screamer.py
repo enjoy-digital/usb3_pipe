@@ -68,6 +68,7 @@ class _CRG(Module):
         # # #
 
         clk100 = platform.request("clk100")
+        platform.add_period_constraint(clk100, 1e9/100e6)
 
         self.cd_sys.clk.attr.add("keep")
         self.cd_clk125.clk.attr.add("keep")
@@ -160,18 +161,29 @@ class USB3SoC(SoCMini):
             )
         ]
 
+        # RX 16 to 32 + Aligner (Hack) -------------------------------------------------------------
+        from usb3_pipe.hack import RX16to32, RXAligner
+        rx16to32  = ClockDomainsRenamer("rx")(RX16to32())
+        rxaligner = ClockDomainsRenamer("rx")(RXAligner())
+        self.submodules += rx16to32, rxaligner
+        self.comb += [
+            gtp.rx_align.eq(0),
+            gtp.source.connect(rx16to32.sink),
+            rx16to32.source.connect(rxaligner.sink)
+        ]
+
         # TSEQ Receiver ----------------------------------------------------------------------------
-        tseq_receiver = OrderedSetReceiver(ordered_set=TSEQ, n_ordered_sets=1024, data_width=16)
+        tseq_receiver = OrderedSetReceiver(ordered_set=TSEQ, n_ordered_sets=1024, data_width=32)
         tseq_receiver = ClockDomainsRenamer("rx")(tseq_receiver)
         self.submodules += tseq_receiver
 
         # TS1 Receiver -----------------------------------------------------------------------------
-        ts1_receiver = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=16, data_width=16)
+        ts1_receiver = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=16, data_width=32)
         ts1_receiver = ClockDomainsRenamer("rx")(ts1_receiver)
         self.submodules += ts1_receiver
 
         # TS2 Receiver -----------------------------------------------------------------------------
-        ts2_receiver = OrderedSetReceiver(ordered_set=TS2, n_ordered_sets=1024, data_width=16)
+        ts2_receiver = OrderedSetReceiver(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
         ts2_receiver = ClockDomainsRenamer("rx")(ts2_receiver)
         self.submodules += ts2_receiver
 
@@ -203,22 +215,22 @@ class USB3SoC(SoCMini):
         self.comb += fsm.reset.eq(lfps_receiver.polling)
         fsm.act("POLLING-LFPS",
             scrambler.reset.eq(1),
-            gtp.rx_align.eq(1),
+            rxaligner.enable.eq(1),
             lfps_transmitter.polling.eq(1),
             NextValue(ts2_transmitter.send, 0),
             NextState("WAIT-TSEQ"),
         )
         fsm.act("WAIT-TSEQ",
-            gtp.rx_align.eq(1),
+            rxaligner.enable.eq(1),
             lfps_transmitter.polling.eq(1),
-            gtp.source.connect(tseq_receiver.sink),
+            rxaligner.source.connect(tseq_receiver.sink),
             If(tseq_det_sync.o,
                 NextState("SEND-POLLING-LFPS-WAIT-TS1")
             )
         )
         fsm.act("SEND-POLLING-LFPS-WAIT-TS1",
-            gtp.rx_align.eq(0),
-            gtp.source.connect(ts1_receiver.sink),
+            rxaligner.enable.eq(0),
+            rxaligner.source.connect(ts1_receiver.sink),
             If(ts1_det_sync.o,
                 NextValue(ts2_transmitter.send, 1),
                 NextState("SEND-TS2-WAIT-TS2")
@@ -226,8 +238,8 @@ class USB3SoC(SoCMini):
         )
         ts2_det = Signal()
         fsm.act("SEND-TS2-WAIT-TS2",
-            gtp.rx_align.eq(0),
-            gtp.source.connect(ts2_receiver.sink),
+            rxaligner.enable.eq(0),
+            rxaligner.source.connect(ts2_receiver.sink),
             ts2_transmitter.source.connect(gtp.sink),
             NextValue(ts2_det, ts2_det | ts2_det_sync.o),
             NextValue(ts2_transmitter.send, 0),
@@ -240,7 +252,7 @@ class USB3SoC(SoCMini):
             )
         )
         fsm.act("READY",
-            gtp.rx_align.eq(0),
+            rxaligner.enable.eq(0),
             scrambler.sink.valid.eq(1),
             scrambler.source.connect(gtp.sink),
         )
@@ -272,17 +284,17 @@ class USB3SoC(SoCMini):
         # RX Analyzer ------------------------------------------------------------------------------
         if with_rx_analyzer:
             analyzer_signals = [
-                fsm,
-                gtp.source,
+                rxaligner.source,
                 tseq_receiver.detected,
                 ts1_receiver.detected,
-                ts1_receiver.reset,
-                ts1_receiver.loopback,
-                ts1_receiver.scrambling,
-                ts2_receiver.detected,
-                ts2_receiver.reset,
-                ts2_receiver.loopback,
-                ts2_receiver.scrambling
+                fsm,
+                #ts1_receiver.reset,
+                #ts1_receiver.loopback,
+                #ts1_receiver.scrambling,
+                #ts2_receiver.detected,
+                #ts2_receiver.reset,
+                #ts2_receiver.loopback,
+                #ts2_receiver.scrambling
             ]
             self.submodules.rx_analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, clock_domain="rx", csr_csv="rx_analyzer.csv")
             self.add_csr("rx_analyzer")

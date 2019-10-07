@@ -92,10 +92,12 @@ class OrderedSetReceiver(Module):
         # Count ------------------------------------------------------------------------------------
         count = Signal(max=mem_depth*n_ordered_sets)
         self.sync += [
-            If(self.sink.valid & ~error & ~self.detected,
-                count.eq(count + 1)
-            ).Else(
-                count.eq(0)
+            If(self.sink.valid,
+                If(~error & ~self.detected,
+                    count.eq(count + 1)
+                ).Else(
+                    count.eq(0)
+                )
             )
         ]
 

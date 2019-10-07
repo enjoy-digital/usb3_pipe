@@ -13,8 +13,9 @@ wb.open()
 
 # # #
 
-TSEQ_FIRST_WORD = int.from_bytes(TSEQ.to_bytes()[0:2], byteorder="little")
-TS1_FIRST_WORD  = int.from_bytes(TS1.to_bytes()[0:2], byteorder="little")
+TSEQ_FIRST_WORD = int.from_bytes(TSEQ.to_bytes()[0:4], byteorder="little")
+TS1_FIRST_WORD  = int.from_bytes(TS1.to_bytes()[0:4], byteorder="little")
+#print("%08x\n" %TSEQ_FIRST_WORD)
 
 # FPGA ID ------------------------------------------------------------------------------------------
 fpga_id = ""
@@ -26,6 +27,8 @@ for i in range(256):
 print("FPGA: " + fpga_id)
 
 # Enable Capture -----------------------------------------------------------------------------------
+wb.regs.gtp_rx_polarity.write(1)
+wb.regs.gtp_rx_polarity.write(0)
 wb.regs.gtp_tx_enable.write(1)
 while (wb.regs.gtp_tx_ready.read() == 0):
     pass
@@ -36,16 +39,17 @@ while (wb.regs.gtp_rx_ready.read() == 0):
 # Analyzer dump ------------------------------------------------------------------------------------
 analyzer = LiteScopeAnalyzerDriver(wb.regs, "rx_analyzer", debug=True)
 analyzer.configure_subsampler(1)
-#analyzer.configure_trigger(cond={
-#    "gtp0_source_payload_ctrl": 0b01,
-#    "gtp0_source_payload_data": TSEQ_FIRST_WORD})
 analyzer.configure_trigger(cond={
-    "gtp0_source_payload_ctrl": 0b11,
-    "gtp0_source_payload_data": TS1_FIRST_WORD})
-#analyzer.configure_trigger(cond={"soc_tseq_receiver_detected": 1})
-#analyzer.configure_trigger(cond={"soc_ts1_receiver_detected": 1})
-#analyzer.configure_trigger(cond={"soc_ts2_receiver_detected": 1})
-#analyzer.configure_trigger(cond={})
+    "rxaligner_source_payload_ctrl": 0b0001,
+    "rxaligner_source_payload_data": TSEQ_FIRST_WORD})
+#analyzer.configure_trigger(cond={"rxaligner_source_payload_ctrl": 0b0001})
+#analyzer.configure_trigger(cond={
+#    "rxaligner_source_payload_ctrl": 0b1111,
+#    "rxaligner_source_payload_data": TS1_FIRST_WORD})
+#analyzer.configure_trigger(cond={"tseq_receiver_detected": 1})
+#analyzer.configure_trigger(cond={"ts1_receiver_detected": 1})
+#analyzer.configure_trigger(cond={"ts2_receiver_detected": 1})
+analyzer.configure_trigger(cond={})
 analyzer.run(offset=32, length=256)
 analyzer.wait_done()
 analyzer.upload()
