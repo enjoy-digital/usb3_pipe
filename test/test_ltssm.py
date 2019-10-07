@@ -18,5 +18,5 @@ class TestLTSSM(unittest.TestCase):
     def test_rx_detect_fsm_syntax(self):
         fsm = ltssm.RXDetectFSM()
 
-    def test_polling_fsm_syntax(self):
-        fsm = ltssm.PollingFSM()
+    #def test_polling_fsm_syntax(self):
+    #    fsm = ltssm.PollingFSM()
