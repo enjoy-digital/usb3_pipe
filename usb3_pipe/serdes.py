@@ -2,12 +2,58 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
+# Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
+
+class SerdesTXDatapath(Module):
+    def __init__(self, clock_domain):
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
+
+        # # #
+
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 4)
+        cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
+        self.submodules += cdc
+        converter = stream.StrideConverter(
+            [("data", 32), ("ctrl", 4)],
+            [("data", 16), ("ctrl", 2)],
+            reverse=False)
+        converter = ClockDomainsRenamer(clock_domain)(converter)
+        self.submodules += converter
+        self.comb += [
+            self.sink.connect(cdc.sink),
+            cdc.source.connect(converter.sink),
+            converter.source.connect(self.source)
+        ]
+
+class SerdesRXDatapath(Module):
+    def __init__(self, clock_domain):
+        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        converter = stream.StrideConverter(
+            [("data", 16), ("ctrl", 2)],
+            [("data", 32), ("ctrl", 4)],
+            reverse=False)
+        converter = ClockDomainsRenamer(clock_domain)(converter)
+        self.submodules += converter
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 4)
+        cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
+        self.submodules += cdc
+        self.comb += [
+            self.sink.connect(converter.sink),
+            converter.source.connect(cdc.sink),
+            cdc.source.connect(self.source)
+        ]
+
 # Kintex7 USB3 Serializer/Deserializer -------------------------------------------------------------
 
 class K7USB3SerDes(Module):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
-        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 16), ("ctrl", 4)])
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         self.enable = Signal()
 
@@ -50,13 +96,17 @@ class K7USB3SerDes(Module):
             tx_polarity=self.tx_polarity,
             rx_polarity=self.rx_polarity)
         gtx.add_stream_endpoints()
-        self.submodules += gtx
+        tx_datapath = SerdesTXDatapath("tx")
+        rx_datapath = SerdesRXDatapath("rx")
+        self.submodules += gtx, tx_datapath, rx_datapath
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
             gtx.rx_align.eq(self.rx_align),
-            self.sink.connect(gtx.sink),
-            gtx.source.connect(self.source),
+            self.sink.connect(tx_datapath.sink),
+            tx_datapath.source.connect(gtx.sink),
+            gtx.source.connect(rx_datapath.sink),
+            rx_datapath.source.connect(self.source),
         ]
         # Override GTX parameters/signals to allow LFPS --------------------------------------------
         gtx.gtx_params.update(
@@ -86,8 +136,8 @@ class K7USB3SerDes(Module):
 
 class A7USB3SerDes(Module):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
-        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 16), ("ctrl", 4)])
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         self.enable = Signal()
 
@@ -130,13 +180,17 @@ class A7USB3SerDes(Module):
             tx_polarity=self.tx_polarity,
             rx_polarity=self.rx_polarity)
         gtp.add_stream_endpoints()
-        self.submodules += gtp
+        tx_datapath = SerdesTXDatapath("tx")
+        rx_datapath = SerdesRXDatapath("rx")
+        self.submodules += gtp, tx_datapath, rx_datapath
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
             gtp.rx_align.eq(self.rx_align),
-            self.sink.connect(gtp.sink),
-            gtp.source.connect(self.source),
+            self.sink.connect(tx_datapath.sink),
+            tx_datapath.source.connect(gtp.sink),
+            gtp.source.connect(rx_datapath.sink),
+            rx_datapath.source.connect(self.source),
         ]
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
         gtp.gtp_params.update(
