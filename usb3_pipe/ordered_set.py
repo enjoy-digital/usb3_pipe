@@ -180,15 +180,15 @@ class OrderedSetUnit(Module):
         self.rx_tseq = Signal() # o
         self.rx_ts1  = Signal() # o
         self.rx_ts2  = Signal() # o
-        self.tx_ts2  = SIgnal() # i
+        self.tx_ts2  = Signal() # i
 
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
         tseq_checker    = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=8)
-        ts1_checher     = OrderedSetChecker(ordered_set=TS1,  n_ordered_sets=8)
+        ts1_checker     = OrderedSetChecker(ordered_set=TS1,  n_ordered_sets=8)
         ts2_checker     = OrderedSetChecker(ordered_set=TS2,  n_ordered_sets=8)
-        self.submodules += tseq_checker, ts1_checher, ts2_checker
+        self.submodules += tseq_checker, ts1_checker, ts2_checker
         self.comb += [
             serdes.source.connect(tseq_checker.sink, omit={"ready"}),
             serdes.source.connect(ts1_checker.sink,  omit={"ready"}),

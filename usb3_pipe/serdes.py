@@ -122,15 +122,16 @@ class K7USB3SerDes(Module):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
-        self.enable = Signal()
+        self.enable = Signal()        # i
+        self.ready  = Signal()        # o
 
-        self.tx_polarity = Signal()
-        self.tx_idle     = Signal()
-        self.tx_pattern  = Signal(20)
+        self.tx_polarity = Signal()   # i
+        self.tx_idle     = Signal()   # i
+        self.tx_pattern  = Signal(20) # i
 
-        self.rx_polarity = Signal()
-        self.rx_idle     = Signal()
-        self.rx_align    = Signal()
+        self.rx_polarity = Signal()   # i
+        self.rx_idle     = Signal()   # o
+        self.rx_align    = Signal()   # i
 
         # # #
 
@@ -170,6 +171,7 @@ class K7USB3SerDes(Module):
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
+            self.ready.eq(gtx.tx_ready & gtx.rx_ready),
             gtx.rx_align.eq(0),
             rx_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
@@ -209,15 +211,16 @@ class A7USB3SerDes(Module):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
-        self.enable = Signal()
+        self.enable = Signal()        # i
+        self.ready  = Signal()        # o
 
-        self.tx_polarity = Signal()
-        self.tx_idle     = Signal()
-        self.tx_pattern  = Signal(20)
+        self.tx_polarity = Signal()   # i
+        self.tx_idle     = Signal()   # i
+        self.tx_pattern  = Signal(20) # i
 
-        self.rx_polarity = Signal()
-        self.rx_idle     = Signal()
-        self.rx_align    = Signal()
+        self.rx_polarity = Signal()   # i
+        self.rx_idle     = Signal()   # o
+        self.rx_align    = Signal()   # i
 
         # # #
 
@@ -257,6 +260,7 @@ class A7USB3SerDes(Module):
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
+            self.ready.eq(gtp.tx_ready & gtp.rx_ready),
             gtp.rx_align.eq(0),
             rx_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
