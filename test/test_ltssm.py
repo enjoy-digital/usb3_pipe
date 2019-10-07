@@ -9,8 +9,8 @@ from usb3_pipe import ltssm
 
 
 class TestLTSSM(unittest.TestCase):
-    def test_ltssm_syntax(self):
-        fsm = ltssm.LTSSM()
+    def test_ltssm_fsm_syntax(self):
+        fsm = ltssm.LTSSMFSM()
 
     def test_ss_inactive_fsm_syntax(self):
         fsm = ltssm.SSInactiveFSM()

@@ -26,8 +26,8 @@ from litescope import LiteScopeAnalyzer
 from usb3_pipe.common import TSEQ, TS1, TS2
 from usb3_pipe.serdes import K7USB3SerDes
 from usb3_pipe.scrambler import Scrambler
-from usb3_pipe.lfps import LFPSReceiver, LFPSTransmitter
-from usb3_pipe.ordered_set import OrderedSetReceiver, OrderedSetTransmitter
+from usb3_pipe.lfps import LFPSChecker, LFPSGenerator
+from usb3_pipe.ordered_set import OrderedSetChecker, OrderedSetGenerator
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -126,12 +126,12 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_serdes
 
         # LFPS Polling Receive ---------------------------------------------------------------------
-        lfps_receiver = LFPSReceiver(sys_clk_freq=sys_clk_freq)
+        lfps_receiver = LFPSChecker(sys_clk_freq=sys_clk_freq)
         self.submodules += lfps_receiver
         self.comb += lfps_receiver.idle.eq(usb3_serdes.rx_idle)
 
         # LFPS Polling Transmit --------------------------------------------------------------------
-        lfps_transmitter = LFPSTransmitter(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
+        lfps_transmitter = LFPSGenerator(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
         self.submodules += lfps_transmitter
         self.comb += [
             If(lfps_transmitter.polling,
@@ -143,22 +143,22 @@ class USB3SoC(SoCMini):
         ]
 
         # TSEQ Receiver ----------------------------------------------------------------------------
-        tseq_receiver = OrderedSetReceiver(ordered_set=TSEQ, n_ordered_sets=1024, data_width=32)
+        tseq_receiver = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=1024, data_width=32)
         tseq_receiver = ClockDomainsRenamer("rx")(tseq_receiver)
         self.submodules += tseq_receiver
 
         # TS1 Receiver -----------------------------------------------------------------------------
-        ts1_receiver = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=16, data_width=32)
+        ts1_receiver = OrderedSetChecker(ordered_set=TS1, n_ordered_sets=16, data_width=32)
         ts1_receiver = ClockDomainsRenamer("rx")(ts1_receiver)
         self.submodules += ts1_receiver
 
         # TS2 Receiver -----------------------------------------------------------------------------
-        ts2_receiver = OrderedSetReceiver(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
+        ts2_receiver = OrderedSetChecker(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
         ts2_receiver = ClockDomainsRenamer("rx")(ts2_receiver)
         self.submodules += ts2_receiver
 
         # TS2 Transmitter --------------------------------------------------------------------------
-        ts2_transmitter = OrderedSetTransmitter(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
+        ts2_transmitter = OrderedSetGenerator(ordered_set=TS2, n_ordered_sets=1024, data_width=32)
         ts2_transmitter = ClockDomainsRenamer("tx")(ts2_transmitter)
         self.submodules += ts2_transmitter
 

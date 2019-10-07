@@ -8,7 +8,7 @@ from migen import *
 # Link Training and Status State Machine -----------------------------------------------------------
 
 @ResetInserter()
-class LTSSM(FSM):
+class LTSSMFSM(FSM):
     """Link Training and Status State Machine (section 7.5)"""
     def __init__(self):
         # FSM --------------------------------------------------------------------------------------
@@ -220,3 +220,13 @@ class PollingFSM(FSM):
 
         # End State -------------------------------------------------------------------------------
         self.act("END")
+
+# Link Training and Status State Machine -----------------------------------------------------------
+
+class LTSSM(Module):
+    def __init__(self, lfps_unit, ordered_set_unit, serdes):
+        # Finite State Machines --------------------------------------------------------------------
+        self.submodules.ltssm_fsm       = LTSSMFSM()
+        self.submodules.ss_inactive_fsm = SSInactiveFSM()
+        self.submodules.rx_detect_fsm   = RXDetectFSM()
+        self.submodules.polling_fsm     = PollingFSM()

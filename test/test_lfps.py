@@ -8,7 +8,7 @@ from migen import *
 from usb3_pipe import lfps
 
 class TestLFPS(unittest.TestCase):
-    def test_lfps_burst_transmitter(self):
+    def test_lfps_burst_generator(self):
         def burst_generator(dut, nbursts, burst_length):
             for i in range(nbursts):
                 yield dut.length.eq(burst_length)
@@ -62,17 +62,17 @@ class TestLFPS(unittest.TestCase):
         sys_clk_freq  = 100e6
         lfps_clk_freq = 25e6
 
-        dut = lfps.LFPSBurstTransmitter(sys_clk_freq, lfps_clk_freq)
+        dut = lfps.LFPSBurstGenerator(sys_clk_freq, lfps_clk_freq)
         dut.run = True
         generators = [
             burst_generator(dut, nbursts=8, burst_length=256),
             burst_clk_checker(dut, sys_clk_freq=sys_clk_freq, lfps_clk_freq=lfps_clk_freq),
             burst_length_checker(dut, burst_length=256)
         ]
-        run_simulation(dut, generators, vcd_name="lfps_burst_transmitter.vcd")
+        run_simulation(dut, generators, vcd_name="lfps_burst_generator.vcd")
 
 
-    def test_lfps_transmitter(self):
+    def test_lfps_generator(self):
         def lfps_generator(dut):
             yield dut.polling.eq(1)
             for i in range(int(1e4)):
@@ -100,7 +100,7 @@ class TestLFPS(unittest.TestCase):
         sys_clk_freq  = 100e6
         lfps_clk_freq = 25e6
 
-        dut = lfps.LFPSTransmitter(sys_clk_freq, lfps_clk_freq)
+        dut = lfps.LFPSGenerator(sys_clk_freq, lfps_clk_freq)
         dut.run = True
         generators = [
             lfps_generator(dut),

@@ -6,11 +6,11 @@ import unittest
 from migen import *
 
 from usb3_pipe.common import TSEQ, TS1
-from usb3_pipe.ordered_set import OrderedSetReceiver, OrderedSetTransmitter
+from usb3_pipe.ordered_set import OrderedSetChecker, OrderedSetGenerator
 
 
 class TestOrderedSet(unittest.TestCase):
-    def test_tseq_receiver(self):
+    def test_tseq_checker(self):
         tseq_length = len(TSEQ.to_bytes())//4
         tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little") for i in range(tseq_length)]
         def generator(dut, n_loops):
@@ -32,7 +32,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(count, n_loops/n_ordered_sets)
 
-        dut = OrderedSetReceiver(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
@@ -41,7 +41,7 @@ class TestOrderedSet(unittest.TestCase):
         run_simulation(dut, generators)
 
 
-    def test_ts1_receiver(self):
+    def test_ts1_checker(self):
         ts1_length = len(TS1.to_bytes())//4
         ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
         def generator(dut, n_loops):
@@ -66,7 +66,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(count, n_loops/n_ordered_sets)
 
-        dut = OrderedSetReceiver(ordered_set=TS1, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetChecker(ordered_set=TS1, n_ordered_sets=4, data_width=32)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
@@ -74,7 +74,7 @@ class TestOrderedSet(unittest.TestCase):
         ]
         run_simulation(dut, generators)
 
-    def test_tseq_transmitter(self):
+    def test_tseq_generator(self):
         tseq_length = len(TSEQ.to_bytes())//4
         tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little") for i in range(tseq_length)]
         def generator(dut, n_loops):
@@ -100,7 +100,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(words, tseq_words*n_loops*n_ordered_sets)
 
-        dut = OrderedSetTransmitter(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetGenerator(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
@@ -108,7 +108,7 @@ class TestOrderedSet(unittest.TestCase):
         ]
         run_simulation(dut, generators)
 
-    def test_ts1_transmitter(self):
+    def test_ts1_generator(self):
         ts1_length = len(TS1.to_bytes())//4
         ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
         def generator(dut, n_loops):
@@ -137,7 +137,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(words, ts1_words*n_loops*n_ordered_sets)
 
-        dut = OrderedSetTransmitter(ordered_set=TS1, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetGenerator(ordered_set=TS1, n_ordered_sets=4, data_width=32)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),

@@ -7,9 +7,9 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common import TSEQ, TS1, TS2
 
-# Ordered Set Receiver -----------------------------------------------------------------------------
+# Ordered Set Checker ------------------------------------------------------------------------------
 
-class OrderedSetReceiver(Module):
+class OrderedSetChecker(Module):
     def __init__(self, ordered_set, n_ordered_sets, data_width):
         assert data_width in [16, 32]
         self.sink     = stream.Endpoint([("data", data_width), ("ctrl", data_width//8)])
@@ -107,9 +107,9 @@ class OrderedSetReceiver(Module):
         # Result -----------------------------------------------------------------------------------
         self.comb += self.detected.eq(count == (mem_depth*n_ordered_sets - 1))
 
-# Ordered Set Transmitter --------------------------------------------------------------------------
+# Ordered Set Generator ----------------------------------------------------------------------------
 
-class OrderedSetTransmitter(Module):
+class OrderedSetGenerator(Module):
     def __init__(self, ordered_set, n_ordered_sets, data_width):
         assert data_width in [16, 32]
         self.send = Signal() # i
@@ -189,3 +189,27 @@ class OrderedSetTransmitter(Module):
 
         # Result -----------------------------------------------------------------------------------
         self.comb += self.done.eq(count == (mem_depth*n_ordered_sets - 1))
+
+# Ordered Set Unit ---------------------------------------------------------------------------------
+
+class OrderedSetUnit(Module):
+    def __init__(self, serdes):
+        # Ordered Set Checkers ---------------------------------------------------------------------
+        tseq_checker    = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=8)
+        ts1_checher     = OrderedSetChecker(ordered_set=TS1,  n_ordered_sets=8)
+        ts2_checker     = OrderedSetChecker(ordered_set=TS2,  n_ordered_sets=8)
+        self.submodules += tseq_checker, ts1_checher, ts2_checker
+        self.comb += [
+            serdes.source.connect(tseq_checker.sink, omit={"ready"}),
+            serdes.source.connect(ts1_checker.sink,  omit={"ready"}),
+            serdes.source.connect(ts2_checker.sink,  omit={"ready"}),
+        ]
+
+        # Ordered Set Generators -------------------------------------------------------------------
+        ts2_generator   = OrderedSetGenerator(ordered_set=TS2, n_ordered_sets=8)
+        self.submodules += ts2_generator
+        self.comb += [
+            If(ts2_generator.source.valid,
+                ts2_generator.source.connect(serdes)
+            )
+        ]
