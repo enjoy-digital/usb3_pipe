@@ -10,9 +10,8 @@ from usb3_pipe.common import TSEQ, TS1, TS2
 # Ordered Set Checker ------------------------------------------------------------------------------
 
 class OrderedSetChecker(Module):
-    def __init__(self, ordered_set, n_ordered_sets, data_width):
-        assert data_width in [16, 32]
-        self.sink     = stream.Endpoint([("data", data_width), ("ctrl", data_width//8)])
+    def __init__(self, ordered_set, n_ordered_sets):
+        self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.detected = Signal() # o
 
         if ordered_set.name in ["TS1", "TS2"]:
@@ -25,21 +24,18 @@ class OrderedSetChecker(Module):
         self.comb += self.sink.ready.eq(1)
 
         # Memory --------------------------------------------------------------------------------
-        mem_depth = len(ordered_set.to_bytes())//(data_width//8)
+        mem_depth = len(ordered_set.to_bytes())//4
         mem_init  = [int.from_bytes(ordered_set.to_bytes()[4*i:4*(i+1)], "little") for i in range(mem_depth)]
-        mem       = Memory(data_width, mem_depth, mem_init)
+        mem       = Memory(32, mem_depth, mem_init)
         port      = mem.get_port(async_read=True)
         self.specials += mem, port
 
         # Data check -------------------------------------------------------------------------------
         error      = Signal()
-        error_mask = Signal(data_width, reset=2**data_width-1)
+        error_mask = Signal(32, reset=2**32-1)
         if ordered_set.name in ["TS1", "TS2"]:
-            first_ctrl = 2**(data_width//8) - 1
-            if data_width == 32:
-                self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
-            else:
-                self.comb += If(port.adr == 2, error_mask.eq(0x00ff))
+            first_ctrl = 2**4 - 1
+            self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
         else:
             first_ctrl = 1
         self.comb += [
@@ -60,22 +56,13 @@ class OrderedSetChecker(Module):
 
         # Link Config ------------------------------------------------------------------------------
         if ordered_set.name in ["TS1", "TS2"]:
-            if data_width == 32:
-                self.sync += [
-                    If(self.sink.valid & (port.adr == 1),
-                        self.reset.eq(      self.sink.data[ 8]),
-                        self.loopback.eq(   self.sink.data[10]),
-                        self.scrambling.eq(~self.sink.data[11])
-                    )
-                ]
-            else:
-                self.sync += [
-                    If(self.sink.valid & (port.adr == 2),
-                        self.reset.eq(      self.sink.data[ 8]),
-                        self.loopback.eq(   self.sink.data[10]),
-                        self.scrambling.eq(~self.sink.data[11])
-                    )
-                ]
+            self.sync += [
+                If(self.sink.valid & (port.adr == 1),
+                    self.reset.eq(      self.sink.data[ 8]),
+                    self.loopback.eq(   self.sink.data[10]),
+                    self.scrambling.eq(~self.sink.data[11])
+                )
+            ]
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [
@@ -110,11 +97,10 @@ class OrderedSetChecker(Module):
 # Ordered Set Generator ----------------------------------------------------------------------------
 
 class OrderedSetGenerator(Module):
-    def __init__(self, ordered_set, n_ordered_sets, data_width):
-        assert data_width in [16, 32]
+    def __init__(self, ordered_set, n_ordered_sets):
         self.send = Signal() # i
         self.done = Signal() # i
-        self.source = stream.Endpoint([("data", data_width), ("ctrl", data_width//8)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         if ordered_set.name in ["TS1", "TS2"]:
             self.reset      = Signal() # i
@@ -126,9 +112,9 @@ class OrderedSetGenerator(Module):
         run = Signal()
 
         # Memory --------------------------------------------------------------------------------
-        mem_depth = len(ordered_set.to_bytes())//(data_width//8)
+        mem_depth = len(ordered_set.to_bytes())//4
         mem_init  = [int.from_bytes(ordered_set.to_bytes()[4*i:4*(i+1)], "little") for i in range(mem_depth)]
-        mem       = Memory(data_width, mem_depth, mem_init)
+        mem       = Memory(32, mem_depth, mem_init)
         port      = mem.get_port(async_read=True)
         self.specials += mem, port
 
@@ -156,7 +142,7 @@ class OrderedSetGenerator(Module):
 
         # Data generation --------------------------------------------------------------------------
         if ordered_set.name in ["TS1", "TS2"]:
-            first_ctrl = 2**(data_width//8) - 1
+            first_ctrl = 2**4 - 1
         else:
             first_ctrl = 1
         self.comb += [
@@ -169,10 +155,7 @@ class OrderedSetGenerator(Module):
             self.source.data.eq(port.dat_r)
         ]
         if ordered_set.name in ["TS1", "TS2"]:
-            if data_width == 32:
-                self.comb += If(port.adr == 1, self.source.data[8:16].eq(link_config))
-            else:
-                self.comb += If(port.adr == 2, self.source.data[8:16].eq(link_config))
+            self.comb += If(port.adr == 1, self.source.data[8:16].eq(link_config))
 
         # Count ------------------------------------------------------------------------------------
         count = Signal(max=mem_depth*n_ordered_sets)

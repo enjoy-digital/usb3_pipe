@@ -32,7 +32,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(count, n_loops/n_ordered_sets)
 
-        dut = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=4)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
@@ -66,7 +66,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(count, n_loops/n_ordered_sets)
 
-        dut = OrderedSetChecker(ordered_set=TS1, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetChecker(ordered_set=TS1, n_ordered_sets=4)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
@@ -100,7 +100,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(words, tseq_words*n_loops*n_ordered_sets)
 
-        dut = OrderedSetGenerator(ordered_set=TSEQ, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetGenerator(ordered_set=TSEQ, n_ordered_sets=4)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
@@ -137,7 +137,7 @@ class TestOrderedSet(unittest.TestCase):
                 yield
             self.assertEqual(words, ts1_words*n_loops*n_ordered_sets)
 
-        dut = OrderedSetGenerator(ordered_set=TS1, n_ordered_sets=4, data_width=32)
+        dut = OrderedSetGenerator(ordered_set=TS1, n_ordered_sets=4)
         dut.run = True
         generators = [
             generator(dut, n_loops=32),
