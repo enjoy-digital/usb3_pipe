@@ -116,8 +116,8 @@ class LFPSBurstGenerator(Module):
         self.length = Signal(32) # i
 
         # Transceiver
-        self.tx_idle    = Signal(reset=1)   # o
-        self.tx_pattern = Signal(40)        # o
+        self.tx_idle    = Signal(reset=1) # o
+        self.tx_pattern = Signal(20)      # o
 
         # # #
 
@@ -147,7 +147,7 @@ class LFPSBurstGenerator(Module):
         )
         fsm.act("BURST",
             self.tx_idle.eq(0),
-            self.tx_pattern.eq(Replicate(clk, 40)),
+            self.tx_pattern.eq(Replicate(clk, 20)),
             NextValue(count, count - 1),
             If(count == 0,
                 NextState("IDLE")
@@ -169,7 +169,7 @@ class LFPSGenerator(Module):
 
         # Transceiver
         self.tx_idle    = Signal()   # o
-        self.tx_pattern = Signal(40) # o
+        self.tx_pattern = Signal(20) # o
 
         # # #
 
@@ -204,16 +204,23 @@ class LFPSGenerator(Module):
 
 class LFPSUnit(Module):
     def __init__(self, sys_clk_freq, serdes):
+        self.rx_polling = Signal() # o
+        self.tx_polling = Signal() # i
+
+        # # #
+
         # LFPS Checker -----------------------------------------------------------------------------
         checker = LFPSChecker(sys_clk_freq=sys_clk_freq)
         self.submodules += checker
         self.comb += checker.idle.eq(serdes.rx_idle)
+        self.comb += self.rx_polling.eq(checker.polling)
 
         # LFPS Generator ---------------------------------------------------------------------------
         generator = LFPSGenerator(sys_clk_freq=sys_clk_freq, lfps_clk_freq=25e6)
         self.submodules += generator
         self.comb += [
-            If(generator.polling,
+            If(self.tx_polling,
+                generator.polling.eq(1),
                 serdes.tx_idle.eq(generator.tx_idle),
                 serdes.tx_pattern.eq(generator.tx_pattern)
             ).Else(
