@@ -1,3 +1,6 @@
+# This file is Copyright (c) 2019 Florent Kermarrec <florent@enjoy-digital.fr>
+# License: BSD
+
 from functools import reduce
 from operator import xor
 
