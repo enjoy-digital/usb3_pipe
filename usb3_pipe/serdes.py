@@ -2,6 +2,8 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.common import COM
+
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
 class SerdesTXDatapath(Module):
@@ -47,6 +49,68 @@ class SerdesRXDatapath(Module):
             converter.source.connect(cdc.sink),
             cdc.source.connect(self.source)
         ]
+
+# RX Aligner ---------------------------------------------------------------------------------------
+
+class SerdesRXAligner(stream.PipelinedActor):
+    def __init__(self):
+        self.enable = Signal()
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        stream.PipelinedActor.__init__(self, 1)
+
+        # # #
+
+        alignment = Signal(2)
+
+        last_data = Signal(32)
+        last_ctrl = Signal(4)
+
+        # Register last data/ctrl
+        self.sync += [
+            If(self.pipe_ce,
+                last_data.eq(sink.data),
+                last_ctrl.eq(sink.ctrl)
+            )
+        ]
+
+        # Alignment detection
+        self.sync += [
+            If(self.enable & sink.valid & self.pipe_ce,
+                If(sink.ctrl[0] & (sink.data[0:8] == COM.value),
+                    alignment.eq(0)
+                ),
+                If(sink.ctrl[1] & (sink.data[8:16] == COM.value),
+                    alignment.eq(1)
+                ),
+                If(sink.ctrl[2] & (sink.data[16:24] == COM.value),
+                    alignment.eq(2)
+                ),
+                If(sink.ctrl[3] & (sink.data[24:32] == COM.value),
+                    alignment.eq(3)
+                )
+            )
+        ]
+
+        # Do the alignment
+        cases = {}
+        cases[0] = [
+            source.data.eq(last_data),
+            source.ctrl.eq(last_ctrl)
+        ]
+        cases[1] = [
+            source.data.eq(Cat(last_data[8:32], sink.data[0:8])),
+            source.ctrl.eq(Cat(last_ctrl[1:4], sink.ctrl[0:1])),
+        ]
+        cases[2] = [
+            source.data.eq(Cat(last_data[16:32], sink.data[0:16])),
+            source.ctrl.eq(Cat(last_ctrl[2:4], sink.ctrl[0:2])),
+        ]
+        cases[3] = [
+            source.data.eq(Cat(last_data[24:32], sink.data[0:24])),
+            source.ctrl.eq(Cat(last_ctrl[3:4], sink.ctrl[0:3])),
+        ]
+        self.comb += Case(alignment, cases)
 
 # Kintex7 USB3 Serializer/Deserializer -------------------------------------------------------------
 
@@ -98,15 +162,18 @@ class K7USB3SerDes(Module):
         gtx.add_stream_endpoints()
         tx_datapath = SerdesTXDatapath("tx")
         rx_datapath = SerdesRXDatapath("rx")
-        self.submodules += gtx, tx_datapath, rx_datapath
+        rx_aligner  = SerdesRXAligner()
+        self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
-            gtx.rx_align.eq(self.rx_align),
+            gtx.rx_align.eq(0),
+            rx_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtx.sink),
             gtx.source.connect(rx_datapath.sink),
-            rx_datapath.source.connect(self.source),
+            rx_datapath.source.connect(rx_aligner.sink),
+            rx_aligner.source.connect(self.source),
         ]
         # Override GTX parameters/signals to allow LFPS --------------------------------------------
         gtx.gtx_params.update(
@@ -182,15 +249,18 @@ class A7USB3SerDes(Module):
         gtp.add_stream_endpoints()
         tx_datapath = SerdesTXDatapath("tx")
         rx_datapath = SerdesRXDatapath("rx")
-        self.submodules += gtp, tx_datapath, rx_datapath
+        rx_aligner  = SerdesRXAligner()
+        self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
-            gtp.rx_align.eq(self.rx_align),
+            gtp.rx_align.eq(0),
+            rx_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtp.sink),
             gtp.source.connect(rx_datapath.sink),
-            rx_datapath.source.connect(self.source),
+            rx_datapath.source.connect(rx_aligner.sink),
+            rx_aligner.source.connect(self.source),
         ]
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
         gtp.gtp_params.update(
