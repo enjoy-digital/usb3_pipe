@@ -3,6 +3,8 @@
 
 from migen import *
 
+from migen.genlib.misc import WaitTimer
+
 # Note: Currently just FSM skeletons with states/transitions.
 
 # Link Training and Status State Machine -----------------------------------------------------------
@@ -243,7 +245,7 @@ class PollingFSM(FSM):
 # Link Training and Status State Machine -----------------------------------------------------------
 
 class LTSSM(Module):
-    def __init__(self, serdes, lfps_unit, ts_unit):
+    def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq):
         # SS Inactive FSM --------------------------------------------------------------------------
         self.submodules.ss_inactive_fsm = SSInactiveFSM()
 
@@ -258,3 +260,9 @@ class LTSSM(Module):
 
         # LTSSM FSM --------------------------------------------------------------------------------
         self.submodules.ltssm_fsm       = LTSSMFSM()
+
+        # FIXME; Experimental RX polarity swap
+        rx_polarity_timer = WaitTimer(int(sys_clk_freq*1e-3))
+        self.submodules += rx_polarity_timer
+        self.comb += rx_polarity_timer.wait.eq(self.polling_fsm.ongoing("RX-EQ") & ~rx_polarity_timer.done)
+        self.sync += If(rx_polarity_timer.done, serdes.rx_polarity.eq(~serdes.rx_polarity))

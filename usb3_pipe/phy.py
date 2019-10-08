@@ -35,7 +35,7 @@ class USB3PHY(Module):
         self.submodules.ts = ts
 
         # LTSSM ------------------------------------------------------------------------------------
-        ltssm = LTSSM(serdes=serdes, lfps_unit=lfps, ts_unit=ts)
+        ltssm = LTSSM(serdes=serdes, lfps_unit=lfps, ts_unit=ts, sys_clk_freq=sys_clk_freq)
         ltssm = ResetInserter()(ltssm)
         self.comb += ltssm.reset.eq(~self.enable)
         self.submodules.ltssm = ltssm
