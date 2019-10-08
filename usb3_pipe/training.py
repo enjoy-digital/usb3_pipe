@@ -13,6 +13,7 @@ class TSChecker(Module):
     def __init__(self, ordered_set, n_ordered_sets):
         self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.detected = Signal() # o
+        self.error    = Signal() # o
 
         if ordered_set.name in ["TS1", "TS2"]:
             self.reset      = Signal() # o
@@ -51,7 +52,8 @@ class TSChecker(Module):
                 If((self.sink.data & error_mask) != (port.dat_r & error_mask),
                     error.eq(1)
                 )
-            )
+            ),
+            self.error.eq(error)
         ]
 
         # Link Config ------------------------------------------------------------------------------
@@ -196,7 +198,7 @@ class TSUnit(Module):
             serdes.source.connect(tseq_checker.sink, omit={"ready"}),
             serdes.source.connect(ts1_checker.sink,  omit={"ready"}),
             serdes.source.connect(ts2_checker.sink,  omit={"ready"}),
-            serdes.source.ready.eq(self.rx_enable),
+            If(self.rx_enable, serdes.source.ready.eq(1)),
             self.rx_tseq.eq(tseq_checker.detected),
             self.rx_ts1.eq(ts1_checker.detected),
             self.rx_ts2.eq(ts2_checker.detected),

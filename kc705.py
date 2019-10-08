@@ -66,7 +66,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, connector="usb3",
+    def __init__(self, platform, connector="pcie",
         with_etherbone=True, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
         with_analyzer=True):
 
@@ -120,6 +120,19 @@ class USB3SoC(SoCMini):
         usb3_phy = USB3PHY(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += usb3_phy
 
+        # Idle handshake trigger--------------------------------------------------------------------
+        idle_start = Signal()
+        rx_ts2_error     = Signal()
+        rx_ts2_error_d   = Signal()
+        self.comb += rx_ts2_error.eq(usb3_phy.ts.ts2_checker.error)
+        self.sync += rx_ts2_error_d.eq(rx_ts2_error)
+        self.comb += [
+            If(usb3_phy.ready,
+                usb3_serdes.source.ready.eq(1),
+                idle_start.eq(~rx_ts2_error & rx_ts2_error_d),
+            )
+        ]
+
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
         self.comb += platform.request("user_led", 1).eq(usb3_phy.ready)
@@ -140,9 +153,11 @@ class USB3SoC(SoCMini):
                 usb3_phy.ts.rx_ts1,
                 usb3_phy.ts.rx_ts2,
                 usb3_phy.ts.tx_ts2,
+                usb3_phy.ts.ts2_checker.error,
 
                 # LTSSM
                 usb3_phy.ltssm.polling_fsm,
+                idle_start,
 
                 # Endpoints
                 usb3_serdes.source,

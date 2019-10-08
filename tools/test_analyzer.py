@@ -22,6 +22,8 @@ def help():
     print(" - rx_ts2")
     print(" - tx_ts2")
     print("")
+    print(" - idle_start")
+    print("")
     print(" - now")
     exit()
 
@@ -62,6 +64,8 @@ elif sys.argv[1] == "rx_ts2":
      analyzer.configure_trigger(cond={"soc_usb3_phy_ts_rx_ts2" : 1})
 elif sys.argv[1] == "tx_ts2":
      analyzer.configure_trigger(cond={"soc_usb3_phy_ts_tx_ts2" : 1})
+elif sys.argv[1] == "idle_start":
+     analyzer.configure_trigger(cond={"soc_idle_start" : 1})
 elif sys.argv[1] == "now":
 	analyzer.configure_trigger(cond={})
 else:
