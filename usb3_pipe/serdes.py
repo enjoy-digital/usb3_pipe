@@ -303,10 +303,11 @@ class K7USB3SerDes(Module):
             tx_polarity=self.tx_polarity,
             rx_polarity=self.rx_polarity)
         gtx.add_stream_endpoints()
-        tx_datapath = SerdesTXDatapath("tx")
-        rx_datapath = SerdesRXDatapath("rx")
-        rx_aligner  = SerdesRXWordAligner()
-        self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner
+        tx_datapath     = SerdesTXDatapath("tx")
+        rx_datapath     = SerdesRXDatapath("rx")
+        rx_aligner      = SerdesRXWordAligner()
+        rx_skip_remover = SerdesRXSkipRemover()
+        self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
@@ -317,7 +318,8 @@ class K7USB3SerDes(Module):
             tx_datapath.source.connect(gtx.sink),
             gtx.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(rx_aligner.sink),
-            rx_aligner.source.connect(self.source),
+            rx_aligner.source.connect(rx_skip_remover.sink),
+            rx_skip_remover.source.connect(self.source),
         ]
         # Override GTX parameters/signals to allow LFPS --------------------------------------------
         gtx.gtx_params.update(
@@ -392,10 +394,11 @@ class A7USB3SerDes(Module):
             tx_polarity=self.tx_polarity,
             rx_polarity=self.rx_polarity)
         gtp.add_stream_endpoints()
-        tx_datapath = SerdesTXDatapath("tx")
-        rx_datapath = SerdesRXDatapath("rx")
-        rx_aligner  = SerdesRXWordAligner()
-        self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner
+        tx_datapath     = SerdesTXDatapath("tx")
+        rx_datapath     = SerdesRXDatapath("rx")
+        rx_aligner      = SerdesRXWordAligner()
+        rx_skip_remover = SerdesRXSkipRemover()
+        self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
@@ -406,7 +409,8 @@ class A7USB3SerDes(Module):
             tx_datapath.source.connect(gtp.sink),
             gtp.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(rx_aligner.sink),
-            rx_aligner.source.connect(self.source),
+            rx_aligner.source.connect(rx_skip_remover.sink),
+            rx_skip_remover.source.connect(self.source),
         ]
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
         gtp.gtp_params.update(
