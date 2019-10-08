@@ -177,10 +177,13 @@ class TSGenerator(Module):
 
 class TSUnit(Module):
     def __init__(self, serdes):
-        self.rx_tseq = Signal() # o
-        self.rx_ts1  = Signal() # o
-        self.rx_ts2  = Signal() # o
-        self.tx_ts2  = Signal() # i
+        self.rx_enable = Signal() # i
+        self.rx_tseq   = Signal() # o
+        self.rx_ts1    = Signal() # o
+        self.rx_ts2    = Signal() # o
+
+        self.tx_enable = Signal() # i
+        self.tx_ts2    = Signal() # i
 
         # # #
 
@@ -190,6 +193,7 @@ class TSUnit(Module):
         ts2_checker     = TSChecker(ordered_set=TS2,  n_ordered_sets=8)
         self.submodules += tseq_checker, ts1_checker, ts2_checker
         self.comb += [
+            serdes.source.ready.eq(self.rx_enable),
             serdes.source.connect(tseq_checker.sink, omit={"ready"}),
             serdes.source.connect(ts1_checker.sink,  omit={"ready"}),
             serdes.source.connect(ts2_checker.sink,  omit={"ready"}),
@@ -199,8 +203,8 @@ class TSUnit(Module):
         ts2_generator   = TSGenerator(ordered_set=TS2, n_ordered_sets=8)
         self.submodules += ts2_generator
         self.comb += [
-            If(self.tx_ts2,
-                ts2_generator.send.eq(1),
+            If(self.tx_enable,
+                ts2_generator.send.eq(self.tx_ts2),
                 ts2_generator.source.connect(serdes.sink),
             )
         ]

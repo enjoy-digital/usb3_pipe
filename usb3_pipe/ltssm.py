@@ -181,7 +181,9 @@ class PollingFSM(FSM):
         self.act("LFPS",
             serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
-            NextState("RX-EQ"),                      # LFPS handshake.
+            If(lfps_unit.rx_polling,
+                NextState("RX-EQ"),                  # LFPS handshake.
+            ),
             #self.exit_to_compliance_mode.eq(1),     # First LFPS timeout.
             #self.exit_to_ss_disabled.eq(1),         # Subsequent LFPS timeouts (Dev) or directed (DS).
             #self.exit_to_rx_detect.eq(1),           # Subsequent LFPS timeouts (DS).
@@ -191,6 +193,8 @@ class PollingFSM(FSM):
         # RxEQ State -------------------------------------------------------------------------------
         self.act("RX-EQ",
             serdes.rx_align.eq(1),
+            lfps_unit.tx_polling.eq(1),
+            ts_unit.rx_enable.eq(1),
             If(ts_unit.rx_tseq,
                 NextState("ACTIVE"),                # TSEQ transmitted.
             ),
@@ -200,6 +204,7 @@ class PollingFSM(FSM):
 
         # Active State -----------------------------------------------------------------------------
         self.act("ACTIVE",
+            ts_unit.rx_enable.eq(1),
             If(ts_unit.rx_ts1 | ts_unit.rx_ts2,
                 NextState("CONFIGURATION"),         # 8 consecutiive TS1 or TS2 received.
             ),
@@ -210,6 +215,8 @@ class PollingFSM(FSM):
 
         # Configuration State ----------------------------------------------------------------------
         self.act("CONFIGURATION",
+            ts_unit.rx_enable.eq(1),
+            ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
             If(ts_unit.rx_ts2,
                 NextState("IDLE"),                  # TS2 handshake.
@@ -248,7 +255,6 @@ class LTSSM(Module):
             serdes    = serdes,
             lfps_unit = lfps_unit,
             ts_unit   = ts_unit)
-        self.comb += self.polling_fsm.reset.eq(lfps_unit.rx_polling)
 
         # LTSSM FSM --------------------------------------------------------------------------------
         self.submodules.ltssm_fsm       = LTSSMFSM()
