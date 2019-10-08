@@ -78,41 +78,24 @@ class SerdesRXAligner(stream.PipelinedActor):
         ]
 
         # Alignment detection
-        self.sync += [
-            If(self.enable & sink.valid & self.pipe_ce,
-                If(sink.ctrl[0] & (sink.data[0:8] == COM.value),
-                    alignment.eq(0)
-                ),
-                If(sink.ctrl[1] & (sink.data[8:16] == COM.value),
-                    alignment.eq(1)
-                ),
-                If(sink.ctrl[2] & (sink.data[16:24] == COM.value),
-                    alignment.eq(2)
-                ),
-                If(sink.ctrl[3] & (sink.data[24:32] == COM.value),
-                    alignment.eq(3)
+        for i in range(4):
+            self.sync += [
+                If(self.enable & sink.valid & self.pipe_ce,
+                    If(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value),
+                        alignment.eq(i)
+                    )
                 )
-            )
-        ]
+            ]
 
         # Do the alignment
+        data = Cat(last_data, sink.data)
+        ctrl = Cat(last_ctrl, sink.ctrl)
         cases = {}
-        cases[0] = [
-            source.data.eq(last_data),
-            source.ctrl.eq(last_ctrl)
-        ]
-        cases[1] = [
-            source.data.eq(Cat(last_data[8:32], sink.data[0:8])),
-            source.ctrl.eq(Cat(last_ctrl[1:4], sink.ctrl[0:1])),
-        ]
-        cases[2] = [
-            source.data.eq(Cat(last_data[16:32], sink.data[0:16])),
-            source.ctrl.eq(Cat(last_ctrl[2:4], sink.ctrl[0:2])),
-        ]
-        cases[3] = [
-            source.data.eq(Cat(last_data[24:32], sink.data[0:24])),
-            source.ctrl.eq(Cat(last_ctrl[3:4], sink.ctrl[0:3])),
-        ]
+        for i in range(4):
+            cases[i] = [
+                source.data.eq(data[8*i:]),
+                source.ctrl.eq(ctrl[i:]),
+            ]
         self.comb += Case(alignment, cases)
 
 # Kintex7 USB3 Serializer/Deserializer -------------------------------------------------------------
