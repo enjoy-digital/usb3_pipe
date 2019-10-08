@@ -22,9 +22,7 @@ from liteeth.frontend.etherbone import LiteEthEtherbone
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe.serdes import K7USB3SerDes
-from usb3_pipe.lfps import LFPSUnit
-from usb3_pipe.ordered_set import OrderedSetUnit
-from usb3_pipe.ltssm import LTSSM
+from usb3_pipe.phy import USB3PHY
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -108,38 +106,30 @@ class USB3SoC(SoCMini):
                 self.eth_phy.crg.cd_eth_rx.clk,
                 self.eth_phy.crg.cd_eth_tx.clk)
 
-        # SerDes -----------------------------------------------------------------------------------
-        serdes = K7USB3SerDes(platform,
+        # USB3 SerDes ------------------------------------------------------------------------------
+        usb3_serdes = K7USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
             refclk_pads  = platform.request("sgmii_clock"),
             refclk_freq  = 125e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"))
-        self.submodules += serdes
+        self.submodules += usb3_serdes
 
-        # LFPS Unit --------------------------------------------------------------------------------
-        lfps_unit = LFPSUnit(sys_clk_freq=sys_clk_freq, serdes=serdes)
-        self.submodules += lfps_unit
-
-        # OrderedSet Unit --------------------------------------------------------------------------
-        ordered_set_unit = OrderedSetUnit(serdes=serdes)
-        self.submodules += ordered_set_unit
-
-        # LTSSM ------------------------------------------------------------------------------------
-        ltssm = LTSSM(lfps_unit=lfps_unit, ordered_set_unit=ordered_set_unit)
-        self.submodules += ltssm
+        # USB3 PHY ---------------------------------------------------------------------------------
+        usb3_phy = USB3PHY(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
+        self.submodules += usb3_phy
 
         # Leds -------------------------------------------------------------------------------------
-        self.comb += platform.request("user_led", 0).eq(serdes.ready)
-        self.comb += platform.request("user_led", 1).eq(ltssm.polling_fsm.idle)
+        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
+        self.comb += platform.request("user_led", 1).eq(usb3_phy.ready)
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
             analyzer_signals = [
-                ltssm.polling_fsm,
-                serdes.source,
-                serdes.sink,
+                usb3_serdes.source,
+                usb3_serdes.sink,
+                usb3_phy.ltssm.polling_fsm,
             ]
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
