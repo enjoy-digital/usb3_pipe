@@ -69,7 +69,7 @@ class TestLFPS(unittest.TestCase):
             burst_clk_checker(dut, sys_clk_freq=sys_clk_freq, lfps_clk_freq=lfps_clk_freq),
             burst_length_checker(dut, burst_length=256)
         ]
-        run_simulation(dut, generators, vcd_name="lfps_burst_generator.vcd")
+        run_simulation(dut, generators)
 
 
     def test_lfps_generator(self):
@@ -108,5 +108,5 @@ class TestLFPS(unittest.TestCase):
                 burst_length=int(sys_clk_freq*lfps.PollingLFPSBurst.t_typ),
                 burst_repeat=int(sys_clk_freq*lfps.PollingLFPSRepeat.t_typ)),
         ]
-        run_simulation(dut, generators, vcd_name="lfps.vcd")
+        run_simulation(dut, generators)
 
