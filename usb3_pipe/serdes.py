@@ -57,7 +57,7 @@ class SerdesRXDatapath(Module):
 
 class SerdesRXAligner(stream.PipelinedActor):
     def __init__(self):
-        self.enable = Signal()
+        self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         stream.PipelinedActor.__init__(self, 1)
