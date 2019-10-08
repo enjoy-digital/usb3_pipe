@@ -1,39 +1,37 @@
-# High Speed Transceiver PIPE Wrapper Experiments
+```
+       __  _________  ____    ___  _______  ____
+      / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
+     / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
+     \____/___/____/____/  /_/  /___/_/  /___/
+           Copyright (c) 2019, EnjoyDigital
+```
+[![](https://travis-ci.com/enjoy-digital/usb3_pipe.svg?branch=master)](https://travis-ci.com/enjoy-digital/usb3_pipe)
+![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)
+# USB3 PIPE Experiments
 
 The aim of this project is to experiment with [High Speed Transceivers (SERDES)](https://en.wikipedia.org/wiki/Multi-gigabit_transceiver) of popular FPGAs to create a [USB3.0 PIPE interface](https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/phy-interface-pci-express-sata-usb30-architectures-3.1.pdf).
 
+Current solutions for USB3 connectivity with an FPGA require the use of an external SerDes chip ([TI TUSB1310A - SuperSpeed 5 Gbps USB 3.0 Transceiver with PIPE and ULPI Interfaces](http://www.ti.com/product/TUSB1310A)) or external FIFO chip ([FTDI FT60X](https://www.ftdichip.com/Products/ICs/FT600.html) or Cypress [FX3](https://www.cypress.com/products/ez-usb-fx3-superspeed-usb-30-peripheral-controller)). With this project, we want to see if it's possible to just use the transceivers of the FPGA for the USB3 connectivity and have the USB3 PIPE directly implemented in the fabric (and then avoid any external chip!)
+
 ## Targets
+While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) when used with a customized [the Daisho USB3 core](https://github.com/enjoy-digital/daisho).
 
-While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targetting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) when used with a customized [the Daisho USB3 core](https://github.com/enjoy-digital/daisho).
-
-It currently targets the following FPGA parts;
- - [ ] Xilinx Kintex 7
- - [ ] Lattice ECP5-5G
-
-It is hoped to eventually expand the support beyond these initial parts to;
- - [ ] Xilinx Artix 7
- - [ ] Xilinx Ultrascale/Ultrascale+ line
- - [ ] Various Xilinx Zynq line
- - [ ] Altera Cyclone parts
+It currently targets Xilinx Kintex7, Artix7 and Lattice ECP5 FPGAs.
 
 ## Test Hardware
-
-One of the following boards;
-
- - [KONDOR AX](https://www.latticesemi.com/en/Products/DevelopmentBoardsAndKits/KONDORAX)
+One of the following boards:
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
+ - [PCIe Screamer](http://shop.lambdaconcept.com/home/32-pciescreamerR02.html)
+ - [Versa ECP5](http://www.latticesemi.com/Products/DevelopmentBoardsAndKits/ECP5VersaDevelopmentKit.aspx)
 
 paired with
  - [3-Port USB 3 FMC Module from HiTechGlobal](https://hitechglobal.us/index.php?route=product/product&path=18_81&product_id=233).
-
-These boards have been previously shown to work with [the Daisho Core](https://github.com/enjoy-digital/daisho) and the [TI TUSB1310A - SuperSpeed 5 Gbps USB 3.0 Transceiver with PIPE and ULPI Interfaces](http://www.ti.com/product/TUSB1310A).
+ - [Modified PCIe riser] (link TBD)
 
 ## Toolchain
 
 This project targets;
-  - [ ] Xilinx Vivado for Kintex 7 support
-  - [ ] Yosys + nextpnr for ECP5 support
+  - Xilinx Vivado for Kintex7 / Artix7 support
+  - Yosys + nextpnr for ECP5 support
 
 There will also be a demo showing how to use a harness to expose the PIPE interface to the SymbiFlow Yosys + VPR flow.
-
-
