@@ -105,7 +105,7 @@ class K7USB3SerDes(Module):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
-        self.enable = Signal()        # i
+        self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
         self.tx_polarity = Signal()   # i
@@ -149,13 +149,13 @@ class K7USB3SerDes(Module):
         gtx.add_stream_endpoints()
         tx_datapath = SerdesTXDatapath("tx")
         rx_datapath = SerdesRXDatapath("rx")
-        rx_aligner  = SerdesRXAligner()
+        rx_aligner  = SerdesRXWordAligner()
         self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
             self.ready.eq(gtx.tx_ready & gtx.rx_ready),
-            gtx.rx_align.eq(0),
+            gtx.rx_align.eq(self.rx_align),
             rx_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtx.sink),
@@ -194,7 +194,7 @@ class A7USB3SerDes(Module):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
-        self.enable = Signal()        # i
+        self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
         self.tx_polarity = Signal()   # i
@@ -238,13 +238,13 @@ class A7USB3SerDes(Module):
         gtp.add_stream_endpoints()
         tx_datapath = SerdesTXDatapath("tx")
         rx_datapath = SerdesRXDatapath("rx")
-        rx_aligner  = SerdesRXCommaAligner()
+        rx_aligner  = SerdesRXWordAligner()
         self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
             self.ready.eq(gtp.tx_ready & gtp.rx_ready),
-            gtp.rx_align.eq(0),
+            gtp.rx_align.eq(self.rx_align),
             rx_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtp.sink),

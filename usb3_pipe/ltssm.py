@@ -163,7 +163,7 @@ class RXDetectFSM(FSM):
 @ResetInserter()
 class PollingFSM(FSM):
     """ Polling Finite State Machine (section 7.5.4)"""
-    def __init__(self, lfps_unit, ts_unit):
+    def __init__(self, serdes, lfps_unit, ts_unit):
         self.exit_to_compliance_mode = Signal()
         self.exit_to_rx_detect       = Signal()
         self.exit_to_ss_disabled     = Signal()
@@ -179,6 +179,7 @@ class PollingFSM(FSM):
 
         # LFPS State -------------------------------------------------------------------------------
         self.act("LFPS",
+            serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
             NextState("RX-EQ"),                      # LFPS handshake.
             #self.exit_to_compliance_mode.eq(1),     # First LFPS timeout.
@@ -189,6 +190,7 @@ class PollingFSM(FSM):
 
         # RxEQ State -------------------------------------------------------------------------------
         self.act("RX-EQ",
+            serdes.rx_align.eq(1),
             If(ts_unit.rx_tseq,
                 NextState("ACTIVE"),                # TSEQ transmitted.
             ),
@@ -234,7 +236,7 @@ class PollingFSM(FSM):
 # Link Training and Status State Machine -----------------------------------------------------------
 
 class LTSSM(Module):
-    def __init__(self, lfps_unit, ts_unit):
+    def __init__(self, serdes, lfps_unit, ts_unit):
         # SS Inactive FSM --------------------------------------------------------------------------
         self.submodules.ss_inactive_fsm = SSInactiveFSM()
 
@@ -243,6 +245,7 @@ class LTSSM(Module):
 
         # Polling FSM ------------------------------------------------------------------------------
         self.submodules.polling_fsm     = PollingFSM(
+            serdes    = serdes,
             lfps_unit = lfps_unit,
             ts_unit   = ts_unit)
         self.comb += self.polling_fsm.reset.eq(lfps_unit.rx_polling)
