@@ -16,6 +16,7 @@ def help():
     print(" - rx_polling")
     print(" - tx_polling")
     print("")
+    print(" - rx_tseq_first_word")
     print(" - rx_tseq")
     print(" - rx_ts1")
     print(" - rx_ts2")
@@ -47,6 +48,12 @@ if sys.argv[1] == "rx_polling":
     analyzer.configure_trigger(cond={"soc_usb3_phy_lfps_rx_polling" : 1})
 elif sys.argv[1] == "tx_polling":
     analyzer.configure_trigger(cond={"soc_usb3_phy_lfps_tx_polling" : 1})
+elif sys.argv[1] == "rx_tseq_first_word":
+    from usb3_pipe.common import TSEQ
+    TSEQ_FIRST_WORD = int.from_bytes(TSEQ.to_bytes()[0:4], byteorder="little")
+    analyzer.configure_trigger(cond={
+        "soc_usb3_serdes_source_source_valid" :       1,
+        "soc_usb3_serdes_source_source_payload_data": TSEQ_FIRST_WORD})
 elif sys.argv[1] == "rx_tseq":
     analyzer.configure_trigger(cond={"soc_usb3_phy_ts_rx_tseq" : 1})
 elif sys.argv[1] == "rx_ts1":
