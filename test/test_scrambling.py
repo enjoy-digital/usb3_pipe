@@ -5,7 +5,7 @@ import unittest
 
 from migen import *
 
-from usb3_pipe.scrambler import Scrambler
+from usb3_pipe.scrambling import Scrambler
 
 scrambler_ref = [
     0x8dbf6dbe, 0xe6a740be, 0xb2e2d32c, 0x2a770207,

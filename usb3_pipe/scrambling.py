@@ -8,6 +8,14 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
+# FIXME:
+# - LFSR shall be advanced for each symbol except for SKP.
+# - All 8b10b D-cores should be scrambled (except Training Sequence Ordered Sets).
+# - K codes shall not be scrambled.
+# - Allow enabling/disabling scrambling.
+
+# Scrambler Unit -----------------------------------------------------------------------------------
+
 @CEInserter()
 class ScramblerUnit(Module):
     def __init__(self):
@@ -71,11 +79,31 @@ class ScramblerUnit(Module):
         ]
         self.sync += cur.eq(new)
 
+# Scrambler ----------------------------------------------------------------------------------------
+
 @ResetInserter()
 class Scrambler(Module):
     def __init__(self):
-        self.sink = sink = stream.Endpoint([("data", 32)])
-        self.source = source = stream.Endpoint([("data", 32)])
+        self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        scrambler = ScramblerUnit()
+        self.submodules += scrambler
+        self.comb += [
+            scrambler.ce.eq(sink.valid & sink.ready),
+            sink.connect(source),
+            source.data.eq(sink.data ^ scrambler.value)
+        ]
+
+# Descrambler --------------------------------------------------------------------------------------
+
+@ResetInserter()
+class Descrambler(Module):
+    def __init__(self):
+        self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
