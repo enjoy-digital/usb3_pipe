@@ -6,7 +6,7 @@ from migen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.lfps import LFPSUnit
-from usb3_pipe.ordered_set import OrderedSetUnit
+from usb3_pipe.training import TSUnit
 from usb3_pipe.ltssm import LTSSM
 
 # USB3 PHY -----------------------------------------------------------------------------------------
@@ -22,16 +22,16 @@ class USB3PHY(Module):
 
         # # #
 
-        # LFPS Unit --------------------------------------------------------------------------------
-        lfps_unit = LFPSUnit(sys_clk_freq=sys_clk_freq, serdes=serdes)
-        self.submodules.lfps_unit = lfps_unit
+        # LFPS -------------------------------------------------------------------------------------
+        lfps = LFPSUnit(sys_clk_freq=sys_clk_freq, serdes=serdes)
+        self.submodules.lfps = lfps
 
-        # OrderedSet Unit --------------------------------------------------------------------------
-        ordered_set_unit = OrderedSetUnit(serdes=serdes)
-        self.submodules.ordered_set_unit = ordered_set_unit
+        # TS----------------------------------------------------------------------------------------
+        ts = TSUnit(serdes=serdes)
+        self.submodules.ts = ts
 
         # LTSSM ------------------------------------------------------------------------------------
-        ltssm = LTSSM(lfps_unit=lfps_unit, ordered_set_unit=ordered_set_unit)
+        ltssm = LTSSM(lfps_unit=lfps, ts_unit=ts)
         self.submodules.ltssm = ltssm
         self.comb += self.ready.eq(ltssm.polling_fsm.idle)
 

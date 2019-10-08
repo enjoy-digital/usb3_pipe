@@ -163,7 +163,7 @@ class RXDetectFSM(FSM):
 @ResetInserter()
 class PollingFSM(FSM):
     """ Polling Finite State Machine (section 7.5.4)"""
-    def __init__(self, lfps_unit, ordered_set_unit):
+    def __init__(self, lfps_unit, ts_unit):
         self.exit_to_compliance_mode = Signal()
         self.exit_to_rx_detect       = Signal()
         self.exit_to_ss_disabled     = Signal()
@@ -189,7 +189,7 @@ class PollingFSM(FSM):
 
         # RxEQ State -------------------------------------------------------------------------------
         self.act("RX-EQ",
-            If(ordered_set_unit.rx_tseq,
+            If(ts_unit.rx_tseq,
                 NextState("ACTIVE"),                # TSEQ transmitted.
             ),
             #self.exit_to_ss_disabled.eq(1),        # Directed (DS).
@@ -198,7 +198,7 @@ class PollingFSM(FSM):
 
         # Active State -----------------------------------------------------------------------------
         self.act("ACTIVE",
-            If(ordered_set_unit.rx_ts1 | ordered_set_unit.rx_ts2,
+            If(ts_unit.rx_ts1 | ts_unit.rx_ts2,
                 NextState("CONFIGURATION"),         # 8 consecutiive TS1 or TS2 received.
             ),
             #self.exit_to_ss_disabled.eq(1),        # Timeout (Dev) or directed (DS).
@@ -208,8 +208,8 @@ class PollingFSM(FSM):
 
         # Configuration State ----------------------------------------------------------------------
         self.act("CONFIGURATION",
-            ordered_set_unit.tx_ts2.eq(1),
-            If(ordered_set_unit.rx_ts2,
+            ts_unit.tx_ts2.eq(1),
+            If(ts_unit.rx_ts2,
                 NextState("IDLE"),                  # TS2 handshake.
             ),
             #self.exit_to_ss_disabled.eq(1),        # Timeout (Dev) or directed (DS).
@@ -234,7 +234,7 @@ class PollingFSM(FSM):
 # Link Training and Status State Machine -----------------------------------------------------------
 
 class LTSSM(Module):
-    def __init__(self, lfps_unit, ordered_set_unit):
+    def __init__(self, lfps_unit, ts_unit):
         # SS Inactive FSM --------------------------------------------------------------------------
         self.submodules.ss_inactive_fsm = SSInactiveFSM()
 
@@ -243,8 +243,8 @@ class LTSSM(Module):
 
         # Polling FSM ------------------------------------------------------------------------------
         self.submodules.polling_fsm     = PollingFSM(
-            lfps_unit        = lfps_unit,
-            ordered_set_unit = ordered_set_unit)
+            lfps_unit = lfps_unit,
+            ts_unit   = ts_unit)
         self.comb += self.polling_fsm.reset.eq(lfps_unit.rx_polling)
 
         # LTSSM FSM --------------------------------------------------------------------------------

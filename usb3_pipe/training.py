@@ -7,9 +7,9 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common import TSEQ, TS1, TS2
 
-# Ordered Set Checker ------------------------------------------------------------------------------
+# Training Sequence Checker ------------------------------------------------------------------------
 
-class OrderedSetChecker(Module):
+class TSChecker(Module):
     def __init__(self, ordered_set, n_ordered_sets):
         self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.detected = Signal() # o
@@ -23,7 +23,7 @@ class OrderedSetChecker(Module):
 
         self.comb += self.sink.ready.eq(1)
 
-        # Memory --------------------------------------------------------------------------------
+        # Memory -----------------------------------------------------------------------------------
         mem_depth = len(ordered_set.to_bytes())//4
         mem_init  = [int.from_bytes(ordered_set.to_bytes()[4*i:4*(i+1)], "little") for i in range(mem_depth)]
         mem       = Memory(32, mem_depth, mem_init)
@@ -94,9 +94,9 @@ class OrderedSetChecker(Module):
         # Result -----------------------------------------------------------------------------------
         self.comb += self.detected.eq(count == (mem_depth*n_ordered_sets - 1))
 
-# Ordered Set Generator ----------------------------------------------------------------------------
+# Training Sequence Generator ----------------------------------------------------------------------
 
-class OrderedSetGenerator(Module):
+class TSGenerator(Module):
     def __init__(self, ordered_set, n_ordered_sets):
         self.send = Signal() # i
         self.done = Signal() # i
@@ -173,9 +173,9 @@ class OrderedSetGenerator(Module):
         # Result -----------------------------------------------------------------------------------
         self.comb += self.done.eq(count == (mem_depth*n_ordered_sets - 1))
 
-# Ordered Set Unit ---------------------------------------------------------------------------------
+# Training Sequence Unit ---------------------------------------------------------------------------
 
-class OrderedSetUnit(Module):
+class TSUnit(Module):
     def __init__(self, serdes):
         self.rx_tseq = Signal() # o
         self.rx_ts1  = Signal() # o
@@ -185,9 +185,9 @@ class OrderedSetUnit(Module):
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
-        tseq_checker    = OrderedSetChecker(ordered_set=TSEQ, n_ordered_sets=8)
-        ts1_checker     = OrderedSetChecker(ordered_set=TS1,  n_ordered_sets=8)
-        ts2_checker     = OrderedSetChecker(ordered_set=TS2,  n_ordered_sets=8)
+        tseq_checker    = TSChecker(ordered_set=TSEQ, n_ordered_sets=8)
+        ts1_checker     = TSChecker(ordered_set=TS1,  n_ordered_sets=8)
+        ts2_checker     = TSChecker(ordered_set=TS2,  n_ordered_sets=8)
         self.submodules += tseq_checker, ts1_checker, ts2_checker
         self.comb += [
             serdes.source.connect(tseq_checker.sink, omit={"ready"}),
@@ -196,11 +196,11 @@ class OrderedSetUnit(Module):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
-        ts2_generator   = OrderedSetGenerator(ordered_set=TS2, n_ordered_sets=8)
+        ts2_generator   = TSGenerator(ordered_set=TS2, n_ordered_sets=8)
         self.submodules += ts2_generator
         self.comb += [
             If(self.tx_ts2,
                 ts2_generator.send.eq(1),
                 ts2_generator.source.connect(serdes.sink),
-            ),
+            )
         ]

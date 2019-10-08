@@ -36,7 +36,7 @@ EPF =  Symbol("EPF", K(23, 7), "End Packet Framing")
 
 symbols = [SKP, SDP, EDB, SUB, COM, RSD, SHP, END, SLC, EPF]
 
-# Ordered Sets -------------------------------------------------------------------------------------
+# Training Sequence Ordered Sets -------------------------------------------------------------------
 
 class OrderedSet(list):
     def __init__(self, name, values, description=""):
