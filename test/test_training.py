@@ -14,13 +14,15 @@ class TestTraining(unittest.TestCase):
         tseq_length = len(TSEQ.to_bytes())//4
         tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little") for i in range(tseq_length)]
         def generator(dut, n_loops):
-            yield dut.sink.valid.eq(1)
             for i in range(n_loops):
                 for j in range(tseq_length):
+                    yield dut.sink.valid.eq(1)
                     yield dut.sink.ctrl.eq(j == 0)
                     yield dut.sink.data.eq(tseq_words[j])
                     yield
-            for i in range(128):
+                    yield dut.sink.valid.eq(0)
+                    yield
+            for i in range(1024):
                 yield
             dut.run = False
 

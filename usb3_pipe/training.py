@@ -80,10 +80,11 @@ class TSChecker(Module):
         ]
 
         # Count ------------------------------------------------------------------------------------
-        count = Signal(max=mem_depth*n_ordered_sets)
+        count      = Signal(max=mem_depth*n_ordered_sets)
+        count_done = (count == (mem_depth*n_ordered_sets - 1))
         self.sync += [
             If(self.sink.valid,
-                If(~error & ~self.detected,
+                If(~error & ~count_done,
                     count.eq(count + 1)
                 ).Else(
                     count.eq(0)
@@ -92,7 +93,7 @@ class TSChecker(Module):
         ]
 
         # Result -----------------------------------------------------------------------------------
-        self.comb += self.detected.eq(count == (mem_depth*n_ordered_sets - 1))
+        self.comb += self.detected.eq(self.sink.valid & count_done)
 
 # Training Sequence Generator ----------------------------------------------------------------------
 
