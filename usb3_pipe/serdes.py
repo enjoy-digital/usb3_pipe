@@ -217,7 +217,7 @@ class SerdesRXSkipRemover(Module):
         ]
         cases[4] = [
             sr_data.eq(Cat(frag_data[:32], sr_data)),
-            sr_ctrl.eq(Cat(sr_ctrl[:4],    sr_ctrl)),
+            sr_ctrl.eq(Cat(frag_ctrl[:4],  sr_ctrl)),
         ]
         self.comb += sink.ready.eq(sr_bytes <= 7)
         self.sync += [

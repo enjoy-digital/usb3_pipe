@@ -159,6 +159,6 @@ class TestSerDes(unittest.TestCase):
                 yield
 
         dut = SerdesRXSkipRemover()
-        run_simulation(dut, [generator(dut), checker(dut)], vcd_name="toto.vcd")
+        run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
