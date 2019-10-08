@@ -23,6 +23,7 @@ from litescope import LiteScopeAnalyzer
 
 from usb3_pipe.serdes import K7USB3SerDes
 from usb3_pipe.phy import USB3PHY
+from usb3_pipe.scrambling import Scrambler
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -130,6 +131,16 @@ class USB3SoC(SoCMini):
             If(usb3_phy.ready,
                 usb3_serdes.source.ready.eq(1),
                 idle_start.eq(~rx_ts2_error & rx_ts2_error_d),
+            )
+        ]
+
+        # Scrambler --------------------------------------------------------------------------------
+        self.submodules.scrambler = scrambler = Scrambler()
+        self.comb += [
+            If(usb3_phy.ready,
+                scrambler.sink.valid.eq(1),
+                scrambler.sink.data.eq(0),
+                scrambler.source.connect(usb3_serdes.sink)
             )
         ]
 

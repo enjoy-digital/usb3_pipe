@@ -205,8 +205,7 @@ class TSUnit(Module):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
-        ts2_generator   = TSGenerator(ordered_set=TS2, n_ordered_sets=8)
-        self.submodules += ts2_generator
+        self.submodules.ts2_generator = ts2_generator = TSGenerator(ordered_set=TS2, n_ordered_sets=8)
         self.comb += [
             If(self.tx_enable,
                 ts2_generator.send.eq(self.tx_ts2),

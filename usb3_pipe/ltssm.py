@@ -176,11 +176,14 @@ class PollingFSM(FSM):
 
         # # #
 
+        rx_ts2 = Signal()
+
         # FSM --------------------------------------------------------------------------------------
         FSM.__init__(self, reset_state="LFPS")
 
         # LFPS State -------------------------------------------------------------------------------
         self.act("LFPS",
+            NextValue(rx_ts2, 0),
             serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
             If(lfps_unit.rx_polling,
@@ -208,7 +211,7 @@ class PollingFSM(FSM):
         self.act("ACTIVE",
             ts_unit.rx_enable.eq(1),
             If(ts_unit.rx_ts1 | ts_unit.rx_ts2,
-                NextState("CONFIGURATION"),         # 8 consecutiive TS1 or TS2 received.
+                NextState("CONFIGURATION_0"),         # 8 consecutiive TS1 or TS2 received.
             ),
             #self.exit_to_ss_disabled.eq(1),        # Timeout (Dev) or directed (DS).
             #self.exit_to_rx_detect.eq(1),          # Timeout (DS).
@@ -216,11 +219,15 @@ class PollingFSM(FSM):
         )
 
         # Configuration State ----------------------------------------------------------------------
-        self.act("CONFIGURATION",
+
+        self.act("CONFIGURATION_0",
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
-            If(ts_unit.rx_ts2,
+            NextValue(rx_ts2, rx_ts2 | ts_unit.rx_ts2),
+            If(rx_ts2 & ts_unit.ts2_generator.done,
+                ts_unit.tx_enable.eq(0),
+                ts_unit.tx_ts2.eq(0),
                 NextState("IDLE"),                  # TS2 handshake.
             ),
             #self.exit_to_ss_disabled.eq(1),        # Timeout (Dev) or directed (DS).
