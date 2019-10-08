@@ -101,10 +101,6 @@ class USB3SoC(SoCMini):
             tx_pads      = platform.request("pcie_tx"),
             rx_pads      = platform.request("pcie_rx"))
         self.submodules += usb3_serdes
-        self.comb += [
-            usb3_serdes.tx_polarity.eq(0),
-            usb3_serdes.rx_polarity.eq(0),
-        ]
 
         # USB3 PHY ---------------------------------------------------------------------------------
         usb3_phy = USB3PHY(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
@@ -121,6 +117,7 @@ class USB3SoC(SoCMini):
                 usb3_serdes.tx_idle,
                 usb3_serdes.rx_idle,
                 usb3_serdes.tx_pattern,
+                usb3_serdes.rx_polarity,
                 usb3_phy.lfps.rx_polling,
                 usb3_phy.lfps.tx_polling,
 
