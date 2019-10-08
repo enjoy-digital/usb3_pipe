@@ -7,7 +7,7 @@ import random
 from migen import *
 
 from usb3_pipe.serdes import SerdesTXDatapath, SerdesRXDatapath
-from usb3_pipe.serdes import SerdesRXAligner
+from usb3_pipe.serdes import SerdesRXWordAligner
 
 
 class TestSerDes(unittest.TestCase):
@@ -53,7 +53,7 @@ class TestSerDes(unittest.TestCase):
         self.assertEqual(dut.data_errors, 0)
         self.assertEqual(dut.ctrl_errors, 0)
 
-    def test_aligner(self):
+    def test_rx_word_aligner(self):
         aligner_datas_input = [
             0x030201bc, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
             0x0201bc07, 0x0605040b, 0x0a09080f, 0x0e0d0c13,
@@ -99,7 +99,7 @@ class TestSerDes(unittest.TestCase):
                     dut.ctrls_errors += 1
                 yield
 
-        dut = SerdesRXAligner()
+        dut = SerdesRXWordAligner()
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)

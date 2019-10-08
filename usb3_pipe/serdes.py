@@ -55,7 +55,7 @@ class SerdesRXDatapath(Module):
 
 # RX Aligner ---------------------------------------------------------------------------------------
 
-class SerdesRXAligner(stream.PipelinedActor):
+class SerdesRXWordAligner(stream.PipelinedActor):
     def __init__(self):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -238,7 +238,7 @@ class A7USB3SerDes(Module):
         gtp.add_stream_endpoints()
         tx_datapath = SerdesTXDatapath("tx")
         rx_datapath = SerdesRXDatapath("rx")
-        rx_aligner  = SerdesRXAligner()
+        rx_aligner  = SerdesRXCommaAligner()
         self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner
         self.comb += [
             gtp.tx_enable.eq(self.enable),
