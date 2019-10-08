@@ -9,7 +9,6 @@ from migen import *
 from litex.soc.interconnect import stream
 
 # FIXME:
-# - LFSR shall be advanced for each symbol except for SKP.
 # - All 8b10b D-cores should be scrambled (except Training Sequence Ordered Sets).
 # - K codes shall not be scrambled.
 # - Allow enabling/disabling scrambling.
