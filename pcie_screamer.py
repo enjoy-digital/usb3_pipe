@@ -17,8 +17,7 @@ from litex.soc.cores.uart import UARTWishboneBridge
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe.serdes import A7USB3SerDes
-from usb3_pipe.core import USB3PIPE
+from usb3_pipe import A7USB3SerDes, USB3PIPE
 
 # IOs ----------------------------------------------------------------------------------------------
 

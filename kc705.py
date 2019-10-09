@@ -21,9 +21,8 @@ from liteeth.frontend.etherbone import LiteEthEtherbone
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe.serdes import K7USB3SerDes
+from usb3_pipe import K7USB3SerDes, USB3PIPE
 from usb3_pipe.scrambling import Scrambler
-from usb3_pipe.core import USB3PIPE
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
