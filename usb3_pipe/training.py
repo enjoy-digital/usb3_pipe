@@ -186,14 +186,16 @@ class TSUnit(Module):
         self.rx_ts2    = Signal() # o
 
         self.tx_enable = Signal() # i
+        self.tx_tseq   = Signal() # i
+        self.tx_ts1    = Signal() # i
         self.tx_ts2    = Signal() # i
 
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
-        self.submodules.tseq_checker = tseq_checker = TSChecker(ordered_set=TSEQ, n_ordered_sets=8)
-        self.submodules.ts1_checker  =  ts1_checker = TSChecker(ordered_set=TS1,  n_ordered_sets=8)
-        self.submodules.ts2_checker  =  ts2_checker = TSChecker(ordered_set=TS2,  n_ordered_sets=8)
+        self.submodules.tseq_checker = tseq_checker = TSChecker(ordered_set=TSEQ, n_ordered_sets=8) # FIXME: n?
+        self.submodules.ts1_checker  =  ts1_checker = TSChecker(ordered_set=TS1,  n_ordered_sets=8) # FIXME: n?
+        self.submodules.ts2_checker  =  ts2_checker = TSChecker(ordered_set=TS2,  n_ordered_sets=8) # FIXME: n?
         self.comb += [
             serdes.source.connect(tseq_checker.sink, omit={"ready"}),
             serdes.source.connect(ts1_checker.sink,  omit={"ready"}),
@@ -205,10 +207,22 @@ class TSUnit(Module):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
-        self.submodules.ts2_generator = ts2_generator = TSGenerator(ordered_set=TS2, n_ordered_sets=8)
+        self.submodules.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=8) # FIXME: n?
+        self.submodules.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=8) # FIXME: n?
+        self.submodules.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=8) # FIXME: n?
         self.comb += [
             If(self.tx_enable,
-                ts2_generator.send.eq(self.tx_ts2),
-                ts2_generator.source.connect(serdes.sink),
+                If(self.tx_tseq,
+                    tseq_generator.send.eq(1),
+                    tseq_generator.source.connect(serdes.sink),
+                ),
+                If(self.tx_ts1,
+                    ts1_generator.send.eq(1),
+                    ts1_generator.source.connect(serdes.sink),
+                ),
+                If(self.tx_ts2,
+                    ts2_generator.send.eq(1),
+                    ts2_generator.source.connect(serdes.sink),
+                ),
             )
         ]
