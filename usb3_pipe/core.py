@@ -9,9 +9,9 @@ from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.ltssm import LTSSM
 
-# USB3 PHY -----------------------------------------------------------------------------------------
+# USB3 PIPE ----------------------------------------------------------------------------------------
 
-class USB3PHY(Module):
+class USB3PIPE(Module):
     def __init__(self, serdes, sys_clk_freq):
         assert sys_clk_freq > 125e6
         self.enable = Signal(reset=1) # i

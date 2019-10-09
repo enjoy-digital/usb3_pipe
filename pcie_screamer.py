@@ -18,7 +18,7 @@ from litex.soc.cores.uart import UARTWishboneBridge
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe.serdes import A7USB3SerDes
-from usb3_pipe.phy import USB3PHY
+from usb3_pipe.core import USB3PIPE
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -79,8 +79,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform,
-        with_analyzer=False):
+    def __init__(self, platform, with_analyzer=False):
 
         sys_clk_freq = int(133e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -103,12 +102,12 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_serdes
 
         # USB3 PHY ---------------------------------------------------------------------------------
-        usb3_phy = USB3PHY(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
-        self.submodules += usb3_phy
+        usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
+        self.submodules += usb3_pipe
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
-        self.comb += platform.request("user_led", 1).eq(usb3_phy.ready)
+        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
@@ -118,17 +117,17 @@ class USB3SoC(SoCMini):
                 usb3_serdes.rx_idle,
                 usb3_serdes.tx_pattern,
                 usb3_serdes.rx_polarity,
-                usb3_phy.lfps.rx_polling,
-                usb3_phy.lfps.tx_polling,
+                usb3_pipe.lfps.rx_polling,
+                usb3_pipe.lfps.tx_polling,
 
                 # Training Sequence
-                usb3_phy.ts.rx_tseq,
-                usb3_phy.ts.rx_ts1,
-                usb3_phy.ts.rx_ts2,
-                usb3_phy.ts.tx_ts2,
+                usb3_pipe.ts.rx_tseq,
+                usb3_pipe.ts.rx_ts1,
+                usb3_pipe.ts.rx_ts2,
+                usb3_pipe.ts.tx_ts2,
 
                 # LTSSM
-                usb3_phy.ltssm.polling_fsm,
+                usb3_pipe.ltssm.polling_fsm,
 
                 # Endpoints
                 usb3_serdes.source,
