@@ -50,14 +50,19 @@ class USB3PIPESim(SoCMini):
         host_usb3_serdes = USB3SerDesModel()
         host_usb3_pipe   = USB3PIPE(serdes=host_usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += host_usb3_serdes, host_usb3_pipe
+        self.comb += host_usb3_pipe.ltssm.polling_fsm.skip_lfps.eq(1) # FIXME
 
         # USB3 Device
         dev_usb3_serdes = USB3SerDesModel()
         dev_usb3_pipe   = USB3PIPE(serdes=dev_usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
+        self.comb += dev_usb3_pipe.ltssm.polling_fsm.skip_lfps.eq(1) # FIXME
 
         # Connect Host <--> Device
         self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
+
+        # Simulation End
+        self.sync += If(host_usb3_pipe.ready & dev_usb3_pipe.ready, Finish())
 
 # Build --------------------------------------------------------------------------------------------
 

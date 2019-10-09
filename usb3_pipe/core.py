@@ -40,4 +40,3 @@ class USB3PIPE(Module):
         self.comb += ltssm.reset.eq(~self.enable)
         self.submodules.ltssm = ltssm
         self.comb += self.ready.eq(ltssm.polling_fsm.idle)
-

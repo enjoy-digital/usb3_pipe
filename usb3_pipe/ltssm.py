@@ -165,89 +165,74 @@ class RXDetectFSM(FSM):
 @ResetInserter()
 class PollingFSM(FSM):
     """ Polling Finite State Machine (section 7.5.4)"""
+    # FIXME: Simplified State Machine for initial tests, implement exits and timeouts.
     def __init__(self, serdes, lfps_unit, ts_unit):
-        self.exit_to_compliance_mode = Signal()
-        self.exit_to_rx_detect       = Signal()
-        self.exit_to_ss_disabled     = Signal()
-        self.exit_to_loopback        = Signal()
-        self.exit_to_hot_reset       = Signal()
-        self.exit_to_u0              = Signal()
-        self.idle                    = Signal()
+        self.idle = Signal()
+        self.skip_lfps = Signal() # FIXME: for simulation
 
         # # #
 
-        rx_ts2 = Signal()
+        rx_tseq_seen = Signal()
+        rx_ts1_seen  = Signal()
+        rx_ts2_seen  = Signal()
 
         # FSM --------------------------------------------------------------------------------------
         FSM.__init__(self, reset_state="LFPS")
 
         # LFPS State -------------------------------------------------------------------------------
+        # Generate/Receive Polling LFPS, jump to RX-EQ when received from partner
         self.act("LFPS",
-            NextValue(rx_ts2, 0),
+            NextValue(rx_tseq_seen, 0),
+            NextValue(rx_ts1_seen,  0),
+            NextValue(rx_ts2_seen,  0),
             serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
-            If(lfps_unit.rx_polling,
-                NextState("RX-EQ"),                  # LFPS handshake.
-            ),
-            #self.exit_to_compliance_mode.eq(1),     # First LFPS timeout.
-            #self.exit_to_ss_disabled.eq(1),         # Subsequent LFPS timeouts (Dev) or directed (DS).
-            #self.exit_to_rx_detect.eq(1),           # Subsequent LFPS timeouts (DS).
-            #NextState("END"),                       # On any exit case.
+            If(lfps_unit.rx_polling | self.skip_lfps,
+                NextState("RX-EQ"),
+            )
         )
 
         # RxEQ State -------------------------------------------------------------------------------
+        # Generate/Receive TSEQ, jump to ACTIVE when TSEQ sent and received from partner
         self.act("RX-EQ",
             serdes.rx_align.eq(1),
-            lfps_unit.tx_polling.eq(1),
             ts_unit.rx_enable.eq(1),
-            If(ts_unit.rx_tseq,
-                NextState("ACTIVE"),                # TSEQ transmitted.
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_tseq.eq(1),
+            NextValue(rx_tseq_seen, rx_tseq_seen | ts_unit.rx_tseq),
+            If(ts_unit.tx_done & rx_tseq_seen,
+                NextState("ACTIVE"),
             ),
-            #self.exit_to_ss_disabled.eq(1),        # Directed (DS).
-            #NextState("END"),                      # On any exit case.
         )
 
         # Active State -----------------------------------------------------------------------------
+        # Generate/Receive TS1, jump to CONFIGURATION when TS1 sent and received from partner
         self.act("ACTIVE",
             ts_unit.rx_enable.eq(1),
-            If(ts_unit.rx_ts1 | ts_unit.rx_ts2,
-                NextState("CONFIGURATION_0"),         # 8 consecutiive TS1 or TS2 received.
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_ts1.eq(1),
+            NextValue(rx_ts1_seen, rx_ts1_seen | ts_unit.rx_ts1),
+            If(ts_unit.tx_done & rx_ts1_seen,
+                NextState("CONFIGURATION"),
             ),
-            #self.exit_to_ss_disabled.eq(1),        # Timeout (Dev) or directed (DS).
-            #self.exit_to_rx_detect.eq(1),          # Timeout (DS).
-            #NextState("END")                       # On any exit case.
         )
 
         # Configuration State ----------------------------------------------------------------------
-
-        self.act("CONFIGURATION_0",
+        # Generate/Receive TS2, jump to IDLE when TS2 sent and reveived from partner
+        self.act("CONFIGURATION",
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
-            NextValue(rx_ts2, rx_ts2 | ts_unit.rx_ts2),
-            If(rx_ts2 & ts_unit.ts2_generator.done,
-                ts_unit.tx_enable.eq(0),
-                ts_unit.tx_ts2.eq(0),
-                NextState("IDLE"),                  # TS2 handshake.
-            ),
-            #self.exit_to_ss_disabled.eq(1),        # Timeout (Dev) or directed (DS).
-            #self.exit_to_rx_detect.eq(1),          # Timeout (DS).
-            #NextState("END"),                      # On any exit case.
+            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
+            If(ts_unit.tx_done & rx_ts2_seen,
+                NextState("IDLE"),
+            )
         )
 
         # Idle State -------------------------------------------------------------------------------
         self.act("IDLE",
-            self.idle.eq(1),
-            #self.exit_to_ss_disabled.eq(1),     # Timeout (Dev) or directed (DS).
-            #self.exit_to_rx_detect.eq(1),       # Timeout (DS).
-            #self.exit_to_loopback.eq(1),        # Directed.
-            #self.exit_to_hot_reset.eq(1),       # Directed.
-            #self.exit_to_u0.eq(1),              # Idle symbol handshake.
-            #NextState("END"),                   # On any exit case.
+            self.idle.eq(1)
         )
-
-        # End State --------------------------------------------------------------------------------
-        self.act("END")
 
 # Link Training and Status State Machine -----------------------------------------------------------
 

@@ -101,8 +101,8 @@ class TSChecker(Module):
 
 class TSGenerator(Module):
     def __init__(self, ordered_set, n_ordered_sets):
-        self.send = Signal() # i
-        self.done = Signal() # i
+        self.start  = Signal() # i
+        self.done   = Signal() # i
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         if ordered_set.name in ["TS1", "TS2"]:
@@ -112,7 +112,11 @@ class TSGenerator(Module):
 
         # # #
 
-        run = Signal()
+        start_d     = Signal()
+        start_pulse = Signal()
+        run         = Signal()
+        self.sync += start_d.eq(self.start)
+        self.comb += start_pulse.eq(self.start & ~start_d)
 
         # Memory --------------------------------------------------------------------------------
         mem_depth = len(ordered_set.to_bytes())//4
@@ -149,7 +153,7 @@ class TSGenerator(Module):
         else:
             first_ctrl = 1
         self.comb += [
-            self.source.valid.eq(self.send | ~self.done),
+            self.source.valid.eq(start_pulse | ~self.done),
             If(port.adr == 0,
                 self.source.ctrl.eq(first_ctrl),
             ).Else(
@@ -163,7 +167,7 @@ class TSGenerator(Module):
         # Count ------------------------------------------------------------------------------------
         count = Signal(max=mem_depth*n_ordered_sets, reset=mem_depth*n_ordered_sets - 1)
         self.sync += [
-            If(self.send & self.done,
+            If(start_pulse,
                 run.eq(1),
                 count.eq(0),
             ).Elif(self.done,
@@ -189,13 +193,14 @@ class TSUnit(Module):
         self.tx_tseq   = Signal() # i
         self.tx_ts1    = Signal() # i
         self.tx_ts2    = Signal() # i
+        self.tx_done   = Signal() # o
 
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
-        self.submodules.tseq_checker = tseq_checker = TSChecker(ordered_set=TSEQ, n_ordered_sets=8) # FIXME: n?
-        self.submodules.ts1_checker  =  ts1_checker = TSChecker(ordered_set=TS1,  n_ordered_sets=8) # FIXME: n?
-        self.submodules.ts2_checker  =  ts2_checker = TSChecker(ordered_set=TS2,  n_ordered_sets=8) # FIXME: n?
+        self.submodules.tseq_checker = tseq_checker = TSChecker(ordered_set=TSEQ, n_ordered_sets=2048)
+        self.submodules.ts1_checker  =  ts1_checker = TSChecker(ordered_set=TS1,  n_ordered_sets=8)
+        self.submodules.ts2_checker  =  ts2_checker = TSChecker(ordered_set=TS2,  n_ordered_sets=8)
         self.comb += [
             serdes.source.connect(tseq_checker.sink, omit={"ready"}),
             serdes.source.connect(ts1_checker.sink,  omit={"ready"}),
@@ -207,22 +212,23 @@ class TSUnit(Module):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
-        self.submodules.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=8) # FIXME: n?
-        self.submodules.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=8) # FIXME: n?
-        self.submodules.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=8) # FIXME: n?
+        self.submodules.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
+        self.submodules.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=128) # FIXME: n?
+        self.submodules.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=128) # FIXME: n?
         self.comb += [
             If(self.tx_enable,
                 If(self.tx_tseq,
-                    tseq_generator.send.eq(1),
+                    tseq_generator.start.eq(1),
                     tseq_generator.source.connect(serdes.sink),
                 ),
                 If(self.tx_ts1,
-                    ts1_generator.send.eq(1),
+                    ts1_generator.start.eq(1),
                     ts1_generator.source.connect(serdes.sink),
                 ),
                 If(self.tx_ts2,
-                    ts2_generator.send.eq(1),
+                    ts2_generator.start.eq(1),
                     ts2_generator.source.connect(serdes.sink),
                 ),
-            )
+            ),
+            self.tx_done.eq(tseq_generator.done & ts1_generator.done & ts2_generator.done),
         ]
