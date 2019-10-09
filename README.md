@@ -1,9 +1,10 @@
 ```
-       __  _________  ____    ___  _______  ____
-      / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
-     / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
-     \____/___/____/____/  /_/  /___/_/  /___/
-           Copyright (c) 2019, EnjoyDigital
+                         __  _________  ____    ___  _______  ____
+                        / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
+                       / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
+                       \____/___/____/____/  /_/  /___/_/  /___/
+                             Copyright (c) 2019, EnjoyDigital
+                                Powered by Migen & LiteX
 ```
 [![](https://travis-ci.com/enjoy-digital/usb3_pipe.svg?branch=master)](https://travis-ci.com/enjoy-digital/usb3_pipe)
 ![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)
