@@ -11,6 +11,10 @@ from litex.build.sim.config import SimConfig
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
+
+from usb3_pipe import USB3SerDesModel
+from usb3_pipe import USB3PIPE
+
 # IOs ----------------------------------------------------------------------------------------------
 
 class SimPins(Pins):
@@ -39,8 +43,21 @@ class Platform(SimPlatform):
 class USB3PIPESim(SoCMini):
     def __init__(self):
         platform = Platform()
-        sys_clk_freq = int(1e6)
+        sys_clk_freq = int(133e6)
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq)
+
+        # USB3 Host
+        host_usb3_serdes = USB3SerDesModel()
+        host_usb3_pipe   = USB3PIPE(serdes=host_usb3_serdes, sys_clk_freq=sys_clk_freq)
+        self.submodules += host_usb3_serdes, host_usb3_pipe
+
+        # USB3 Device
+        dev_usb3_serdes = USB3SerDesModel()
+        dev_usb3_pipe   = USB3PIPE(serdes=dev_usb3_serdes, sys_clk_freq=sys_clk_freq)
+        self.submodules += dev_usb3_serdes, dev_usb3_pipe
+
+        # Connect Host <--> Device
+        self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
 
 # Build --------------------------------------------------------------------------------------------
 
