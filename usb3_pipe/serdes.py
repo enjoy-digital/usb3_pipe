@@ -398,7 +398,7 @@ class A7USB3SerDes(Module):
         rx_datapath     = SerdesRXDatapath("rx")
         rx_aligner      = SerdesRXWordAligner()
         rx_skip_remover = SerdesRXSkipRemover()
-        self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
+        self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
