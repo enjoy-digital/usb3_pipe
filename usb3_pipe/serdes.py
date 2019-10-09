@@ -437,3 +437,35 @@ class A7USB3SerDes(Module):
             sys_clk,
             gtp.cd_tx.clk,
             gtp.cd_rx.clk)
+
+
+# Simulation Serializer/Deserializer Model ---------------------------------------------------------
+
+class USB3SerDesModel(Module):
+    def __init__(self):
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        self.enable = Signal(reset=1) # i
+        self.ready  = Signal()        # o
+
+        self.tx_polarity = Signal()   # i # not used
+        self.tx_idle     = Signal()   # i
+        self.tx_pattern  = Signal(20) # i # not used
+
+        self.rx_polarity = Signal()   # i # not used
+        self.rx_idle     = Signal()   # o
+        self.rx_align    = Signal()   # i # not used
+
+        # # #
+
+        # Ready when enabled
+        self.comb += self.ready.eq(self.enable)
+
+    def connect(self, serdes):
+        self.comb += [
+            self.sink.connect(serdes.source),
+            serdes.sink.connect(self.source),
+            self.rx_idle.eq(serdes.tx_idle),
+            serdes.rx_idle.eq(self.tx_idle),
+        ]
