@@ -81,7 +81,7 @@ class LFPSChecker(Module):
                 If(idle == 0,
                     NextValue(count, burst_cycles - 1),
                 ).Else(
-                    NextValue(count, repeat_cycles - burst_cycles - 1),
+                    NextValue(count, repeat_cycles - 2*burst_cycles - 1),
                     NextState("TREPEAT")
                 )
             ).Else(
@@ -186,7 +186,7 @@ class LFPSGenerator(Module):
                 self.tx_idle.eq(1),
                 NextValue(burst_generator.start, 1),
                 NextValue(burst_generator.length, int(sys_clk_freq*PollingLFPSBurst.t_typ)),
-                NextValue(burst_repeat_count,       int(sys_clk_freq*PollingLFPSRepeat.t_typ)),
+                NextValue(burst_repeat_count,     int(sys_clk_freq*PollingLFPSRepeat.t_typ)),
                 NextState("RUN")
             )
         )

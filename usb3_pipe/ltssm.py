@@ -168,7 +168,6 @@ class PollingFSM(FSM):
     # FIXME: Simplified State Machine for initial tests, implement exits and timeouts.
     def __init__(self, serdes, lfps_unit, ts_unit):
         self.idle = Signal()
-        self.skip_lfps = Signal() # FIXME: for simulation
 
         # # #
 
@@ -187,7 +186,7 @@ class PollingFSM(FSM):
             NextValue(rx_ts2_seen,  0),
             serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
-            If(lfps_unit.rx_polling | self.skip_lfps,
+            If(lfps_unit.rx_polling,
                 NextState("RX-EQ"),
             )
         )
