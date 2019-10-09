@@ -81,9 +81,9 @@ class TestTraining(unittest.TestCase):
         tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little") for i in range(tseq_length)]
         def generator(dut, n_loops):
             for i in range(n_loops):
-                yield dut.send.eq(1)
+                yield dut.start.eq(1)
                 yield
-                yield dut.send.eq(0)
+                yield dut.start.eq(0)
                 yield
                 while not (yield dut.done):
                     yield
@@ -115,12 +115,12 @@ class TestTraining(unittest.TestCase):
         ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
         def generator(dut, n_loops):
             for i in range(n_loops):
-                yield dut.send.eq(1)
+                yield dut.start.eq(1)
                 yield dut.reset.eq(0)
                 yield dut.loopback.eq(0)
                 yield dut.scrambling.eq(1)
                 yield
-                yield dut.send.eq(0)
+                yield dut.start.eq(0)
                 yield
                 while not (yield dut.done):
                     yield
