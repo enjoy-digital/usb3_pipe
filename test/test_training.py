@@ -83,10 +83,9 @@ class TestTraining(unittest.TestCase):
             for i in range(n_loops):
                 yield dut.start.eq(1)
                 yield
-                yield dut.start.eq(0)
-                yield
                 while not (yield dut.done):
                     yield
+                yield dut.start.eq(0)
                 yield
             for i in range(128):
                 yield
@@ -96,17 +95,23 @@ class TestTraining(unittest.TestCase):
             words = []
             yield dut.source.ready.eq(1)
             yield
+            i = 0
             while dut.run:
                 if (yield dut.source.valid):
                     words.append((yield dut.source.data))
+                i += 1
+                yield dut.source.ready.eq(0)
                 yield
+                yield dut.source.ready.eq(1)
+                yield
+
             self.assertEqual(words, tseq_words*n_loops*n_ordered_sets)
 
         dut = TSGenerator(ordered_set=TSEQ, n_ordered_sets=4)
         dut.run = True
         generators = [
-            generator(dut, n_loops=32),
-            checker(dut, n_loops=32, n_ordered_sets=4),
+            generator(dut, n_loops=4),
+            checker(dut, n_loops=4, n_ordered_sets=4),
         ]
         run_simulation(dut, generators)
 

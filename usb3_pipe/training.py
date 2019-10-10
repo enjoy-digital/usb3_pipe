@@ -35,10 +35,10 @@ class TSChecker(Module):
         error      = Signal()
         error_mask = Signal(32, reset=2**32-1)
         if ordered_set.name in ["TS1", "TS2"]:
-            first_ctrl = 2**4 - 1
+            first_ctrl = 0b1111
             self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
         else:
-            first_ctrl = 1
+            first_ctrl = 0b0001
         self.comb += [
             If(self.sink.valid,
                 # Check Comma
@@ -112,11 +112,7 @@ class TSGenerator(Module):
 
         # # #
 
-        start_d     = Signal()
-        start_pulse = Signal()
         run         = Signal()
-        self.sync += start_d.eq(self.start)
-        self.comb += start_pulse.eq(self.start & ~start_d)
 
         # Memory --------------------------------------------------------------------------------
         mem_depth = len(ordered_set.to_bytes())//4
@@ -151,11 +147,11 @@ class TSGenerator(Module):
 
         # Data generation --------------------------------------------------------------------------
         if ordered_set.name in ["TS1", "TS2"]:
-            first_ctrl = 2**4 - 1
+            first_ctrl = 0b1111
         else:
-            first_ctrl = 1
+            first_ctrl = 0b0001
         self.comb += [
-            self.source.valid.eq(start_pulse | run),
+            self.source.valid.eq(self.start | run),
             If(port.adr == 0,
                 self.source.ctrl.eq(first_ctrl),
             ).Else(
@@ -170,18 +166,20 @@ class TSGenerator(Module):
         count = Signal(max=mem_depth*n_ordered_sets, reset=mem_depth*n_ordered_sets - 1)
         count_done = (count == (mem_depth*n_ordered_sets - 1))
         self.sync += [
-            If(start_pulse,
+            If(self.start & ~run,
                 run.eq(1),
                 count.eq(1),
-            ).Elif(count_done,
-                run.eq(0),
-            ).Else(
-                count.eq(count + 1)
+            ).Elif(self.source.ready,
+                If(count_done,
+                    run.eq(0),
+                ).Else(
+                    count.eq(count + 1)
+                )
             )
         ]
 
         # Result -----------------------------------------------------------------------------------
-        self.comb += self.done.eq(run & count_done)
+        self.comb += self.done.eq(self.source.ready & run & count_done)
 
 # Training Sequence Unit ---------------------------------------------------------------------------
 

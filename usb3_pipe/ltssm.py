@@ -206,7 +206,6 @@ class PollingFSM(FSM):
             ts_unit.tx_tseq.eq(1),
             NextValue(rx_tseq_seen, rx_tseq_seen | ts_unit.rx_tseq),
             If(ts_unit.tx_done,
-                ts_unit.tx_tseq.eq(0),
                 If(rx_tseq_seen,
                     NextState("ACTIVE")
                 )
@@ -221,7 +220,6 @@ class PollingFSM(FSM):
             ts_unit.tx_ts1.eq(1),
             NextValue(rx_ts1_seen, rx_ts1_seen | ts_unit.rx_ts1),
             If(ts_unit.tx_done,
-                ts_unit.tx_ts1.eq(0),
                 If(rx_ts1_seen,
                     NextState("CONFIGURATION")
                 )
@@ -236,7 +234,6 @@ class PollingFSM(FSM):
             ts_unit.tx_ts2.eq(1),
             NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
             If(ts_unit.tx_done,
-                ts_unit.tx_ts2.eq(0),
                 If(rx_ts2_seen,
                     NextState("IDLE")
                 )
