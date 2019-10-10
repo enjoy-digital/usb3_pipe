@@ -22,7 +22,6 @@ from liteeth.frontend.etherbone import LiteEthEtherbone
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe import K7USB3SerDes, USB3PIPE
-from usb3_pipe.scrambling import Scrambler
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -119,29 +118,8 @@ class USB3SoC(SoCMini):
         # USB3 PIPE --------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += usb3_pipe
-
-        # Idle handshake trigger--------------------------------------------------------------------
-        idle_start = Signal()
-        rx_ts2_error     = Signal()
-        rx_ts2_error_d   = Signal()
-        self.comb += rx_ts2_error.eq(usb3_pipe.ts.ts2_checker.error)
-        self.sync += rx_ts2_error_d.eq(rx_ts2_error)
-        self.comb += [
-            If(usb3_pipe.ready,
-                usb3_serdes.source.ready.eq(1),
-                idle_start.eq(~rx_ts2_error & rx_ts2_error_d),
-            )
-        ]
-
-        # Scrambler --------------------------------------------------------------------------------
-        self.submodules.scrambler = scrambler = Scrambler()
-        self.comb += [
-            If(usb3_pipe.ready,
-                scrambler.sink.valid.eq(1),
-                scrambler.sink.data.eq(0),
-                scrambler.source.connect(usb3_serdes.sink)
-            )
-        ]
+        self.comb += usb3_pipe.sink.valid.eq(1)
+        self.comb += usb3_pipe.source.ready.eq(1)
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
@@ -162,12 +140,14 @@ class USB3SoC(SoCMini):
                 usb3_pipe.ts.rx_tseq,
                 usb3_pipe.ts.rx_ts1,
                 usb3_pipe.ts.rx_ts2,
+                usb3_pipe.ts.tx_tseq,
+                usb3_pipe.ts.tx_ts1,
                 usb3_pipe.ts.tx_ts2,
-                usb3_pipe.ts.ts2_checker.error,
+                usb3_pipe.ts.tx_done,
 
                 # LTSSM
                 usb3_pipe.ltssm.polling_fsm,
-                idle_start,
+                usb3_pipe.ready,
 
                 # Endpoints
                 usb3_serdes.source,
