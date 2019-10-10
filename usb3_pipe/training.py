@@ -141,8 +141,8 @@ class TSGenerator(Module):
         if ordered_set.name in ["TS1", "TS2"]:
             self.comb += [
                 link_config[0].eq(self.reset),
-                link_config[1].eq(self.loopback),
-                link_config[2].eq(~self.scrambling)
+                link_config[2].eq(self.loopback),
+                link_config[3].eq(~self.scrambling)
             ]
 
         # Data generation --------------------------------------------------------------------------
