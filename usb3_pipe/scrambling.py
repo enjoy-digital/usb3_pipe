@@ -97,3 +97,30 @@ class Scrambler(Module):
                     )
                 )
             ]
+
+
+# Descrambler (Scrambler + Auto-Synchronization) ---------------------------------------------------
+
+class Descrambler(Module):
+    def __init__(self):
+        self.enable = Signal(reset=1)
+        self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        scrambler = Scrambler()
+        self.submodules += scrambler
+
+        sync   = Signal()
+        synced = Signal()
+        self.comb += sync.eq(sink.valid & (sink.data == scrambler.source.data))
+        self.sync += If(sync, synced.eq(1))
+        self.comb += [
+            If(~sync & ~synced,
+                sink.ready.eq(1)
+            ).Else(
+                sink.connect(scrambler.sink)
+            ),
+            scrambler.source.connect(source)
+        ]
