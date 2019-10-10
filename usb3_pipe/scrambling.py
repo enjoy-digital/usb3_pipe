@@ -80,7 +80,6 @@ class ScramblerUnit(Module):
 
 # Scrambler ----------------------------------------------------------------------------------------
 
-@ResetInserter()
 class Scrambler(Module):
     def __init__(self):
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -98,7 +97,6 @@ class Scrambler(Module):
 
 # Descrambler --------------------------------------------------------------------------------------
 
-@ResetInserter()
 class Descrambler(Module):
     def __init__(self):
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
