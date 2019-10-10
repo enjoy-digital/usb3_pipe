@@ -47,9 +47,9 @@ print("FPGA: " + fpga_id)
 # Analyzer dump ------------------------------------------------------------------------------------
 analyzer = LiteScopeAnalyzerDriver(wb.regs, "analyzer", debug=True)
 if sys.argv[1] == "rx_polling":
-    analyzer.configure_trigger(cond={"soc_usb3_pipe_lfps_rx_polling" : 1})
+    analyzer.add_rising_edge_trigger("soc_usb3_pipe_lfps_rx_polling")
 elif sys.argv[1] == "tx_polling":
-    analyzer.configure_trigger(cond={"soc_usb3_pipe_lfps_tx_polling" : 1})
+    analyzer.add_rising_edge_trigger("soc_usb3_pipe_lfps_tx_polling")
 elif sys.argv[1] == "rx_tseq_first_word":
     from usb3_pipe.common import TSEQ
     TSEQ_FIRST_WORD = int.from_bytes(TSEQ.to_bytes()[0:4], byteorder="little")
@@ -57,15 +57,15 @@ elif sys.argv[1] == "rx_tseq_first_word":
         "soc_usb3_serdes_source_source_valid" :       1,
         "soc_usb3_serdes_source_source_payload_data": TSEQ_FIRST_WORD})
 elif sys.argv[1] == "rx_tseq":
-    analyzer.configure_trigger(cond={"soc_usb3_pipe_ts_rx_tseq" : 1})
+    analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_rx_tseq")
 elif sys.argv[1] == "rx_ts1":
-     analyzer.configure_trigger(cond={"soc_usb3_pipe_ts_rx_ts1" : 1})
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_rx_ts1")
 elif sys.argv[1] == "rx_ts2":
-     analyzer.configure_trigger(cond={"soc_usb3_pipe_ts_rx_ts2" : 1})
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_rx_ts2")
 elif sys.argv[1] == "tx_ts2":
-     analyzer.configure_trigger(cond={"soc_usb3_pipe_ts_tx_ts2" : 1})
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_tx_ts2")
 elif sys.argv[1] == "ready":
-     analyzer.configure_trigger(cond={"soc_usb3_pipe_ready" : 1})
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ready")
 elif sys.argv[1] == "now":
 	analyzer.configure_trigger(cond={})
 else:
