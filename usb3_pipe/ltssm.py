@@ -171,6 +171,9 @@ class PollingFSM(FSM):
 
         # # #
 
+        count      = Signal(32)
+        count_done = (count == int(10e3))
+
         rx_tseq_seen = Signal()
         rx_ts1_seen  = Signal()
         rx_ts2_seen  = Signal()
@@ -181,12 +184,15 @@ class PollingFSM(FSM):
         # LFPS State -------------------------------------------------------------------------------
         # Generate/Receive Polling LFPS, jump to RX-EQ when received from partner
         self.act("LFPS",
+            If(~count_done,
+                NextValue(count, count + 1)
+            ),
             NextValue(rx_tseq_seen, 0),
             NextValue(rx_ts1_seen,  0),
             NextValue(rx_ts2_seen,  0),
             serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
-            If(lfps_unit.rx_polling,
+            If(count_done,
                 NextState("RX-EQ"),
             )
         )
@@ -199,8 +205,11 @@ class PollingFSM(FSM):
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_tseq.eq(1),
             NextValue(rx_tseq_seen, rx_tseq_seen | ts_unit.rx_tseq),
-            If(ts_unit.tx_done & rx_tseq_seen,
-                NextState("ACTIVE"),
+            If(ts_unit.tx_done,
+                ts_unit.tx_tseq.eq(0),
+                If(rx_tseq_seen,
+                    NextState("ACTIVE")
+                )
             ),
         )
 
@@ -211,8 +220,11 @@ class PollingFSM(FSM):
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts1.eq(1),
             NextValue(rx_ts1_seen, rx_ts1_seen | ts_unit.rx_ts1),
-            If(ts_unit.tx_done & rx_ts1_seen,
-                NextState("CONFIGURATION"),
+            If(ts_unit.tx_done,
+                ts_unit.tx_ts1.eq(0),
+                If(rx_ts1_seen,
+                    NextState("CONFIGURATION")
+                )
             ),
         )
 
@@ -223,8 +235,11 @@ class PollingFSM(FSM):
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
             NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
-            If(ts_unit.tx_done & rx_ts2_seen,
-                NextState("IDLE"),
+            If(ts_unit.tx_done,
+                ts_unit.tx_ts2.eq(0),
+                If(rx_ts2_seen,
+                    NextState("IDLE")
+                )
             )
         )
 
@@ -248,6 +263,7 @@ class LTSSM(Module):
             serdes    = serdes,
             lfps_unit = lfps_unit,
             ts_unit   = ts_unit)
+        self.comb += self.polling_fsm.reset.eq(lfps_unit.rx_polling)
 
         # LTSSM FSM --------------------------------------------------------------------------------
         self.submodules.ltssm_fsm       = LTSSMFSM()

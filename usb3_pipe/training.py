@@ -127,11 +127,13 @@ class TSGenerator(Module):
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [
-            If(self.source.valid & self.source.ready,
-                If(port.adr == (mem_depth - 1),
-                    port.adr.eq(0)
-                ).Else(
-                    port.adr.eq(port.adr + 1)
+            If(self.source.valid,
+                If(self.source.ready,
+                    If(port.adr == (mem_depth - 1),
+                        port.adr.eq(0)
+                    ).Else(
+                        port.adr.eq(port.adr + 1)
+                    )
                 )
             ).Else(
                 port.adr.eq(0)
