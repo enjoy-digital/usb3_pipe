@@ -104,6 +104,7 @@ class SerdesRXSkipRemover(Module):
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.skip   = Signal()
 
         # # #
 
@@ -111,6 +112,7 @@ class SerdesRXSkipRemover(Module):
         skp = Signal(4)
         for i in range(4):
             self.comb += skp[i].eq(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == SKP.value))
+        self.comb += self.skip.eq(self.sink.valid & self.sink.ready & (skp != 0))
 
         # Select valid Data/Ctrl fragments ---------------------------------------------------------
         frag_data  = Signal(32)
@@ -271,6 +273,7 @@ class K7USB3SerDes(Module):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i
+        self.rx_skip     = Signal()   # o
 
         # # #
 
@@ -307,6 +310,7 @@ class K7USB3SerDes(Module):
         rx_datapath     = SerdesRXDatapath("rx")
         rx_aligner      = SerdesRXWordAligner()
         rx_skip_remover = SerdesRXSkipRemover()
+        self.comb += self.rx_skip.eq(rx_skip_remover.skip)
         self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
         self.comb += [
             gtx.tx_enable.eq(self.enable),
@@ -362,6 +366,7 @@ class A7USB3SerDes(Module):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i
+        self.rx_skip     = Signal()   # o
 
         # # #
 
@@ -398,6 +403,7 @@ class A7USB3SerDes(Module):
         rx_datapath     = SerdesRXDatapath("rx")
         rx_aligner      = SerdesRXWordAligner()
         rx_skip_remover = SerdesRXSkipRemover()
+        self.comb += self.rx_skip.eq(rx_skip_remover.skip)
         self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
         self.comb += [
             gtp.tx_enable.eq(self.enable),

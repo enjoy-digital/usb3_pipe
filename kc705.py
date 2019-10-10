@@ -152,6 +152,7 @@ class USB3SoC(SoCMini):
                 usb3_pipe.ready,
 
                 # Endpoints
+                usb3_serdes.rx_skip,
                 usb3_serdes.source,
                 usb3_serdes.sink,
                 usb3_pipe.source,
