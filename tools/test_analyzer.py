@@ -23,6 +23,10 @@ def help():
     print(" - tx_ts2")
     print("")
     print(" - ready")
+    print(" - skip")
+    print("")
+    print(" - sink_ready")
+    print(" - source_valid")
     print("")
     print(" - now")
     exit()
@@ -66,6 +70,12 @@ elif sys.argv[1] == "tx_ts2":
      analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_tx_ts2")
 elif sys.argv[1] == "ready":
      analyzer.add_rising_edge_trigger("soc_usb3_pipe_ready")
+elif sys.argv[1] == "skip":
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ready")
+elif sys.argv[1] == "sink_ready":
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_sink_sink_ready")
+elif sys.argv[1] == "source_valid":
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_source_source_valid")
 elif sys.argv[1] == "now":
 	analyzer.configure_trigger(cond={})
 else:
