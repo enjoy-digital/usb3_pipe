@@ -27,7 +27,7 @@ scrambler_ref = [
 ]
 
 class TestScrambler(unittest.TestCase):
-    def test_scrambler(self):
+    def test_scrambler_data(self):
         def generator(dut):
             yield dut.source.ready.eq(1)
             yield
@@ -36,6 +36,21 @@ class TestScrambler(unittest.TestCase):
             yield
             for i in range(64):
                 self.assertEqual((yield dut.source.data), scrambler_ref[i])
+                yield
+
+        dut = Scrambler()
+        run_simulation(dut, generator(dut))
+
+    def test_scrambler_ctrl(self):
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield
+            yield dut.sink.data.eq(0)
+            yield dut.sink.ctrl.eq(0b1111)
+            yield dut.sink.valid.eq(1)
+            yield
+            for i in range(64):
+                self.assertEqual((yield dut.source.data), 0)
                 yield
 
         dut = Scrambler()

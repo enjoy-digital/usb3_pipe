@@ -9,8 +9,6 @@ from migen import *
 from litex.soc.interconnect import stream
 
 # FIXME:
-# - All 8b10b D-cores should be scrambled (except Training Sequence Ordered Sets).
-# - K codes shall not be scrambled.
 # - Allow enabling/disabling scrambling.
 
 # Scrambler Unit -----------------------------------------------------------------------------------
@@ -89,25 +87,14 @@ class Scrambler(Module):
 
         scrambler = ScramblerUnit()
         self.submodules += scrambler
-        self.comb += [
-            scrambler.ce.eq(sink.valid & sink.ready),
-            sink.connect(source),
-            source.data.eq(sink.data ^ scrambler.value)
-        ]
-
-# Descrambler --------------------------------------------------------------------------------------
-
-class Descrambler(Module):
-    def __init__(self):
-        self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-
-        # # #
-
-        scrambler = ScramblerUnit()
-        self.submodules += scrambler
-        self.comb += [
-            scrambler.ce.eq(sink.valid & sink.ready),
-            sink.connect(source),
-            source.data.eq(sink.data ^ scrambler.value)
-        ]
+        self.comb += scrambler.ce.eq(sink.valid & sink.ready)
+        self.comb += sink.connect(source)
+        for i in range(4):
+            self.comb += [
+                source.ctrl[i].eq(sink.ctrl[i]),
+                If(sink.ctrl[i], # K codes shall not be scrambled.
+                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
+                ).Else(
+                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ scrambler.value[8*i:8*(i+1)])
+                )
+            ]

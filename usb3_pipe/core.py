@@ -8,7 +8,7 @@ from litex.soc.interconnect import stream
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.ltssm import LTSSM
-from usb3_pipe.scrambling import Scrambler, Descrambler
+from usb3_pipe.scrambling import Scrambler
 
 # USB3 PIPE ----------------------------------------------------------------------------------------
 
@@ -52,7 +52,7 @@ class USB3PIPE(Module):
             If(self.ready, scrambler.source.connect(serdes.sink))
         ]
 
-        descrambler = Descrambler()
+        descrambler = Scrambler()
         descrambler = ResetInserter()(descrambler)
         self.comb += descrambler.reset.eq(~self.enable)
         self.submodules.descrambler = descrambler
