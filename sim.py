@@ -3,6 +3,7 @@
 import argparse
 
 from migen import *
+from migen.genlib.misc import WaitTimer
 
 from litex.build.generic_platform import *
 from litex.build.sim import SimPlatform
@@ -10,7 +11,6 @@ from litex.build.sim.config import SimConfig
 
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
-
 
 from usb3_pipe import USB3SerDesModel
 from usb3_pipe import USB3PIPE
@@ -79,7 +79,10 @@ class USB3PIPESim(SoCMini):
                 ]
 
         # Simulation End
-        self.sync += If(host_usb3_pipe.ready & dev_usb3_pipe.ready, Finish())
+        end_timer = WaitTimer(2**16)
+        self.submodules += end_timer
+        self.comb += end_timer.wait.eq(host_usb3_pipe.ready & dev_usb3_pipe.ready)
+        self.sync += If(end_timer.done, Finish())
 
 # Build --------------------------------------------------------------------------------------------
 
