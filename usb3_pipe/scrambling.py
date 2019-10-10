@@ -8,9 +8,6 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
-# FIXME:
-# - Allow enabling/disabling scrambling.
-
 # Scrambler Unit -----------------------------------------------------------------------------------
 
 @CEInserter()
@@ -80,6 +77,7 @@ class ScramblerUnit(Module):
 
 class Scrambler(Module):
     def __init__(self):
+        self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -91,10 +89,11 @@ class Scrambler(Module):
         self.comb += sink.connect(source)
         for i in range(4):
             self.comb += [
-                source.ctrl[i].eq(sink.ctrl[i]),
-                If(sink.ctrl[i], # K codes shall not be scrambled.
-                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
-                ).Else(
-                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ scrambler.value[8*i:8*(i+1)])
+                If(self.enable,
+                    If(sink.ctrl[i], # K codes shall not be scrambled.
+                        source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
+                    ).Else(
+                        source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ scrambler.value[8*i:8*(i+1)])
+                    )
                 )
             ]
