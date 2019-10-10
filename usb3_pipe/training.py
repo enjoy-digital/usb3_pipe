@@ -102,7 +102,7 @@ class TSChecker(Module):
 class TSGenerator(Module):
     def __init__(self, ordered_set, n_ordered_sets):
         self.start  = Signal() # i
-        self.done   = Signal() # i
+        self.done   = Signal() # o
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         if ordered_set.name in ["TS1", "TS2"]:
@@ -153,7 +153,7 @@ class TSGenerator(Module):
         else:
             first_ctrl = 1
         self.comb += [
-            self.source.valid.eq(start_pulse | ~self.done),
+            self.source.valid.eq(start_pulse | run),
             If(port.adr == 0,
                 self.source.ctrl.eq(first_ctrl),
             ).Else(
@@ -166,11 +166,12 @@ class TSGenerator(Module):
 
         # Count ------------------------------------------------------------------------------------
         count = Signal(max=mem_depth*n_ordered_sets, reset=mem_depth*n_ordered_sets - 1)
+        count_done = (count == (mem_depth*n_ordered_sets - 1))
         self.sync += [
             If(start_pulse,
                 run.eq(1),
-                count.eq(0),
-            ).Elif(self.done,
+                count.eq(1),
+            ).Elif(count_done,
                 run.eq(0),
             ).Else(
                 count.eq(count + 1)
@@ -178,7 +179,7 @@ class TSGenerator(Module):
         ]
 
         # Result -----------------------------------------------------------------------------------
-        self.comb += self.done.eq(count == (mem_depth*n_ordered_sets - 1))
+        self.comb += self.done.eq(run & count_done)
 
 # Training Sequence Unit ---------------------------------------------------------------------------
 
@@ -230,5 +231,5 @@ class TSUnit(Module):
                     ts2_generator.source.connect(serdes.sink),
                 ),
             ),
-            self.tx_done.eq(tseq_generator.done & ts1_generator.done & ts2_generator.done),
+            self.tx_done.eq(tseq_generator.done | ts1_generator.done | ts2_generator.done),
         ]
