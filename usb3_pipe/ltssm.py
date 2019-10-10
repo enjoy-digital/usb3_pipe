@@ -171,9 +171,6 @@ class PollingFSM(FSM):
 
         # # #
 
-        count      = Signal(32)
-        count_done = (count == int(10e3))
-
         rx_tseq_seen = Signal()
         rx_ts1_seen  = Signal()
         rx_ts2_seen  = Signal()
@@ -184,17 +181,12 @@ class PollingFSM(FSM):
         # LFPS State -------------------------------------------------------------------------------
         # Generate/Receive Polling LFPS, jump to RX-EQ when received from partner
         self.act("LFPS",
-            If(~count_done,
-                NextValue(count, count + 1)
-            ),
             NextValue(rx_tseq_seen, 0),
             NextValue(rx_ts1_seen,  0),
             NextValue(rx_ts2_seen,  0),
             serdes.rx_align.eq(1),
             lfps_unit.tx_polling.eq(1),
-            If(count_done,
-                NextState("RX-EQ"),
-            )
+            NextState("RX-EQ"),
         )
 
         # RxEQ State -------------------------------------------------------------------------------
@@ -204,6 +196,7 @@ class PollingFSM(FSM):
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_tseq.eq(1),
+            lfps_unit.tx_polling.eq(1), # FIXME
             NextValue(rx_tseq_seen, rx_tseq_seen | ts_unit.rx_tseq),
             If(ts_unit.tx_done,
                 If(rx_tseq_seen,
