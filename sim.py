@@ -50,14 +50,33 @@ class USB3PIPESim(SoCMini):
         host_usb3_serdes = USB3SerDesModel()
         host_usb3_pipe   = USB3PIPE(serdes=host_usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += host_usb3_serdes, host_usb3_pipe
+        host_usb3_pipe.finalize()
 
         # USB3 Device
         dev_usb3_serdes = USB3SerDesModel()
         dev_usb3_pipe   = USB3PIPE(serdes=dev_usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
+        dev_usb3_pipe.finalize()
 
         # Connect Host <--> Device
         self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
+
+        # Simulation Timer
+        timer = Signal(32)
+        self.sync += timer.eq(timer + 1)
+
+        # Simulation Status
+        for pipe, fsm in [
+            ["host",  host_usb3_pipe.ltssm.polling_fsm],
+            ["dev ",  dev_usb3_pipe.ltssm.polling_fsm]]:
+            for state, value in fsm.encoding.items():
+                self.sync += [
+                    If(fsm.next_state != fsm.state,
+                        If(fsm.next_state == value,
+                            Display("[%08d] {} entering {} state".format(pipe.upper(), state), timer)
+                        )
+                    )
+                ]
 
         # Simulation End
         self.sync += If(host_usb3_pipe.ready & dev_usb3_pipe.ready, Finish())
