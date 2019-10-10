@@ -137,9 +137,11 @@ class USB3SoC(SoCMini):
                 usb3_pipe.lfps.tx_polling,
 
                 # Training Sequence
+                usb3_pipe.ts.tx_enable,
                 usb3_pipe.ts.rx_tseq,
                 usb3_pipe.ts.rx_ts1,
                 usb3_pipe.ts.rx_ts2,
+                usb3_pipe.ts.tx_enable,
                 usb3_pipe.ts.tx_tseq,
                 usb3_pipe.ts.tx_ts1,
                 usb3_pipe.ts.tx_ts2,
@@ -152,6 +154,8 @@ class USB3SoC(SoCMini):
                 # Endpoints
                 usb3_serdes.source,
                 usb3_serdes.sink,
+                usb3_pipe.source,
+                usb3_pipe.sink,
             ]
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
