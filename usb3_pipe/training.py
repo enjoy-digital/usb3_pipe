@@ -16,9 +16,9 @@ class TSChecker(Module):
         self.error    = Signal() # o
 
         if ordered_set.name in ["TS1", "TS2"]:
-            self.reset      = Signal() # o
-            self.loopback   = Signal() # o
-            self.scrambling = Signal() # o
+            self.reset      = Signal()        # o
+            self.loopback   = Signal()        # o
+            self.scrambling = Signal(reset=1) # o
 
         # # #
 
@@ -106,9 +106,9 @@ class TSGenerator(Module):
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         if ordered_set.name in ["TS1", "TS2"]:
-            self.reset      = Signal() # i
-            self.loopback   = Signal() # i
-            self.scrambling = Signal() # i
+            self.reset      = Signal()        # i
+            self.loopback   = Signal()        # i
+            self.scrambling = Signal(reset=1) # i
 
         # # #
 
