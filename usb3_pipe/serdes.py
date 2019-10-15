@@ -256,7 +256,7 @@ class SerdesRXSkipRemover(Module):
         ]
         self.comb += Case(sr_bytes, cases)
 
-# Kintex7 USB3 Serializer/Deserializer -------------------------------------------------------------
+# Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
 
 class K7USB3SerDes(Module):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
@@ -349,7 +349,7 @@ class K7USB3SerDes(Module):
             gtx.cd_tx.clk,
             gtx.cd_rx.clk)
 
-# Artix7 USB3 Serializer/Deserializer -------------------------------------------------------------
+# Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
 class A7USB3SerDes(Module):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
@@ -444,6 +444,82 @@ class A7USB3SerDes(Module):
             gtp.cd_tx.clk,
             gtp.cd_rx.clk)
 
+# Lattice ECP5 USB3 Serializer/Deserializer --------------------------------------------------------
+
+class ECP5USB3SerDes(Module):
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        self.enable = Signal(reset=1) # i
+        self.ready  = Signal()        # o
+
+        self.tx_polarity = Signal()   # i # FIXME: not used for now
+        self.tx_idle     = Signal()   # i # FIXME: not used for now
+        self.tx_pattern  = Signal(20) # i
+
+        self.rx_polarity = Signal()   # i # FIXME: not used for now
+        self.rx_idle     = Signal()   # o # FIXME: not used for now
+        self.rx_align    = Signal()   # i
+        self.rx_skip     = Signal()   # o
+
+        # # #
+
+        from liteiclink.transceiver.serdes_ecp5 import SerDesECP5PLL, SerDesECP5
+
+        # Clock ------------------------------------------------------------------------------------
+        if isinstance(refclk_pads, (Signal, ClockSignal)):
+            refclk = refclk_pads
+        else:
+            refclk = Signal()
+            refclk = Signal()
+            self.specials.extref0 = Instance("EXTREFB",
+                i_REFCLKP=refclk_pads.p,
+                i_REFCLKN=refclk_pads.n,
+                o_REFCLKO=refclk,
+                p_REFCK_PWDNB="0b1",
+                p_REFCK_RTERM="0b1", # 100 Ohm
+            )
+            self.extref0.attr.add(("LOC", "EXTREF0"))
+
+        # PLL --------------------------------------------------------------------------------------
+        serdes_pll = SerDesECP5PLL(refclk, refclk_freq=156.25e6, linerate=2.5e9) # FIXME: use 5gbps
+        self.submodules += serdes_pll
+
+        # Transceiver ------------------------------------------------------------------------------
+        serdes  = SerDesECP5(serdes_pll, tx_pads, rx_pads, channel=1, data_width=20)
+        serdes.add_stream_endpoints()
+        tx_datapath     = SerdesTXDatapath("tx")
+        rx_datapath     = SerdesRXDatapath("rx")
+        rx_aligner      = SerdesRXWordAligner()
+        rx_skip_remover = SerdesRXSkipRemover()
+        self.comb += self.rx_skip.eq(rx_skip_remover.skip)
+        self.submodules += serdes, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
+        self.comb += [
+            serdes.tx_enable.eq(self.enable),
+            serdes.rx_enable.eq(self.enable),
+            self.ready.eq(serdes.tx_ready & serdes.rx_ready),
+            serdes.rx_align.eq(self.rx_align),
+            rx_aligner.enable.eq(self.rx_align),
+            self.sink.connect(tx_datapath.sink),
+            tx_datapath.source.connect(serdes.sink),
+            serdes.source.connect(rx_datapath.sink),
+            rx_datapath.source.connect(rx_aligner.sink),
+            rx_aligner.source.connect(rx_skip_remover.sink),
+            rx_skip_remover.source.connect(self.source),
+        ]
+
+        # Override SerDes parameters/signals to allow LFPS --------------------------------------------
+        # FIXME: See how to generate TX electrical idle and detect RX electrical idle.
+        self.comb += [
+            serdes.tx_produce_pattern.eq(self.tx_pattern != 0),
+            serdes.tx_pattern.eq(self.tx_pattern)
+        ]
+
+        # Timing constraints -----------------------------------------------------------------------
+        # FIXME: Add keep and false path?
+        platform.add_period_constraint(serdes.txoutclk, 1e9/125e6)
+        platform.add_period_constraint(serdes.rxoutclk, 1e9/125e6)
 
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
