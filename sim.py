@@ -71,8 +71,8 @@ class USB3PIPESim(SoCMini):
 
         # Simulation Status
         for pipe, fsm in [
-            ["host",  host_usb3_pipe.ltssm.polling_fsm],
-            ["dev ",  dev_usb3_pipe.ltssm.polling_fsm]]:
+            ["host",  host_usb3_pipe.ltssm.polling.fsm],
+            ["dev ",  dev_usb3_pipe.ltssm.polling.fsm]]:
             for state, value in fsm.encoding.items():
                 self.sync += [
                     If(fsm.next_state != fsm.state,

@@ -282,25 +282,25 @@ class PollingFSM(Module):
 class LTSSM(Module):
     def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq):
         # SS Inactive FSM --------------------------------------------------------------------------
-        self.submodules.ss_inactive_fsm = SSInactiveFSM()
+        self.submodules.ss_inactive = SSInactiveFSM()
 
         # RX Detect FSM ----------------------------------------------------------------------------
-        self.submodules.rx_detect_fsm   = RXDetectFSM()
+        self.submodules.rx_detect   = RXDetectFSM()
 
         # Polling FSM ------------------------------------------------------------------------------
-        self.submodules.polling_fsm     = PollingFSM(
+        self.submodules.polling     = PollingFSM(
             serdes       = serdes,
             lfps_unit    = lfps_unit,
             ts_unit      = ts_unit,
             sys_clk_freq = sys_clk_freq)
 
         # LTSSM FSM --------------------------------------------------------------------------------
-        self.submodules.ltssm_fsm       = LTSSMFSM()
+        self.submodules.ltssm       = LTSSMFSM()
 
         # FIXME; Experimental RX polarity swap
         rx_polarity_timer = WaitTimer(int(sys_clk_freq*1e-3))
         self.submodules += rx_polarity_timer
         self.comb += rx_polarity_timer.wait.eq(
-            self.polling_fsm.fsm.ongoing("Polling.RxEQ") &
+            self.polling.fsm.ongoing("Polling.RxEQ") &
              ~rx_polarity_timer.done)
         self.sync += If(rx_polarity_timer.done, serdes.rx_polarity.eq(~serdes.rx_polarity))
