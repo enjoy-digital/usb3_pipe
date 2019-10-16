@@ -214,8 +214,8 @@ class TSUnit(Module):
 
         # Ordered Set Generators -------------------------------------------------------------------
         self.submodules.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
-        self.submodules.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=128) # FIXME: n?
-        self.submodules.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=128) # FIXME: n?
+        self.submodules.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=16)
+        self.submodules.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=16)
         self.comb += [
             If(self.tx_enable,
                 If(self.tx_tseq,

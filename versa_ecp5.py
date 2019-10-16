@@ -148,7 +148,7 @@ class USB3SoC(SoCMini):
                 usb3_pipe.ts.tx_done,
 
                 # LTSSM
-                usb3_pipe.ltssm.polling_fsm,
+                usb3_pipe.ltssm.polling_fsm.fsm,
                 usb3_pipe.ready,
 
                 # Endpoints

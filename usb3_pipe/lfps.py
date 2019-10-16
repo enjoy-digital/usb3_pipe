@@ -166,6 +166,7 @@ class LFPSGenerator(Module):
     def __init__(self, sys_clk_freq, lfps_clk_freq):
         # Control
         self.polling = Signal()      # i
+        self.count   = Signal(16)    # o
 
         # Transceiver
         self.tx_idle    = Signal()   # o
@@ -188,6 +189,8 @@ class LFPSGenerator(Module):
                 NextValue(burst_generator.length, int(sys_clk_freq*PollingLFPSBurst.t_typ)),
                 NextValue(burst_repeat_count,     int(sys_clk_freq*PollingLFPSRepeat.t_typ)),
                 NextState("RUN")
+            ).Else(
+                NextValue(self.count, 0)
             )
         )
         fsm.act("RUN",
@@ -196,7 +199,8 @@ class LFPSGenerator(Module):
             self.tx_pattern.eq(burst_generator.tx_pattern),
             NextValue(burst_repeat_count, burst_repeat_count - 1),
             If(burst_repeat_count == 0,
-                NextState("IDLE")
+                NextState("IDLE"),
+                NextValue(self.count, self.count + 1)
             ),
         )
 
@@ -204,8 +208,9 @@ class LFPSGenerator(Module):
 
 class LFPSUnit(Module):
     def __init__(self, sys_clk_freq, serdes):
-        self.rx_polling = Signal() # o
-        self.tx_polling = Signal() # i
+        self.rx_polling = Signal()   # o
+        self.tx_polling = Signal()   # i
+        self.tx_count   = Signal(16) # o
 
         # # #
 
@@ -225,5 +230,6 @@ class LFPSUnit(Module):
                 serdes.tx_pattern.eq(generator.tx_pattern)
             ).Else(
                  serdes.tx_idle.eq(0)
-            )
+            ),
+            self.tx_count.eq(generator.count)
         ]

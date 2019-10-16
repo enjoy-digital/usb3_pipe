@@ -160,82 +160,121 @@ class RXDetectFSM(FSM):
         # End State --------------------------------------------------------------------------------
         self.act("END")
 
-# Polling Finite State Machine  --------------------------------------------------------------------
+# Polling Finite State Machine ---------------------------------------------------------------------
 
 @ResetInserter()
-class PollingFSM(FSM):
+class PollingFSM(Module):
     """ Polling Finite State Machine (section 7.5.4)"""
-    # FIXME: Simplified State Machine for initial tests, implement exits and timeouts.
-    def __init__(self, serdes, lfps_unit, ts_unit):
-        self.idle = Signal()
+    def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq):
+        self.idle               = Signal()
+        self.exit_to_compliance = Signal()
+        self.exit_to_rx_detect  = Signal()
 
         # # #
 
-        rx_tseq_seen = Signal()
-        rx_ts1_seen  = Signal()
-        rx_ts2_seen  = Signal()
+        tx_lfps_count = Signal(16)
+        rx_lfps_seen  = Signal()
+        rx_ts2_seen   = Signal()
+
+        # 360ms Timer ------------------------------------------------------------------------------
+        _360_ms_timer = WaitTimer(int(360e-3*sys_clk_freq))
+        self.submodules += _360_ms_timer
+
+        # 12ms Timer -------------------------------------------------------------------------------
+        _12_ms_timer = WaitTimer(int(12e-3*sys_clk_freq))
+        self.submodules += _12_ms_timer
 
         # FSM --------------------------------------------------------------------------------------
-        FSM.__init__(self, reset_state="LFPS")
+        self.submodules.fsm = fsm = FSM(reset_state="Polling.Entry")
 
-        # LFPS State -------------------------------------------------------------------------------
-        # Generate/Receive Polling LFPS, jump to RX-EQ when received from partner
-        self.act("LFPS",
-            NextValue(rx_tseq_seen, 0),
-            NextValue(rx_ts1_seen,  0),
-            NextValue(rx_ts2_seen,  0),
-            serdes.rx_align.eq(1),
+        # Entry State ------------------------------------------------------------------------------
+        fsm.act("Polling.Entry",
+            NextValue(tx_lfps_count, 16),
+            NextValue(rx_lfps_seen, 0),
+            NextValue(rx_ts2_seen, 0),
+            NextState("Polling.LFPS"),
+        )
+
+        # LFPS State (7.5.4.3) ---------------------------------------------------------------------
+        fsm.act("Polling.LFPS",
+            _360_ms_timer.wait.eq(1),
             lfps_unit.tx_polling.eq(1),
-            NextState("RX-EQ"),
-        )
-
-        # RxEQ State -------------------------------------------------------------------------------
-        # Generate/Receive TSEQ, jump to ACTIVE when TSEQ sent and received from partner
-        self.act("RX-EQ",
-            serdes.rx_align.eq(1),
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_tseq.eq(1),
-            lfps_unit.tx_polling.eq(1), # FIXME
-            NextValue(rx_tseq_seen, rx_tseq_seen | ts_unit.rx_tseq),
-            If(ts_unit.tx_done,
-                If(rx_tseq_seen,
-                    NextState("ACTIVE")
-                )
-            ),
-        )
-
-        # Active State -----------------------------------------------------------------------------
-        # Generate/Receive TS1, jump to CONFIGURATION when TS1 sent and received from partner
-        self.act("ACTIVE",
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_ts1.eq(1),
-            NextValue(rx_ts1_seen, rx_ts1_seen | ts_unit.rx_ts1),
-            If(ts_unit.tx_done,
-                If(rx_ts1_seen,
-                    NextState("CONFIGURATION")
-                )
-            ),
-        )
-
-        # Configuration State ----------------------------------------------------------------------
-        # Generate/Receive TS2, jump to IDLE when TS2 sent and reveived from partner
-        self.act("CONFIGURATION",
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_ts2.eq(1),
-            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
-            If(ts_unit.tx_done,
-                If(rx_ts2_seen,
-                    NextState("IDLE")
+            # Go to ExitToCompliance when:
+            # - 360ms timer is expired.
+            If(_360_ms_timer.done,
+                NextState("Polling.ExitToCompliance")
+            # Go to RxEQ when:
+            # - at least 16 LFPS Polling Bursts have been generated.
+            # - 2 consecutive LFPS Polling Bursts have been received (ensured by ts_unit).
+            # - 4 LFPS Polling Bursts have been sent since first LFPS Polling Bursts reception.
+            ).Elif(lfps_unit.tx_count >= tx_lfps_count,
+                If(lfps_unit.rx_polling & ~rx_lfps_seen,
+                    NextValue(rx_lfps_seen, 1),
+                    NextValue(tx_lfps_count, lfps_unit.tx_count + 4)
+                ),
+                If(rx_lfps_seen,
+                    NextState("Polling.RxEQ"),
                 )
             )
         )
 
-        # Idle State -------------------------------------------------------------------------------
-        self.act("IDLE",
+        # RxEQ State (7.5.4.4) ---------------------------------------------------------------------
+        fsm.act("Polling.RxEQ",
+            serdes.rx_align.eq(1),
+            ts_unit.rx_enable.eq(1),
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_tseq.eq(1),
+            # Go to Active when the 65536 TSEQ ordered sets are sent.
+            If(ts_unit.tx_done,
+                NextState("Polling.Active")
+            ),
+        )
+
+        # Active State (7.5.4.5) -------------------------------------------------------------------
+        fsm.act("Polling.Active",
+            _12_ms_timer.wait.eq(1),
+            ts_unit.rx_enable.eq(1),
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_ts1.eq(1),
+            # Go to RxDetect if no TS1/TS2 seen in the 12ms.
+            If(_12_ms_timer.done,
+                NextState("Polling.ExitToRxDetect")
+            ),
+            # Go to Activation if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
+            If(ts_unit.rx_ts1 | ts_unit.rx_ts2,
+                NextState("Polling.Activation")
+            )
+        )
+
+        # Configuration State (7.5.4.6) ------------------------------------------------------------
+        fsm.act("Polling.Activation",
+            ts_unit.rx_enable.eq(1),
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_ts2.eq(1),
+            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
+            # Go to Idle when:
+            # - 8 consecutive TS2 ordered sets are received. (8 ensured by ts_unit)
+            # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
+            If(ts_unit.tx_done,
+                If(rx_ts2_seen,
+                    NextState("Polling.Idle")
+                )
+            )
+        )
+
+        # Idle State (7.5.4.7) ---------------------------------------------------------------------
+        fsm.act("Polling.Idle",
             self.idle.eq(1)
+        )
+
+        # Exit to Compliance -----------------------------------------------------------------------
+        fsm.act("Polling.ExitToCompliance",
+            self.exit_to_compliance.eq(1)
+        )
+
+        # Exit to RxDetect -------------------------------------------------------------------------
+        fsm.act("Polling.ExitToRxDetect",
+            self.exit_to_rx_detect.eq(1)
         )
 
 # Link Training and Status State Machine -----------------------------------------------------------
@@ -250,10 +289,10 @@ class LTSSM(Module):
 
         # Polling FSM ------------------------------------------------------------------------------
         self.submodules.polling_fsm     = PollingFSM(
-            serdes    = serdes,
-            lfps_unit = lfps_unit,
-            ts_unit   = ts_unit)
-        self.comb += self.polling_fsm.reset.eq(lfps_unit.rx_polling)
+            serdes       = serdes,
+            lfps_unit    = lfps_unit,
+            ts_unit      = ts_unit,
+            sys_clk_freq = sys_clk_freq)
 
         # LTSSM FSM --------------------------------------------------------------------------------
         self.submodules.ltssm_fsm       = LTSSMFSM()
@@ -261,5 +300,7 @@ class LTSSM(Module):
         # FIXME; Experimental RX polarity swap
         rx_polarity_timer = WaitTimer(int(sys_clk_freq*1e-3))
         self.submodules += rx_polarity_timer
-        self.comb += rx_polarity_timer.wait.eq(self.polling_fsm.ongoing("RX-EQ") & ~rx_polarity_timer.done)
+        self.comb += rx_polarity_timer.wait.eq(
+            self.polling_fsm.fsm.ongoing("Polling.RxEQ") &
+             ~rx_polarity_timer.done)
         self.sync += If(rx_polarity_timer.done, serdes.rx_polarity.eq(~serdes.rx_polarity))
