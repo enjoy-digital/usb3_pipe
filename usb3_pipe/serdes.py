@@ -455,11 +455,11 @@ class ECP5USB3SerDes(Module):
         self.ready  = Signal()        # o
 
         self.tx_polarity = Signal()   # i # FIXME: not used for now
-        self.tx_idle     = Signal()   # i # FIXME: not used for now
+        self.tx_idle     = Signal()   # i
         self.tx_pattern  = Signal(20) # i
 
         self.rx_polarity = Signal()   # i # FIXME: not used for now
-        self.rx_idle     = Signal()   # o # FIXME: not used for now
+        self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i
         self.rx_skip     = Signal()   # o
 
@@ -483,7 +483,7 @@ class ECP5USB3SerDes(Module):
             self.extref0.attr.add(("LOC", "EXTREF0"))
 
         # PLL --------------------------------------------------------------------------------------
-        serdes_pll = SerDesECP5PLL(refclk, refclk_freq=156.25e6, linerate=2.5e9) # FIXME: use 5gbps
+        serdes_pll = SerDesECP5PLL(refclk, refclk_freq=refclk_freq, linerate=5e9)
         self.submodules += serdes_pll
 
         # Transceiver ------------------------------------------------------------------------------
@@ -498,6 +498,8 @@ class ECP5USB3SerDes(Module):
         self.comb += [
             serdes.tx_enable.eq(self.enable),
             serdes.rx_enable.eq(self.enable),
+            serdes.tx_idle.eq(self.tx_idle),
+            self.rx_idle.eq(serdes.rx_idle),
             self.ready.eq(serdes.tx_ready & serdes.rx_ready),
             serdes.rx_align.eq(self.rx_align),
             rx_aligner.enable.eq(self.rx_align),
