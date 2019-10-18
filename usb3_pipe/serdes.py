@@ -512,7 +512,6 @@ class ECP5USB3SerDes(Module):
         ]
 
         # Override SerDes parameters/signals to allow LFPS --------------------------------------------
-        # FIXME: See how to generate TX electrical idle and detect RX electrical idle.
         self.comb += [
             serdes.tx_produce_pattern.eq(self.tx_pattern != 0),
             serdes.tx_pattern.eq(self.tx_pattern)
@@ -520,8 +519,8 @@ class ECP5USB3SerDes(Module):
 
         # Timing constraints -----------------------------------------------------------------------
         # FIXME: Add keep and false path?
-        platform.add_period_constraint(serdes.txoutclk, 1e9/125e6)
-        platform.add_period_constraint(serdes.rxoutclk, 1e9/125e6)
+        platform.add_period_constraint(serdes.txoutclk, 1e9/serdes.tx_clk_freq)
+        platform.add_period_constraint(serdes.rxoutclk, 1e9/serdes.rx_clk_freq)
 
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
