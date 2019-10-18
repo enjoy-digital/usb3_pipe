@@ -13,11 +13,7 @@ from litex.boards.platforms import versa_ecp5
 from litex.soc.cores.clock import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
-
-from liteeth.common import convert_ip
-from liteeth.phy.ecp5rgmii import LiteEthPHYRGMII
-from liteeth.core import LiteEthUDPIPCore
-from liteeth.frontend.etherbone import LiteEthEtherbone
+from litex.soc.cores.uart import UARTWishboneBridge
 
 from litescope import LiteScopeAnalyzer
 
@@ -72,9 +68,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, connector="pcie",
-        with_etherbone=False, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
-        with_analyzer=True):
+    def __init__(self, platform, connector="pcie", with_analyzer=True):
 
         sys_clk_freq = int(133e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -82,28 +76,9 @@ class USB3SoC(SoCMini):
         # CRG --------------------------------------------------------------------------------------
         self.submodules.crg = _CRG(platform, sys_clk_freq)
 
-        # Ethernet <--> Wishbone -------------------------------------------------------------------
-        if with_etherbone:
-            # phy
-            self.submodules.eth_phy = LiteEthPHYRGMII(
-                clock_pads = platform.request("eth_clocks"),
-                pads       = platform.request("eth"))
-            self.add_csr("eth_phy")
-            # core
-            self.submodules.eth_core = LiteEthUDPIPCore(
-                phy         = self.eth_phy,
-                mac_address = mac_address,
-                ip_address  = convert_ip(ip_address),
-                clk_freq    = sys_clk_freq)
-            # etherbone
-            self.submodules.etherbone = LiteEthEtherbone(self.eth_core.udp, 1234)
-            self.add_wb_master(self.etherbone.wishbone.bus)
-
-            # timing constraints
-            self.eth_phy.crg.cd_eth_rx.clk.attr.add("keep")
-            self.eth_phy.crg.cd_eth_tx.clk.attr.add("keep")
-            self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
-            self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
+        # Serial Bridge ----------------------------------------------------------------------------
+        self.submodules.bridge = UARTWishboneBridge(platform.request("serial"), sys_clk_freq)
+        self.add_wb_master(self.bridge.wishbone)
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = ECP5USB3SerDes(platform,
@@ -116,7 +91,7 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_serdes
 
         # USB3 PIPE --------------------------------------------------------------------------------
-        usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
+        usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq, with_scrambling=False)
         self.submodules += usb3_pipe
         self.comb += usb3_pipe.sink.valid.eq(1)
         self.comb += usb3_pipe.source.ready.eq(1)
@@ -164,11 +139,11 @@ class USB3SoC(SoCMini):
 # Build --------------------------------------------------------------------------------------------
 
 def main():
-    platform = versa_ecp5.Platform(toolchain="diamond")
+    platform = versa_ecp5.Platform(toolchain="trellis")
     platform.add_extension(_usb3_io)
     soc = USB3SoC(platform)
     builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
-    vns = builder.build(toolchain_path="/usr/local/diamond/3.10_x64/bin/lin64")
+    vns = builder.build()
 
 if __name__ == "__main__":
     main()
