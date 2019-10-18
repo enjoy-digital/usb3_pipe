@@ -16,7 +16,7 @@ class SerdesTXDatapath(Module):
 
         # # #
 
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 4)
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
         self.submodules += cdc
         converter = stream.StrideConverter(
@@ -46,7 +46,7 @@ class SerdesRXDatapath(Module):
         converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
         self.submodules += converter
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 4)
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.submodules += cdc
         self.comb += [
