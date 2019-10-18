@@ -472,7 +472,6 @@ class ECP5USB3SerDes(Module):
             refclk = refclk_pads
         else:
             refclk = Signal()
-            refclk = Signal()
             self.specials.extref0 = Instance("EXTREFB",
                 i_REFCLKP=refclk_pads.p,
                 i_REFCLKN=refclk_pads.n,

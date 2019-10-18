@@ -81,13 +81,16 @@ class USB3SoC(SoCMini):
         self.add_wb_master(self.bridge.wishbone)
 
         # USB3 SerDes ------------------------------------------------------------------------------
+        self.comb += platform.request("refclk_en").eq(1)
+        self.comb += platform.request("refclk_rst_n").eq(1)
         usb3_serdes = ECP5USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
             refclk_pads  = platform.request("refclk", 1),
             refclk_freq  = 156.25e6,
             tx_pads      = platform.request(connector + "_tx"),
-            rx_pads      = platform.request(connector + "_rx"))
+            rx_pads      = platform.request(connector + "_rx"),
+            channel      = 0)
         self.submodules += usb3_serdes
 
         # USB3 PIPE --------------------------------------------------------------------------------
@@ -95,10 +98,6 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_pipe
         self.comb += usb3_pipe.sink.valid.eq(1)
         self.comb += usb3_pipe.source.ready.eq(1)
-
-        # Leds -------------------------------------------------------------------------------------
-        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
-        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
@@ -135,6 +134,23 @@ class USB3SoC(SoCMini):
             ]
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
+
+
+        # Leds -------------------------------------------------------------------------------------
+        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
+        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
+
+        sys_counter = Signal(32)
+        self.sync.sys += sys_counter.eq(sys_counter + 1)
+        self.comb += platform.request("user_led", 4).eq(sys_counter[26])
+
+        rx_counter = Signal(32)
+        self.sync.rx += rx_counter.eq(rx_counter + 1)
+        self.comb += platform.request("user_led", 5).eq(rx_counter[26])
+
+        tx_counter = Signal(32)
+        self.sync.tx += tx_counter.eq(rx_counter + 1)
+        self.comb += platform.request("user_led", 6).eq(tx_counter[26])
 
 # Build --------------------------------------------------------------------------------------------
 
