@@ -447,7 +447,7 @@ class A7USB3SerDes(Module):
 # Lattice ECP5 USB3 Serializer/Deserializer --------------------------------------------------------
 
 class ECP5USB3SerDes(Module):
-    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads, channel):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -487,7 +487,7 @@ class ECP5USB3SerDes(Module):
         self.submodules += serdes_pll
 
         # Transceiver ------------------------------------------------------------------------------
-        serdes  = SerDesECP5(serdes_pll, tx_pads, rx_pads, channel=1, data_width=20)
+        serdes  = SerDesECP5(serdes_pll, tx_pads, rx_pads, channel=channel, data_width=20)
         serdes.add_stream_endpoints()
         tx_datapath     = SerdesTXDatapath("tx")
         rx_datapath     = SerdesRXDatapath("rx")
