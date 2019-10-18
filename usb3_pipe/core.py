@@ -13,7 +13,7 @@ from usb3_pipe.scrambling import Scrambler, Descrambler
 # USB3 PIPE ----------------------------------------------------------------------------------------
 
 class USB3PIPE(Module):
-    def __init__(self, serdes, sys_clk_freq):
+    def __init__(self, serdes, sys_clk_freq, with_scrambling=True):
         assert sys_clk_freq > 125e6
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
@@ -43,20 +43,24 @@ class USB3PIPE(Module):
         self.comb += self.ready.eq(ltssm.polling.idle)
 
         # Scrambling -------------------------------------------------------------------------------
-        scrambler = Scrambler()
-        scrambler = ResetInserter()(scrambler)
-        self.comb += scrambler.reset.eq(~self.ready)
-        self.submodules.scrambler = scrambler
-        self.comb += [
-            self.sink.connect(scrambler.sink),
-            If(self.ready, scrambler.source.connect(serdes.sink))
-        ]
+        if with_scrambling:
+            scrambler = Scrambler()
+            scrambler = ResetInserter()(scrambler)
+            self.comb += scrambler.reset.eq(~self.ready)
+            self.submodules.scrambler = scrambler
+            self.comb += [
+                self.sink.connect(scrambler.sink),
+                If(self.ready, scrambler.source.connect(serdes.sink))
+            ]
 
-        descrambler = Descrambler()
-        descrambler = ResetInserter()(descrambler)
-        self.comb += descrambler.reset.eq(~self.ready)
-        self.submodules.descrambler = descrambler
-        self.comb += [
-            If(self.ready, serdes.source.connect(descrambler.sink)),
-            descrambler.source.connect(self.source),
-        ]
+            descrambler = Descrambler()
+            descrambler = ResetInserter()(descrambler)
+            self.comb += descrambler.reset.eq(~self.ready)
+            self.submodules.descrambler = descrambler
+            self.comb += [
+                If(self.ready, serdes.source.connect(descrambler.sink)),
+                descrambler.source.connect(self.source),
+            ]
+        else:
+            self.comb += If(self.ready, self.sink.connect(serdes.sink))
+            self.comb += If(self.ready, serdes.source.connect(self.source))
