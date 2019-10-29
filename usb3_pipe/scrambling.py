@@ -114,13 +114,11 @@ class Descrambler(Module):
 
         sync   = Signal()
         synced = Signal()
-        self.comb += sync.eq(sink.valid & (sink.data == scrambler.source.data))
+        self.comb += sync.eq(sink.data == scrambler.source.data)
         self.sync += If(sync, synced.eq(1))
         self.comb += [
-            If(~sync & ~synced,
-                sink.ready.eq(1)
-            ).Else(
-                sink.connect(scrambler.sink)
-            ),
+            sink.ready.eq(1),
+            sink.connect(scrambler.sink),
+            scrambler.sink.valid.eq(sink.valid & (sync | synced)),
             scrambler.source.connect(source)
         ]
