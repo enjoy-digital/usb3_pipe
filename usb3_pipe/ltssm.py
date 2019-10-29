@@ -241,9 +241,14 @@ class PollingFSM(Module):
                 NextState("Polling.ExitToRxDetect")
             ),
             # Go to Activation if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
-            If(ts_unit.rx_ts1 | ts_unit.rx_ts2,
+            If(ts_unit.rx_ts1,
+                NextValue(serdes.rx_polarity, 0),
                 NextState("Polling.Activation")
-            )
+            ),
+            If(ts_unit.rx_ts2,
+                NextValue(serdes.rx_polarity, 1),
+                NextState("Polling.Activation")
+            ),
         )
 
         # Configuration State (7.5.4.6) ------------------------------------------------------------
@@ -296,11 +301,3 @@ class LTSSM(Module):
 
         # LTSSM FSM --------------------------------------------------------------------------------
         self.submodules.ltssm       = LTSSMFSM()
-
-        # FIXME; Experimental RX polarity swap
-        rx_polarity_timer = WaitTimer(int(sys_clk_freq*1e-3))
-        self.submodules += rx_polarity_timer
-        self.comb += rx_polarity_timer.wait.eq(
-            self.polling.fsm.ongoing("Polling.RxEQ") &
-             ~rx_polarity_timer.done)
-        self.sync += If(rx_polarity_timer.done, serdes.rx_polarity.eq(~serdes.rx_polarity))
