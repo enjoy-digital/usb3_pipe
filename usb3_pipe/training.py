@@ -15,10 +15,9 @@ class TSChecker(Module):
         self.detected = Signal() # o
         self.error    = Signal() # o
 
-        if ordered_set.name in ["TS1", "TS2"]:
-            self.reset      = Signal()        # o
-            self.loopback   = Signal()        # o
-            self.scrambling = Signal(reset=1) # o
+        self.reset      = Signal()        # o
+        self.loopback   = Signal()        # o
+        self.scrambling = Signal(reset=1) # o
 
         # # #
 
@@ -34,11 +33,8 @@ class TSChecker(Module):
         # Data check -------------------------------------------------------------------------------
         error      = Signal()
         error_mask = Signal(32, reset=2**32-1)
-        if ordered_set.name in ["TS1", "TS2"]:
-            first_ctrl = 0b1111
-            self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
-        else:
-            first_ctrl = 0b0001
+        first_ctrl = 0b1111
+        self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
         self.comb += [
             If(self.sink.valid,
                 # Check Comma
@@ -57,14 +53,13 @@ class TSChecker(Module):
         ]
 
         # Link Config ------------------------------------------------------------------------------
-        if ordered_set.name in ["TS1", "TS2"]:
-            self.sync += [
-                If(self.sink.valid & (port.adr == 1),
-                    self.reset.eq(      self.sink.data[ 8]),
-                    self.loopback.eq(   self.sink.data[10]),
-                    self.scrambling.eq(~self.sink.data[11])
-                )
-            ]
+        self.sync += [
+            If(self.sink.valid & (port.adr == 1),
+                self.reset.eq(      self.sink.data[ 8]),
+                self.loopback.eq(   self.sink.data[10]),
+                self.scrambling.eq(~self.sink.data[11])
+            )
+        ]
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [
