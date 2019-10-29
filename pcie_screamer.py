@@ -120,7 +120,6 @@ class USB3SoC(SoCMini):
                 usb3_pipe.lfps.tx_polling,
 
                 # Training Sequence
-                usb3_pipe.ts.rx_tseq,
                 usb3_pipe.ts.rx_ts1,
                 usb3_pipe.ts.rx_ts2,
                 usb3_pipe.ts.tx_ts2,

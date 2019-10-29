@@ -14,7 +14,6 @@ from litex.soc.interconnect.csr import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
-from liteeth.common import convert_ip
 from liteeth.phy import LiteEthPHY
 from liteeth.core import LiteEthUDPIPCore
 from liteeth.frontend.etherbone import LiteEthEtherbone
@@ -87,7 +86,7 @@ class USB3SoC(SoCMini):
             self.submodules.eth_core = LiteEthUDPIPCore(
                 phy         = self.eth_phy,
                 mac_address = mac_address,
-                ip_address  = convert_ip(ip_address),
+                ip_address  = ip_address,
                 clk_freq    = sys_clk_freq)
             # etherbone
             self.submodules.etherbone = LiteEthEtherbone(self.eth_core.udp, 1234)
@@ -138,7 +137,6 @@ class USB3SoC(SoCMini):
 
                 # Training Sequence
                 usb3_pipe.ts.tx_enable,
-                usb3_pipe.ts.rx_tseq,
                 usb3_pipe.ts.rx_ts1,
                 usb3_pipe.ts.rx_ts2,
                 usb3_pipe.ts.tx_enable,
