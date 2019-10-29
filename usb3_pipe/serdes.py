@@ -4,6 +4,7 @@
 from migen import *
 
 from litex.soc.interconnect import stream
+from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import COM, SKP
 
@@ -529,13 +530,15 @@ class USB3SerDesModel(Module):
     def __init__(self):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.tx     = stream.Endpoint([("data", 40)])
+        self.rx     = stream.Endpoint([("data", 40)])
 
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
         self.tx_polarity = Signal()   # i # not used
         self.tx_idle     = Signal()   # i
-        self.tx_pattern  = Signal(20) # i # not used
+        self.tx_pattern  = Signal(20) # i
 
         self.rx_polarity = Signal()   # i # not used
         self.rx_idle     = Signal()   # o
@@ -543,13 +546,35 @@ class USB3SerDesModel(Module):
 
         # # #
 
+        encoder  = Encoder(4, True)
+        decoders = [Decoder(True) for _ in range(4)]
+        self.submodules += encoder, decoders
+        self.comb += self.sink.ready.eq(1)
+        self.comb += self.source.valid.eq(1)
+        for i in range(4):
+            self.comb += [
+                encoder.k[i].eq(self.sink.ctrl[i]),
+                encoder.d[i].eq(self.sink.data[8*i:8*(i+1)]),
+                self.source.ctrl[i].eq(decoders[i].k),
+                self.source.data[8*i:8*(i+1)].eq(decoders[i].d),
+            ]
+        self.comb += [
+            If(self.tx_pattern != 0,
+                self.tx.data.eq(self.tx_pattern)
+            ).Else(
+                self.tx.data.eq(Cat(*[encoder.output[i] for i in range(4)])),
+            )
+        ]
+        for i in range(4):
+            self.comb += decoders[i].input.eq(self.rx.data[10*i:10*(i+1)])
+
         # Ready when enabled
         self.comb += self.ready.eq(self.enable)
 
     def connect(self, serdes):
         self.comb += [
-            self.sink.connect(serdes.source),
-            serdes.sink.connect(self.source),
+            self.tx.connect(serdes.rx),
+            serdes.tx.connect(self.rx),
             self.rx_idle.eq(serdes.tx_idle),
             serdes.rx_idle.eq(self.tx_idle),
         ]
