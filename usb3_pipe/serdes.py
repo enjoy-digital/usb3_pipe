@@ -536,15 +536,18 @@ class USB3SerDesModel(Module):
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
-        self.tx_polarity = Signal()   # i # not used
+        self.tx_polarity = Signal()   # i
         self.tx_idle     = Signal()   # i
         self.tx_pattern  = Signal(20) # i
 
-        self.rx_polarity = Signal()   # i # not used
+        self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i # not used
 
         # # #
+
+        tx_data = Signal(40)
+        rx_data = Signal(40)
 
         encoder  = Encoder(4, True)
         decoders = [Decoder(True) for _ in range(4)]
@@ -560,13 +563,25 @@ class USB3SerDesModel(Module):
             ]
         self.comb += [
             If(self.tx_pattern != 0,
-                self.tx.data.eq(self.tx_pattern)
+                tx_data.eq(self.tx_pattern)
             ).Else(
-                self.tx.data.eq(Cat(*[encoder.output[i] for i in range(4)])),
+                tx_data.eq(Cat(*[encoder.output[i] for i in range(4)])),
+            ),
+            If(self.tx_polarity,
+                self.tx.data.eq(~tx_data)
+            ).Else(
+                self.tx.data.eq(tx_data)
+            )
+        ]
+        self.comb += [
+            If(self.rx_polarity,
+                rx_data.eq(~self.rx.data)
+            ).Else(
+                rx_data.eq(self.rx.data)
             )
         ]
         for i in range(4):
-            self.comb += decoders[i].input.eq(self.rx.data[10*i:10*(i+1)])
+            self.comb += decoders[i].input.eq(rx_data[10*i:10*(i+1)])
 
         # Ready when enabled
         self.comb += self.ready.eq(self.enable)
