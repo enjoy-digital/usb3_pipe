@@ -105,7 +105,7 @@ def main():
 
     soc = USB3PIPESim()
     builder = Builder(soc, output_dir="build")
-    builder.build(sim_config=sim_config, trace=args.trace)
+    builder.build(sim_config=sim_config, trace=args.trace, opt_level="O0")
 
 
 if __name__ == "__main__":
