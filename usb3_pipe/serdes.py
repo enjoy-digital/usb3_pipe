@@ -141,10 +141,14 @@ class SerdesRXSkipRemover(Module):
         sr_ctrl  = Signal(8)
         sr_bytes = Signal(4)
         cases = {}
-        for i in range(5):
+        cases[0] = [
+            sr_data.eq(sr_data),
+            sr_ctrl.eq(sr_ctrl),
+        ]
+        for i in range(1, 5):
             cases[i] = [
-                sr_data.eq(Cat(frag_data[:8*i], sr_data)),
-                sr_ctrl.eq(Cat(frag_ctrl[:1*i], sr_ctrl)),
+                sr_data.eq(Cat(frag_data[0:8*i], sr_data)),
+                sr_ctrl.eq(Cat(frag_ctrl[0:1*i], sr_ctrl)),
             ]
         self.comb += sink.ready.eq(sr_bytes <= 7)
         self.sync += [
