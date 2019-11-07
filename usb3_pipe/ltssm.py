@@ -165,7 +165,7 @@ class RXDetectFSM(FSM):
 @ResetInserter()
 class PollingFSM(Module):
     """ Polling Finite State Machine (section 7.5.4)"""
-    def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq):
+    def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq, with_timers=True):
         self.idle               = Signal()
         self.exit_to_compliance = Signal()
         self.exit_to_rx_detect  = Signal()
@@ -197,7 +197,7 @@ class PollingFSM(Module):
 
         # LFPS State (7.5.4.3) ---------------------------------------------------------------------
         fsm.act("Polling.LFPS",
-            _360_ms_timer.wait.eq(1),
+            _360_ms_timer.wait.eq(with_timers),
             lfps_unit.tx_polling.eq(1),
             # Go to ExitToCompliance when:
             # - 360ms timer is expired.
@@ -232,7 +232,7 @@ class PollingFSM(Module):
 
         # Active State (7.5.4.5) -------------------------------------------------------------------
         fsm.act("Polling.Active",
-            _12_ms_timer.wait.eq(1),
+            _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts1.eq(1),
