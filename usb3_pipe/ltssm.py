@@ -274,11 +274,13 @@ class PollingFSM(Module):
 
         # Exit to Compliance -----------------------------------------------------------------------
         fsm.act("Polling.ExitToCompliance",
+            lfps_unit.tx_idle.eq(1), # FIXME: for bringup
             self.exit_to_compliance.eq(1)
         )
 
         # Exit to RxDetect -------------------------------------------------------------------------
         fsm.act("Polling.ExitToRxDetect",
+            lfps_unit.tx_idle.eq(1), # FIXME: for bringup
             self.exit_to_rx_detect.eq(1)
         )
 
