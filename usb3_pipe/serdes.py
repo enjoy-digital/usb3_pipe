@@ -122,81 +122,18 @@ class SerdesRXSkipRemover(Module):
         frag_ctrl  = Signal(4)
         frag_bytes = Signal(3)
         cases = {}
-        cases[0b0000] = [
-            frag_data.eq(sink.data),
-            frag_ctrl.eq(sink.ctrl),
-            frag_bytes.eq(4)
-        ]
-        cases[0b0001] = [
-            frag_data.eq(sink.data[8:]),
-            frag_ctrl.eq(sink.ctrl[1:]),
-            frag_bytes.eq(3)
-        ]
-        cases[0b0010] = [
-            frag_data.eq(Cat(sink.data[0:8], sink.data[16:])),
-            frag_ctrl.eq(Cat(sink.ctrl[0], sink.ctrl[2:])),
-            frag_bytes.eq(3)
-        ]
-        cases[0b0011] = [
-            frag_data.eq(Cat(sink.data[16:])),
-            frag_ctrl.eq(Cat(sink.ctrl[2:])),
-            frag_bytes.eq(2)
-        ]
-        cases[0b0100] = [
-            frag_data.eq(Cat(sink.data[0:16], sink.data[24:])),
-            frag_ctrl.eq(Cat(sink.ctrl[0:2], sink.ctrl[3])),
-            frag_bytes.eq(3)
-        ]
-        cases[0b0101] = [
-            frag_data.eq(Cat(sink.data[8:16], sink.data[24:])),
-            frag_ctrl.eq(Cat(sink.ctrl[1:2], sink.ctrl[3])),
-            frag_bytes.eq(2)
-        ]
-        cases[0b0111] = [
-            frag_data.eq(sink.data[24:]),
-            frag_ctrl.eq(sink.ctrl[3]),
-            frag_bytes.eq(1)
-        ]
-        cases[0b1000] = [
-            frag_data.eq(sink.data[:24]),
-            frag_ctrl.eq(sink.ctrl[:3]),
-            frag_bytes.eq(3)
-        ]
-        cases[0b1001] = [
-            frag_data.eq(sink.data[8:24]),
-            frag_ctrl.eq(sink.ctrl[1:3]),
-            frag_bytes.eq(2)
-        ]
-        cases[0b1010] = [
-            frag_data.eq(Cat(sink.data[:8], sink.data[16:24])),
-            frag_ctrl.eq(Cat(sink.ctrl[:1], sink.data[2:3])),
-            frag_bytes.eq(2)
-        ]
-        cases[0b1011] = [
-            frag_data.eq(sink.data[16:24]),
-            frag_ctrl.eq(sink.ctrl[2]),
-            frag_bytes.eq(1)
-        ]
-        cases[0b1100] = [
-            frag_data.eq(sink.data[:16]),
-            frag_ctrl.eq(sink.ctrl[:2]),
-            frag_bytes.eq(2)
-        ]
-        cases[0b1101] = [
-            frag_data.eq(sink.data[8:16]),
-            frag_ctrl.eq(sink.ctrl[1:2]),
-            frag_bytes.eq(1)
-        ]
-        cases[0b1110] = [
-            frag_data.eq(sink.data[:8]),
-            frag_ctrl.eq(sink.ctrl[0]),
-            frag_bytes.eq(1)
-        ]
-        cases[0b1111] = [
-            frag_data.eq(0),
-            frag_ctrl.eq(0),
-            frag_bytes.eq(0),
-        ]
+        for i in range(2**4):
+            datas = []
+            ctrls = []
+            for j in range(4):
+                if (i & 2**j) == 0:
+                    datas.append(sink.data[8*j:8*(j+1)])
+                    ctrls.append(sink.ctrl[1*j:1*(j+1)])
+            cases[i] = [
+                frag_data.eq(Cat(*datas) if len(datas) else 0),
+                frag_ctrl.eq(Cat(*ctrls) if len(ctrls) else 0),
+                frag_bytes.eq(len(ctrls)),
+            ]
         self.comb += Case(skp, cases)
 
         # Store Data/Ctrl in a 64/8-bit Shift Register ---------------------------------------------
@@ -204,26 +141,11 @@ class SerdesRXSkipRemover(Module):
         sr_ctrl  = Signal(8)
         sr_bytes = Signal(4)
         cases = {}
-        cases[0] = [
-            sr_data.eq(sr_data),
-            sr_ctrl.eq(sr_ctrl),
-        ]
-        cases[1] = [
-            sr_data.eq(Cat(frag_data[:8], sr_data)),
-            sr_ctrl.eq(Cat(frag_ctrl[:1],  sr_ctrl)),
-        ]
-        cases[2] = [
-            sr_data.eq(Cat(frag_data[:16], sr_data)),
-            sr_ctrl.eq(Cat(frag_ctrl[:2],  sr_ctrl)),
-        ]
-        cases[3] = [
-            sr_data.eq(Cat(frag_data[:24], sr_data)),
-            sr_ctrl.eq(Cat(frag_ctrl[:3],  sr_ctrl)),
-        ]
-        cases[4] = [
-            sr_data.eq(Cat(frag_data[:32], sr_data)),
-            sr_ctrl.eq(Cat(frag_ctrl[:4],  sr_ctrl)),
-        ]
+        for i in range(5):
+            cases[i] = [
+                sr_data.eq(Cat(frag_data[:8*i], sr_data)),
+                sr_ctrl.eq(Cat(frag_ctrl[:1*i], sr_ctrl)),
+            ]
         self.comb += sink.ready.eq(sr_bytes <= 7)
         self.sync += [
             If(sink.valid & sink.ready,
@@ -241,22 +163,11 @@ class SerdesRXSkipRemover(Module):
         # Output Data/Ctrl when there is a full 32/4-bit word --------------------------------------
         self.comb += source.valid.eq(sr_bytes >= 4)
         cases = {}
-        cases[4] = [
-            source.data.eq(sr_data[0:32]),
-            source.ctrl.eq(sr_ctrl[0:4]),
-        ]
-        cases[5] = [
-            source.data.eq(sr_data[8:40]),
-            source.ctrl.eq(sr_ctrl[1:5]),
-        ]
-        cases[6] = [
-            source.data.eq(sr_data[16:48]),
-            source.ctrl.eq(sr_ctrl[2:6]),
-        ]
-        cases[7] = [
-            source.data.eq(sr_data[24:56]),
-            source.ctrl.eq(sr_ctrl[3:7]),
-        ]
+        for i in range(4, 8):
+            cases[i] = [
+                source.data.eq(sr_data[8*(i-4):8*i]),
+                source.ctrl.eq(sr_ctrl[1*(i-4):1*i]),
+            ]
         self.comb += Case(sr_bytes, cases)
 
 # Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
