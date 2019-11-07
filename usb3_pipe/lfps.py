@@ -209,6 +209,7 @@ class LFPSGenerator(Module):
 class LFPSUnit(Module):
     def __init__(self, sys_clk_freq, serdes):
         self.rx_polling = Signal()   # o
+        self.tx_idle    = Signal()   # i
         self.tx_polling = Signal()   # i
         self.tx_count   = Signal(16) # o
 
@@ -229,7 +230,7 @@ class LFPSUnit(Module):
                 serdes.tx_idle.eq(generator.tx_idle),
                 serdes.tx_pattern.eq(generator.tx_pattern)
             ).Else(
-                 serdes.tx_idle.eq(0)
+                 serdes.tx_idle.eq(self.tx_idle)
             ),
             self.tx_count.eq(generator.count)
         ]
