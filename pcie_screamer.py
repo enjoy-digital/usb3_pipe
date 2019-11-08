@@ -30,6 +30,9 @@ _io = [
     ("user_btn", 0, Pins("AA1"), IOStandard("LVCMOS33")),
     ("user_btn", 1, Pins("AB6"), IOStandard("LVCMOS33")),
 
+    ("user_gpio", 0, Pins("Y6"),  IOStandard("LVCMOS33")),
+    ("user_gpio", 1, Pins("AA6"), IOStandard("LVCMOS33")),
+
     ("serial", 0,
         Subsignal("tx", Pins("T1")),
         Subsignal("rx", Pins("U1")),
@@ -58,7 +61,7 @@ class Platform(XilinxPlatform):
 class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys = ClockDomain()
-        self.clock_domains.cd_oob = ClockDomain()
+        self.clock_domains.cd_usb3_oob = ClockDomain()
         self.clock_domains.cd_clk125 = ClockDomain()
 
         # # #
@@ -70,9 +73,10 @@ class _CRG(Module):
         self.cd_clk125.clk.attr.add("keep")
 
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
+        self.comb += pll.reset.eq(~platform.request("user_btn", 0))
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_oob, sys_clk_freq/8)
+        pll.create_clkout(self.cd_usb3_oob, sys_clk_freq/8)
         pll.create_clkout(self.cd_clk125, 125e6)
 
 # USB3SoC ------------------------------------------------------------------------------------------
@@ -99,6 +103,7 @@ class USB3SoC(SoCMini):
             tx_pads      = platform.request("pcie_tx"),
             rx_pads      = platform.request("pcie_rx"))
         self.submodules += usb3_serdes
+        platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
 
         # USB3 PHY ---------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
