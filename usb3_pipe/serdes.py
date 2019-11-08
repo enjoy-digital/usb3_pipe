@@ -336,13 +336,20 @@ class A7USB3SerDes(Module):
             rx_aligner.source.connect(rx_skip_remover.sink),
             rx_skip_remover.source.connect(self.source),
         ]
+
+        # Override GTP RX termination for USB3 (800 mV Term Voltage) -------------------------------
+        gtp.gtp_params.update(
+            p_RX_CM_SEL      = 0b11,
+            p_RX_CM_TRIM     = 0b1010,
+            p_RXLPM_INCM_CFG = 0b1,
+            p_RXLPM_IPCM_CFG = 0b0
+        )
+
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
         gtp.gtp_params.update(
             p_PCS_RSVD_ATTR  = 0x000000000100,
-            #p_RXOOB_CLK_CFG  = "FABRIC",
-            #i_SIGVALIDCLK    = ClockSignal("usb3_oob"),
-            p_RXOOB_CLK_CFG  = "PMA",
-            i_RXOOBRESET     = 0b0,
+            p_RXOOB_CLK_CFG  = "FABRIC",
+            i_SIGVALIDCLK    = ClockSignal("usb3_oob"),
             p_RXOOB_CFG      = 0b0000110,
             i_RXELECIDLEMODE = 0b00,
             o_RXELECIDLE     = self.rx_idle,
