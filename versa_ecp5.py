@@ -74,9 +74,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, connector="pcie",
-            with_etherbone=True, mac_address=0x10e2d5000000, ip_address="192.168.1.50",
-            with_analyzer=True):
+    def __init__(self, platform, connector="pcie", with_etherbone=True, with_analyzer=True):
 
         sys_clk_freq = int(133e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -98,8 +96,8 @@ class USB3SoC(SoCMini):
             # core
             self.submodules.eth_core = LiteEthUDPIPCore(
                 phy         = self.eth_phy,
-                mac_address = mac_address,
-                ip_address  = ip_address,
+                mac_address = 0x10e2d5000000,
+                ip_address  = "192.168.1.50",
                 clk_freq    = sys_clk_freq)
             # etherbone
             self.submodules.etherbone = LiteEthEtherbone(self.eth_core.udp, 1234)
