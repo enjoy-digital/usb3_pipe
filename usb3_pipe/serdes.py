@@ -204,10 +204,10 @@ class K7USB3SerDes(Module):
             refclk = Signal()
             self.specials += [
                 Instance("IBUFDS_GTE2",
-                    i_CEB=0,
-                    i_I=refclk_pads.p,
-                    i_IB=refclk_pads.n,
-                    o_O=refclk
+                    i_CEB = 0,
+                    i_I   = refclk_pads.p,
+                    i_IB  = refclk_pads.n,
+                    o_O   = refclk
                 )
             ]
 
@@ -217,12 +217,12 @@ class K7USB3SerDes(Module):
 
         # Transceiver ------------------------------------------------------------------------------
         self.submodules.gtx = gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
-            data_width=20,
-            clock_aligner=False,
-            tx_buffer_enable=True,
-            rx_buffer_enable=True,
-            tx_polarity=self.tx_polarity,
-            rx_polarity=self.rx_polarity)
+            data_width       = 20,
+            clock_aligner    = False,
+            tx_buffer_enable = True,
+            rx_buffer_enable = True,
+            tx_polarity      = self.tx_polarity,
+            rx_polarity      = self.rx_polarity)
         gtx.add_stream_endpoints()
         tx_datapath     = SerdesTXDatapath("tx")
         rx_datapath     = SerdesRXDatapath("rx")
@@ -310,12 +310,12 @@ class A7USB3SerDes(Module):
 
         # Transceiver ------------------------------------------------------------------------------
         self.submodules.gtp = gtp = GTP(pll, tx_pads, rx_pads, sys_clk_freq,
-            data_width=20,
-            clock_aligner=False,
-            tx_buffer_enable=True,
-            rx_buffer_enable=True,
-            tx_polarity=self.tx_polarity,
-            rx_polarity=self.rx_polarity)
+            data_width       = 20,
+            clock_aligner    = False,
+            tx_buffer_enable = True,
+            rx_buffer_enable = True,
+            tx_polarity      = self.tx_polarity,
+            rx_polarity      = self.rx_polarity)
         gtp.add_stream_endpoints()
         tx_datapath     = SerdesTXDatapath("tx")
         rx_datapath     = SerdesRXDatapath("rx")
@@ -398,11 +398,11 @@ class ECP5USB3SerDes(Module):
         else:
             refclk = Signal()
             self.specials.extref0 = Instance("EXTREFB",
-                i_REFCLKP=refclk_pads.p,
-                i_REFCLKN=refclk_pads.n,
-                o_REFCLKO=refclk,
-                p_REFCK_PWDNB="0b1",
-                p_REFCK_RTERM="0b1", # 100 Ohm
+                i_REFCLKP     = refclk_pads.p,
+                i_REFCLKN     = refclk_pads.n,
+                o_REFCLKO     = refclk,
+                p_REFCK_PWDNB = "0b1",
+                p_REFCK_RTERM = "0b1", # 100 Ohm
             )
             self.extref0.attr.add(("LOC", "EXTREF0"))
 
