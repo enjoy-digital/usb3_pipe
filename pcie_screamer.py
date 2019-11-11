@@ -73,7 +73,6 @@ class _CRG(Module):
         self.cd_clk125.clk.attr.add("keep")
 
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
-        self.comb += pll.reset.eq(~platform.request("user_btn", 0))
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
         pll.create_clkout(self.cd_usb3_oob, sys_clk_freq/8)
@@ -108,6 +107,9 @@ class USB3SoC(SoCMini):
         # USB3 PHY ---------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules += usb3_pipe
+        self.comb += usb3_pipe.reset.eq(~platform.request("user_btn", 0))
+        self.comb += usb3_pipe.sink.valid.eq(1)
+        self.comb += usb3_pipe.source.ready.eq(1)
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)

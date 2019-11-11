@@ -12,6 +12,7 @@ from usb3_pipe.scrambling import Scrambler, Descrambler
 
 # USB3 PIPE ----------------------------------------------------------------------------------------
 
+@ResetInserter()
 class USB3PIPE(Module):
     def __init__(self, serdes, sys_clk_freq, with_scrambling=True):
         assert sys_clk_freq > 125e6

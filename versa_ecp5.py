@@ -61,14 +61,12 @@ class _CRG(Module):
 
         # clk / rst
         clk100 = platform.request("clk100")
-        rst_n  = platform.request("rst_n")
         platform.add_period_constraint(clk100, 1e9/100e6)
 
         # pll
         self.submodules.pll = pll = ECP5PLL()
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        self.specials += AsyncResetSynchronizer(self.cd_sys, ~rst_n)
 
 
 # USB3SoC ------------------------------------------------------------------------------------------
@@ -125,6 +123,7 @@ class USB3SoC(SoCMini):
         # USB3 PIPE --------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq, with_scrambling=False)
         self.submodules += usb3_pipe
+        self.comb += usb3_pipe.reset.eq(~platform.request("rst_n"))
         self.comb += usb3_pipe.sink.valid.eq(1)
         self.comb += usb3_pipe.source.ready.eq(1)
 
