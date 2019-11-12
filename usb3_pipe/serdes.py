@@ -130,7 +130,7 @@ class RXWordAligner(stream.PipelinedActor):
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
 class SerdesTXDatapath(Module):
-    def __init__(self, clock_domain):
+    def __init__(self, clock_domain="sys"):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
 
@@ -153,7 +153,7 @@ class SerdesTXDatapath(Module):
         ]
 
 class SerdesRXDatapath(Module):
-    def __init__(self, clock_domain):
+    def __init__(self, clock_domain="sys"):
         self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -445,8 +445,8 @@ class USB3SerDesModel(Module):
     def __init__(self):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.tx     = stream.Endpoint([("data", 40)])
-        self.rx     = stream.Endpoint([("data", 40)])
+        self.tx     = stream.Endpoint([("data", 20)])
+        self.rx     = stream.Endpoint([("data", 20)])
 
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
@@ -461,26 +461,35 @@ class USB3SerDesModel(Module):
 
         # # #
 
-        tx_data = Signal(40)
-        rx_data = Signal(40)
+        tx_datapath = SerdesTXDatapath()
+        rx_datapath = SerdesRXDatapath()
+        self.submodules += tx_datapath, rx_datapath
+        self.comb += [
+            self.sink.connect(tx_datapath.sink),
+            rx_datapath.word_aligner.enable.eq(self.rx_align),
+            rx_datapath.source.connect(self.source)
+        ]
 
-        encoder  = Encoder(4, True)
-        decoders = [Decoder(True) for _ in range(4)]
+        encoder  = Encoder(2, True)
+        decoders = [Decoder(True) for _ in range(2)]
         self.submodules += encoder, decoders
-        self.comb += self.sink.ready.eq(1)
-        self.comb += self.source.valid.eq(1)
-        for i in range(4):
+        self.comb += tx_datapath.source.ready.eq(1)
+        self.comb += rx_datapath.sink.valid.eq(1)
+        for i in range(2):
             self.comb += [
-                encoder.k[i].eq(self.sink.ctrl[i]),
-                encoder.d[i].eq(self.sink.data[8*i:8*(i+1)]),
-                self.source.ctrl[i].eq(decoders[i].k),
-                self.source.data[8*i:8*(i+1)].eq(decoders[i].d),
+                encoder.k[i].eq(tx_datapath.source.ctrl[i]),
+                encoder.d[i].eq(tx_datapath.source.data[8*i:8*(i+1)]),
+                rx_datapath.sink.ctrl[i].eq(decoders[i].k),
+                rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
+
+        tx_data = Signal(20)
+        rx_data = Signal(20)
         self.comb += [
             If(self.tx_pattern != 0,
                 tx_data.eq(self.tx_pattern)
             ).Else(
-                tx_data.eq(Cat(*[encoder.output[i] for i in range(4)])),
+                tx_data.eq(Cat(*[encoder.output[i] for i in range(2)])),
             ),
             If(self.tx_polarity,
                 self.tx.data.eq(~tx_data)
@@ -495,7 +504,7 @@ class USB3SerDesModel(Module):
                 rx_data.eq(self.rx.data)
             )
         ]
-        for i in range(4):
+        for i in range(2):
             self.comb += decoders[i].input.eq(rx_data[10*i:10*(i+1)])
 
         # Ready when enabled
