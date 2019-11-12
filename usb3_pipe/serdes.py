@@ -242,11 +242,18 @@ class K7USB3SerDes(Module):
             gtx.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(self.source),
         ]
+
+        # Override GTX RX termination for USB3 (800 mV Term Voltage) -------------------------------
+        gtp.gtp_params.update(
+            p_RX_CM_SEL  = 0b11,
+            p_RX_CM_TRIM = 0b1010,
+            p_PMA_RSV2   = 0x2050,
+        )
+
         # Override GTX parameters/signals to allow LFPS --------------------------------------------
         gtx.gtx_params.update(
             p_PCS_RSVD_ATTR  = 0x000000000100,
             p_RXOOB_CFG      = 0b0000110,
-            i_RXOOBRESET     = 0,
             i_CLKRSVD        = ClockSignal("usb3_oob"),
             i_RXELECIDLEMODE = 0b00,
             o_RXELECIDLE     = self.rx_idle,
