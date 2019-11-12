@@ -6,54 +6,12 @@ import random
 
 from migen import *
 
+from usb3_pipe.serdes import RXWordAligner
+from usb3_pipe.serdes import RXSkipRemover
 from usb3_pipe.serdes import SerdesTXDatapath, SerdesRXDatapath
-from usb3_pipe.serdes import SerdesRXWordAligner
-from usb3_pipe.serdes import SerdesRXSkipRemover
 
 
 class TestSerDes(unittest.TestCase):
-    def test_datapath_loopback(self):
-        prng  = random.Random(42)
-        datas = [prng.randrange(2**32) for _ in range(64)]
-        ctrls = [prng.randrange(2**2)  for _ in range(64)]
-
-        class DUT(Module):
-            def __init__(self):
-                self.submodules.tx = SerdesTXDatapath("serdes")
-                self.submodules.rx = SerdesRXDatapath("serdes")
-                self.comb += self.tx.source.connect(self.rx.sink)
-
-        def generator(dut):
-            for data, ctrl in zip(datas, ctrls):
-                yield dut.tx.sink.valid.eq(1)
-                yield dut.tx.sink.data.eq(data)
-                yield dut.tx.sink.ctrl.eq(ctrl)
-                yield
-                while not (yield dut.tx.sink.ready):
-                    yield
-                yield dut.tx.sink.valid.eq(0)
-
-        def checker(dut):
-            dut.data_errors = 0
-            dut.ctrl_errors = 0
-            yield dut.rx.source.ready.eq(1)
-            for data, ctrl in zip(datas, ctrls):
-                while not (yield dut.rx.source.valid):
-                    yield
-                if (yield dut.rx.source.data != data):
-                    dut.data_errors += 1
-                if (yield dut.rx.source.ctrl != ctrl):
-                    dut.ctrl_errors += 1
-                yield
-
-        dut = DUT()
-        run_simulation(dut,
-            generators = [generator(dut), checker(dut)],
-            clocks     = {"sys": 1e9/133e6, "serdes": 1e9/125e6}
-        )
-        self.assertEqual(dut.data_errors, 0)
-        self.assertEqual(dut.ctrl_errors, 0)
-
     def test_rx_word_aligner(self):
         datas_input = [
             0x030201bc, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
@@ -100,7 +58,7 @@ class TestSerDes(unittest.TestCase):
                     dut.ctrls_errors += 1
                 yield
 
-        dut = SerdesRXWordAligner()
+        dut = RXWordAligner()
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
@@ -158,7 +116,50 @@ class TestSerDes(unittest.TestCase):
                 yield dut.source.ready.eq(0)
                 yield
 
-        dut = SerdesRXSkipRemover()
+        dut = RXSkipRemover()
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
+
+    def test_datapath_loopback(self):
+        prng  = random.Random(42)
+        datas = [prng.randrange(2**32) for _ in range(64)]
+        ctrls = [prng.randrange(2**2)  for _ in range(64)]
+
+        class DUT(Module):
+            def __init__(self):
+                self.submodules.tx = SerdesTXDatapath("serdes")
+                self.submodules.rx = SerdesRXDatapath("serdes")
+                self.comb += self.tx.source.connect(self.rx.sink)
+
+        def generator(dut):
+            for data, ctrl in zip(datas, ctrls):
+                yield dut.tx.sink.valid.eq(1)
+                yield dut.tx.sink.data.eq(data)
+                yield dut.tx.sink.ctrl.eq(ctrl)
+                yield
+                while not (yield dut.tx.sink.ready):
+                    yield
+                yield dut.tx.sink.valid.eq(0)
+
+        def checker(dut):
+            dut.data_errors = 0
+            dut.ctrl_errors = 0
+            yield dut.rx.source.ready.eq(1)
+            for data, ctrl in zip(datas, ctrls):
+                while not (yield dut.rx.source.valid):
+                    yield
+                if (yield dut.rx.source.data != data):
+                    dut.data_errors += 1
+                if (yield dut.rx.source.ctrl != ctrl):
+                    dut.ctrl_errors += 1
+                yield
+
+        dut = DUT()
+        run_simulation(dut,
+            generators = [generator(dut), checker(dut)],
+            clocks     = {"sys": 1e9/133e6, "serdes": 1e9/125e6},
+            vcd_name = "toto.vcd"
+        )
+        self.assertEqual(dut.data_errors, 0)
+        self.assertEqual(dut.ctrl_errors, 0)

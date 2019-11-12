@@ -8,102 +8,9 @@ from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import COM, SKP
 
-# Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
-
-class SerdesTXDatapath(Module):
-    def __init__(self, clock_domain):
-        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
-
-        # # #
-
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
-        cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
-        self.submodules += cdc
-        converter = stream.StrideConverter(
-            [("data", 32), ("ctrl", 4)],
-            [("data", 16), ("ctrl", 2)],
-            reverse=False)
-        converter = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(converter)
-        converter = ClockDomainsRenamer(clock_domain)(converter)
-        self.submodules += converter
-        self.comb += [
-            self.sink.connect(cdc.sink),
-            cdc.source.connect(converter.sink),
-            converter.source.connect(self.source)
-        ]
-
-class SerdesRXDatapath(Module):
-    def __init__(self, clock_domain):
-        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
-        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-
-        # # #
-
-        converter = stream.StrideConverter(
-            [("data", 16), ("ctrl", 2)],
-            [("data", 32), ("ctrl", 4)],
-            reverse=False)
-        converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
-        converter = ClockDomainsRenamer(clock_domain)(converter)
-        self.submodules += converter
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
-        cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
-        self.submodules += cdc
-        self.comb += [
-            self.sink.connect(converter.sink),
-            converter.source.connect(cdc.sink),
-            cdc.source.connect(self.source)
-        ]
-
-# RX Aligner ---------------------------------------------------------------------------------------
-
-class SerdesRXWordAligner(stream.PipelinedActor):
-    def __init__(self):
-        self.enable = Signal(reset=1)
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        stream.PipelinedActor.__init__(self, 1)
-
-        # # #
-
-        alignment = Signal(2)
-
-        last_data = Signal(32)
-        last_ctrl = Signal(4)
-
-        # Register last data/ctrl
-        self.sync += [
-            If(self.pipe_ce,
-                last_data.eq(sink.data),
-                last_ctrl.eq(sink.ctrl)
-            )
-        ]
-
-        # Alignment detection
-        for i in range(4):
-            self.sync += [
-                If(self.enable & sink.valid & self.pipe_ce,
-                    If(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value),
-                        alignment.eq(i)
-                    )
-                )
-            ]
-
-        # Do the alignment
-        data = Cat(last_data, sink.data)
-        ctrl = Cat(last_ctrl, sink.ctrl)
-        cases = {}
-        for i in range(4):
-            cases[i] = [
-                source.data.eq(data[8*i:]),
-                source.ctrl.eq(ctrl[i:]),
-            ]
-        self.comb += Case(alignment, cases)
-
 # RX Skip Remover ----------------------------------------------------------------------------------
 
-class SerdesRXSkipRemover(Module):
+class RXSkipRemover(Module):
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -174,6 +81,106 @@ class SerdesRXSkipRemover(Module):
             ]
         self.comb += Case(sr_bytes, cases)
 
+
+# RX Aligner ---------------------------------------------------------------------------------------
+
+class RXWordAligner(stream.PipelinedActor):
+    def __init__(self):
+        self.enable = Signal(reset=1)
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        stream.PipelinedActor.__init__(self, 1)
+
+        # # #
+
+        alignment = Signal(2)
+
+        last_data = Signal(32)
+        last_ctrl = Signal(4)
+
+        # Register last data/ctrl
+        self.sync += [
+            If(self.pipe_ce,
+                last_data.eq(sink.data),
+                last_ctrl.eq(sink.ctrl)
+            )
+        ]
+
+        # Alignment detection
+        for i in range(4):
+            self.sync += [
+                If(self.enable & sink.valid & self.pipe_ce,
+                    If(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value),
+                        alignment.eq(i)
+                    )
+                )
+            ]
+
+        # Do the alignment
+        data = Cat(last_data, sink.data)
+        ctrl = Cat(last_ctrl, sink.ctrl)
+        cases = {}
+        for i in range(4):
+            cases[i] = [
+                source.data.eq(data[8*i:]),
+                source.ctrl.eq(ctrl[i:]),
+            ]
+        self.comb += Case(alignment, cases)
+
+# Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
+
+class SerdesTXDatapath(Module):
+    def __init__(self, clock_domain):
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
+
+        # # #
+
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+        cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
+        self.submodules.cdc = cdc
+        converter = stream.StrideConverter(
+            [("data", 32), ("ctrl", 4)],
+            [("data", 16), ("ctrl", 2)],
+            reverse=False)
+        converter = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(converter)
+        converter = ClockDomainsRenamer(clock_domain)(converter)
+        self.submodules.converter = converter
+        self.comb += [
+            self.sink.connect(cdc.sink),
+            cdc.source.connect(converter.sink),
+            converter.source.connect(self.source)
+        ]
+
+class SerdesRXDatapath(Module):
+    def __init__(self, clock_domain):
+        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        converter = stream.StrideConverter(
+            [("data", 16), ("ctrl", 2)],
+            [("data", 32), ("ctrl", 4)],
+            reverse=False)
+        converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
+        converter = ClockDomainsRenamer(clock_domain)(converter)
+        self.submodules.converter = converter
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+        cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
+        self.submodules.cdc = cdc
+        skip_remover = RXSkipRemover()
+        self.submodules.skip_remover = skip_remover
+        word_aligner = RXWordAligner()
+        self.submodules.word_aligner = word_aligner
+        self.comb += [
+            self.sink.connect(converter.sink),
+            converter.source.connect(cdc.sink),
+            cdc.source.connect(skip_remover.sink),
+            skip_remover.source.connect(word_aligner.sink),
+            word_aligner.source.connect(self.source),
+        ]
+
 # Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
 
 class K7USB3SerDes(Module):
@@ -191,7 +198,6 @@ class K7USB3SerDes(Module):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i
-        self.rx_skip     = Signal()   # o
 
         # # #
 
@@ -216,7 +222,7 @@ class K7USB3SerDes(Module):
         self.submodules += pll
 
         # Transceiver ------------------------------------------------------------------------------
-        self.submodules.gtx = gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
+        gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
             data_width       = 20,
             clock_aligner    = False,
             tx_buffer_enable = True,
@@ -224,24 +230,21 @@ class K7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtx.add_stream_endpoints()
-        tx_datapath     = SerdesTXDatapath("tx")
-        rx_datapath     = SerdesRXDatapath("rx")
-        rx_aligner      = SerdesRXWordAligner()
-        rx_skip_remover = SerdesRXSkipRemover()
-        self.comb += self.rx_skip.eq(rx_skip_remover.skip)
-        self.submodules += gtx, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
+        tx_datapath = SerdesTXDatapath("tx")
+        rx_datapath = SerdesRXDatapath("rx")
+        self.submodules.gtx         = gtx
+        self.submodules.tx_datapath = tx_datapath
+        self.submodules.rx_datapath = rx_datapath
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
             self.ready.eq(gtx.tx_ready & gtx.rx_ready),
             gtx.rx_align.eq(self.rx_align),
-            rx_aligner.enable.eq(self.rx_align),
+            rx_datapath.word_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtx.sink),
             gtx.source.connect(rx_datapath.sink),
-            rx_datapath.source.connect(rx_aligner.sink),
-            rx_aligner.source.connect(rx_skip_remover.sink),
-            rx_skip_remover.source.connect(self.source),
+            rx_datapath.source.connect(self.source),
         ]
         # Override GTX parameters/signals to allow LFPS --------------------------------------------
         gtx.gtx_params.update(
@@ -284,7 +287,6 @@ class A7USB3SerDes(Module):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i
-        self.rx_skip     = Signal()   # o
 
         # # #
 
@@ -309,7 +311,7 @@ class A7USB3SerDes(Module):
         self.submodules += pll
 
         # Transceiver ------------------------------------------------------------------------------
-        self.submodules.gtp = gtp = GTP(pll, tx_pads, rx_pads, sys_clk_freq,
+        gtp = gtp = GTP(pll, tx_pads, rx_pads, sys_clk_freq,
             data_width       = 20,
             clock_aligner    = False,
             tx_buffer_enable = True,
@@ -317,24 +319,21 @@ class A7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtp.add_stream_endpoints()
-        tx_datapath     = SerdesTXDatapath("tx")
-        rx_datapath     = SerdesRXDatapath("rx")
-        rx_aligner      = SerdesRXWordAligner()
-        rx_skip_remover = SerdesRXSkipRemover()
-        self.comb += self.rx_skip.eq(rx_skip_remover.skip)
-        self.submodules += gtp, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
+        tx_datapath = SerdesTXDatapath("tx")
+        rx_datapath = SerdesRXDatapath("rx")
+        self.submodules.gtp         = gtp
+        self.submodules.tx_datapath = tx_datapath
+        self.submodules.rx_datapath = rx_datapath
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
             self.ready.eq(gtp.tx_ready & gtp.rx_ready),
             gtp.rx_align.eq(self.rx_align),
-            rx_aligner.enable.eq(self.rx_align),
+            rx_datapath.word_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtp.sink),
             gtp.source.connect(rx_datapath.sink),
-            rx_datapath.source.connect(rx_aligner.sink),
-            rx_aligner.source.connect(rx_skip_remover.sink),
-            rx_skip_remover.source.connect(self.source),
+            rx_datapath.source.connect(self.source),
         ]
 
         # Override GTP RX termination for USB3 (800 mV Term Voltage) -------------------------------
@@ -386,7 +385,6 @@ class ECP5USB3SerDes(Module):
         self.rx_polarity = Signal()   # i # FIXME: not used for now
         self.rx_idle     = Signal()   # o
         self.rx_align    = Signal()   # i
-        self.rx_skip     = Signal()   # o
 
         # # #
 
@@ -413,26 +411,21 @@ class ECP5USB3SerDes(Module):
         # Transceiver ------------------------------------------------------------------------------
         serdes  = SerDesECP5(serdes_pll, tx_pads, rx_pads, channel=channel, data_width=20)
         serdes.add_stream_endpoints()
-        tx_datapath     = SerdesTXDatapath("tx")
-        rx_datapath     = SerdesRXDatapath("rx")
-        rx_aligner      = SerdesRXWordAligner()
-        rx_skip_remover = SerdesRXSkipRemover()
-        self.comb += self.rx_skip.eq(rx_skip_remover.skip)
-        self.submodules += serdes, tx_datapath, rx_datapath, rx_aligner, rx_skip_remover
+        tx_datapath = SerdesTXDatapath("tx")
+        rx_datapath = SerdesRXDatapath("rx")
+        self.submodules.serdes         = serdes
+        self.submodules.tx_datapath = tx_datapath
+        self.submodules.rx_datapath = rx_datapath
         self.comb += [
             serdes.tx_enable.eq(self.enable),
             serdes.rx_enable.eq(self.enable),
-            serdes.tx_idle.eq(self.tx_idle),
-            self.rx_idle.eq(serdes.rx_idle),
             self.ready.eq(serdes.tx_ready & serdes.rx_ready),
             serdes.rx_align.eq(self.rx_align),
-            rx_aligner.enable.eq(self.rx_align),
+            rx_datapath.word_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(serdes.sink),
             serdes.source.connect(rx_datapath.sink),
-            rx_datapath.source.connect(rx_aligner.sink),
-            rx_aligner.source.connect(rx_skip_remover.sink),
-            rx_skip_remover.source.connect(self.source),
+            rx_datapath.source.connect(self.source),
         ]
 
         # Override SerDes parameters/signals to allow LFPS --------------------------------------------
