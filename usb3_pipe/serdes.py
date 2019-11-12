@@ -54,8 +54,8 @@ class RXSkipRemover(Module):
         ]
         for i in range(1, 5):
             cases[i] = [
-                sr_data.eq(Cat(frag_data[0:8*i], sr_data)),
-                sr_ctrl.eq(Cat(frag_ctrl[0:1*i], sr_ctrl)),
+                sr_data.eq(Cat(sr_data[8*i:], frag_data[0:8*i])),
+                sr_ctrl.eq(Cat(sr_ctrl[1*i:], frag_ctrl[0:1*i])),
             ]
         self.comb += sink.ready.eq(sr_bytes <= 7)
         self.sync += [
@@ -76,8 +76,8 @@ class RXSkipRemover(Module):
         cases = {}
         for i in range(4, 8):
             cases[i] = [
-                source.data.eq(sr_data[8*(i-4):8*i]),
-                source.ctrl.eq(sr_ctrl[1*(i-4):1*i]),
+                source.data.eq(sr_data[8*(8-i):8*(8-i+4)]),
+                source.ctrl.eq(sr_ctrl[1*(8-i):1*(8-i+4)]),
             ]
         self.comb += Case(sr_bytes, cases)
 
@@ -92,7 +92,8 @@ class RXWordAligner(Module):
 
         # # #
 
-        alignment = Signal(2)
+        alignment   = Signal(2)
+        alignment_d = Signal(2)
 
         buf = stream.Buffer([("data", 32), ("ctrl", 4)])
         self.submodules += buf
@@ -103,14 +104,23 @@ class RXWordAligner(Module):
         ]
 
         # Alignment detection
-        for i in range(4):
-            self.sync += [
-                If(self.enable & sink.valid & sink.ready,
+        for i in reversed(range(4)):
+            self.comb += [
+                If(sink.valid & sink.ready,
                     If(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value),
                         alignment.eq(i)
                     )
                 )
             ]
+        self.sync += [
+            If(sink.valid & sink.ready,
+                If(self.enable,
+                    If((sink.ctrl != 0) & (buf.source.ctrl == 0),
+                        alignment_d.eq(alignment),
+                    )
+                )
+            ),
+        ]
 
         # Data selection
         data = Cat(buf.source.data, sink.data)
@@ -121,7 +131,7 @@ class RXWordAligner(Module):
                 source.data.eq(data[8*i:]),
                 source.ctrl.eq(ctrl[i:]),
             ]
-        self.comb += Case(alignment, cases)
+        self.comb += Case(alignment_d, cases)
 
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
@@ -236,7 +246,6 @@ class K7USB3SerDes(Module):
             gtx.rx_enable.eq(self.enable),
             self.ready.eq(gtx.tx_ready & gtx.rx_ready),
             gtx.rx_align.eq(self.rx_align),
-            rx_datapath.word_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtx.sink),
             gtx.source.connect(rx_datapath.sink),
@@ -244,7 +253,7 @@ class K7USB3SerDes(Module):
         ]
 
         # Override GTX RX termination for USB3 (800 mV Term Voltage) -------------------------------
-        gtp.gtp_params.update(
+        gtx.gtx_params.update(
             p_RX_CM_SEL  = 0b11,
             p_RX_CM_TRIM = 0b1010,
             p_PMA_RSV2   = 0x2050,
@@ -332,7 +341,6 @@ class A7USB3SerDes(Module):
             gtp.rx_enable.eq(self.enable),
             self.ready.eq(gtp.tx_ready & gtp.rx_ready),
             gtp.rx_align.eq(self.rx_align),
-            rx_datapath.word_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtp.sink),
             gtp.source.connect(rx_datapath.sink),
@@ -424,7 +432,6 @@ class ECP5USB3SerDes(Module):
             serdes.rx_enable.eq(self.enable),
             self.ready.eq(serdes.tx_ready & serdes.rx_ready),
             serdes.rx_align.eq(self.rx_align),
-            rx_datapath.word_aligner.enable.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(serdes.sink),
             serdes.source.connect(rx_datapath.sink),
