@@ -124,7 +124,7 @@ class TestSerDes(unittest.TestCase):
     def test_datapath_loopback(self):
         prng  = random.Random(42)
         datas = [prng.randrange(2**32) for _ in range(64)]
-        ctrls = [prng.randrange(2**2)  for _ in range(64)]
+        ctrls = [prng.randrange(2**4)  for _ in range(64)]
 
         class DUT(Module):
             def __init__(self):
