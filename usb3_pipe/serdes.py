@@ -6,7 +6,7 @@ from migen import *
 from litex.soc.interconnect import stream
 from litex.soc.cores.code_8b10b import Encoder, Decoder
 
-from usb3_pipe.common import COM, SKP
+from usb3_pipe.common import K, COM, SKP
 
 # RX Skip Remover ----------------------------------------------------------------------------------
 
@@ -133,6 +133,24 @@ class RXWordAligner(Module):
             ]
         self.comb += Case(alignment_d, cases)
 
+# RXSubstitution -----------------------------------------------------------------------------------
+
+class RXSubstitution(Module):
+    def __init__(self, serdes, clock_domain):
+        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
+        self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
+
+        # # #
+
+        self.comb += self.sink.connect(self.source)
+        for i in range(2):
+            self.comb += [
+                If(serdes.decoders[i].invalid,
+                    self.source.ctrl[i].eq(1),
+                    self.source.data[8*i:8*(i+1)].eq(K(28, 4)),
+                )
+            ]
+
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
 class SerdesTXDatapath(Module):
@@ -236,11 +254,13 @@ class K7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtx.add_stream_endpoints()
-        tx_datapath = SerdesTXDatapath("tx")
-        rx_datapath = SerdesRXDatapath("rx")
-        self.submodules.gtx         = gtx
-        self.submodules.tx_datapath = tx_datapath
-        self.submodules.rx_datapath = rx_datapath
+        tx_datapath     = SerdesTXDatapath("tx")
+        rx_substitution = RXSubstitution(gtx, "rx")
+        rx_datapath     = SerdesRXDatapath("rx")
+        self.submodules.gtx             = gtx
+        self.submodules.tx_datapath     = tx_datapath
+        self.submodules.rx_substitution = rx_substitution
+        self.submodules.rx_datapath     = rx_datapath
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
@@ -248,7 +268,8 @@ class K7USB3SerDes(Module):
             gtx.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtx.sink),
-            gtx.source.connect(rx_datapath.sink),
+            gtx.source.connect(rx_substitution.sink),
+            rx_substitution.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(self.source),
         ]
 
@@ -331,11 +352,13 @@ class A7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtp.add_stream_endpoints()
-        tx_datapath = SerdesTXDatapath("tx")
-        rx_datapath = SerdesRXDatapath("rx")
-        self.submodules.gtp         = gtp
-        self.submodules.tx_datapath = tx_datapath
-        self.submodules.rx_datapath = rx_datapath
+        tx_datapath     = SerdesTXDatapath("tx")
+        rx_substitution = RXSubstitution(gtp, "rx")
+        rx_datapath     = SerdesRXDatapath("rx")
+        self.submodules.gtp             = gtp
+        self.submodules.tx_datapath     = tx_datapath
+        self.submodules.rx_substitution = rx_substitution
+        self.submodules.rx_datapath     = rx_datapath
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
@@ -343,7 +366,8 @@ class A7USB3SerDes(Module):
             gtp.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(gtp.sink),
-            gtp.source.connect(rx_datapath.sink),
+            gtp.source.connect(rx_substitution.sink),
+            rx_substitution.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(self.source),
         ]
 
@@ -422,11 +446,13 @@ class ECP5USB3SerDes(Module):
         # Transceiver ------------------------------------------------------------------------------
         serdes  = SerDesECP5(serdes_pll, tx_pads, rx_pads, channel=channel, data_width=20)
         serdes.add_stream_endpoints()
-        tx_datapath = SerdesTXDatapath("tx")
-        rx_datapath = SerdesRXDatapath("rx")
-        self.submodules.serdes         = serdes
-        self.submodules.tx_datapath = tx_datapath
-        self.submodules.rx_datapath = rx_datapath
+        tx_datapath     = SerdesTXDatapath("tx")
+        rx_substitution = RXSubstitution(serdes, "rx")
+        rx_datapath     = SerdesRXDatapath("rx")
+        self.submodules.serdes          = serdes
+        self.submodules.tx_datapath     = tx_datapath
+        self.submodules.rx_substitution = rx_substitution
+        self.submodules.rx_datapath     = rx_datapath
         self.comb += [
             serdes.tx_enable.eq(self.enable),
             serdes.rx_enable.eq(self.enable),
@@ -434,7 +460,8 @@ class ECP5USB3SerDes(Module):
             serdes.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.source.connect(serdes.sink),
-            serdes.source.connect(rx_datapath.sink),
+            serdes.source.connect(rx_substitution.sink),
+            rx_substitution.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(self.source),
         ]
 
