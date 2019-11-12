@@ -51,9 +51,9 @@ print("FPGA: " + fpga_id)
 # Analyzer dump ------------------------------------------------------------------------------------
 analyzer = LiteScopeAnalyzerDriver(wb.regs, "analyzer", debug=True)
 if sys.argv[1] == "rx_polling":
-    analyzer.add_rising_edge_trigger("soc_usb3_pipe_lfps_rx_polling")
+    analyzer.add_rising_edge_trigger("soc_usb3_pipe_rx_polling")
 elif sys.argv[1] == "tx_polling":
-    analyzer.add_rising_edge_trigger("soc_usb3_pipe_lfps_tx_polling")
+    analyzer.add_rising_edge_trigger("soc_usb3_pipe_tx_polling")
 elif sys.argv[1] == "rx_tseq_first_word":
     from usb3_pipe.common import TSEQ
     TSEQ_FIRST_WORD = int.from_bytes(TSEQ.to_bytes()[0:4], byteorder="little")
@@ -61,21 +61,21 @@ elif sys.argv[1] == "rx_tseq_first_word":
         "soc_usb3_serdes_source_source_valid" :       1,
         "soc_usb3_serdes_source_source_payload_data": TSEQ_FIRST_WORD})
 elif sys.argv[1] == "rx_tseq":
-    analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_rx_tseq")
+    analyzer.add_rising_edge_trigger("soc_usb3_pipe_rx_tseq")
 elif sys.argv[1] == "rx_ts1":
-     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_rx_ts1")
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_rx_ts1")
 elif sys.argv[1] == "rx_ts2":
-     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_rx_ts2")
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_rx_ts2")
 elif sys.argv[1] == "tx_ts2":
-     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ts_tx_ts2")
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_tx_ts2")
 elif sys.argv[1] == "ready":
      analyzer.add_rising_edge_trigger("soc_usb3_pipe_ready")
 elif sys.argv[1] == "skip":
-     analyzer.add_rising_edge_trigger("soc_usb3_pipe_ready")
+     analyzer.add_rising_edge_trigger("soc_usb3_serdes_rx_skip")
 elif sys.argv[1] == "sink_ready":
-     analyzer.add_rising_edge_trigger("soc_usb3_pipe_sink_sink_ready")
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_sink_ready")
 elif sys.argv[1] == "source_valid":
-     analyzer.add_rising_edge_trigger("soc_usb3_pipe_source_source_valid")
+     analyzer.add_rising_edge_trigger("soc_usb3_pipe_source_valid")
 elif sys.argv[1] == "now":
 	analyzer.configure_trigger(cond={})
 else:
