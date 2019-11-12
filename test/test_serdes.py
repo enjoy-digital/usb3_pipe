@@ -142,6 +142,7 @@ class TestSerDes(unittest.TestCase):
                     yield
                 yield dut.tx.sink.valid.eq(0)
 
+        @passive
         def checker(dut):
             dut.data_errors = 0
             dut.ctrl_errors = 0
@@ -159,7 +160,6 @@ class TestSerDes(unittest.TestCase):
         run_simulation(dut,
             generators = [generator(dut), checker(dut)],
             clocks     = {"sys": 1e9/133e6, "serdes": 1e9/125e6},
-            vcd_name = "toto.vcd"
         )
         self.assertEqual(dut.data_errors, 0)
         self.assertEqual(dut.ctrl_errors, 0)

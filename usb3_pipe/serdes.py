@@ -84,41 +84,37 @@ class RXSkipRemover(Module):
 
 # RX Aligner ---------------------------------------------------------------------------------------
 
-class RXWordAligner(stream.PipelinedActor):
+class RXWordAligner(Module):
     def __init__(self):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        stream.PipelinedActor.__init__(self, 1)
 
         # # #
 
         alignment = Signal(2)
 
-        last_data = Signal(32)
-        last_ctrl = Signal(4)
-
-        # Register last data/ctrl
-        self.sync += [
-            If(self.pipe_ce,
-                last_data.eq(sink.data),
-                last_ctrl.eq(sink.ctrl)
-            )
+        buf = stream.Buffer([("data", 32), ("ctrl", 4)])
+        self.submodules += buf
+        self.comb += [
+            sink.connect(buf.sink),
+            source.valid.eq(sink.valid & buf.source.valid),
+            buf.source.ready.eq(sink.valid & source.ready),
         ]
 
         # Alignment detection
         for i in range(4):
             self.sync += [
-                If(self.enable & sink.valid & self.pipe_ce,
+                If(self.enable & sink.valid & sink.ready,
                     If(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value),
                         alignment.eq(i)
                     )
                 )
             ]
 
-        # Do the alignment
-        data = Cat(last_data, sink.data)
-        ctrl = Cat(last_ctrl, sink.ctrl)
+        # Data selection
+        data = Cat(buf.source.data, sink.data)
+        ctrl = Cat(buf.source.ctrl, sink.ctrl)
         cases = {}
         for i in range(4):
             cases[i] = [
@@ -442,7 +438,7 @@ class ECP5USB3SerDes(Module):
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
 class USB3SerDesModel(Module):
-    def __init__(self):
+    def __init__(self, rx_word_shift=0):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.tx     = stream.Endpoint([("data", 20)])
@@ -483,8 +479,9 @@ class USB3SerDesModel(Module):
                 rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
 
-        tx_data = Signal(20)
-        rx_data = Signal(20)
+        tx_data    = Signal(20)
+        rx_data    = Signal(20)
+        rx_data_sr = Signal(40)
         self.comb += [
             If(self.tx_pattern != 0,
                 tx_data.eq(self.tx_pattern)
@@ -504,8 +501,9 @@ class USB3SerDesModel(Module):
                 rx_data.eq(self.rx.data)
             )
         ]
+        self.sync += rx_data_sr.eq(Cat(rx_data, rx_data_sr))
         for i in range(2):
-            self.comb += decoders[i].input.eq(rx_data[10*i:10*(i+1)])
+            self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
 
         # Ready when enabled
         self.comb += self.ready.eq(self.enable)
