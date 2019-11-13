@@ -158,17 +158,21 @@ class TSGenerator(Module):
             self.comb += If(port.adr == 1, self.source.data[8:16].eq(link_config))
 
         # Count ------------------------------------------------------------------------------------
-        count = Signal(max=mem_depth*n_ordered_sets, reset=mem_depth*n_ordered_sets - 1)
+        count = Signal(max=mem_depth*n_ordered_sets)
         count_done = (count == (mem_depth*n_ordered_sets - 1))
         self.sync += [
-            If(self.start & ~run,
-                run.eq(1),
-                count.eq(1),
-            ).Elif(self.source.ready,
-                If(count_done,
-                    run.eq(0),
-                ).Else(
-                    count.eq(count + 1)
+            If(run,
+                If(self.source.ready,
+                    count.eq(count + 1),
+                    If(count_done,
+                        run.eq(0),
+                        count.eq(0)
+                    )
+                )
+            ).Elif(self.start,
+                If(self.source.ready,
+                    run.eq(1),
+                    count.eq(1)
                 )
             )
         ]
