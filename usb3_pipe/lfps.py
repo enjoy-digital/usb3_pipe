@@ -32,29 +32,12 @@ def ns_to_cycles(clk_freq, t):
 
 # LFPS Definitions ---------------------------------------------------------------------------------
 
-# TODO: add LFPS Handshake timings
-
 PollingLFPSBurst  = LFPSTiming(t_typ=1.0e-6,  t_min=0.6e-6, t_max=1.4e-6)
 PollingLFPSRepeat = LFPSTiming(t_typ=10.0e-6, t_min=6.0e-6, t_max=14.0e-6)
 PollingLFPS       = LFPS(burst=PollingLFPSBurst, repeat=PollingLFPSRepeat)
 
-PingLFPSBurst     = LFPSTiming(t_typ=None,     t_min=40.0e-9,  t_max=200.0e-9)
-PingLFPSRepeat    = LFPSTiming(t_typ=200.0e-3, t_min=160.0e-3, t_max=240.0e-3)
-PingLFPS          = LFPS(burst=PingLFPSBurst, repeat=PingLFPSRepeat, cycles=2)
-
 ResetLFPSBurst    = LFPSTiming(t_typ=100.0e-3, t_min=80.0e-3,  t_max=120.0e-3)
 ResetLFPS         = LFPS(burst=ResetLFPSBurst)
-
-U1ExitLFPSBurst   = LFPSTiming(t_typ=None, t_min=300.0e-9, t_max=900.0e-9) # FIXME: t_max=900.0e-9/2.0e-6?
-U1ExitLFPS        = LFPS(burst=U1ExitLFPSBurst)
-
-U2LFPSBurst       = LFPSTiming(t_typ=None, t_min=80.0e-3, t_max=2.0e-3)
-U2LFPS            = LFPS(burst=U2LFPSBurst)
-
-LoopbackExitLFPS  = U2LFPS
-
-U3WakeupLFPSBurst = LFPSTiming(t_typ=None, t_min=80.0e-3, t_max=10.0e-3)
-U3WakeupLFPS      = LFPS(burst=U3WakeupLFPSBurst)
 
 # LFPS Checker -------------------------------------------------------------------------------------
 
