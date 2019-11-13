@@ -167,6 +167,8 @@ class PollingFSM(Module):
     """ Polling Finite State Machine (section 7.5.4)"""
     def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq, with_timers=True):
         self.idle               = Signal()
+        self.rx_ready           = Signal()
+        self.tx_ready           = Signal()
         self.exit_to_compliance = Signal()
         self.exit_to_rx_detect  = Signal()
 
@@ -256,6 +258,7 @@ class PollingFSM(Module):
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
+            self.rx_ready.eq(rx_ts2_seen),
             NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
             # Go to Idle when:
             # - 8 consecutive TS2 ordered sets are received. (8 ensured by ts_unit)
@@ -269,7 +272,9 @@ class PollingFSM(Module):
 
         # Idle State (7.5.4.7) ---------------------------------------------------------------------
         fsm.act("Polling.Idle",
-            self.idle.eq(1)
+            self.idle.eq(1),
+            self.rx_ready.eq(1),
+            self.tx_ready.eq(1),
         )
 
         # Exit to Compliance -----------------------------------------------------------------------
