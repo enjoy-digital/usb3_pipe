@@ -3,11 +3,14 @@
 # This file is Copyright (c) 2019 Florent Kermarrec <florent@enjoy-digital.fr>
 # License: BSD
 
+import sys
+
 from migen import *
 
 from litex.boards.platforms import kc705
 
 from litex.build.generic_platform import *
+from litex.build.xilinx import VivadoProgrammer
 
 from litex.soc.cores.clock import *
 from litex.soc.interconnect.csr import *
@@ -157,9 +160,18 @@ class USB3SoC(SoCMini):
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
 
+# Load ---------------------------------------------------------------------------------------------
+
+def load():
+    prog = VivadoProgrammer()
+    prog.load_bitstream("build/gateware/top.bit")
+    exit()
+
 # Build --------------------------------------------------------------------------------------------
 
 def main():
+    if "load" in sys.argv[1:]:
+        load()
     platform = kc705.Platform()
     platform.add_extension(_usb3_io)
     soc = USB3SoC(platform)

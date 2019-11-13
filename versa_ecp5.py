@@ -3,6 +3,8 @@
 # This file is Copyright (c) 2019 Florent Kermarrec <florent@enjoy-digital.fr>
 # License: BSD
 
+import sys
+
 from migen import *
 from migen.genlib.resetsync import AsyncResetSynchronizer
 
@@ -179,9 +181,28 @@ class USB3SoC(SoCMini):
         self.sync.tx += tx_counter.eq(rx_counter + 1)
         self.comb += platform.request("user_led", 6).eq(tx_counter[26])
 
+# Load ---------------------------------------------------------------------------------------------
+def load():
+    import os
+    f = open("ecp5-versa5g.cfg", "w")
+    f.write(
+"""
+interface ftdi
+ftdi_vid_pid 0x0403 0x6010
+ftdi_channel 0
+ftdi_layout_init 0xfff8 0xfffb
+reset_config none
+adapter_khz 25000
+jtag newtap ecp5 tap -irlen 8 -expected-id 0x81112043
+""")
+    f.close()
+    os.system("openocd -f ecp5-versa5g.cfg -c \"transport select jtag; init; svf build/gateware/top.svf; exit\"")
+
 # Build --------------------------------------------------------------------------------------------
 
 def main():
+    if "load" in sys.argv[1:]:
+        load()
     platform = versa_ecp5.Platform(toolchain="trellis")
     platform.add_extension(_usb3_io)
     soc = USB3SoC(platform)
