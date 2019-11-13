@@ -25,9 +25,9 @@ One of the following boards:
  - [PCIe Screamer](http://shop.lambdaconcept.com/home/32-pciescreamerR02.html)
  - [Versa ECP5](http://www.latticesemi.com/Products/DevelopmentBoardsAndKits/ECP5VersaDevelopmentKit.aspx)
 
-paired with
- - [3-Port USB 3 FMC Module from HiTechGlobal](https://hitechglobal.us/index.php?route=product/product&path=18_81&product_id=233).
- - [Modified PCIe riser] (link TBD)
+paired with the [PCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
+![PCIsh-to-USB3.0](https://raw.githubusercontent.com/enjoy-digital/usb3_pipe/master/doc/breakout_board.jpg)
+(If you are interested by a breakout board, please ask)
 
 ## Toolchain
 
