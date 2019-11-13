@@ -36,3 +36,65 @@ This project targets;
   - Yosys + nextpnr for ECP5 support
 
 There will also be a demo showing how to use a harness to expose the PIPE interface to the SymbiFlow Yosys + VPR flow.
+
+
+## Prerequisites
+```sh
+$ sudo apt install build-essential  wget git python3-setuptools
+$ git clone ttps://github.com/enjoy-digital/usb3_pipe/
+$ cd usb3_pipe
+```
+
+## Installing LiteX
+```sh
+$ wget https://raw.githubusercontent.com/enjoy-digital/litex/master/litex_setup.py
+$ chmod +x litex_setup.py
+$ sudo ./litex_setup.py init install
+```
+
+## Installing Verilator
+```sh
+$ sudo apt install verilator
+$ sudo apt install libevent-dev libjson-c-dev
+```
+
+``
+
+## Running the LiteX simulation
+```sh
+$ ./sim.py
+```
+You should see the USB3.0 initialization between a Host and Device:
+```
+[00000000] HOST entering Polling.LFPS state
+[00000000] DEV  entering Polling.LFPS state
+[00000000] HOST entering Polling.LFPS state
+[00000000] DEV  entering Polling.LFPS state
+[00026641] HOST entering Polling.RxEQ state
+[00026641] DEV  entering Polling.RxEQ state
+[01075207] HOST entering Polling.Active state
+[01075207] DEV  entering Polling.Active state
+[01075296] HOST entering Polling.Configuration state
+[01075296] DEV  entering Polling.Configuration state
+[01075423] HOST entering Polling.Idle state
+[01075423] DEV  entering Polling.Idle state
+```
+
+To have a .vcd waveform of the simulation, run it with --trace:
+```sh
+$ ./sim.py --trace
+$ gtkwave build/gateware/dut.vcd
+```
+
+## Running on hardware
+### Build the FPGA bitstream
+Once installed, build the bitstream with:
+```sh
+$ ./target.py (can be kc705, pcie_screamer or versa_ecp5)
+```
+
+### Load the FPGA bitstream
+To load the bitstream to you board, run:
+```sh
+$ ./target.py load
+```
