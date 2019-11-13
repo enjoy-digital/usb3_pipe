@@ -242,24 +242,32 @@ class PollingFSM(Module):
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
-            # Go to Activation if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
+            # Go to Configuration if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
             If(ts_unit.rx_ts1,
                 NextValue(serdes.rx_polarity, 0),
-                NextState("Polling.Activation")
+                _12_ms_timer.wait.eq(0),
+                NextState("Polling.Configuration")
             ),
             If(ts_unit.rx_ts2,
                 NextValue(serdes.rx_polarity, 1),
-                NextState("Polling.Activation")
+                _12_ms_timer.wait.eq(0),
+                NextState("Polling.Configuration")
             ),
         )
 
         # Configuration State (7.5.4.6) ------------------------------------------------------------
-        fsm.act("Polling.Activation",
+        fsm.act("Polling.Configuration",
+            _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
             self.rx_ready.eq(rx_ts2_seen),
             NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
+            # Go to RxDetect if no TS2 seen in the 12ms.
+            If(_12_ms_timer.done,
+                _12_ms_timer.wait.eq(0),
+                NextState("Polling.ExitToRxDetect")
+            ),
             # Go to Idle when:
             # - 8 consecutive TS2 ordered sets are received. (8 ensured by ts_unit)
             # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
