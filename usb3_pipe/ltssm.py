@@ -279,10 +279,18 @@ class PollingFSM(Module):
         )
 
         # Idle State (7.5.4.7) ---------------------------------------------------------------------
+        _idle_timer = WaitTimer(int(1000e-3*sys_clk_freq)) # FIXME: remove
+        self.submodules += _idle_timer
         fsm.act("Polling.Idle",
-            self.idle.eq(1),
-            self.rx_ready.eq(1),
-            self.tx_ready.eq(1),
+            _idle_timer.wait.eq(1),
+            If(~_idle_timer.done,
+                self.idle.eq(1),
+                self.rx_ready.eq(1),
+                self.tx_ready.eq(1),
+            ).Else(
+                # FIXME: for now, disable the link after 1000ms to simplify debug
+                lfps_unit.tx_idle.eq(1),
+            )
         )
 
         # Exit to Compliance -----------------------------------------------------------------------
