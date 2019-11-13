@@ -40,21 +40,21 @@ class USB3PIPE(Module):
         if with_scrambling:
             scrambler = Scrambler()
             scrambler = CEInserter()(scrambler)
-            self.comb += scrambler.ce.eq(self.ready)
+            self.comb += scrambler.ce.eq(ltssm.polling.tx_ready)
             self.submodules.scrambler = scrambler
             self.comb += [
                 self.sink.connect(scrambler.sink),
-                If(self.ready, scrambler.source.connect(serdes.sink))
+                If(ltssm.polling.tx_ready, scrambler.source.connect(serdes.sink))
             ]
 
             descrambler = Descrambler()
             descrambler = CEInserter()(descrambler)
-            self.comb += descrambler.ce.eq(self.ready)
+            self.comb += descrambler.ce.eq(ltssm.polling.rx_ready)
             self.submodules.descrambler = descrambler
             self.comb += [
-                If(self.ready, serdes.source.connect(descrambler.sink)),
+                If(ltssm.polling.rx_ready, serdes.source.connect(descrambler.sink)),
                 descrambler.source.connect(self.source),
             ]
         else:
-            self.comb += If(self.ready, self.sink.connect(serdes.sink))
-            self.comb += If(self.ready, serdes.source.connect(self.source))
+            self.comb += If(ltssm.polling.tx_ready, self.sink.connect(serdes.sink))
+            self.comb += If(ltssm.polling.rx_ready, serdes.source.connect(self.source))
