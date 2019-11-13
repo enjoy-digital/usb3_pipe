@@ -77,7 +77,6 @@ class ScramblerUnit(Module):
 
 class Scrambler(Module):
     def __init__(self):
-        self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -89,21 +88,17 @@ class Scrambler(Module):
         self.comb += sink.connect(source)
         for i in range(4):
             self.comb += [
-                If(self.enable,
-                    If(sink.ctrl[i], # K codes shall not be scrambled.
-                        source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
-                    ).Else(
-                        source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ scrambler.value[8*i:8*(i+1)])
-                    )
+                If(sink.ctrl[i], # K codes shall not be scrambled.
+                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
+                ).Else(
+                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ scrambler.value[8*i:8*(i+1)])
                 )
             ]
-
 
 # Descrambler (Scrambler + Auto-Synchronization) ---------------------------------------------------
 
 class Descrambler(Module):
     def __init__(self):
-        self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -112,13 +107,12 @@ class Descrambler(Module):
         scrambler = Scrambler()
         self.submodules += scrambler
 
-        sync   = Signal()
-        synced = Signal()
-        self.comb += sync.eq(sink.data == scrambler.source.data)
-        self.sync += If(sync, synced.eq(1))
+        synchro      = Signal()
+        synchronized = Signal()
+        self.comb += synchro.eq(sink.valid & sink.ready & (scrambler.source.data == 0x00000000))
+        self.sync += If(synchro, synchronized.eq(1))
         self.comb += [
-            sink.ready.eq(1),
             sink.connect(scrambler.sink),
-            scrambler.sink.valid.eq(sink.valid & (sync | synced)),
+            scrambler.sink.valid.eq(sink.valid & (synchro | synchronized)),
             scrambler.source.connect(source)
         ]

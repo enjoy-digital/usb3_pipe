@@ -5,7 +5,7 @@ import unittest
 
 from migen import *
 
-from usb3_pipe.scrambling import Scrambler
+from usb3_pipe.scrambling import Scrambler, Descrambler
 
 scrambler_ref = [
     0x8dbf6dbe, 0xe6a740be, 0xb2e2d32c, 0x2a770207,
@@ -26,7 +26,7 @@ scrambler_ref = [
     0xd514af76, 0xb660ac4f, 0xb762d679, 0x2ae5e743
 ]
 
-class TestScrambler(unittest.TestCase):
+class TestScrambling(unittest.TestCase):
     def test_scrambler_data(self):
         def generator(dut):
             yield dut.source.ready.eq(1)
@@ -55,3 +55,28 @@ class TestScrambler(unittest.TestCase):
 
         dut = Scrambler()
         run_simulation(dut, generator(dut))
+
+    def test_descrambler_data(self):
+        def generator(dut):
+            for i in range(16):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(0)
+                yield
+            for i in range(16):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(scrambler_ref[i])
+                yield
+            yield dut.sink.valid.eq(0)
+            for i in range(64):
+                yield
+
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            while (yield dut.source.valid) == 0:
+                yield
+            for i in range(16):
+                self.assertEqual((yield dut.source.data), 0)
+                yield
+
+        dut = Descrambler()
+        run_simulation(dut, [generator(dut), checker(dut)], vcd_name="toto.vcd")
