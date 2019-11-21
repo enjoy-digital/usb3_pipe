@@ -151,6 +151,66 @@ class RXSubstitution(Module):
                 )
             ]
 
+# TX Skip Inserter ---------------------------------------------------------------------------------
+
+class TXSkipInserter(Module):
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        data_count   = Signal(8)
+        skip_grant   = Signal(reset=1)
+        skip_queue   = Signal()
+        skip_dequeue = Signal()
+        skip_count   = Signal(16)
+
+        # Queue one 2 SKP Ordered Set every 166 Data/Ctrl words (FIXME: should be 1 SKP every 88 words)
+        self.sync += [
+            skip_queue.eq(0),
+            If(sink.valid & sink.ready,
+                data_count.eq(data_count + 1),
+                If(data_count == 165,
+                    data_count.eq(0),
+                    skip_queue.eq(1)
+                )
+            )
+        ]
+
+        # SKP grant: SKP should not be inserted inside packets
+        self.sync += [
+            If(sink.valid & sink.ready,
+                If(sink.last,
+                    skip_grant.eq(1)
+                ).Elif(sink.first,
+                    skip_grant.eq(0)
+                )
+            )
+        ]
+
+        # SKP counter
+        self.sync += [
+            If(skip_queue & ~skip_dequeue,
+                skip_count.eq(skip_count + 1)
+            ),
+            If(~skip_queue &  skip_dequeue,
+                skip_count.eq(skip_count - 1)
+            )
+        ]
+
+        # SKP insertion
+        self.comb += [
+            If(skip_grant & (skip_count != 0),
+                source.valid.eq(1),
+                source.data.eq(Replicate(Signal(8, reset=SKP.value), 4)),
+                source.ctrl.eq(Replicate(Signal(1, reset=1)        , 4)),
+                skip_dequeue.eq(source.ready)
+            ).Else(
+                sink.connect(source)
+            )
+        ]
+
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
 class SerdesTXDatapath(Module):

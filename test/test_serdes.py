@@ -7,7 +7,7 @@ import random
 from migen import *
 
 from usb3_pipe.serdes import RXWordAligner
-from usb3_pipe.serdes import RXSkipRemover
+from usb3_pipe.serdes import RXSkipRemover, TXSkipInserter
 from usb3_pipe.serdes import SerdesTXDatapath, SerdesRXDatapath
 
 
@@ -142,6 +142,34 @@ class TestSerDes(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
+
+    def test_tx_skip_inserter(self):
+        def generator(dut):
+            for i in range(256):
+                yield dut.sink.valid.eq(1)
+                yield
+
+        @passive
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            dut.ctrl_errors = 0
+            dut.data_errors = 0
+            while not (yield dut.source.valid):
+                yield
+            while True:
+                for i in range(167):
+                    yield
+                if (yield dut.source.ctrl) != 0b1111:
+                    dut.ctrl_errors += 1
+                if (yield dut.source.data) != 0x3c3c3c3c:
+                    dut.data_errors += 1
+                yield
+                yield
+
+        dut = TXSkipInserter()
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(dut.data_errors, 0)
+        self.assertEqual(dut.ctrl_errors, 0)
 
     def test_datapath_loopback(self):
         prng  = random.Random(42)
