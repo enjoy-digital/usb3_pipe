@@ -220,6 +220,8 @@ class SerdesTXDatapath(Module):
 
         # # #
 
+        skip_inserter = TXSkipInserter()
+        self.submodules += skip_inserter
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
         self.submodules.cdc = cdc
@@ -231,7 +233,8 @@ class SerdesTXDatapath(Module):
         converter = ClockDomainsRenamer(clock_domain)(converter)
         self.submodules.converter = converter
         self.comb += [
-            self.sink.connect(cdc.sink),
+            self.sink.connect(skip_inserter.sink),
+            skip_inserter.source.connect(cdc.sink),
             cdc.source.connect(converter.sink),
             converter.source.connect(self.source)
         ]
