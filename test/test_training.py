@@ -65,6 +65,9 @@ class TestTraining(unittest.TestCase):
             i = 0
             while dut.run:
                 if (yield dut.source.valid):
+                    length = tseq_length*n_ordered_sets
+                    self.assertEqual((yield dut.source.first), int(i%length == 0))
+                    self.assertEqual((yield dut.source.last),  int(i%length == (length-1)))
                     words.append((yield dut.source.data))
                 i += 1
                 yield dut.source.ready.eq(0)
@@ -105,9 +108,14 @@ class TestTraining(unittest.TestCase):
             words = []
             yield dut.source.ready.eq(1)
             yield
+            i = 0
             while dut.run:
                 if (yield dut.source.valid):
+                    length = ts1_length*n_ordered_sets
+                    self.assertEqual((yield dut.source.first), int(i%length == 0))
+                    self.assertEqual((yield dut.source.last),  int(i%length == (length-1)))
                     words.append((yield dut.source.data))
+                    i += 1
                 yield
             self.assertEqual(words, ts1_words*n_loops*n_ordered_sets)
 

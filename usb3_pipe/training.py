@@ -176,6 +176,11 @@ class TSGenerator(Module):
                 )
             )
         ]
+        # Delimiters -------------------------------------------------------------------------------
+        self.comb += [
+            self.source.first.eq(count == 0),
+            self.source.last.eq(count_done),
+        ]
 
         # Result -----------------------------------------------------------------------------------
         self.comb += self.done.eq(self.source.ready & run & count_done)
