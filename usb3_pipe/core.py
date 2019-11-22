@@ -9,6 +9,7 @@ from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.ltssm import LTSSM
 from usb3_pipe.scrambling import Scrambler, Descrambler
+from usb3_pipe.serdes import RXWordAligner
 
 # USB3 PIPE ----------------------------------------------------------------------------------------
 
@@ -47,12 +48,15 @@ class USB3PIPE(Module):
                 If(ltssm.polling.tx_ready, scrambler.source.connect(serdes.sink))
             ]
 
+            aligner = RXWordAligner(check_ctrl_only=True) # FIXME: can we avoid alignment here?
+            self.submodules.aligner = aligner
             descrambler = Descrambler()
             descrambler = CEInserter()(descrambler)
             self.comb += descrambler.ce.eq(ltssm.polling.rx_ready)
             self.submodules.descrambler = descrambler
             self.comb += [
-                If(ltssm.polling.rx_ready, serdes.source.connect(descrambler.sink)),
+                If(ltssm.polling.rx_ready, serdes.source.connect(aligner.sink)),
+                aligner.source.connect(descrambler.sink),
                 descrambler.source.connect(self.source),
             ]
         else:

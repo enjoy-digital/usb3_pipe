@@ -62,6 +62,7 @@ class USB3Core(Module, AutoCSR):
         u0_timer = ResetInserter()(u0_timer)
         self.submodules += u0_timer
         self.comb += u0_timer.wait.eq(1)
+        self.comb += u0_timer.reset.eq(self.reset)
 
         LT_POLLING_IDLE = 15
         LT_POLLING_U0   = 16

@@ -85,7 +85,7 @@ class RXSkipRemover(Module):
 # RX Aligner ---------------------------------------------------------------------------------------
 
 class RXWordAligner(Module):
-    def __init__(self):
+    def __init__(self, check_ctrl_only=False):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -107,7 +107,7 @@ class RXWordAligner(Module):
         for i in reversed(range(4)):
             self.comb += [
                 If(sink.valid & sink.ready,
-                    If(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value),
+                    If(sink.ctrl[i] & (check_ctrl_only | (sink.data[8*i:8*(i+1)] == COM.value)),
                         alignment.eq(i)
                     )
                 )
