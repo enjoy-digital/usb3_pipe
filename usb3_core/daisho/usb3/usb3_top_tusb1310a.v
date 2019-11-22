@@ -8,7 +8,7 @@
 // See LICENSE.TXT for details.
 //
 
-module usb3_top (
+module usb3_top_tusb1310a (
 
 input	wire			ext_clk,
 input	wire			reset_n,
