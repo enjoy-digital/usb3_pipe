@@ -21,6 +21,7 @@ from litex.soc.cores.uart import UARTWishboneBridge
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe import A7USB3SerDes, USB3PIPE
+from usb3_core.core import USB3Core
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -107,12 +108,20 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_serdes
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
 
-        # USB3 PHY ---------------------------------------------------------------------------------
+        # USB3 PIPE --------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
-        self.submodules += usb3_pipe
+        self.submodules.usb3_pipe = usb3_pipe
         self.comb += usb3_pipe.reset.eq(~platform.request("user_btn", 0))
-        self.comb += usb3_pipe.sink.valid.eq(1)
-        self.comb += usb3_pipe.source.ready.eq(1)
+
+        # USB3 Core --------------------------------------------------------------------------------
+        usb3_core = USB3Core(platform)
+        self.submodules.usb3_core = usb3_core
+        self.comb += [
+            usb3_pipe.source.connect(usb3_core.sink),
+            usb3_core.source.connect(usb3_pipe.sink),
+            usb3_core.reset.eq(~usb3_pipe.ready),
+        ]
+        self.add_csr("usb3_core")
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
