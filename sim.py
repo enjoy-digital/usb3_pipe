@@ -14,6 +14,7 @@ from litex.soc.integration.builder import *
 
 from usb3_pipe.serdes import *
 from usb3_pipe import USB3PIPE
+from usb3_core.core import USB3Core
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -134,9 +135,15 @@ class USB3PIPESim(SoCMini):
             sys_clk_freq    = sys_clk_freq,
             with_scrambling = True)
         self.submodules += host_usb3_serdes, host_usb3_pipe
-        self.comb += host_usb3_pipe.sink.valid.eq(1)
-        self.comb += host_usb3_pipe.source.ready.eq(1)
         host_usb3_pipe.finalize()
+        host_usb3_core = USB3Core(platform)
+        self.submodules.host_usb3_core = host_usb3_core
+        self.comb += [
+            host_usb3_pipe.source.connect(host_usb3_core.sink),
+            host_usb3_core.source.connect(host_usb3_pipe.sink),
+            host_usb3_core.reset.eq(~host_usb3_pipe.ready),
+        ]
+        self.add_csr("host_usb3_core")
 
         # USB3 Device
         dev_usb3_serdes = USB3SerDesModel()
@@ -145,9 +152,16 @@ class USB3PIPESim(SoCMini):
             sys_clk_freq    = sys_clk_freq,
             with_scrambling = True)
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
-        self.comb += dev_usb3_pipe.sink.valid.eq(1)
-        self.comb += dev_usb3_pipe.source.ready.eq(1)
         dev_usb3_pipe.finalize()
+        dev_usb3_core = USB3Core(platform)
+        self.submodules.dev_usb3_core = dev_usb3_core
+        self.comb += [
+            dev_usb3_pipe.source.connect(dev_usb3_core.sink),
+            dev_usb3_core.source.connect(dev_usb3_pipe.sink),
+            dev_usb3_core.reset.eq(~dev_usb3_pipe.ready),
+        ]
+        self.add_csr("dev_usb3_core")
+
 
         # Connect Host <--> Device
         self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
@@ -183,6 +197,8 @@ def main():
     args = parser.parse_args()
 
     sim_config = SimConfig(default_clk="sys_clk")
+
+    os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
 
     soc = USB3PIPESim()
     builder = Builder(soc, output_dir="build")
