@@ -14,6 +14,8 @@ module usb3_top_usb3_pipe (
 input	wire			clk,
 input	wire			reset_n,
 
+input	wire	[4:0]	ltssm_state,
+
 input wire		[31:0]	in_data,
 input wire		[3:0]	in_datak,
 input wire				in_active,
@@ -57,7 +59,7 @@ usb3_link iu3l (
 	.local_clk				( clk ),
 	.reset_n				( reset_n ),
 
-	.ltssm_state			( LT_U0 ), // FIXME ?
+	.ltssm_state			( ltssm_state ),
 	.ltssm_hot_reset		( 1'b0 ),
 	.ltssm_go_disabled		( ),
 	.ltssm_go_recovery		( ),
@@ -254,7 +256,7 @@ usb3_protocol iu3r (
 	.ext_clk				( clk ), // FIXME ?
 
 	.reset_n				( reset_n),
-	.ltssm_state			( LT_U0 ), // FIXME ?
+	.ltssm_state			( ltssm_state ),
 
 	// muxed endpoint signals
 	.endp_mode_rx			( prot_endp_mode_rx ),
