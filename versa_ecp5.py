@@ -26,6 +26,7 @@ from litex.soc.cores.uart import UARTWishboneBridge
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe import ECP5USB3SerDes, USB3PIPE
+from usb3_core.core import USB3Core
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -83,7 +84,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, connector="pcie", with_etherbone=True, with_analyzer=True):
+    def __init__(self, platform, connector="pcie", with_etherbone=False, with_analyzer=False):
 
         sys_clk_freq = int(150e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
@@ -132,11 +133,22 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_serdes
 
         # USB3 PIPE --------------------------------------------------------------------------------
-        usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq, with_scrambling=False)
-        self.submodules += usb3_pipe
-        #self.comb += usb3_pipe.reset.eq(~platform.request("rst_n"))
-        self.comb += usb3_pipe.sink.valid.eq(1)
-        self.comb += usb3_pipe.source.ready.eq(1)
+        usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
+        self.submodules.usb3_pipe = usb3_pipe
+
+        # USB3 Core --------------------------------------------------------------------------------
+        usb3_core = USB3Core(platform)
+        self.submodules.usb3_core = usb3_core
+        self.comb += [
+            usb3_pipe.source.connect(usb3_core.sink),
+            usb3_core.source.connect(usb3_pipe.sink),
+            usb3_core.reset.eq(~usb3_pipe.ready),
+        ]
+        self.add_csr("usb3_core")
+
+        # Leds -------------------------------------------------------------------------------------
+        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
+        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
@@ -172,23 +184,6 @@ class USB3SoC(SoCMini):
             ]
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
-
-
-        # Leds -------------------------------------------------------------------------------------
-        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
-        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
-
-        sys_counter = Signal(32)
-        self.sync.sys += sys_counter.eq(sys_counter + 1)
-        self.comb += platform.request("user_led", 4).eq(sys_counter[26])
-
-        rx_counter = Signal(32)
-        self.sync.rx += rx_counter.eq(rx_counter + 1)
-        self.comb += platform.request("user_led", 5).eq(rx_counter[26])
-
-        tx_counter = Signal(32)
-        self.sync.tx += tx_counter.eq(rx_counter + 1)
-        self.comb += platform.request("user_led", 6).eq(tx_counter[26])
 
 # Load ---------------------------------------------------------------------------------------------
 def load():
