@@ -208,6 +208,7 @@ jtag newtap ecp5 tap -irlen 8 -expected-id 0x81112043
 def main():
     if "load" in sys.argv[1:]:
         load()
+    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     platform = versa_ecp5.Platform(toolchain="trellis")
     platform.add_extension(_usb3_io)
     soc = USB3SoC(platform)

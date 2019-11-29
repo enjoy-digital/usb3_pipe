@@ -198,6 +198,7 @@ def main():
 
     sim_config = SimConfig(default_clk="sys_clk")
 
+    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
 
     soc = USB3PIPESim()
