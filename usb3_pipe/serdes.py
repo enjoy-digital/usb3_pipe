@@ -476,7 +476,7 @@ class ECP5USB3SerDes(Module):
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
-        self.tx_polarity = Signal()   # i # FIXME: not used for now
+        self.tx_polarity = Signal()   # i
         self.tx_idle     = Signal()   # i
         self.tx_pattern  = Signal(20) # i
 
@@ -510,6 +510,7 @@ class ECP5USB3SerDes(Module):
         serdes  = SerDesECP5(serdes_pll, tx_pads, rx_pads,
             channel     = channel,
             data_width  = 20,
+            tx_polarity = self.tx_polarity,
             rx_polarity = self.rx_polarity)
         serdes.add_stream_endpoints()
         tx_datapath     = SerdesTXDatapath("tx")
