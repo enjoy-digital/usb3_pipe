@@ -42,18 +42,19 @@ class Platform(SimPlatform):
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
 class USB3SerDesModel(Module):
-    def __init__(self, rx_word_shift=0):
+    def __init__(self, phy_dw=20, rx_word_shift=0):
+        assert phy_dw in [20, 40]
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.tx     = stream.Endpoint([("data", 20)])
-        self.rx     = stream.Endpoint([("data", 20)])
+        self.tx     = stream.Endpoint([("data", phy_dw)])
+        self.rx     = stream.Endpoint([("data", phy_dw)])
 
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
         self.tx_polarity = Signal()   # i
         self.tx_idle     = Signal()   # i
-        self.tx_pattern  = Signal(20) # i
+        self.tx_pattern  = Signal(phy_dw) # i
 
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
@@ -61,8 +62,10 @@ class USB3SerDesModel(Module):
 
         # # #
 
-        tx_datapath = SerdesTXDatapath()
-        rx_datapath = SerdesRXDatapath()
+        nwords = phy_dw//10
+
+        tx_datapath = SerdesTXDatapath(phy_dw=nwords*8)
+        rx_datapath = SerdesRXDatapath(phy_dw=nwords*8)
         self.submodules += tx_datapath, rx_datapath
         self.comb += [
             self.sink.connect(tx_datapath.sink),
@@ -70,12 +73,12 @@ class USB3SerDesModel(Module):
             rx_datapath.source.connect(self.source)
         ]
 
-        encoder  = Encoder(2, True)
-        decoders = [Decoder(True) for _ in range(2)]
+        encoder  = Encoder(nwords, True)
+        decoders = [Decoder(True) for _ in range(nwords)]
         self.submodules += encoder, decoders
         self.comb += tx_datapath.source.ready.eq(1)
         self.comb += rx_datapath.sink.valid.eq(1)
-        for i in range(2):
+        for i in range(nwords):
             self.comb += [
                 encoder.k[i].eq(tx_datapath.source.ctrl[i]),
                 encoder.d[i].eq(tx_datapath.source.data[8*i:8*(i+1)]),
@@ -83,14 +86,14 @@ class USB3SerDesModel(Module):
                 rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
 
-        tx_data    = Signal(20)
-        rx_data    = Signal(20)
-        rx_data_sr = Signal(40)
+        tx_data    = Signal(phy_dw)
+        rx_data    = Signal(phy_dw)
+        rx_data_sr = Signal(2*phy_dw)
         self.comb += [
             If(self.tx_pattern != 0,
                 tx_data.eq(self.tx_pattern)
             ).Else(
-                tx_data.eq(Cat(*[encoder.output[i] for i in range(2)])),
+                tx_data.eq(Cat(*[encoder.output[i] for i in range(nwords)])),
             ),
             If(self.tx_polarity,
                 self.tx.data.eq(~tx_data)
@@ -106,7 +109,7 @@ class USB3SerDesModel(Module):
             )
         ]
         self.sync += rx_data_sr.eq(Cat(rx_data, rx_data_sr))
-        for i in range(2):
+        for i in range(nwords):
             self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
 
         # Ready when enabled
@@ -123,13 +126,13 @@ class USB3SerDesModel(Module):
 # USB3PIPESim --------------------------------------------------------------------------------------
 
 class USB3PIPESim(SoCMini):
-    def __init__(self):
+    def __init__(self, phy_dw=20):
         platform = Platform()
         sys_clk_freq = int(133e6)
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq)
 
         # USB3 Host
-        host_usb3_serdes = USB3SerDesModel()
+        host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         host_usb3_pipe   = USB3PIPE(
             serdes          = host_usb3_serdes,
             sys_clk_freq    = sys_clk_freq,
@@ -146,7 +149,7 @@ class USB3PIPESim(SoCMini):
         self.add_csr("host_usb3_core")
 
         # USB3 Device
-        dev_usb3_serdes = USB3SerDesModel()
+        dev_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         dev_usb3_pipe   = USB3PIPE(
             serdes          = dev_usb3_serdes,
             sys_clk_freq    = sys_clk_freq,
