@@ -194,6 +194,10 @@ class USB3PIPESim(SoCMini):
 def main():
     parser = argparse.ArgumentParser(description="USB3 PIPE Simulation")
     parser.add_argument("--trace", action="store_true", help="enable VCD tracing")
+    parser.add_argument("--trace-start", default=0,
+                        help="cycle to start VCD tracing")
+    parser.add_argument("--trace-end", default=-1,
+                        help="cycle to end VCD tracing")
     args = parser.parse_args()
 
     sim_config = SimConfig(default_clk="sys_clk")
@@ -203,8 +207,11 @@ def main():
 
     soc = USB3PIPESim()
     builder = Builder(soc, output_dir="build")
-    builder.build(sim_config=sim_config, trace=args.trace, opt_level="O0")
-
+    builder.build(sim_config=sim_config,
+        opt_level   = "O0",
+        trace       = args.trace,
+        trace_start = int(args.trace_start),
+        trace_end   = int(args.trace_end))
 
 if __name__ == "__main__":
     main()
