@@ -214,9 +214,9 @@ class TXSkipInserter(Module):
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
 class SerdesTXDatapath(Module):
-    def __init__(self, clock_domain="sys"):
+    def __init__(self, clock_domain="sys", phy_dw=16):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
+        self.source = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
 
         # # #
 
@@ -227,7 +227,7 @@ class SerdesTXDatapath(Module):
         self.submodules.cdc = cdc
         converter = stream.StrideConverter(
             [("data", 32), ("ctrl", 4)],
-            [("data", 16), ("ctrl", 2)],
+            [("data", phy_dw), ("ctrl", phy_dw//8)],
             reverse=False)
         converter = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
@@ -240,14 +240,14 @@ class SerdesTXDatapath(Module):
         ]
 
 class SerdesRXDatapath(Module):
-    def __init__(self, clock_domain="sys"):
-        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
+    def __init__(self, clock_domain="sys", phy_dw=16):
+        self.sink   = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
         converter = stream.StrideConverter(
-            [("data", 16), ("ctrl", 2)],
+            [("data", phy_dw), ("ctrl", phy_dw//8)],
             [("data", 32), ("ctrl", 4)],
             reverse=False)
         converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
