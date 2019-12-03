@@ -1,6 +1,8 @@
 # This file is Copyright (c) 2019 Florent Kermarrec <florent@enjoy-digital.fr>
 # License: BSD
 
+from migen import *
+
 # Helpers ------------------------------------------------------------------------------------------
 
 def K(x, y):
@@ -72,3 +74,15 @@ TS2 = OrderedSet("TS2",
     [D(5, 2) for i in range(10)])
 
 ordered_sets = [TSEQ, TS1, TS2]
+
+# Endianness Swap ----------------------------------------------------------------------------------
+
+class EndiannessSwap(Module):
+    def __init__(self, sink, source):
+        assert len(sink.data) == len(source.data)
+        assert len(sink.ctrl) == len(source.ctrl)
+        self.comb += sink.connect(source, omit={"data", "ctrl"})
+        n = len(sink.ctrl)
+        for i in range(len(sink.ctrl)):
+            self.comb += source.data[8*i:8*(i+1)].eq(sink.data[8*(n-1-i):8*(n-1-i+1)])
+            self.comb += source.ctrl[i].eq(sink.data[n-1-i])
