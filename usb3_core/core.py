@@ -56,8 +56,7 @@ class USB3Core(Module, AutoCSR):
 
         # # #
 
-        self.submodules.usb3_control = usb3_control = USB3CoreControl()
-
+        # Artificial after reset delay from LT_POLLING_IDLE to LT_POLLING_U0
         u0_timer = WaitTimer(32)
         u0_timer = ResetInserter()(u0_timer)
         self.submodules += u0_timer
@@ -75,25 +74,59 @@ class USB3Core(Module, AutoCSR):
             )
         ]
 
-        self.comb += sink.ready.eq(1)
+        # RX (Sink) --------------------------------------------------------------------------------
+        in_data   = Signal(32)
+        in_datak  = Signal(4)
+        in_active = Signal()
+        self.comb += [
+            sink.ready.eq(1), # Always ready
+            in_data.eq(sink.data),
+            in_datak.eq(sink.ctrl),
+            in_active.eq(sink.valid),
+        ]
 
+        # TX (Source) ------------------------------------------------------------------------------
+        # Daisho core does not support back-pressure (ready signal of LiteX's streams). To accomodate
+        # that, we use a FIFO that absorbs the data bursts from the core and re-transmits datas to
+        # the USB3 Pipe at the maximum allowed rate with back-pressure. This is a hack for our tests
+        # and should be fixed correctly in the core.
+
+        # FIFO
+        out_fifo = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 128)
+        self.submodules += out_fifo
+
+        # Map core signals to stream, re-generate first/last delimiters from active signal.
         out_data     = Signal(32)
         out_datak    = Signal(4)
         out_stall    = Signal()
         out_active   = Signal()
         out_active_d = Signal()
-        # FIXME: Source always supposed to be ready, which is not the case! Use this for now for
-        # initial tests along with a sys_clk generated from the same source as the one used for
-        # the TX transceiver
-        self.comb += source.valid.eq(1)
+        self.comb += out_fifo.sink.valid.eq(out_active_d)
         self.sync += [
-            source.data.eq(out_data),
-            source.ctrl.eq(out_datak),
+            out_fifo.sink.data.eq(out_data),
+            out_fifo.sink.ctrl.eq(out_datak),
             out_active_d.eq(out_active),
-            source.first.eq(out_active & ~ out_active_d),
+            out_fifo.sink.first.eq(out_active & ~ out_active_d),
         ]
-        self.comb += source.last.eq(~out_active & out_active_d)
+        self.comb += out_fifo.sink.last.eq(~out_active & out_active_d)
 
+        # Connect FIFO to source.
+        self.comb += [
+            If(out_fifo.source.valid,
+                out_fifo.source.connect(source)
+            ).Else(
+                source.valid.eq(1),
+                source.first.eq(0),
+                source.last.eq(0),
+                source.data.eq(0),
+                source.ctrl.eq(0),
+            )
+        ]
+
+        # Daisho USB3 core control -----------------------------------------------------------------
+        self.submodules.usb3_control = usb3_control = USB3CoreControl()
+
+        # Daisho USB3 core -------------------------------------------------------------------------
         self.specials += Instance("usb3_top_usb3_pipe",
             i_clk               = ClockSignal(),
             i_reset_n           = ~self.reset,
@@ -129,7 +162,6 @@ class USB3Core(Module, AutoCSR):
             #o_vend_req_request =,
             #o_vend_req_val     =
         )
-
         daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "daisho")
         platform.add_verilog_include_path(os.path.join(daisho_path))
         platform.add_verilog_include_path(os.path.join(daisho_path, "usb3"))
