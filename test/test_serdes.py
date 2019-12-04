@@ -157,7 +157,7 @@ class TestSerDes(unittest.TestCase):
             while not (yield dut.source.valid):
                 yield
             while True:
-                for i in range(167):
+                for i in range(177):
                     yield
                 if (yield dut.source.ctrl) != 0b1111:
                     dut.ctrl_errors += 1

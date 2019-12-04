@@ -166,12 +166,12 @@ class TXSkipInserter(Module):
         skip_dequeue = Signal()
         skip_count   = Signal(16)
 
-        # Queue one 2 SKP Ordered Set every 166 Data/Ctrl words (FIXME: should be 1 SKP every 88 words)
+        # Queue one 2 SKP Ordered Set every 176 Data/Ctrl words (FIXME: should be 1 SKP every 88 words)
         self.sync += [
             skip_queue.eq(0),
             If(sink.valid & sink.ready,
                 data_count.eq(data_count + 1),
-                If(data_count == 165,
+                If(data_count == 175,
                     data_count.eq(0),
                     skip_queue.eq(1)
                 )
