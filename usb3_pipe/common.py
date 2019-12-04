@@ -83,6 +83,6 @@ class EndiannessSwap(Module):
         assert len(sink.ctrl) == len(source.ctrl)
         self.comb += sink.connect(source, omit={"data", "ctrl"})
         n = len(sink.ctrl)
-        for i in range(len(sink.ctrl)):
+        for i in range(n):
             self.comb += source.data[8*i:8*(i+1)].eq(sink.data[8*(n-1-i):8*(n-1-i+1)])
-            self.comb += source.ctrl[i].eq(sink.data[n-1-i])
+            self.comb += source.ctrl[i].eq(sink.ctrl[n-1-i])
