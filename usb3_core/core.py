@@ -75,11 +75,25 @@ class USB3Core(Module, AutoCSR):
             )
         ]
 
-
         self.comb += sink.ready.eq(1)
+
+        out_data     = Signal(32)
+        out_datak    = Signal(4)
+        out_stall    = Signal()
+        out_active   = Signal()
+        out_active_d = Signal()
+        # FIXME: Source always supposed to be ready, which is not the case! Use this for now for
+        # initial tests along with a sys_clk generated from the same source as the one used for
+        # the TX transceiver
         self.comb += source.valid.eq(1)
-        out_stall = Signal()
-        self.comb += out_stall.eq(~source.ready)
+        self.sync += [
+            source.data.eq(out_data),
+            source.ctrl.eq(out_datak),
+            out_active_d.eq(out_active),
+            source.first.eq(out_active & ~ out_active_d),
+        ]
+        self.comb += source.last.eq(~out_active & out_active_d)
+
         self.specials += Instance("usb3_top_usb3_pipe",
             i_clk               = ClockSignal(),
             i_reset_n           = ~self.reset,
@@ -90,10 +104,10 @@ class USB3Core(Module, AutoCSR):
             i_in_datak          = sink.ctrl,
             i_in_active         = sink.valid,
 
-            o_out_data          = source.data,
-            o_out_datak         = source.ctrl,
-            #o_out_active        = ,
-            i_out_stall         = out_stall,
+            o_out_data          = out_data,
+            o_out_datak         = out_datak,
+            o_out_active        = out_active,
+            i_out_stall         = 0, # FIXME
 
             i_buf_in_addr       = usb3_control.buf_in_addr,
             i_buf_in_data       = usb3_control.buf_in_data,
