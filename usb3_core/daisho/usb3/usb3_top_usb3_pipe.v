@@ -23,7 +23,7 @@ input wire				in_active,
 output wire		[31:0]	out_data,
 output wire		[3:0]	out_datak,
 output wire				out_active,
-output wire				out_stall,
+input  wire				out_stall,
 
 input	wire	[8:0]	buf_in_addr,
 input	wire	[31:0]	buf_in_data,
