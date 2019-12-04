@@ -17,7 +17,7 @@ from usb3_pipe.serdes import RXWordAligner
 @ResetInserter()
 class USB3PIPE(Module):
     def __init__(self, serdes, sys_clk_freq, with_scrambling=True, with_endianness_swap=True):
-        assert sys_clk_freq > 125e6
+        assert sys_clk_freq >= 125e6
         self.ready  = Signal() # o
 
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
