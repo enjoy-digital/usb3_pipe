@@ -242,13 +242,13 @@ class PollingFSM(Module):
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
-            # Go to Configuration if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
+            # Go to Configuration if at least 8 consecutive TS1 or TS1_INV seen (8 ensured by ts_unit)
             If(ts_unit.rx_ts1,
                 NextValue(serdes.rx_polarity, 0),
                 _12_ms_timer.wait.eq(0),
                 NextState("Polling.Configuration")
             ),
-            If(ts_unit.rx_ts2,
+            If(ts_unit.rx_ts1_inv,
                 NextValue(serdes.rx_polarity, 1),
                 _12_ms_timer.wait.eq(0),
                 NextState("Polling.Configuration")

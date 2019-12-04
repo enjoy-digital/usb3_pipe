@@ -142,6 +142,7 @@ class USB3PIPESim(SoCMini):
         host_usb3_core = USB3Core(platform)
         self.submodules.host_usb3_core = host_usb3_core
         self.comb += [
+            host_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
             host_usb3_pipe.source.connect(host_usb3_core.sink),
             host_usb3_core.source.connect(host_usb3_pipe.sink),
             host_usb3_core.reset.eq(~host_usb3_pipe.ready),
@@ -159,12 +160,12 @@ class USB3PIPESim(SoCMini):
         dev_usb3_core = USB3Core(platform)
         self.submodules.dev_usb3_core = dev_usb3_core
         self.comb += [
+            dev_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
             dev_usb3_pipe.source.connect(dev_usb3_core.sink),
             dev_usb3_core.source.connect(dev_usb3_pipe.sink),
             dev_usb3_core.reset.eq(~dev_usb3_pipe.ready),
         ]
         self.add_csr("dev_usb3_core")
-
 
         # Connect Host <--> Device
         self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
