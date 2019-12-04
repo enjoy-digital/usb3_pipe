@@ -53,14 +53,14 @@ _usb3_io = [
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(Module):
-    def __init__(self, platform, refclk62p5, sys_clk_freq):
+    def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys = ClockDomain()
         self.clock_domains.cd_usb3_oob = ClockDomain()
 
         # # #
 
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
-        pll.register_clkin(refclk62p5, 62.5e6)
+        pll.register_clkin(platform.request("clk156"), 156.5e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
         pll.create_clkout(self.cd_usb3_oob, sys_clk_freq/8)
 
@@ -69,25 +69,11 @@ class _CRG(Module):
 class USB3SoC(SoCMini):
     def __init__(self, platform, connector="pcie", with_etherbone=True, with_analyzer=True):
 
-        sys_clk_freq = int(125e6)
+        sys_clk_freq = int(156.5e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
-        # 125MHz RefClk ----------------------------------------------------------------------------
-        sgmii_clk = platform.request("sgmii_clock")
-        refclk125 = Signal()
-        refclk62p5 = Signal()
-        self.specials += [
-            Instance("IBUFDS_GTE2",
-                i_CEB   = 0,
-                i_I     = sgmii_clk.p,
-                i_IB    = sgmii_clk.n,
-                o_O     = refclk125,
-                o_ODIV2 = refclk62p5,
-            )
-        ]
-
         # CRG --------------------------------------------------------------------------------------
-        self.submodules.crg = _CRG(platform, refclk62p5, sys_clk_freq)
+        self.submodules.crg = _CRG(platform, sys_clk_freq)
 
         # Ethernet <--> Wishbone -------------------------------------------------------------------
         if with_etherbone:
@@ -123,7 +109,7 @@ class USB3SoC(SoCMini):
         usb3_serdes = K7USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = refclk125,
+            refclk_pads  = platform.request("sgmii_clock"),
             refclk_freq  = 125e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"))
