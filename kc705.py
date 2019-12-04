@@ -48,6 +48,16 @@ _usb3_io = [
         Subsignal("p", Pins("L4")),
         Subsignal("n", Pins("L3")),
     ),
+
+    # SMA
+    ("sma_tx", 0,
+        Subsignal("p", Pins("K2")),
+        Subsignal("n", Pins("K1"))
+    ),
+    ("sma_rx", 0,
+        Subsignal("p", Pins("K6")),
+        Subsignal("n", Pins("K5"))
+    ),
 ]
 
 # CRG ----------------------------------------------------------------------------------------------
