@@ -160,34 +160,20 @@ class TXSKPInserter(Module):
 
         # # #
 
-        data_count      = Signal(8)
-        skip_grant      = Signal(reset=1)
-        skip_state      = Signal()
-        skip_queue_x1   = Signal()
-        skip_dequeue_x1 = Signal()
-        skip_dequeue_x2 = Signal()
-        skip_count      = Signal(8)
+        data_count   = Signal(8)
+        skip_grant   = Signal(reset=1)
+        skip_queue   = Signal()
+        skip_dequeue = Signal()
+        skip_count   = Signal(16)
 
-        # Register Sink Data/Ctrl
-        sink_data_d = Signal(32)
-        sink_ctrl_d = Signal(4)
-        sink_last_d = Signal()
+        # Queue one 2 SKP Ordered Set every 176 Data/Ctrl words
         self.sync += [
-            If(sink.valid & sink.ready,
-                sink_data_d.eq(sink.data),
-                sink_ctrl_d.eq(sink.ctrl),
-                sink_last_d.eq(sink.last),
-            )
-        ]
-
-        # Queue one 1 SKP Ordered Set every 88 Data/Ctrl words
-        self.sync += [
-            skip_queue_x1.eq(0),
+            skip_queue.eq(0),
             If(sink.valid & sink.ready,
                 data_count.eq(data_count + 1),
-                If(data_count == 87,
+                If(data_count == 175,
                     data_count.eq(0),
-                    skip_queue_x1.eq(1)
+                    skip_queue.eq(1)
                 )
             )
         ]
@@ -195,9 +181,7 @@ class TXSKPInserter(Module):
         # SKP grant: SKP should not be inserted inside packets
         self.sync += [
             If(sink.valid & sink.ready,
-                If(sink.last & ~skip_state,
-                    skip_grant.eq(1)
-                ).Elif(sink_last_d & skip_state,
+                If(sink.last,
                     skip_grant.eq(1)
                 ).Elif(sink.first,
                     skip_grant.eq(0)
@@ -206,47 +190,24 @@ class TXSKPInserter(Module):
         ]
 
         # SKP counter
-        self.sync += skip_count.eq(skip_count + skip_queue_x1 - skip_dequeue_x1 - 2*skip_dequeue_x2)
+        self.sync += [
+            If(skip_queue & ~skip_dequeue,
+                skip_count.eq(skip_count + 1)
+            ),
+            If(~skip_queue &  skip_dequeue,
+                skip_count.eq(skip_count - 1)
+            )
+        ]
 
         # SKP insertion
-        self.sync += If(skip_dequeue_x1, skip_state.eq(~skip_state))
         self.comb += [
-            If(skip_grant & ~sink.first & (skip_count != 0),
-                If(skip_count >= 2,
-                    source.valid.eq(1),
-                    source.data.eq(Replicate(Signal(8, reset=SKP.value), 4)),
-                    source.ctrl.eq(Replicate(Signal(1, reset=1)        , 4)),
-                    If(source.ready,
-                        skip_dequeue_x2.eq(1)
-                    ),
-                ).Else(
-                    If(skip_state,
-                        source.valid.eq(1),
-                        source.data.eq(Cat(Replicate(Signal(8, reset=SKP.value), 2), sink_data_d[16:])),
-                        source.ctrl.eq(Cat(Replicate(Signal(1, reset=1)        , 2), sink_ctrl_d[2:])),
-                        If(source.ready,
-                            skip_dequeue_x1.eq(1)
-                        ),
-                    ).Else(
-                        source.valid.eq(sink.valid),
-                        source.data.eq(Cat(Replicate(Signal(8, reset=SKP.value), 2), sink.data)),
-                        source.ctrl.eq(Cat(Replicate(Signal(1, reset=1)        , 2), sink.ctrl)),
-                        If(source.valid & source.ready,
-                            sink.ready.eq(1),
-                            skip_dequeue_x1.eq(1)
-                        )
-                    )
-                )
+            If(skip_grant & (skip_count != 0),
+                source.valid.eq(1),
+                source.data.eq(Replicate(Signal(8, reset=SKP.value), 4)),
+                source.ctrl.eq(Replicate(Signal(1, reset=1)        , 4)),
+                skip_dequeue.eq(source.ready)
             ).Else(
-                source.valid.eq(sink.valid),
-                sink.ready.eq(source.ready),
-                If(skip_state,
-                    source.data.eq(Cat(sink_data_d[16:], sink.data)),
-                    source.ctrl.eq(Cat(sink_ctrl_d[2:],  sink.ctrl))
-                ).Else(
-                    source.data.eq(sink.data),
-                    source.ctrl.eq(sink.ctrl)
-                )
+                sink.connect(source)
             )
         ]
 

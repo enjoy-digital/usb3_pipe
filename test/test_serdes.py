@@ -159,11 +159,11 @@ class TestSerDes(unittest.TestCase):
             yield
             yield
             while True:
-                for i in range(87):
+                for i in range(175):
                     yield
-                if (yield dut.source.ctrl) != 0b0011:
+                if (yield dut.source.ctrl) != 0b1111:
                     dut.ctrl_errors += 1
-                if (yield dut.source.data) != 0x00003c3c:
+                if (yield dut.source.data) != 0x3c3c3c3c:
                     dut.data_errors += 1
                 yield
 
