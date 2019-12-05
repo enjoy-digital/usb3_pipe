@@ -7,7 +7,7 @@ import random
 from migen import *
 
 from usb3_pipe.serdes import RXWordAligner
-from usb3_pipe.serdes import RXSkipRemover, TXSkipInserter
+from usb3_pipe.serdes import RXSKPRemover, TXSKPInserter
 from usb3_pipe.serdes import SerdesTXDatapath, SerdesRXDatapath
 
 
@@ -138,7 +138,7 @@ class TestSerDes(unittest.TestCase):
                 yield dut.source.ready.eq(0)
                 yield
 
-        dut = RXSkipRemover()
+        dut = RXSKPRemover()
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
@@ -156,30 +156,44 @@ class TestSerDes(unittest.TestCase):
             dut.data_errors = 0
             while not (yield dut.source.valid):
                 yield
+            yield
+            yield
             while True:
-                for i in range(177):
+                for i in range(87):
                     yield
-                if (yield dut.source.ctrl) != 0b1111:
+                if (yield dut.source.ctrl) != 0b0011:
                     dut.ctrl_errors += 1
-                if (yield dut.source.data) != 0x3c3c3c3c:
+                if (yield dut.source.data) != 0x00003c3c:
                     dut.data_errors += 1
                 yield
-                yield
 
-        dut = TXSkipInserter()
+        dut = TXSKPInserter()
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.data_errors, 0)
         self.assertEqual(dut.ctrl_errors, 0)
 
-    def test_datapath_loopback(self):
+    def test_datapath_loopback(self, nwords=512):
         prng  = random.Random(42)
-        datas = [prng.randrange(2**32) for _ in range(64)]
-        ctrls = [prng.randrange(2**4)  for _ in range(64)]
+        datas = [prng.randrange(2**32) for _ in range(nwords)]
+        ctrls = [prng.randrange(2**4)  for _ in range(nwords)]
+
+        def remove_skp(datas, ctrls):
+            _ctrls = []
+            for data, ctrl in zip(datas, ctrls):
+                for i in range(4):
+                    if ((((data >> (8*i)) & 0xff) == 0x3c) and
+                        (((ctrl >> i) & 0x1) == 1)):
+                        ctrl &= ~(1<<i)
+                _ctrls.append(ctrl)
+            return datas, _ctrls
+
+        datas, ctrls = remove_skp(datas, ctrls)
 
         class DUT(Module):
             def __init__(self):
                 self.submodules.tx = SerdesTXDatapath("serdes")
                 self.submodules.rx = SerdesRXDatapath("serdes")
+                self.comb += self.rx.word_aligner.enable.eq(0)
                 self.comb += self.tx.source.connect(self.rx.sink)
 
         def generator(dut):
