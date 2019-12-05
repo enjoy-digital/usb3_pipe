@@ -58,6 +58,7 @@ class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys = ClockDomain()
         self.clock_domains.cd_por = ClockDomain(reset_less=True)
+        self.clock_domains.cd_ref = ClockDomain(reset_less=True)
 
         # # #
 
@@ -79,6 +80,7 @@ class _CRG(Module):
         self.submodules.pll = pll = ECP5PLL()
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
+        pll.create_clkout(self.cd_ref, 200e6)
         self.specials += AsyncResetSynchronizer(self.cd_sys, ~por_done | ~pll.locked | ~rst_n)
 
 # USB3SoC ------------------------------------------------------------------------------------------
@@ -125,8 +127,8 @@ class USB3SoC(SoCMini):
         usb3_serdes = ECP5USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = platform.request("refclk", 1),
-            refclk_freq  = 156.25e6,
+            refclk_pads  = self.crg.cd_ref.clk,
+            refclk_freq  = 200e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"),
             channel      = 0)
