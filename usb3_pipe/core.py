@@ -52,8 +52,8 @@ class USB3PIPE(Module):
         # Scrambling -------------------------------------------------------------------------------
         if with_scrambling:
             scrambler = Scrambler()
-            scrambler = CEInserter()(scrambler)
-            self.comb += scrambler.ce.eq(ltssm.polling.tx_ready)
+            scrambler = ResetInserter()(scrambler)
+            self.comb += scrambler.reset.eq(~ltssm.polling.tx_ready)
             self.submodules.scrambler = scrambler
             self.comb += [
                 sink.connect(scrambler.sink),
@@ -63,8 +63,8 @@ class USB3PIPE(Module):
             aligner = RXWordAligner(check_ctrl_only=True) # FIXME: can we avoid alignment here?
             self.submodules.aligner = aligner
             descrambler = Descrambler()
-            descrambler = CEInserter()(descrambler)
-            self.comb += descrambler.ce.eq(ltssm.polling.rx_ready)
+            descrambler = ResetInserter()(descrambler)
+            self.comb += descrambler.reset.eq(~ltssm.polling.rx_ready)
             self.submodules.descrambler = descrambler
             self.comb += [
                 If(ltssm.polling.rx_ready, serdes.source.connect(aligner.sink)),
