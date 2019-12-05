@@ -8,9 +8,9 @@ from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import K, COM, SKP
 
-# RX Skip Remover ----------------------------------------------------------------------------------
+# RX SKP Remover -----------------------------------------------------------------------------------
 
-class RXSkipRemover(Module):
+class RXSKPRemover(Module):
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -151,9 +151,9 @@ class RXSubstitution(Module):
                 )
             ]
 
-# TX Skip Inserter ---------------------------------------------------------------------------------
+# TX SKP Inserter ----------------------------------------------------------------------------------
 
-class TXSkipInserter(Module):
+class TXSKPInserter(Module):
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -220,7 +220,7 @@ class SerdesTXDatapath(Module):
 
         # # #
 
-        skip_inserter = TXSkipInserter()
+        skip_inserter = TXSKPInserter()
         self.submodules += skip_inserter
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
@@ -256,7 +256,7 @@ class SerdesRXDatapath(Module):
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.submodules.cdc = cdc
-        skip_remover = RXSkipRemover()
+        skip_remover = RXSKPRemover()
         self.submodules.skip_remover = skip_remover
         word_aligner = RXWordAligner()
         self.submodules.word_aligner = word_aligner
