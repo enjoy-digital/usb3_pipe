@@ -246,11 +246,13 @@ class PollingFSM(Module):
             If(ts_unit.rx_ts1,
                 NextValue(serdes.rx_polarity, 0),
                 _12_ms_timer.wait.eq(0),
+                NextValue(rx_ts2_seen, 0),
                 NextState("Polling.Configuration")
             ),
             If(ts_unit.rx_ts1_inv,
                 NextValue(serdes.rx_polarity, 1),
                 _12_ms_timer.wait.eq(0),
+                NextValue(rx_ts2_seen, 0),
                 NextState("Polling.Configuration")
             ),
         )
@@ -283,17 +285,28 @@ class PollingFSM(Module):
             self.idle.eq(1),
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
+            If(ts_unit.rx_ts1, # FIXME: for bringup, should be Recovery.Active
+                NextState("Polling.Active")
+            ).Elif(lfps_unit.rx_polling, # FIXME: for bringup
+                NextState("Polling.Entry")
+            )
         )
 
         # Exit to Compliance -----------------------------------------------------------------------
         fsm.act("Polling.ExitToCompliance",
             lfps_unit.tx_idle.eq(1), # FIXME: for bringup
+            If(lfps_unit.rx_polling, # FIXME: for bringup
+                NextState("Polling.Entry")
+            ),
             self.exit_to_compliance.eq(1)
         )
 
         # Exit to RxDetect -------------------------------------------------------------------------
         fsm.act("Polling.ExitToRxDetect",
             lfps_unit.tx_idle.eq(1), # FIXME: for bringup
+            If(lfps_unit.rx_polling, # FIXME: for bringup
+                NextState("Polling.Entry")
+            ),
             self.exit_to_rx_detect.eq(1)
         )
 
