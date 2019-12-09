@@ -107,12 +107,17 @@ class Descrambler(Module):
         scrambler = Scrambler()
         self.submodules += scrambler
 
-        synchro      = Signal()
-        synchronized = Signal()
-        self.comb += synchro.eq(sink.valid & sink.ready & (scrambler.source.data == 0x00000000))
-        self.sync += If(synchro, synchronized.eq(1))
+        synced     = Signal()
+        synced_set = Signal()
+        self.sync += If(synced_set, synced.eq(1))
+
         self.comb += [
-            sink.connect(scrambler.sink),
-            scrambler.sink.valid.eq(sink.valid & (synchro | synchronized)),
+            sink.connect(scrambler.sink, keep={"data", "ctrl"}),
+            If((sink.data == 0x8dbf6dbe) | synced,
+                synced_set.eq(1),
+                sink.connect(scrambler.sink, omit={"data", "ctrl"})
+            ).Else(
+                sink.ready.eq(1)
+            ),
             scrambler.source.connect(source)
         ]

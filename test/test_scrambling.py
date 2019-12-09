@@ -79,4 +79,4 @@ class TestScrambling(unittest.TestCase):
                 yield
 
         dut = Descrambler()
-        run_simulation(dut, [generator(dut), checker(dut)], vcd_name="toto.vcd")
+        run_simulation(dut, [generator(dut), checker(dut)])
