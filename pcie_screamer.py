@@ -175,6 +175,7 @@ def main():
     if "load" in sys.argv[1:]:
         load()
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+    os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
     platform = Platform()
     soc = USB3SoC(platform)
     builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")

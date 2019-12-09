@@ -211,6 +211,7 @@ def main():
     if "load" in sys.argv[1:]:
         load()
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+    os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
     platform = versa_ecp5.Platform(toolchain="trellis")
     platform.add_extension(_usb3_io)
     soc = USB3SoC(platform)
