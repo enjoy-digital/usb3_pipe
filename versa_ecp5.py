@@ -131,7 +131,7 @@ class USB3SoC(SoCMini):
             refclk_freq  = 200e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"),
-            channel      = 0)
+            channel      = 1 if connector == "sma" else 0)
         self.submodules += usb3_serdes
 
         # USB3 PIPE --------------------------------------------------------------------------------
