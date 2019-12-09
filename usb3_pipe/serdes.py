@@ -222,7 +222,7 @@ class SerdesTXDatapath(Module):
 
         skip_inserter = TXSKPInserter()
         self.submodules += skip_inserter
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
         self.submodules.cdc = cdc
         converter = stream.StrideConverter(
@@ -253,12 +253,13 @@ class SerdesRXDatapath(Module):
         converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
         self.submodules.converter = converter
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.submodules.cdc = cdc
         skip_remover = RXSKPRemover()
         self.submodules.skip_remover = skip_remover
         word_aligner = RXWordAligner()
+        word_aligner = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(word_aligner)
         self.submodules.word_aligner = word_aligner
         self.comb += [
             self.sink.connect(converter.sink),

@@ -61,6 +61,7 @@ class USB3PIPE(Module):
 
             descrambler = Descrambler()
             descrambler = ResetInserter()(descrambler)
+            descrambler = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(descrambler)
             self.comb += descrambler.reset.eq(~ltssm.polling.rx_ready)
             self.submodules.descrambler = descrambler
             self.comb += [
