@@ -122,8 +122,6 @@ class USB3SoC(SoCMini):
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
 
         # USB3 SerDes ------------------------------------------------------------------------------
-        self.comb += platform.request("refclk_en").eq(1)
-        self.comb += platform.request("refclk_rst_n").eq(1)
         usb3_serdes = ECP5USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
@@ -149,8 +147,8 @@ class USB3SoC(SoCMini):
         self.add_csr("usb3_core")
 
         # Leds -------------------------------------------------------------------------------------
-        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
-        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
+        self.comb += platform.request("user_led", 0).eq(~usb3_serdes.ready)
+        self.comb += platform.request("user_led", 1).eq(~usb3_pipe.ready)
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
