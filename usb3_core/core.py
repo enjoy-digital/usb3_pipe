@@ -9,9 +9,9 @@ from migen.genlib.misc import WaitTimer
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import stream
 
-# USB3 Core Control --------------------------------------------------------------------------------
+# USB3 Core Endpoint --------------------------------------------------------------------------------
 
-class USB3CoreControl(Module, AutoCSR):
+class USB3CoreEndpoint(Module, AutoCSR):
     def __init__(self):
         # Not functional but prevents synthesis optimizations
         self._buf_in_addr       = CSRStorage(9)
@@ -49,7 +49,7 @@ class USB3CoreControl(Module, AutoCSR):
 # USB3 Core ----------------------------------------------------------------------------------------
 
 class USB3Core(Module, AutoCSR):
-    def __init__(self, platform):
+    def __init__(self, platform, with_endpoint=False):
         self.reset  = Signal()
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -123,11 +123,8 @@ class USB3Core(Module, AutoCSR):
             )
         ]
 
-        # Daisho USB3 core control -----------------------------------------------------------------
-        self.submodules.usb3_control = usb3_control = USB3CoreControl()
-
         # Daisho USB3 core -------------------------------------------------------------------------
-        self.specials += Instance("usb3_top_usb3_pipe",
+        usb3_top_params = dict(
             i_clk               = ClockSignal(),
             i_reset_n           = ~self.reset,
 
@@ -141,27 +138,32 @@ class USB3Core(Module, AutoCSR):
             o_out_datak         = out_datak,
             o_out_active        = out_active,
             i_out_stall         = 0, # FIXME
-
-            i_buf_in_addr       = usb3_control.buf_in_addr,
-            i_buf_in_data       = usb3_control.buf_in_data,
-            i_buf_in_wren       = usb3_control.buf_in_wren,
-            o_buf_in_request    = usb3_control.buf_in_request,
-            o_buf_in_ready      = usb3_control.buf_in_ready,
-            i_buf_in_commit     = usb3_control.buf_in_commit,
-            i_buf_in_commit_len = usb3_control.buf_in_commit_len,
-            o_buf_in_commit_ack = usb3_control.buf_in_commit_ack,
-
-            i_buf_out_addr      = usb3_control.buf_out_addr,
-            o_buf_out_q         = usb3_control.buf_out_q,
-            o_buf_out_len       = usb3_control.buf_out_len,
-            o_buf_out_hasdata   = usb3_control.buf_out_hasdata,
-            i_buf_out_arm       = usb3_control.buf_out_arm,
-            o_buf_out_arm_ack   = usb3_control.buf_out_arm_ack,
-
-            #o_vend_req_act     =,
-            #o_vend_req_request =,
-            #o_vend_req_val     =
         )
+
+        # Daisho USB3 core endpoinst ---------------------------------------------------------------
+        if with_endpoint:
+            self.submodules.usb3_control = usb3_control = USB3CoreControl()
+            usb3_top_params.update(
+                i_buf_in_addr       = usb3_control.buf_in_addr,
+                i_buf_in_data       = usb3_control.buf_in_data,
+                i_buf_in_wren       = usb3_control.buf_in_wren,
+                o_buf_in_request    = usb3_control.buf_in_request,
+                o_buf_in_ready      = usb3_control.buf_in_ready,
+                i_buf_in_commit     = usb3_control.buf_in_commit,
+                i_buf_in_commit_len = usb3_control.buf_in_commit_len,
+                o_buf_in_commit_ack = usb3_control.buf_in_commit_ack,
+
+                i_buf_out_addr      = usb3_control.buf_out_addr,
+                o_buf_out_q         = usb3_control.buf_out_q,
+                o_buf_out_len       = usb3_control.buf_out_len,
+                o_buf_out_hasdata   = usb3_control.buf_out_hasdata,
+                i_buf_out_arm       = usb3_control.buf_out_arm,
+                o_buf_out_arm_ack   = usb3_control.buf_out_arm_ack,
+            )
+
+        # Daisho USB3 instance ---------------------------------------------------------------------
+        self.specials += Instance("usb3_top_usb3_pipe", **usb3_top_params)
+
         daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "daisho")
         platform.add_verilog_include_path(os.path.join(daisho_path))
         platform.add_verilog_include_path(os.path.join(daisho_path, "usb3"))
