@@ -9,6 +9,8 @@ from migen.genlib.misc import WaitTimer
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import stream
 
+from usb3_pipe.serdes import RXWordAligner
+
 # USB3 Core Endpoint --------------------------------------------------------------------------------
 
 class USB3CoreEndpoint(Module, AutoCSR):
@@ -53,7 +55,6 @@ class USB3Core(Module, AutoCSR):
         self.reset  = Signal()
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-
         # # #
 
         # Artificial after reset delay from LT_POLLING_IDLE to LT_POLLING_U0
@@ -75,14 +76,18 @@ class USB3Core(Module, AutoCSR):
         ]
 
         # RX (Sink) --------------------------------------------------------------------------------
+        aligner = RXWordAligner(check_ctrl_only=True) # FIXME: can we avoid alignment here?
+        self.submodules.aligner = aligner
+        self.comb += sink.connect(aligner.sink)
+
         in_data   = Signal(32)
         in_datak  = Signal(4)
         in_active = Signal()
         self.comb += [
-            sink.ready.eq(1), # Always ready
-            in_data.eq(sink.data),
-            in_datak.eq(sink.ctrl),
-            in_active.eq(sink.valid),
+            aligner.source.ready.eq(1), # Always ready
+            in_data.eq(aligner.source.data),
+            in_datak.eq(aligner.source.ctrl),
+            in_active.eq(aligner.source.valid),
         ]
 
         # TX (Source) ------------------------------------------------------------------------------
@@ -130,9 +135,9 @@ class USB3Core(Module, AutoCSR):
 
             i_ltssm_state       = ltssm_state,
 
-            i_in_data           = sink.data,
-            i_in_datak          = sink.ctrl,
-            i_in_active         = sink.valid,
+            i_in_data           = aligner.source.data,
+            i_in_datak          = aligner.source.ctrl,
+            i_in_active         = aligner.source.valid,
 
             o_out_data          = out_data,
             o_out_datak         = out_datak,
