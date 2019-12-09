@@ -521,6 +521,8 @@ class ECP5USB3SerDes(Module):
         self.submodules.rx_substitution = rx_substitution
         self.submodules.rx_datapath     = rx_datapath
         self.comb += [
+            serdes.tx_idle.eq(self.tx_idle),
+            self.rx_idle.eq(serdes.rx_idle),
             serdes.tx_enable.eq(self.enable),
             serdes.rx_enable.eq(self.enable),
             self.ready.eq(serdes.tx_ready & serdes.rx_ready),
