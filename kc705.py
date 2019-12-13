@@ -65,7 +65,7 @@ _usb3_io = [
 class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys = ClockDomain()
-        self.clock_domains.cd_usb3_oob = ClockDomain()
+        self.clock_domains.cd_oob = ClockDomain()
         self.clock_domains.cd_clk125 = ClockDomain()
 
         # # #
@@ -73,7 +73,7 @@ class _CRG(Module):
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
         pll.register_clkin(platform.request("clk200"), 200e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_usb3_oob, sys_clk_freq/8)
+        pll.create_clkout(self.cd_oob, sys_clk_freq/8)
         pll.create_clkout(self.cd_clk125, 125e6)
 
 # USB3SoC ------------------------------------------------------------------------------------------

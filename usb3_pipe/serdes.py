@@ -348,7 +348,7 @@ class K7USB3SerDes(Module):
         gtx.gtx_params.update(
             p_PCS_RSVD_ATTR  = 0x000000000100,
             p_RXOOB_CFG      = 0b0000110,
-            i_CLKRSVD        = ClockSignal("usb3_oob"),
+            i_CLKRSVD        = ClockSignal("oob"),
             i_RXELECIDLEMODE = 0b00,
             o_RXELECIDLE     = self.rx_idle,
             i_TXELECIDLE     = self.tx_idle)
@@ -447,7 +447,7 @@ class A7USB3SerDes(Module):
         gtp.gtp_params.update(
             p_PCS_RSVD_ATTR  = 0x000000000100,
             p_RXOOB_CLK_CFG  = "FABRIC",
-            i_SIGVALIDCLK    = ClockSignal("usb3_oob"),
+            i_SIGVALIDCLK    = ClockSignal("oob"),
             p_RXOOB_CFG      = 0b0000110,
             i_RXELECIDLEMODE = 0b00,
             o_RXELECIDLE     = self.rx_idle,
