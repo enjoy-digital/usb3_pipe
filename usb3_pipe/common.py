@@ -6,20 +6,24 @@ from migen import *
 # Helpers ------------------------------------------------------------------------------------------
 
 def K(x, y):
+    """K code generator ex: K(28, 5) is COM Symbol"""
     return (y << 5) | x
 
 def D(x, y):
+    """D code generator"""
     return (y << 5) | x
 
 def LinkConfig(reset=0, loopback=0, scrambling=1):
+    """Link Configuration of TS1/TS2 Ordered Sets."""
     value  = (      reset   << 0)
     value |= (   loopback   << 2)
     value |= ((not scrambling) << 3)
     return value
 
-# Symbols ------------------------------------------------------------------------------------------
+# Symbols (6.3.5) ----------------------------------------------------------------------------------
 
 class Symbol:
+    """Symbol definition with name, 8-bit value and description"""
     def __init__(self, name, value, description=""):
         self.name        = name
         self.value       = value
@@ -38,9 +42,10 @@ EPF =  Symbol("EPF", K(23, 7), "End Packet Framing")
 
 symbols = [SKP, SDP, EDB, SUB, COM, RSD, SHP, END, SLC, EPF]
 
-# Training Sequence Ordered Sets -------------------------------------------------------------------
+# Training Sequence Ordered Sets (6.4.1.2) ---------------------------------------------------------
 
 class OrderedSet(list):
+    """Ordered Set definition with name, 8-bit values and description"""
     def __init__(self, name, values, description=""):
         self.name        = name
         self.values      = values
@@ -83,6 +88,7 @@ ordered_sets = [TSEQ, TS1, TS2]
 # Endianness Swap ----------------------------------------------------------------------------------
 
 class EndiannessSwap(Module):
+    """Swap the data bytes/ctrl bits of stream"""
     def __init__(self, sink, source):
         assert len(sink.data) == len(source.data)
         assert len(sink.ctrl) == len(source.ctrl)
