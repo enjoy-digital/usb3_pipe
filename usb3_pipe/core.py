@@ -36,7 +36,7 @@ class USB3PIPE(Module):
             source = self.source
 
         # LFPS -------------------------------------------------------------------------------------
-        lfps = LFPSUnit(sys_clk_freq=sys_clk_freq, serdes=serdes)
+        lfps = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq)
         self.submodules.lfps = lfps
 
         # TS----------------------------------------------------------------------------------------

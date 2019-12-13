@@ -74,7 +74,7 @@ class TestLFPS(unittest.TestCase):
 
     def test_lfps_generator(self):
         def lfps_generator(dut):
-            yield dut.polling.eq(1)
+            yield dut.generate.eq(1)
             for i in range(int(1e4)):
                 yield
             dut.run = False
@@ -100,7 +100,7 @@ class TestLFPS(unittest.TestCase):
         sys_clk_freq  = 100e6
         lfps_clk_freq = 25e6
 
-        dut = lfps.LFPSGenerator(sys_clk_freq, lfps_clk_freq)
+        dut = lfps.LFPSGenerator(lfps.PollingLFPS, sys_clk_freq, lfps_clk_freq)
         dut.run = True
         generators = [
             lfps_generator(dut),
