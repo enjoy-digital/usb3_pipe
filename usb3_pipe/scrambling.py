@@ -8,10 +8,14 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
-# Scrambler Unit -----------------------------------------------------------------------------------
+# Scrambler Unit (Appendix B) ----------------------------------------------------------------------
 
 @CEInserter()
 class ScramblerUnit(Module):
+    """Scrambler Unit
+
+    This module generates the scrambled datas for the USB3.0 link (X^16 + X^5 + X^4 + X^3 + 1 polynom).
+    """
     def __init__(self):
         self.value = Signal(32)
 
@@ -73,9 +77,13 @@ class ScramblerUnit(Module):
         ]
         self.sync += cur.eq(new)
 
-# Scrambler ----------------------------------------------------------------------------------------
+# Scrambler (Appendix B) ---------------------------------------------------------------------------
 
 class Scrambler(Module):
+    """Scrambler
+
+    This module scrambles the TX data/ctrl stream. K codes shall not be scrambled.
+    """
     def __init__(self):
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -95,9 +103,15 @@ class Scrambler(Module):
                 )
             ]
 
-# Descrambler (Scrambler + Auto-Synchronization) ---------------------------------------------------
+# Descrambler (Scrambler + Auto-Synchronization) (Appendix B) --------------------------------------
 
 class Descrambler(Module):
+    """Descrambler
+
+    This module descrambles the RX data/ctrl stream. K codes shall not be scrambled. The descrambler
+    automatically synchronize itself to the incoming stream during the Idle handshake sequence. Once
+    synchronized, it will keep the current synchronization until the next reset/Idle handshake sequence.
+    """
     def __init__(self):
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
