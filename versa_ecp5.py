@@ -87,8 +87,9 @@ class _CRG(Module):
 
 class USB3SoC(SoCMini):
     def __init__(self, platform, connector="pcie", with_etherbone=False, with_analyzer=False):
-
         sys_clk_freq = int(125e6)
+
+        # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
         # CRG --------------------------------------------------------------------------------------
@@ -116,8 +117,6 @@ class USB3SoC(SoCMini):
             self.add_wb_master(self.etherbone.wishbone.bus)
 
             # timing constraints
-            self.eth_phy.crg.cd_eth_rx.clk.attr.add("keep")
-            self.eth_phy.crg.cd_eth_tx.clk.attr.add("keep")
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
 

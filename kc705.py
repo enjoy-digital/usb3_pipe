@@ -64,24 +64,25 @@ _usb3_io = [
 
 class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
-        self.clock_domains.cd_sys = ClockDomain()
-        self.clock_domains.cd_oob = ClockDomain()
+        self.clock_domains.cd_sys    = ClockDomain()
+        self.clock_domains.cd_oob    = ClockDomain()
         self.clock_domains.cd_clk125 = ClockDomain()
 
         # # #
 
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
         pll.register_clkin(platform.request("clk200"), 200e6)
-        pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_oob, sys_clk_freq/8)
+        pll.create_clkout(self.cd_sys,    sys_clk_freq)
+        pll.create_clkout(self.cd_oob,    sys_clk_freq/8)
         pll.create_clkout(self.cd_clk125, 125e6)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
     def __init__(self, platform, connector="pcie", with_etherbone=True, with_analyzer=True):
+        sys_clk_freq = int(125e6)
 
-        sys_clk_freq = int(156.5e6)
+        # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
         # CRG --------------------------------------------------------------------------------------
@@ -106,9 +107,6 @@ class USB3SoC(SoCMini):
             self.add_wb_master(self.etherbone.wishbone.bus)
 
             # timing constraints
-            self.crg.cd_sys.clk.attr.add("keep")
-            self.eth_phy.crg.cd_eth_rx.clk.attr.add("keep")
-            self.eth_phy.crg.cd_eth_tx.clk.attr.add("keep")
             self.platform.add_period_constraint(self.crg.cd_sys.clk, 1e9/156.5e6)
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
