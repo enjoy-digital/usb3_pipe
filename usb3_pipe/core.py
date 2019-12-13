@@ -15,6 +15,18 @@ from usb3_pipe.scrambling import Scrambler, Descrambler
 
 @ResetInserter()
 class USB3PIPE(Module):
+    """USB3.0 PIPE Core
+
+    Wrap an FPGA transceiver exposing 2 TX and RX data/ctrl streams into a USB3.0 PIPE by adding:
+    - LFPS detection/generation.
+    - Training Sequence Ordered Sets detection/generation.
+    - Clock compensation Ordered Sets removing/insertion.
+    - Convertion to/from a 32-bit/4-bit data/ctrl stream.
+    - Clock domain crossing to/from sys_clk (>=125MHz).
+    - RX words alignment.
+    - TX scrambling/RX descrambling.
+    - Link Training State Machine.
+    """
     def __init__(self, serdes, sys_clk_freq, with_scrambling=True, with_endianness_swap=True):
         assert sys_clk_freq >= 125e6
         self.ready  = Signal() # o
