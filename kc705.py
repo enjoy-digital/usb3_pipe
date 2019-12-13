@@ -66,13 +66,15 @@ class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys = ClockDomain()
         self.clock_domains.cd_usb3_oob = ClockDomain()
+        self.clock_domains.cd_clk125 = ClockDomain()
 
         # # #
 
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
-        pll.register_clkin(platform.request("clk156"), 156.5e6)
+        pll.register_clkin(platform.request("clk200"), 200e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
         pll.create_clkout(self.cd_usb3_oob, sys_clk_freq/8)
+        pll.create_clkout(self.cd_clk125, 125e6)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
@@ -119,11 +121,12 @@ class USB3SoC(SoCMini):
         usb3_serdes = K7USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = platform.request("sgmii_clock"),
+            refclk_pads  = ClockSignal("clk125"),
             refclk_freq  = 125e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"))
         self.submodules += usb3_serdes
+        platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-52]")
 
         # USB3 PIPE --------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
