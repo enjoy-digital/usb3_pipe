@@ -7,9 +7,10 @@ import sys
 
 from migen import *
 
+from litex.boards.platforms import pcie_screamer
+
 from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
-from litex.build.xilinx import XilinxPlatform
 
 from litex.soc.cores.clock import *
 from litex.soc.interconnect.csr import *
@@ -17,32 +18,15 @@ from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.uart import UARTWishboneBridge
 
-
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe import A7USB3SerDes, USB3PIPE
 from usb3_core.core import USB3Core
 
-# IOs ----------------------------------------------------------------------------------------------
+# USB3 IOs -----------------------------------------------------------------------------------------
 
-_io = [
-    ("clk100", 0, Pins("R4"), IOStandard("LVCMOS33")),
-
-    ("user_led", 0, Pins("AB1"), IOStandard("LVCMOS33")),
-    ("user_led", 1, Pins("AB8"), IOStandard("LVCMOS33")),
-
-    ("user_btn", 0, Pins("AA1"), IOStandard("LVCMOS33")),
-    ("user_btn", 1, Pins("AB6"), IOStandard("LVCMOS33")),
-
-    ("user_gpio", 0, Pins("Y6"),  IOStandard("LVCMOS33")),
-    ("user_gpio", 1, Pins("AA6"), IOStandard("LVCMOS33")),
-
-    ("serial", 0,
-        Subsignal("tx", Pins("T1")),
-        Subsignal("rx", Pins("U1")),
-        IOStandard("LVCMOS33"),
-    ),
-
+_usb3_io = [
+    # PCIe
     ("pcie_tx", 0,
         Subsignal("p", Pins("B6")),
         Subsignal("n", Pins("A6")),
@@ -54,12 +38,6 @@ _io = [
     ),
 ]
 
-# Platform -----------------------------------------------------------------------------------------
-
-class Platform(XilinxPlatform):
-    def __init__(self):
-        XilinxPlatform.__init__(self, "xc7a35t-fgg484-2", _io, toolchain="vivado")
-
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(Module):
@@ -70,11 +48,8 @@ class _CRG(Module):
 
         # # #
 
-        clk100 = platform.request("clk100")
-        platform.add_period_constraint(clk100, 1e9/100e6)
-
         self.submodules.pll = pll = S7PLL(speedgrade=-2)
-        pll.register_clkin(clk100, 100e6)
+        pll.register_clkin(platform.request("clk100"), 100e6)
         pll.create_clkout(self.cd_sys,    sys_clk_freq)
         pll.create_clkout(self.cd_oob,    sys_clk_freq/8)
         pll.create_clkout(self.cd_clk125, 125e6)
@@ -174,7 +149,8 @@ def main():
         load()
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
-    platform = Platform()
+    platform = pcie_screamer.Platform()
+    platform.add_extension(_usb3_io)
     soc = USB3SoC(platform)
     builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
     vns = builder.build()
