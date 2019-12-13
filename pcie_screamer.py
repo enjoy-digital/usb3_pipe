@@ -87,7 +87,7 @@ class _CRG(Module):
 class USB3SoC(SoCMini):
     def __init__(self, platform, with_analyzer=False):
 
-        sys_clk_freq = int(150e6)
+        sys_clk_freq = int(125e6)
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
         # CRG --------------------------------------------------------------------------------------
