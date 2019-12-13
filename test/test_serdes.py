@@ -8,7 +8,7 @@ from migen import *
 
 from usb3_pipe.serdes import RXWordAligner
 from usb3_pipe.serdes import RXSKPRemover, TXSKPInserter
-from usb3_pipe.serdes import SerdesTXDatapath, SerdesRXDatapath
+from usb3_pipe.serdes import RXDatapath, TXDatapath
 
 
 class TestSerDes(unittest.TestCase):
@@ -191,8 +191,8 @@ class TestSerDes(unittest.TestCase):
 
         class DUT(Module):
             def __init__(self):
-                self.submodules.tx = SerdesTXDatapath("serdes")
-                self.submodules.rx = SerdesRXDatapath("serdes")
+                self.submodules.tx = TXDatapath("serdes")
+                self.submodules.rx = RXDatapath("serdes")
                 self.comb += self.rx.word_aligner.enable.eq(0)
                 self.comb += self.tx.source.connect(self.rx.sink)
 

@@ -64,8 +64,8 @@ class USB3SerDesModel(Module):
 
         nwords = phy_dw//10
 
-        tx_datapath = SerdesTXDatapath(phy_dw=nwords*8)
-        rx_datapath = SerdesRXDatapath(phy_dw=nwords*8)
+        tx_datapath = TXDatapath(phy_dw=nwords*8)
+        rx_datapath = RXDatapath(phy_dw=nwords*8)
         self.submodules += tx_datapath, rx_datapath
         self.comb += [
             self.sink.connect(tx_datapath.sink),

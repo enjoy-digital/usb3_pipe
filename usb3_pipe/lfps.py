@@ -231,7 +231,7 @@ class LFPSUnit(Module):
         # LFPS Checkers ----------------------------------------------------------------------------
         polling_checker = LFPSChecker(PollingLFPS, sys_clk_freq)
         self.submodules += polling_checker
-        self.comb += polling.checker.idle.eq(serdes.rx_idle)
+        self.comb += polling_checker.idle.eq(serdes.rx_idle)
         self.comb += self.rx_polling.eq(polling_checker.detect)
 
         # LFPS Generators --------------------------------------------------------------------------

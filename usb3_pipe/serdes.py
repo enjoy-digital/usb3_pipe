@@ -8,9 +8,15 @@ from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import K, COM, SKP
 
-# RX SKP Remover -----------------------------------------------------------------------------------
+# RX SKP Remover (6.4.3) ---------------------------------------------------------------------------
 
 class RXSKPRemover(Module):
+    """RX SKP Remover
+
+    SKP Ordered Sets are inserted in the stream for clock compensation between partners with an
+    average of 1 SKP Ordered Set every 354 symbols. This module removes SKP Ordered Sets from
+    the RX stream.
+    """
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -85,6 +91,10 @@ class RXSKPRemover(Module):
 # RX Aligner ---------------------------------------------------------------------------------------
 
 class RXWordAligner(Module):
+    """RX Word Aligner
+
+    Align RX Words by analyzing the location of the COM/K-codes (configurable) in the RX stream.
+    """
     def __init__(self, check_ctrl_only=False):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -133,9 +143,13 @@ class RXWordAligner(Module):
             ]
         self.comb += Case(alignment_d, cases)
 
-# RXSubstitution -----------------------------------------------------------------------------------
+# RXErrorSubstitution (6.3.5) ----------------------------------------------------------------------
 
-class RXSubstitution(Module):
+class RXErrorSubstitution(Module):
+    """RX Error Substitution
+
+    Substitutes 8b/10b decoder errors with K28.4 symbols.
+    """
     def __init__(self, serdes, clock_domain):
         self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
         self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
@@ -151,9 +165,20 @@ class RXSubstitution(Module):
                 )
             ]
 
-# TX SKP Inserter ----------------------------------------------------------------------------------
+# TX SKP Inserter (6.4.3) --------------------------------------------------------------------------
 
 class TXSKPInserter(Module):
+    """TX SKP Inserter
+
+    SKP Ordered Sets are inserted in the stream for clock compensation between partners with an
+    average of 1 SKP Ordered Set every 354 symbols. This module inserts SKP Ordered Sets to the
+    TX stream. SKP Ordered Sets shall not be inserted inside a packet, so this packet delimiters
+    (first/last) should be used to ensure SKP are inserted only between packets and not inside.
+
+    Note: To simplify implementation and keep alignment, 2 SKP Ordered Sets are inserted every 708
+    symbols, which is a small deviation from the specification (good average, but 2x interval between
+    SKPs). More tests need to be done to ensure this deviation is acceptable with all hardwares.
+    """
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -213,18 +238,30 @@ class TXSKPInserter(Module):
 
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
-class SerdesTXDatapath(Module):
+class TXDatapath(Module):
+    """TX Datapath
+
+    This module realizes the:
+    - Clock compensation (SKP insertion).
+    - Clock domain crossing (from system clock to transceiver's TX clock).
+    - Data-width adaptation (from 32-bit to transceiver's data-width).
+    """
     def __init__(self, clock_domain="sys", phy_dw=16):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
 
         # # #
 
+        # Clock compensation
         skip_inserter = TXSKPInserter()
         self.submodules += skip_inserter
+
+        # Clock domain crossing
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
         self.submodules.cdc = cdc
+
+        # Data-width adaptation
         converter = stream.StrideConverter(
             [("data", 32), ("ctrl", 4)],
             [("data", phy_dw), ("ctrl", phy_dw//8)],
@@ -232,6 +269,8 @@ class SerdesTXDatapath(Module):
         converter = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
         self.submodules.converter = converter
+
+        # Flow
         self.comb += [
             self.sink.connect(skip_inserter.sink),
             skip_inserter.source.connect(cdc.sink),
@@ -239,13 +278,22 @@ class SerdesTXDatapath(Module):
             converter.source.connect(self.source)
         ]
 
-class SerdesRXDatapath(Module):
+class RXDatapath(Module):
+    """RX Datapath
+
+    This module realizes the:
+    - Data-width adaptation (from transceiver's data-width to 32-bit).
+    - Clock domain crossing (from transceiver's RX clock to system clock).
+    - Clock compensation (SKP removing).
+    - Words alignment.
+    """
     def __init__(self, clock_domain="sys", phy_dw=16):
         self.sink   = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
+        # Data-width adaptation
         converter = stream.StrideConverter(
             [("data", phy_dw), ("ctrl", phy_dw//8)],
             [("data", 32), ("ctrl", 4)],
@@ -253,14 +301,22 @@ class SerdesRXDatapath(Module):
         converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
         self.submodules.converter = converter
+
+        # Clock domain crossing
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.submodules.cdc = cdc
+
+        # Clock compensation
         skip_remover = RXSKPRemover()
         self.submodules.skip_remover = skip_remover
+
+        # Words alignment
         word_aligner = RXWordAligner()
         word_aligner = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(word_aligner)
         self.submodules.word_aligner = word_aligner
+
+        # Flow
         self.comb += [
             self.sink.connect(converter.sink),
             converter.source.connect(cdc.sink),
@@ -318,9 +374,9 @@ class K7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtx.add_stream_endpoints()
-        tx_datapath     = SerdesTXDatapath("tx")
-        rx_substitution = RXSubstitution(gtx, "rx")
-        rx_datapath     = SerdesRXDatapath("rx")
+        tx_datapath     = TXDatapath("tx")
+        rx_substitution = RXErrorSubstitution(gtx, "rx")
+        rx_datapath     = RXDatapath("rx")
         self.submodules.gtx             = gtx
         self.submodules.tx_datapath     = tx_datapath
         self.submodules.rx_substitution = rx_substitution
@@ -360,10 +416,7 @@ class K7USB3SerDes(Module):
         # Timing constraints -----------------------------------------------------------------------
         platform.add_period_constraint(gtx.cd_tx.clk, 1e9/gtx.tx_clk_freq)
         platform.add_period_constraint(gtx.cd_rx.clk, 1e9/gtx.rx_clk_freq)
-        platform.add_false_path_constraints(
-            sys_clk,
-            gtx.cd_tx.clk,
-            gtx.cd_rx.clk)
+        platform.add_false_path_constraints(sys_clk, gtx.cd_tx.clk, gtx.cd_rx.clk)
 
 # Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
@@ -414,9 +467,9 @@ class A7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtp.add_stream_endpoints()
-        tx_datapath     = SerdesTXDatapath("tx")
-        rx_substitution = RXSubstitution(gtp, "rx")
-        rx_datapath     = SerdesRXDatapath("rx")
+        tx_datapath     = TXDatapath("tx")
+        rx_substitution = RXErrorSubstitution(gtp, "rx")
+        rx_datapath     = RXDatapath("rx")
         self.submodules.gtp             = gtp
         self.submodules.tx_datapath     = tx_datapath
         self.submodules.rx_substitution = rx_substitution
@@ -458,10 +511,7 @@ class A7USB3SerDes(Module):
         # Timing constraints -----------------------------------------------------------------------
         platform.add_period_constraint(gtp.cd_tx.clk, 1e9/gtp.tx_clk_freq)
         platform.add_period_constraint(gtp.cd_rx.clk, 1e9/gtp.rx_clk_freq)
-        platform.add_false_path_constraints(
-            sys_clk,
-            gtp.cd_tx.clk,
-            gtp.cd_rx.clk)
+        platform.add_false_path_constraints(sys_clk, gtp.cd_tx.clk, gtp.cd_rx.clk)
 
 # Lattice ECP5 USB3 Serializer/Deserializer --------------------------------------------------------
 
@@ -510,9 +560,9 @@ class ECP5USB3SerDes(Module):
             tx_polarity = self.tx_polarity,
             rx_polarity = self.rx_polarity)
         serdes.add_stream_endpoints()
-        tx_datapath     = SerdesTXDatapath("tx")
-        rx_substitution = RXSubstitution(serdes, "rx")
-        rx_datapath     = SerdesRXDatapath("rx")
+        tx_datapath     = TXDatapath("tx")
+        rx_substitution = RXErrorSubstitution(serdes, "rx")
+        rx_datapath     = RXDatapath("rx")
         self.submodules.serdes          = serdes
         self.submodules.tx_datapath     = tx_datapath
         self.submodules.rx_substitution = rx_substitution
@@ -538,6 +588,6 @@ class ECP5USB3SerDes(Module):
         ]
 
         # Timing constraints -----------------------------------------------------------------------
-        # FIXME: Add keep and false path?
         platform.add_period_constraint(serdes.txoutclk, 1e9/serdes.tx_clk_freq)
         platform.add_period_constraint(serdes.rxoutclk, 1e9/serdes.rx_clk_freq)
+        #platform.add_false_path_constraints(sys_clk, serdes.cd_tx.clk, serdes.cd_rx.clk) # FIXME
