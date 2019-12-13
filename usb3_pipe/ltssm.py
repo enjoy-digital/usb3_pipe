@@ -5,9 +5,9 @@ from migen import *
 
 from migen.genlib.misc import WaitTimer
 
-# Note: Currently just FSM skeletons with states/transitions.
-
 # Link Training and Status State Machine -----------------------------------------------------------
+
+# Note: Currently just FSM skeletons with states/transitions.
 
 @ResetInserter()
 class LTSSMFSM(FSM):
@@ -95,6 +95,8 @@ class LTSSMFSM(FSM):
 
 # SSInactive Finite State Machine  -----------------------------------------------------------------
 
+# Note: Currently just FSM skeletons with states/transitions.
+
 @ResetInserter()
 class SSInactiveFSM(FSM):
     """SSInactive Finite State Machine (section 7.5.2)"""
@@ -124,6 +126,8 @@ class SSInactiveFSM(FSM):
         self.act("END")
 
 # RXDetect Finite State Machine  -------------------------------------------------------------------
+
+# Note: Currently just FSM skeletons with states/transitions.
 
 @ResetInserter()
 class RXDetectFSM(FSM):
