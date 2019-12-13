@@ -51,6 +51,15 @@ class USB3CoreEndpoint(Module, AutoCSR):
 # USB3 Core ----------------------------------------------------------------------------------------
 
 class USB3Core(Module, AutoCSR):
+    """USB3.0 Core
+
+    Wrap the Daisho USB3.0 Core (https://github.com/mossmann/daisho) in a Module with small adaptations
+    to make it compatible with the USB3.0 PIPE.
+    - New top to only keep link/protocol layers and and endpoints.
+    - Additional logic to emulate Daisho's internal ltssm states.
+    - Additional RX words alignment. FIXME: could we avoid it or do it or should we do it in the PIPE?
+    - Additional TX FIFO to handle back-pressure from the SerDes. (not handled by Daisho)
+    """
     def __init__(self, platform, with_endpoint=False):
         self.reset  = Signal()
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -169,6 +178,7 @@ class USB3Core(Module, AutoCSR):
         # Daisho USB3 instance ---------------------------------------------------------------------
         self.specials += Instance("usb3_top_usb3_pipe", **usb3_top_params)
 
+        # Daisho USB3 sources ----------------------------------------------------------------------
         daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "daisho")
         platform.add_verilog_include_path(os.path.join(daisho_path))
         platform.add_verilog_include_path(os.path.join(daisho_path, "usb3"))
