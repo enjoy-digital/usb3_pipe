@@ -10,7 +10,16 @@ from usb3_pipe.common import TSEQ, TS1, TS1_INV, TS2
 # Training Sequence Checker ------------------------------------------------------------------------
 
 class TSChecker(Module):
-    def __init__(self, ordered_set, n_ordered_sets):
+    """Training Sequence Checker
+
+    Generic Training Sequence Ordered Set checker.
+
+    This module detects a specific Training Sequence Ordered Set by analyzing the RX stream. When N
+    consecutive Ordered Sets have been detected without errors (N configured by n_ordered_sets), a
+    detection is reported on detected signals for one cycle. Training config is also reported for
+    TS1/TS2 Ordered Sets.
+    """
+    def __init__(self, ordered_set, n_ordered_sets=1):
         self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.detected = Signal() # o
         self.error    = Signal() # o
@@ -95,7 +104,16 @@ class TSChecker(Module):
 # Training Sequence Generator ----------------------------------------------------------------------
 
 class TSGenerator(Module):
-    def __init__(self, ordered_set, n_ordered_sets):
+    """Training Sequence Generator
+
+    Generic Training Sequence Ordered Set generator.
+
+    This module generates a specific Training Sequence Ordered Set to the TX stream. For each start,
+    N consecutive Ordered Sets are generated (N configured by n_ordered_sets). Done signal is assert
+    on the last cycle of the generation. Training config can also be transmitted for TS1/TS2 Ordered
+    Sets.
+    """
+    def __init__(self, ordered_set, n_ordered_sets=1):
         self.start  = Signal() # i
         self.done   = Signal() # o
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -188,6 +206,11 @@ class TSGenerator(Module):
 # Training Sequence Unit ---------------------------------------------------------------------------
 
 class TSUnit(Module):
+    """Training Sequence Unit
+
+    Detect/generate the Training Sequence Ordered Sets required for a USB3.0 link with simple
+    control/status signals.
+    """
     def __init__(self, serdes):
         self.rx_enable  = Signal() # i
         self.rx_ts1     = Signal() # o
