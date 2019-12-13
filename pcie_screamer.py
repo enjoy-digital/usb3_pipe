@@ -13,7 +13,6 @@ from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
 
 from litex.soc.cores.clock import *
-from litex.soc.interconnect.csr import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 from litex.soc.cores.uart import UARTWishboneBridge
@@ -66,9 +65,9 @@ class USB3SoC(SoCMini):
         # CRG --------------------------------------------------------------------------------------
         self.submodules.crg = _CRG(platform, sys_clk_freq)
 
-        # Serial bridge ----------------------------------------------------------------------------
-        self.submodules.serial_bridge = UARTWishboneBridge(platform.request("serial"), sys_clk_freq)
-        self.add_wb_master(self.serial_bridge.wishbone)
+        # Serial Bridge ----------------------------------------------------------------------------
+        self.submodules.bridge = UARTWishboneBridge(platform.request("serial"), sys_clk_freq)
+        self.add_wb_master(self.bridge.wishbone)
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = A7USB3SerDes(platform,

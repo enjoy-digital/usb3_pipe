@@ -13,9 +13,9 @@ from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
 
 from litex.soc.cores.clock import *
-from litex.soc.interconnect.csr import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
+from litex.soc.cores.uart import UARTWishboneBridge
 
 from liteeth.phy import LiteEthPHY
 from liteeth.core import LiteEthUDPIPCore
@@ -88,6 +88,10 @@ class USB3SoC(SoCMini):
         # CRG --------------------------------------------------------------------------------------
         self.submodules.crg = _CRG(platform, sys_clk_freq)
 
+        # Serial Bridge ----------------------------------------------------------------------------
+        self.submodules.bridge = UARTWishboneBridge(platform.request("serial"), sys_clk_freq)
+        self.add_wb_master(self.bridge.wishbone)
+
         # Ethernet <--> Wishbone -------------------------------------------------------------------
         if with_etherbone:
             # phy
@@ -107,7 +111,6 @@ class USB3SoC(SoCMini):
             self.add_wb_master(self.etherbone.wishbone.bus)
 
             # timing constraints
-            self.platform.add_period_constraint(self.crg.cd_sys.clk, 1e9/156.5e6)
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
             self.platform.add_false_path_constraints(

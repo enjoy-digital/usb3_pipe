@@ -15,13 +15,11 @@ from litex.boards.platforms import versa_ecp5
 from litex.soc.cores.clock import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
+from litex.soc.cores.uart import UARTWishboneBridge
 
 from liteeth.phy.ecp5rgmii import LiteEthPHYRGMII
 from liteeth.core import LiteEthUDPIPCore
 from liteeth.frontend.etherbone import LiteEthEtherbone
-
-
-from litex.soc.cores.uart import UARTWishboneBridge
 
 from litescope import LiteScopeAnalyzer
 
@@ -56,9 +54,9 @@ _usb3_io = [
 
 class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
-        self.clock_domains.cd_sys = ClockDomain()
-        self.clock_domains.cd_por = ClockDomain(reset_less=True)
-        self.clock_domains.cd_ref = ClockDomain(reset_less=True)
+        self.clock_domains.cd_sys    = ClockDomain()
+        self.clock_domains.cd_por    = ClockDomain(reset_less=True)
+        self.clock_domains.cd_clk200 = ClockDomain()
 
         # # #
 
@@ -66,7 +64,6 @@ class _CRG(Module):
 
         # clk / rst
         clk100 = platform.request("clk100")
-        rst_n  = platform.request("rst_n")
         platform.add_period_constraint(clk100, 1e9/100e6)
 
         # power on reset
@@ -80,8 +77,8 @@ class _CRG(Module):
         self.submodules.pll = pll = ECP5PLL()
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_ref, 200e6)
-        self.specials += AsyncResetSynchronizer(self.cd_sys, ~por_done | ~pll.locked | ~rst_n)
+        pll.create_clkout(self.cd_clk200, 200e6)
+        self.specials += AsyncResetSynchronizer(self.cd_sys, ~por_done | ~pll.locked)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
@@ -119,12 +116,16 @@ class USB3SoC(SoCMini):
             # timing constraints
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
             self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
+            self.platform.add_false_path_constraints(
+                self.crg.cd_sys.clk,
+                self.eth_phy.crg.cd_eth_rx.clk,
+                self.eth_phy.crg.cd_eth_tx.clk)
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = ECP5USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = self.crg.cd_ref.clk,
+            refclk_pads  = ClockSignal("clk200"),
             refclk_freq  = 200e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"),
@@ -134,6 +135,7 @@ class USB3SoC(SoCMini):
         # USB3 PIPE --------------------------------------------------------------------------------
         usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.submodules.usb3_pipe = usb3_pipe
+        self.comb += usb3_pipe.reset.eq(~platform.request("rst_n"))
 
         # USB3 Core --------------------------------------------------------------------------------
         usb3_core = USB3Core(platform)
@@ -185,6 +187,7 @@ class USB3SoC(SoCMini):
             self.add_csr("analyzer")
 
 # Load ---------------------------------------------------------------------------------------------
+
 def load():
     import os
     f = open("ecp5-versa5g.cfg", "w")
