@@ -22,6 +22,7 @@ It currently targets Xilinx Kintex7, Artix7 and Lattice ECP5 FPGAs.
 ## Test Hardware
 One of the following boards:
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
+ - [NeTV2](https://www.crowdsupply.com/alphamax/netv2)
  - [PCIe Screamer](http://shop.lambdaconcept.com/home/32-pciescreamerR02.html)
  - [Versa ECP5](http://www.latticesemi.com/Products/DevelopmentBoardsAndKits/ECP5VersaDevelopmentKit.aspx)
 
@@ -58,8 +59,6 @@ $ sudo apt install verilator
 $ sudo apt install libevent-dev libjson-c-dev
 ```
 
-``
-
 ## Running the LiteX simulation
 ```sh
 $ ./sim.py
@@ -90,7 +89,7 @@ $ gtkwave build/gateware/dut.vcd
 ### Build the FPGA bitstream
 Once installed, build the bitstream with:
 ```sh
-$ ./target.py (can be kc705, pcie_screamer or versa_ecp5)
+$ ./target.py (can be kc705, netv2, pcie_screamer or versa_ecp5)
 ```
 
 ### Load the FPGA bitstream
