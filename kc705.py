@@ -195,7 +195,9 @@ def load():
 import argparse
 
 def main():
-    parser = argparse.ArgumentParser()
+    with open("README.md") as f:
+        description = [str(f.readline()) for i in range(7)]
+    parser = argparse.ArgumentParser(description="".join(description[1:]), formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--build", action="store_true", help="build bitstream")
     parser.add_argument("--load",  action="store_true", help="load bitstream (to SRAM)")
     args = parser.parse_args()
