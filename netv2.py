@@ -151,6 +151,9 @@ def main():
     parser.add_argument("--device", default="xc7a35t", help="FPGA device (xc7a35t (default) or xc7a100t)")
     args = parser.parse_args()
 
+    if not args.build and not args.load:
+        parser.print_help()
+
     if args.build:
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
         os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
