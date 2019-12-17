@@ -24,7 +24,7 @@ One of the following boards:
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
  - [NeTV2](https://www.crowdsupply.com/alphamax/netv2)
  - [PCIe Screamer](http://shop.lambdaconcept.com/home/32-pciescreamerR02.html)
- - [Versa ECP5](http://www.latticesemi.com/Products/DevelopmentBoardsAndKits/ECP5VersaDevelopmentKit.aspx)
+ - [Versa ECP5](http://www.latticesemi.com/en/Products/DevelopmentBoardsAndKits/ECP55GVersaDevKit)
 
 paired with the [PCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
 ![PCIsh-to-USB3.0](https://raw.githubusercontent.com/enjoy-digital/usb3_pipe/master/doc/breakout_board.jpg)
