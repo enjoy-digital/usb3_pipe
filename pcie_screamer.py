@@ -143,16 +143,25 @@ def load():
 
 # Build --------------------------------------------------------------------------------------------
 
+import argparse
+
 def main():
-    if "load" in sys.argv[1:]:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--build", action="store_true", help="build bitstream")
+    parser.add_argument("--load",  action="store_true", help="load bitstream (to SRAM)")
+    args = parser.parse_args()
+
+    if args.build:
+        os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+        os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
+        platform = pcie_screamer.Platform()
+        platform.add_extension(_usb3_io)
+        soc     = USB3SoC(platform)
+        builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
+        builder.build()
+
+    if args.load:
         load()
-    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
-    platform = pcie_screamer.Platform()
-    platform.add_extension(_usb3_io)
-    soc = USB3SoC(platform)
-    builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
-    vns = builder.build()
 
 if __name__ == "__main__":
     main()

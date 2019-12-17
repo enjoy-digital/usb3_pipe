@@ -89,11 +89,11 @@ $ gtkwave build/gateware/dut.vcd
 ### Build the FPGA bitstream
 Once installed, build the bitstream with:
 ```sh
-$ ./target.py (can be kc705, netv2, pcie_screamer or versa_ecp5)
+$ ./target.py --build (can be kc705, netv2, pcie_screamer or versa_ecp5)
 ```
 
 ### Load the FPGA bitstream
 To load the bitstream to you board, run:
 ```sh
-$ ./target.py load
+$ ./target.py --load
 ```
