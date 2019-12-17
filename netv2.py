@@ -157,6 +157,7 @@ def main():
         parser.print_help()
 
     if args.build:
+        print("[build {}]...".format(args.device))
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
         os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
         platform = netv2.Platform(device=args.device)
@@ -166,6 +167,7 @@ def main():
         builder.build()
 
     if args.load:
+        print("[load]...")
         load()
 
 if __name__ == "__main__":

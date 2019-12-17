@@ -206,6 +206,7 @@ def main():
         parser.print_help()
 
     if args.build:
+        print("[build]...")
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
         os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
         platform = kc705.Platform()
@@ -215,6 +216,7 @@ def main():
         builder.build()
 
     if args.load:
+        print("[load]...")
         load()
 
 if __name__ == "__main__":
