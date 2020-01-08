@@ -18,14 +18,9 @@ from usb3_core.core import USB3Core
 
 # IOs ----------------------------------------------------------------------------------------------
 
-class SimPins(Pins):
-    def __init__(self, n=1):
-        Pins.__init__(self, "s "*n)
-
-
 _io = [
-    ("sys_clk", 0, SimPins(1)),
-    ("sys_rst", 0, SimPins(1))
+    ("sys_clk", 0, Pins(1)),
+    ("sys_rst", 0, Pins(1))
 ]
 
 # Platform -----------------------------------------------------------------------------------------
@@ -35,9 +30,6 @@ class Platform(SimPlatform):
 
     def __init__(self):
         SimPlatform.__init__(self, "SIM", _io)
-
-    def do_finalize(self, fragment):
-        pass
 
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
