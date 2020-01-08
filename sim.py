@@ -56,6 +56,10 @@ class USB3SerDesModel(Module):
 
         nwords = phy_dw//10
 
+        # Control
+        self.comb += self.ready.eq(self.enable) # Ready when enabled
+
+        # Datapath
         tx_datapath = TXDatapath(phy_dw=nwords*8)
         rx_datapath = RXDatapath(phy_dw=nwords*8)
         self.submodules += tx_datapath, rx_datapath
@@ -65,6 +69,7 @@ class USB3SerDesModel(Module):
             rx_datapath.source.connect(self.source)
         ]
 
+        # 8b10b Encoders/Decoders
         encoder  = Encoder(nwords, True)
         decoders = [Decoder(True) for _ in range(nwords)]
         self.submodules += encoder, decoders
@@ -78,6 +83,7 @@ class USB3SerDesModel(Module):
                 rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
 
+        # Pattern/Polarity/Shift emulation
         tx_data    = Signal(phy_dw)
         rx_data    = Signal(phy_dw)
         rx_data_sr = Signal(2*phy_dw)
@@ -103,9 +109,6 @@ class USB3SerDesModel(Module):
         self.sync += rx_data_sr.eq(Cat(rx_data, rx_data_sr))
         for i in range(nwords):
             self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
-
-        # Ready when enabled
-        self.comb += self.ready.eq(self.enable)
 
     def connect(self, serdes):
         self.comb += [
