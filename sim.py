@@ -130,8 +130,7 @@ class USB3PIPESim(SoCMini):
         host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         host_usb3_pipe   = USB3PIPE(
             serdes          = host_usb3_serdes,
-            sys_clk_freq    = sys_clk_freq,
-            with_scrambling = True)
+            sys_clk_freq    = sys_clk_freq)
         self.submodules += host_usb3_serdes, host_usb3_pipe
         host_usb3_pipe.finalize()
         host_usb3_core = USB3Core(platform)
@@ -148,8 +147,7 @@ class USB3PIPESim(SoCMini):
         dev_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         dev_usb3_pipe   = USB3PIPE(
             serdes          = dev_usb3_serdes,
-            sys_clk_freq    = sys_clk_freq,
-            with_scrambling = True)
+            sys_clk_freq    = sys_clk_freq)
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
         dev_usb3_pipe.finalize()
         dev_usb3_core = USB3Core(platform)

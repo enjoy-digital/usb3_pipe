@@ -8,21 +8,24 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.common import COM
+
 # Scrambler Unit (Appendix B) ----------------------------------------------------------------------
 
+@ResetInserter()
 @CEInserter()
 class ScramblerUnit(Module):
     """Scrambler Unit
 
     This module generates the scrambled datas for the USB3.0 link (X^16 + X^5 + X^4 + X^3 + 1 polynom).
     """
-    def __init__(self):
+    def __init__(self, reset=0xffff):
         self.value = Signal(32)
 
         # # #
 
         new = Signal(16)
-        cur = Signal(16, reset=0x7dbd)
+        cur = Signal(16, reset=reset)
 
         self.comb += [
             new[0].eq(cur[0]  ^ cur[6] ^ cur[8]  ^ cur[10]),
@@ -84,22 +87,21 @@ class Scrambler(Module):
 
     This module scrambles the TX data/ctrl stream. K codes shall not be scrambled.
     """
-    def __init__(self):
+    def __init__(self, reset=0x7dbd):
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
-        scrambler = ScramblerUnit()
-        self.submodules += scrambler
-        self.comb += scrambler.ce.eq(sink.valid & sink.ready)
+        self.submodules.unit = unit = ScramblerUnit(reset=reset)
+        self.comb += unit.ce.eq(sink.valid & sink.ready)
         self.comb += sink.connect(source)
         for i in range(4):
             self.comb += [
                 If(sink.ctrl[i], # K codes shall not be scrambled.
                     source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
                 ).Else(
-                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ scrambler.value[8*i:8*(i+1)])
+                    source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ unit.value[8*i:8*(i+1)])
                 )
             ]
 
@@ -109,8 +111,8 @@ class Descrambler(Module):
     """Descrambler
 
     This module descrambles the RX data/ctrl stream. K codes shall not be scrambled. The descrambler
-    automatically synchronize itself to the incoming stream during the Idle handshake sequence. Once
-    synchronized, it will keep the current synchronization until the next reset/Idle handshake sequence.
+    automatically synchronizes itself to the incoming stream and resets the scrambler unit when COM
+    characters are seen.
     """
     def __init__(self):
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -118,20 +120,22 @@ class Descrambler(Module):
 
         # # #
 
-        scrambler = Scrambler()
+        scrambler = Scrambler(reset=0xffff)
         self.submodules += scrambler
 
-        synced     = Signal()
-        synced_set = Signal()
-        self.sync += If(synced_set, synced.eq(1))
+        # Synchronize on COM
+        for i in range(4):
+            self.comb += [
+                If(sink.valid &
+                   sink.ready &
+                   (sink.data[8*i:8*(i+1)] == COM.value) &
+                   sink.ctrl[i],
+                   scrambler.unit.reset.eq(1)
+                )
+            ]
 
+        # Descramble data
         self.comb += [
-            sink.connect(scrambler.sink, keep={"data", "ctrl"}),
-            If((sink.data == 0x8dbf6dbe) | synced,
-                synced_set.eq(1),
-                sink.connect(scrambler.sink, omit={"data", "ctrl"})
-            ).Else(
-                sink.ready.eq(1)
-            ),
+            sink.connect(scrambler.sink),
             scrambler.source.connect(source)
         ]

@@ -27,7 +27,7 @@ class USB3PIPE(Module):
     - TX scrambling/RX descrambling.
     - Link Training State Machine.
     """
-    def __init__(self, serdes, sys_clk_freq, with_scrambling=True, with_endianness_swap=True):
+    def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True):
         assert sys_clk_freq >= 125e6
         self.ready  = Signal() # o
 
@@ -61,26 +61,19 @@ class USB3PIPE(Module):
         self.comb += self.ready.eq(ltssm.polling.idle)
 
         # Scrambling -------------------------------------------------------------------------------
-        if with_scrambling:
-            scrambler = Scrambler()
-            scrambler = ResetInserter()(scrambler)
-            self.comb += scrambler.reset.eq(~ltssm.polling.tx_ready)
-            self.submodules.scrambler = scrambler
-            self.comb += [
-                sink.connect(scrambler.sink),
-                If(ltssm.polling.tx_ready, scrambler.source.connect(serdes.sink))
-            ]
+        scrambler = Scrambler()
+        scrambler = ResetInserter()(scrambler)
+        self.comb += scrambler.reset.eq(~ltssm.polling.tx_ready)
+        self.submodules.scrambler = scrambler
+        self.comb += [
+            sink.connect(scrambler.sink),
+            If(ltssm.polling.tx_ready, scrambler.source.connect(serdes.sink))
+        ]
 
-            descrambler = Descrambler()
-            descrambler = ResetInserter()(descrambler)
-            descrambler = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(descrambler)
-            self.comb += descrambler.reset.eq(~ltssm.polling.rx_ready)
-            self.submodules.descrambler = descrambler
-            self.comb += [
-                serdes.source.connect(descrambler.sink, keep={"data", "ctrl"}),
-                If(ltssm.polling.rx_ready, serdes.source.connect(descrambler.sink, omit={"data", "ctrl"})),
-                descrambler.source.connect(source),
-            ]
-        else:
-            self.comb += If(ltssm.polling.tx_ready, sink.connect(serdes.sink))
-            self.comb += If(ltssm.polling.rx_ready, serdes.source.connect(source))
+        descrambler = Descrambler()
+        self.submodules.descrambler = descrambler
+        self.comb += [
+            serdes.source.connect(descrambler.sink, keep={"data", "ctrl"}),
+            If(ltssm.polling.rx_ready, serdes.source.connect(descrambler.sink, omit={"data", "ctrl"})),
+            descrambler.source.connect(source),
+        ]
