@@ -88,6 +88,7 @@ class Scrambler(Module):
     This module scrambles the TX data/ctrl stream. K codes shall not be scrambled.
     """
     def __init__(self, reset=0x7dbd):
+        self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -98,7 +99,7 @@ class Scrambler(Module):
         self.comb += sink.connect(source)
         for i in range(4):
             self.comb += [
-                If(sink.ctrl[i], # K codes shall not be scrambled.
+                If(~self.enable | sink.ctrl[i], # K codes shall not be scrambled.
                     source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
                 ).Else(
                     source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)] ^ unit.value[8*i:8*(i+1)])
@@ -114,14 +115,16 @@ class Descrambler(Module):
     automatically synchronizes itself to the incoming stream and resets the scrambler unit when COM
     characters are seen.
     """
-    def __init__(self):
+    def __init__(self, reset=0xffff):
+        self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
-        scrambler = Scrambler(reset=0xffff)
+        scrambler = Scrambler(reset=reset)
         self.submodules += scrambler
+        self.comb += scrambler.enable.eq(self.enable)
 
         # Synchronize on COM
         for i in range(4):
