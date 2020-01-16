@@ -221,7 +221,8 @@ def main():
         parser.print_help()
 
     if args.build:
-        print("[build ({})]...".format(args.device))
+        print("[build]...")
+        os.makedirs("build/gateware", exist_ok=True)
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
         os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
         platform = versa_ecp5.Platform(toolchain="trellis")

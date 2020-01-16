@@ -158,6 +158,7 @@ def main():
 
     if args.build:
         print("[build {}]...".format(args.device))
+        os.makedirs("build/gateware", exist_ok=True)
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
         os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
         platform = netv2.Platform(device=args.device)
