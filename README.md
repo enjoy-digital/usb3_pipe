@@ -15,7 +15,7 @@ The aim of this project is to experiment with [High Speed Transceivers (SERDES)]
 Current solutions for USB3 connectivity with an FPGA require the use of an external SerDes chip ([TI TUSB1310A - SuperSpeed 5 Gbps USB 3.0 Transceiver with PIPE and ULPI Interfaces](http://www.ti.com/product/TUSB1310A)) or external FIFO chip ([FTDI FT60X](https://www.ftdichip.com/Products/ICs/FT600.html) or Cypress [FX3](https://www.cypress.com/products/ez-usb-fx3-superspeed-usb-30-peripheral-controller)). With this project, we want to see if it's possible to just use the transceivers of the FPGA for the USB3 connectivity and have the USB3 PIPE directly implemented in the fabric (and then avoid any external chip!)
 
 ## Targets
-While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) when used with a customized [the Daisho USB3 core](https://github.com/enjoy-digital/daisho).
+While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) when used with a customized [Daisho USB3 core](https://github.com/enjoy-digital/daisho).
 
 It currently targets Xilinx Kintex7, Artix7 and Lattice ECP5 FPGAs.
 
@@ -28,7 +28,7 @@ One of the following boards:
 
 paired with the [PCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
 ![PCIsh-to-USB3.0](https://raw.githubusercontent.com/enjoy-digital/usb3_pipe/master/doc/breakout_board.jpg)
-(If you are interested by a breakout board, please ask)
+(If you are interested in a breakout board, please ask)
 
 ## Toolchain
 
