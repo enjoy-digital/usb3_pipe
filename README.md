@@ -79,6 +79,8 @@ You should see the USB3.0 initialization between a Host and Device:
 [01075423] DEV  entering Polling.Idle state
 ```
 
+At this point, all the steps of the USB3.0 PIPE initialization have succeeded and the USB3.0 Core can start transmitting packets.
+
 To have a .vcd waveform of the simulation, run it with --trace:
 ```sh
 $ ./sim.py --trace
@@ -92,8 +94,19 @@ Once installed, build the bitstream with:
 $ ./target.py --build (can be kc705, netv2, pcie_screamer or versa_ecp5)
 ```
 
+### Prepare the hardware:
+![Hardware Setup](https://raw.githubusercontent.com/enjoy-digital/usb3_pipe/master/doc/hardware_setup.jpg)
+- Plug the PCIsh-to-USB3.0 breakout board to the PCIe connector of the FPGA board.
+- Connect the USB3.0 type A cable between the breakout board and the computer.
+- Connect the JTAG programming cable to the FPGA board.
+- Power on the hardware
+
 ### Load the FPGA bitstream
 To load the bitstream to you board, run:
 ```sh
 $ ./target.py --load
 ```
+
+### Verify USB3.0 link establishment
+Once the FPGA is loaded, the link will be automatically established with the computer and an Openmoko, Inc USB3.0 device should be enumerated.
+**Note:** Enumeration has only been done on a few hardware setups and there is still work in progress to improve reliability.
