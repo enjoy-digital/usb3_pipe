@@ -115,12 +115,12 @@ class USB3Core(Module, AutoCSR):
         out_stall    = Signal()
         out_active   = Signal()
         out_active_d = Signal()
-        self.comb += out_fifo.sink.valid.eq(out_active_d)
         self.sync += [
+            out_fifo.sink.valid.eq(out_active),
             out_fifo.sink.data.eq(out_data),
             out_fifo.sink.ctrl.eq(out_datak),
             out_active_d.eq(out_active),
-            out_fifo.sink.first.eq(out_active & ~ out_active_d),
+            out_fifo.sink.first.eq(out_active & ~out_active_d),
         ]
         self.comb += out_fifo.sink.last.eq(~out_active & out_active_d)
 
