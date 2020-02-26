@@ -136,9 +136,30 @@ class USB3SoC(SoCMini):
 # Load ---------------------------------------------------------------------------------------------
 
 def load():
-    prog = VivadoProgrammer()
+    import os
+    f = open("netv2.cfg", "w")
+    f.write(
+"""
+interface bcm2835gpio
+transport select jtag
+bcm2835gpio_peripheral_base 0x3F000000
+bcm2835gpio_speed_coeffs 100000 5
+bcm2835gpio_jtag_nums 4 17 27 22
+bcm2835gpio_srst_num 24
+reset_config none
+
+source [find cpld/xilinx-xc7.cfg]
+adapter_khz 10000
+
+proc fpga_program {} {
+    global _CHIPNAME
+    xc7_program $_CHIPNAME.tap
+}
+""")
+    f.close()
+    from litex.build.openocd import OpenOCD
+    prog = OpenOCD("netv2.cfg")
     prog.load_bitstream("build/gateware/top.bit")
-    exit()
 
 # Build --------------------------------------------------------------------------------------------
 
