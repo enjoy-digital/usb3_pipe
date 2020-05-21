@@ -186,25 +186,6 @@ class USB3SoC(SoCMini):
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
 
-# Load ---------------------------------------------------------------------------------------------
-
-def load():
-    import os
-    f = open("ecp5-versa5g.cfg", "w")
-    f.write(
-"""
-interface ftdi
-ftdi_vid_pid 0x0403 0x6010
-ftdi_channel 0
-ftdi_layout_init 0xfff8 0xfffb
-reset_config none
-adapter_khz 25000
-jtag newtap ecp5 tap -irlen 8 -expected-id 0x81112043
-""")
-    f.close()
-    os.system("openocd -f ecp5-versa5g.cfg -c \"transport select jtag; init; svf build/gateware/top.svf; exit\"")
-    exit()
-
 # Build --------------------------------------------------------------------------------------------
 
 import argparse
@@ -233,7 +214,8 @@ def main():
 
     if args.load:
         print("[load]...")
-        load()
+        prog = soc.platform.create_programmer()
+        prog.load_bitstream(os.path.join(builder.gateware_dir, soc.build_name + ".svf"))
 
 if __name__ == "__main__":
     main()

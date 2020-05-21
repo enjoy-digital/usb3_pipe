@@ -133,34 +133,6 @@ class USB3SoC(SoCMini):
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
 
-# Load ---------------------------------------------------------------------------------------------
-
-def load():
-    import os
-    f = open("netv2.cfg", "w")
-    f.write(
-"""
-interface bcm2835gpio
-transport select jtag
-bcm2835gpio_peripheral_base 0x3F000000
-bcm2835gpio_speed_coeffs 100000 5
-bcm2835gpio_jtag_nums 4 17 27 22
-bcm2835gpio_srst_num 24
-reset_config none
-
-source [find cpld/xilinx-xc7.cfg]
-adapter_khz 10000
-
-proc fpga_program {} {
-    global _CHIPNAME
-    xc7_program $_CHIPNAME.tap
-}
-""")
-    f.close()
-    from litex.build.openocd import OpenOCD
-    prog = OpenOCD("netv2.cfg")
-    prog.load_bitstream("build/gateware/top.bit")
-
 # Build --------------------------------------------------------------------------------------------
 
 import argparse
@@ -179,18 +151,18 @@ def main():
 
     if args.build:
         print("[build {}]...".format(args.device))
-        os.makedirs("build/gateware", exist_ok=True)
+        os.makedirs("build/netv2/gateware", exist_ok=True)
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-        os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
+        os.system("cp usb3_core/daisho/usb3/*.init build/netv2/gateware/")
         platform = netv2.Platform(device=args.device)
         platform.add_extension(_usb3_io)
         soc     = USB3SoC(platform)
-        builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
+        builder = Builder(soc, csr_csv="tools/csr.csv")
         builder.build()
 
     if args.load:
-        print("[load]...")
-        load()
+        prog = soc.platform.create_programmer()
+        prog.load_bitstream(os.path.join(builder.gateware_dir, soc.build_name + ".bit"))
 
 if __name__ == "__main__":
     main()

@@ -183,13 +183,6 @@ class USB3SoC(SoCMini):
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
             self.add_csr("analyzer")
 
-# Load ---------------------------------------------------------------------------------------------
-
-def load():
-    prog = VivadoProgrammer()
-    prog.load_bitstream("build/gateware/top.bit")
-    exit()
-
 # Build --------------------------------------------------------------------------------------------
 
 import argparse
@@ -207,18 +200,19 @@ def main():
 
     if args.build:
         print("[build]...")
-        os.makedirs("build/gateware", exist_ok=True)
+        os.makedirs("build/kc705/gateware", exist_ok=True)
         os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-        os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
+        os.system("cp usb3_core/daisho/usb3/*.init build/kc705/gateware/")
         platform = kc705.Platform()
         platform.add_extension(_usb3_io)
         soc     = USB3SoC(platform)
-        builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
+        builder = Builder(soc, csr_csv="tools/csr.csv")
         builder.build()
 
     if args.load:
         print("[load]...")
-        load()
+        prog = soc.platform.create_programmer()
+        prog.load_bitstream(os.path.join(builder.gateware_dir, soc.build_name + ".bit"))
 
 if __name__ == "__main__":
     main()

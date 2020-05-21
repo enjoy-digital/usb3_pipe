@@ -200,10 +200,10 @@ def main():
     sim_config = SimConfig(default_clk="sys_clk")
 
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
+    os.system("cp usb3_core/daisho/usb3/*.init build/sim/gateware/")
 
     soc = USB3PIPESim()
-    builder = Builder(soc, output_dir="build")
+    builder = Builder(soc)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",
         trace       = args.trace,
