@@ -198,19 +198,16 @@ def main():
     if not args.build and not args.load:
         parser.print_help()
 
-    if args.build:
-        print("[build]...")
-        os.makedirs("build/kc705/gateware", exist_ok=True)
-        os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-        os.system("cp usb3_core/daisho/usb3/*.init build/kc705/gateware/")
-        platform = kc705.Platform()
-        platform.add_extension(_usb3_io)
-        soc     = USB3SoC(platform)
-        builder = Builder(soc, csr_csv="tools/csr.csv")
-        builder.build()
+    os.makedirs("build/kc705/gateware", exist_ok=True)
+    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+    os.system("cp usb3_core/daisho/usb3/*.init build/kc705/gateware/")
+    platform = kc705.Platform()
+    platform.add_extension(_usb3_io)
+    soc     = USB3SoC(platform)
+    builder = Builder(soc, csr_csv="tools/csr.csv")
+    builder.build(run=args.build)
 
     if args.load:
-        print("[load]...")
         prog = soc.platform.create_programmer()
         prog.load_bitstream(os.path.join(builder.gateware_dir, soc.build_name + ".bit"))
 

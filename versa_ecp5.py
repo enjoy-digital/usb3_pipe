@@ -201,19 +201,17 @@ def main():
     if not args.build and not args.load:
         parser.print_help()
 
-    if args.build:
-        print("[build]...")
-        os.makedirs("build/gateware", exist_ok=True)
-        os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-        os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
-        platform = versa_ecp5.Platform(toolchain="trellis")
-        platform.add_extension(_usb3_io)
-        soc     = USB3SoC(platform)
-        builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
-        builder.build()
+    print("[build]...")
+    os.makedirs("build/versa_ecp5/gateware", exist_ok=True)
+    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+    os.system("cp usb3_core/daisho/usb3/*.init build/versa_ecp5/gateware/")
+    platform = versa_ecp5.Platform(toolchain="trellis")
+    platform.add_extension(_usb3_io)
+    soc     = USB3SoC(platform)
+    builder = Builder(soc, csr_csv="tools/csr.csv")
+    builder.build(run=args.build)
 
     if args.load:
-        print("[load]...")
         prog = soc.platform.create_programmer()
         prog.load_bitstream(os.path.join(builder.gateware_dir, soc.build_name + ".svf"))
 

@@ -149,16 +149,14 @@ def main():
     if not args.build and not args.load:
         parser.print_help()
 
-    if args.build:
-        print("[build {}]...".format(args.device))
-        os.makedirs("build/netv2/gateware", exist_ok=True)
-        os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-        os.system("cp usb3_core/daisho/usb3/*.init build/netv2/gateware/")
-        platform = netv2.Platform(device=args.device)
-        platform.add_extension(_usb3_io)
-        soc     = USB3SoC(platform)
-        builder = Builder(soc, csr_csv="tools/csr.csv")
-        builder.build()
+    os.makedirs("build/netv2/gateware", exist_ok=True)
+    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+    os.system("cp usb3_core/daisho/usb3/*.init build/netv2/gateware/")
+    platform = netv2.Platform(device=args.device)
+    platform.add_extension(_usb3_io)
+    soc     = USB3SoC(platform)
+    builder = Builder(soc, csr_csv="tools/csr.csv")
+    builder.build(run=args.build)
 
     if args.load:
         prog = soc.platform.create_programmer()

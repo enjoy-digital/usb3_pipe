@@ -195,13 +195,13 @@ def main():
     if not args.build and not args.load:
         parser.print_help()
 
-    os.makedirs("build/gateware", exist_ok=True)
+    os.makedirs("build/ecpix5/gateware", exist_ok=True)
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/gateware/")
+    os.system("cp usb3_core/daisho/usb3/*.init build/ecpix5/gateware/")
     platform = ecpix5.Platform(toolchain="trellis")
     platform.add_extension(_usb3_io)
     soc     = USB3SoC(platform)
-    builder = Builder(soc, output_dir="build", csr_csv="tools/csr.csv")
+    builder = Builder(soc, csr_csv="tools/csr.csv")
     builder.build(run=args.build)
 
     if args.load:
