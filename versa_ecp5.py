@@ -78,6 +78,7 @@ class _CRG(Module):
 
         # pll
         self.submodules.pll = pll = ECP5PLL()
+        pll.vco_freq_range  = (400e6, 1000e6) # FIXME: overriden, should be (400e6, 800e6)
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
         pll.create_clkout(self.cd_clk200, 200e6)
