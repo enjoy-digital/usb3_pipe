@@ -3,7 +3,7 @@
                         / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
                        / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
                        \____/___/____/____/  /_/  /___/_/  /___/
-                             Copyright (c) 2019, EnjoyDigital
+                             Copyright (c) 2019-2020, EnjoyDigital
                                 Powered by Migen & LiteX
 ```
 [![](https://travis-ci.com/enjoy-digital/usb3_pipe.svg?branch=master)](https://travis-ci.com/enjoy-digital/usb3_pipe)
@@ -23,7 +23,6 @@ It currently targets Xilinx Kintex7, Artix7 and Lattice ECP5 FPGAs.
 One of the following boards:
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
  - [NeTV2](https://www.crowdsupply.com/alphamax/netv2)
- - [PCIe Screamer](http://shop.lambdaconcept.com/home/32-pciescreamerR02.html)
  - [Versa ECP5](http://www.latticesemi.com/en/Products/DevelopmentBoardsAndKits/ECP55GVersaDevKit)
 
 paired with the [PCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
@@ -91,7 +90,7 @@ $ gtkwave build/gateware/dut.vcd
 ### Build the FPGA bitstream
 Once installed, build the bitstream with:
 ```sh
-$ ./target.py --build (can be kc705, netv2, pcie_screamer or versa_ecp5)
+$ ./target.py --build (can be kc705, netv2, or versa_ecp5)
 ```
 
 ### Prepare the hardware:
