@@ -56,10 +56,10 @@ _usb3_io = [
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(Module):
-    def __init__(self, platform, sys_clk_freq):
+    def __init__(self, platform, sys_clk_freq, serdes_ref_freq):
         self.clock_domains.cd_sys    = ClockDomain()
         self.clock_domains.cd_por    = ClockDomain(reset_less=True)
-        self.clock_domains.cd_clk200 = ClockDomain()
+        self.clock_domains.cd_clk_serdes_ref = ClockDomain()
 
         # # #
 
@@ -81,7 +81,8 @@ class _CRG(Module):
         pll.vco_freq_range  = (400e6, 1000e6) # FIXME: overriden, should be (400e6, 800e6)
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_clk200, 200e6)
+        pll.create_clkout(self.cd_clk_serdes_ref, serdes_ref_freq)
+
         self.specials += AsyncResetSynchronizer(self.cd_sys, ~por_done | ~pll.locked)
 
 # USB3SoC ------------------------------------------------------------------------------------------
@@ -89,12 +90,13 @@ class _CRG(Module):
 class USB3SoC(SoCMini):
     def __init__(self, platform, connector="pcie", with_etherbone=False, with_analyzer=False):
         sys_clk_freq = int(125e6)
+        serdes_ref_freq = int(250e6)
 
         # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
         # CRG --------------------------------------------------------------------------------------
-        self.submodules.crg = _CRG(platform, sys_clk_freq)
+        self.submodules.crg = _CRG(platform, sys_clk_freq, serdes_ref_freq)
 
         # Serial Bridge ----------------------------------------------------------------------------
         self.submodules.bridge = UARTWishboneBridge(platform.request("serial"), sys_clk_freq)
@@ -129,8 +131,8 @@ class USB3SoC(SoCMini):
         usb3_serdes = ECP5USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = ClockSignal("clk200"),
-            refclk_freq  = 200e6,
+            refclk_pads  = ClockSignal("clk_serdes_ref"),
+            refclk_freq  = serdes_ref_freq,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"),
             channel      = 1 if connector == "sma" else 0)
