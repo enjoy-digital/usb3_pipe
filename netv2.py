@@ -93,7 +93,6 @@ class USB3SoC(SoCMini):
             usb3_core.source.connect(usb3_pipe.sink),
             usb3_core.reset.eq(~usb3_pipe.ready),
         ]
-        self.add_csr("usb3_core")
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
@@ -132,7 +131,6 @@ class USB3SoC(SoCMini):
                 usb3_pipe.sink,
             ]
             self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
-            self.add_csr("analyzer")
 
 # Build --------------------------------------------------------------------------------------------
 
