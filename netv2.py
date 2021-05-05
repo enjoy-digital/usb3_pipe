@@ -10,7 +10,7 @@ import sys
 
 from migen import *
 
-from litex.boards.platforms import netv2
+from litex_boards.platforms import netv2
 
 from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
@@ -144,9 +144,9 @@ def main():
     with open("README.md") as f:
         description = [str(f.readline()) for i in range(7)]
     parser = argparse.ArgumentParser(description="".join(description[1:]), formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--build", action="store_true", help="build bitstream")
-    parser.add_argument("--load",  action="store_true", help="load bitstream (to SRAM)")
-    parser.add_argument("--device", default="xc7a35t", help="FPGA device (xc7a35t (default) or xc7a100t)")
+    parser.add_argument("--build",   action="store_true", help="Build bitstream.")
+    parser.add_argument("--load",    action="store_true", help="Load bitstream.")
+    parser.add_argument("--variant", default="a7-35",     help="Board variant: a7-35 (default) or a7-100.")
     args = parser.parse_args()
 
     if not args.build and not args.load:
@@ -155,7 +155,7 @@ def main():
     os.makedirs("build/netv2/gateware", exist_ok=True)
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     os.system("cp usb3_core/daisho/usb3/*.init build/netv2/gateware/")
-    platform = netv2.Platform(device=args.device)
+    platform = netv2.Platform(variant=args.variant)
     platform.add_extension(_usb3_io)
     soc     = USB3SoC(platform)
     builder = Builder(soc, csr_csv="tools/csr.csv")

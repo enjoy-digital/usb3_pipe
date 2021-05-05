@@ -10,7 +10,7 @@ import sys
 
 from migen import *
 
-from litex.boards.platforms import kc705
+from litex_boards.platforms import kc705
 
 from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
@@ -194,8 +194,8 @@ def main():
     with open("README.md") as f:
         description = [str(f.readline()) for i in range(7)]
     parser = argparse.ArgumentParser(description="".join(description[1:]), formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--build", action="store_true", help="build bitstream")
-    parser.add_argument("--load",  action="store_true", help="load bitstream (to SRAM)")
+    parser.add_argument("--build", action="store_true", help="Build bitstream.")
+    parser.add_argument("--load",  action="store_true", help="Load bitstream.")
     args = parser.parse_args()
 
     if not args.build and not args.load:

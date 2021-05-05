@@ -13,7 +13,7 @@ from migen.genlib.resetsync import AsyncResetSynchronizer
 
 from litex.build.generic_platform import *
 
-from litex.boards.platforms import versa_ecp5
+from litex_boards.platforms import versa_ecp5
 
 from litex.soc.cores.clock import *
 from litex.soc.integration.soc_core import *
@@ -59,30 +59,27 @@ class _CRG(Module):
     def __init__(self, platform, sys_clk_freq):
         self.clock_domains.cd_sys    = ClockDomain()
         self.clock_domains.cd_por    = ClockDomain(reset_less=True)
-        self.clock_domains.cd_clk200 = ClockDomain()
+        self.clock_domains.cd_clk250 = ClockDomain()
 
         # # #
 
-        self.cd_sys.clk.attr.add("keep")
-
-        # clk / rst
+        # Clk / Rst.
         clk100 = platform.request("clk100")
         platform.add_period_constraint(clk100, 1e9/100e6)
 
-        # power on reset
+        # Power On Reset.
         por_count = Signal(16, reset=2**16-1)
         por_done = Signal()
         self.comb += self.cd_por.clk.eq(ClockSignal())
         self.comb += por_done.eq(por_count == 0)
         self.sync.por += If(~por_done, por_count.eq(por_count - 1))
 
-        # pll
+        # PLL
         self.submodules.pll = pll = ECP5PLL()
         pll.vco_freq_range  = (400e6, 1000e6) # FIXME: overriden, should be (400e6, 800e6)
         pll.register_clkin(clk100, 100e6)
         pll.create_clkout(self.cd_sys, sys_clk_freq)
-        pll.create_clkout(self.cd_clk200, 200e6)
-        self.specials += AsyncResetSynchronizer(self.cd_sys, ~por_done | ~pll.locked)
+        pll.create_clkout(self.cd_clk250, 250e6)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
@@ -129,8 +126,8 @@ class USB3SoC(SoCMini):
         usb3_serdes = ECP5USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = ClockSignal("clk200"),
-            refclk_freq  = 200e6,
+            refclk_pads  = ClockSignal("clk250"),
+            refclk_freq  = 250e6,
             tx_pads      = platform.request(connector + "_tx"),
             rx_pads      = platform.request(connector + "_rx"),
             channel      = 1 if connector == "sma" else 0)
@@ -198,8 +195,8 @@ def main():
     with open("README.md") as f:
         description = [str(f.readline()) for i in range(7)]
     parser = argparse.ArgumentParser(description="".join(description[1:]), formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--build", action="store_true", help="build bitstream")
-    parser.add_argument("--load",  action="store_true", help="load bitstream (to SRAM)")
+    parser.add_argument("--build", action="store_true", help="Build bitstream")
+    parser.add_argument("--load",  action="store_true", help="Load bitstream.")
     args = parser.parse_args()
 
     if not args.build and not args.load:
