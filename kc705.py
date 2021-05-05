@@ -20,8 +20,6 @@ from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
 from liteeth.phy import LiteEthPHY
-from liteeth.core import LiteEthUDPIPCore
-from liteeth.frontend.etherbone import LiteEthEtherbone
 
 from litescope import LiteScopeAnalyzer
 
@@ -93,31 +91,13 @@ class USB3SoC(SoCMini):
         # UARTBone ---------------------------------------------------------------------------------
         self.add_uartbone()
 
-        # Ethernet <--> Wishbone -------------------------------------------------------------------
+        # Etherbone --------------------------------------------------------------------------------
         if with_etherbone:
-            # phy
             self.submodules.eth_phy = LiteEthPHY(
                 clock_pads = platform.request("eth_clocks"),
                 pads       = platform.request("eth"),
                 clk_freq   = sys_clk_freq)
-            self.add_csr("eth_phy")
-            # core
-            self.submodules.eth_core = LiteEthUDPIPCore(
-                phy         = self.eth_phy,
-                mac_address = 0x10e2d5000000,
-                ip_address  = "192.168.1.50",
-                clk_freq    = sys_clk_freq)
-            # etherbone
-            self.submodules.etherbone = LiteEthEtherbone(self.eth_core.udp, 1234)
-            self.add_wb_master(self.etherbone.wishbone.bus)
-
-            # timing constraints
-            self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_rx.clk, 1e9/125e6)
-            self.platform.add_period_constraint(self.eth_phy.crg.cd_eth_tx.clk, 1e9/125e6)
-            self.platform.add_false_path_constraints(
-                self.crg.cd_sys.clk,
-                self.eth_phy.crg.cd_eth_rx.clk,
-                self.eth_phy.crg.cd_eth_tx.clk)
+            self.add_etherbone(phy=self.eth_phy, ip_address="192.168.1.50")
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = K7USB3SerDes(platform,
