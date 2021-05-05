@@ -18,7 +18,6 @@ from litex_boards.platforms import versa_ecp5
 from litex.soc.cores.clock import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
-from litex.soc.cores.uart import UARTWishboneBridge
 
 from liteeth.phy.ecp5rgmii import LiteEthPHYRGMII
 from liteeth.core import LiteEthUDPIPCore
@@ -93,9 +92,8 @@ class USB3SoC(SoCMini):
         # CRG --------------------------------------------------------------------------------------
         self.submodules.crg = _CRG(platform, sys_clk_freq)
 
-        # Serial Bridge ----------------------------------------------------------------------------
-        self.submodules.bridge = UARTWishboneBridge(platform.request("serial"), sys_clk_freq)
-        self.add_wb_master(self.bridge.wishbone)
+        # UARTBone ---------------------------------------------------------------------------------
+        self.add_uartbone()
 
         # Ethernet <--> Wishbone -------------------------------------------------------------------
         if with_etherbone:
