@@ -130,7 +130,7 @@ class USB3SoC(SoCMini):
                 usb3_pipe.source,
                 usb3_pipe.sink,
             ]
-            self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="tools/analyzer.csv")
+            self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="analyzer.csv")
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -153,7 +153,7 @@ def main():
     platform = sqrl_acorn.Platform()
     platform.add_extension(_usb3_io)
     soc     = USB3SoC(platform)
-    builder = Builder(soc, csr_csv="tools/csr.csv")
+    builder = Builder(soc, csr_csv="csr.csv")
     builder.build(run=args.build)
 
     if args.load:
