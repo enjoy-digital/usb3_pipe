@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 from migen import *
+from migen.genlib.cdc import MultiReg
+from migen.genlib.misc import WaitTimer
 
 from litex.soc.interconnect import stream
 from litex.soc.cores.code_8b10b import Encoder, Decoder
@@ -397,20 +399,45 @@ class K7USB3SerDes(Module):
         ]
 
         # Override GTX RX termination for USB3 (800 mV Term Voltage) -------------------------------
+        rxcdr_cfgs = {
+            1 : 0x0380008bff10400010,
+            2 : 0x0380008bff10200010,
+            4 : 0x0380008bff10100010,
+            8 : 0x0380008bff10080010,
+           16 : 0x0380008bff10080010,
+        }
         gtx.gtx_params.update(
             p_RX_CM_SEL  = 0b11,
             p_RX_CM_TRIM = 0b1010,
+            p_RXCDR_CFG  = rxcdr_cfgs[pll.config['d']],
+            p_PMA_RSV    = 0x18480,
             p_PMA_RSV2   = 0x2050,
         )
 
-        # Override GTX parameters/signals to allow LFPS --------------------------------------------
+        # Override GTX TX termination for USB3 (800 mV Term Voltage) -------------------------------
         gtx.gtx_params.update(
-            p_PCS_RSVD_ATTR  = 0x000000000100,
-            p_RXOOB_CFG      = 0b0000110,
-            i_CLKRSVD        = ClockSignal("oob"),
-            i_RXELECIDLEMODE = 0b00,
-            o_RXELECIDLE     = self.rx_idle,
-            i_TXELECIDLE     = self.tx_idle)
+            i_TXDIFFCTRL = 0b1100,
+        )
+
+        # Override GTX parameters/signals for USB3 LFPS --------------------------------------------
+        rx_idle   = Signal()
+        rx_idle_r = Signal()
+        gtx.gtx_params.update(
+            p_PCS_RSVD_ATTR    = 0x000000000100,
+            p_RXOOB_CFG        = 0b0000110,
+            i_CLKRSVD          = ClockSignal("oob"),
+            i_RXELECIDLEMODE   = 0b00,
+            o_RXELECIDLE       = rx_idle,
+            i_TXPDELECIDLEMODE = 0b1,
+            i_TXELECIDLE       = self.tx_idle
+        )
+
+        self.specials += MultiReg(rx_idle, rx_idle_r)
+        rx_idle_timer = WaitTimer(10)
+        self.submodules += rx_idle_timer
+        self.comb += rx_idle_timer.wait.eq(rx_idle_r)
+        self.comb += self.rx_idle.eq(rx_idle_timer.done)
+
         self.comb += [
             gtx.tx_produce_pattern.eq(self.tx_pattern != 0),
             gtx.tx_pattern.eq(self.tx_pattern)
