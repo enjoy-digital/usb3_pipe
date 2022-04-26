@@ -215,29 +215,33 @@ class TSUnit(Module):
     control/status signals.
     """
     def __init__(self, serdes):
-        self.rx_enable  = Signal() # i
-        self.rx_ts1     = Signal() # o
-        self.rx_ts1_inv = Signal() # o
-        self.rx_ts2     = Signal() # o
+        self.rx_enable    = Signal() # i
+        self.rx_ts1       = Signal() # o
+        self.rx_ts1_short = Signal() # o
+        self.rx_ts1_inv   = Signal() # o
+        self.rx_ts2       = Signal() # o
 
-        self.tx_enable  = Signal() # i
-        self.tx_tseq    = Signal() # i
-        self.tx_ts1     = Signal() # i
-        self.tx_ts2     = Signal() # i
-        self.tx_done    = Signal() # o
+        self.tx_enable    = Signal() # i
+        self.tx_tseq      = Signal() # i
+        self.tx_ts1       = Signal() # i
+        self.tx_ts2       = Signal() # i
+        self.tx_done      = Signal() # o
 
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
-        self.submodules.ts1_checker     =  ts1_checker     = TSChecker(ordered_set=TS1,     n_ordered_sets=8)
-        self.submodules.ts1_inv_checker =  ts1_inv_checker = TSChecker(ordered_set=TS1_INV, n_ordered_sets=8)
-        self.submodules.ts2_checker     =  ts2_checker     = TSChecker(ordered_set=TS2,     n_ordered_sets=8)
+        self.submodules.ts1_checker       =  ts1_checker       = TSChecker(ordered_set=TS1,     n_ordered_sets=8)
+        self.submodules.ts1_checker_short =  ts1_checker_short = TSChecker(ordered_set=TS1,     n_ordered_sets=1)
+        self.submodules.ts1_inv_checker   =  ts1_inv_checker   = TSChecker(ordered_set=TS1_INV, n_ordered_sets=8)
+        self.submodules.ts2_checker       =  ts2_checker       = TSChecker(ordered_set=TS2,     n_ordered_sets=8)
         self.comb += [
-            serdes.source.connect(ts1_checker.sink,     omit={"ready"}),
-            serdes.source.connect(ts1_inv_checker.sink, omit={"ready"}),
-            serdes.source.connect(ts2_checker.sink,     omit={"ready"}),
+            serdes.source.connect(ts1_checker.sink,       omit={"ready"}),
+            serdes.source.connect(ts1_checker_short.sink, omit={"ready"}),
+            serdes.source.connect(ts1_inv_checker.sink,   omit={"ready"}),
+            serdes.source.connect(ts2_checker.sink,       omit={"ready"}),
             If(self.rx_enable, serdes.source.ready.eq(1)),
             self.rx_ts1.eq(ts1_checker.detected),
+            self.rx_ts1_short.eq(ts1_checker_short.detected),
             self.rx_ts1_inv.eq(ts1_inv_checker.detected),
             self.rx_ts2.eq(ts2_checker.detected),
         ]
