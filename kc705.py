@@ -29,17 +29,7 @@ from usb3_core.core import USB3Core
 # USB3 IOs -----------------------------------------------------------------------------------------
 
 _usb3_io = [
-    # HiTechGlobal USB3.0 FMC P3 connector
-    ("usb3_rx", 0,
-        Subsignal("p", Pins("HPC:DP0_M2C_P")),
-        Subsignal("n", Pins("HPC:DP0_M2C_N")),
-    ),
-    ("usb3_tx", 0,
-        Subsignal("p", Pins("HPC:DP0_C2M_P")),
-        Subsignal("n", Pins("HPC:DP0_C2M_N")),
-    ),
-
-    # PCIe
+    # PCIe / Through PCIsh-to-USB3 breakout board.
     ("pcie_rx", 0,
         Subsignal("p", Pins("M6")),
         Subsignal("n", Pins("M5")),
@@ -57,6 +47,16 @@ _usb3_io = [
     ("sma_rx", 0,
         Subsignal("p", Pins("K6")),
         Subsignal("n", Pins("K5"))
+    ),
+
+    # SFP / Through XillyUSB's SFP2USB.
+    ("sfp_tx", 0,
+        Subsignal("p", Pins("H2")),
+        Subsignal("n", Pins("H1")),
+    ),
+    ("sfp_rx", 0,
+        Subsignal("p", Pins("G4")),
+        Subsignal("n", Pins("G3")),
     ),
 ]
 
@@ -79,7 +79,7 @@ class _CRG(Module):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, connector="pcie", with_etherbone=True, with_analyzer=True):
+    def __init__(self, platform, connector="sfp", with_etherbone=True, with_analyzer=True):
         sys_clk_freq = int(125e6)
 
         # SoCMini ----------------------------------------------------------------------------------
