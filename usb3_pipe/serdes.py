@@ -525,14 +525,24 @@ class A7USB3SerDes(Module):
         )
 
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
+        rx_idle   = Signal()
+        rx_idle_r = Signal()
         gtp.gtp_params.update(
             p_PCS_RSVD_ATTR  = 0x000000000100,
             p_RXOOB_CLK_CFG  = "FABRIC",
             i_SIGVALIDCLK    = ClockSignal("oob"),
             p_RXOOB_CFG      = 0b0000110,
             i_RXELECIDLEMODE = 0b00,
-            o_RXELECIDLE     = self.rx_idle,
-            i_TXELECIDLE     = self.tx_idle)
+            o_RXELECIDLE     = rx_idle,
+            i_TXELECIDLE     = self.tx_idle
+        )
+
+        self.specials += MultiReg(rx_idle, rx_idle_r)
+        rx_idle_timer = WaitTimer(10)
+        self.submodules += rx_idle_timer
+        self.comb += rx_idle_timer.wait.eq(rx_idle_r)
+        self.comb += self.rx_idle.eq(rx_idle_timer.done)
+
         self.comb += [
             gtp.tx_produce_pattern.eq(self.tx_pattern != 0),
             gtp.tx_pattern.eq(self.tx_pattern)
