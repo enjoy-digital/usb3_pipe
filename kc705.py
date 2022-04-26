@@ -124,6 +124,17 @@ class USB3SoC(SoCMini):
             usb3_core.reset.eq(~usb3_pipe.ready),
         ]
 
+        # Debug IOs (Through CYUSB3ACC-005) --------------------------------------------------------
+        _debug_ios = [
+            ("tx_idle", 0, Pins("AK20"), IOStandard("LVCMOS12")), # I2C_SDA
+            ("rx_idle", 0, Pins("AK21"), IOStandard("LVCMOS12")), # I2C_SCL
+        ]
+        self.platform.add_extension(_debug_ios)
+        self.comb += [
+            platform.request("tx_idle").eq(usb3_serdes.tx_idle),
+            platform.request("rx_idle").eq(usb3_serdes.rx_idle),
+        ]
+
         # Leds -------------------------------------------------------------------------------------
         self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
         self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
