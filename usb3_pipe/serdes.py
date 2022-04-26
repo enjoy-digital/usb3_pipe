@@ -517,24 +517,38 @@ class A7USB3SerDes(Module):
         ]
 
         # Override GTP RX termination for USB3 (800 mV Term Voltage) -------------------------------
+        rxcdr_cfgs = {
+            1 : 0x0000087FE406004441010,
+            2 : 0x0000087FE206004441010,
+            4 : 0x0000087FE106004441010,
+            8 : 0x0000087FE086004441010,
+           16 : 0x0000087FE086004441010,
+        }
         gtp.gtp_params.update(
             p_RX_CM_SEL      = 0b11,
             p_RX_CM_TRIM     = 0b1010,
+            p_RXCDR_CFG      = rxcdr_cfgs[pll.config['d']],
             p_RXLPM_INCM_CFG = 0b1,
             p_RXLPM_IPCM_CFG = 0b0
+        )
+
+        # Override GTP TX termination for USB3 (800 mV Term Voltage) -------------------------------
+        gtp.gtp_params.update(
+            i_TXDIFFCTRL = 0b1100,
         )
 
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
         rx_idle   = Signal()
         rx_idle_r = Signal()
         gtp.gtp_params.update(
-            p_PCS_RSVD_ATTR  = 0x000000000100,
-            p_RXOOB_CLK_CFG  = "FABRIC",
-            i_SIGVALIDCLK    = ClockSignal("oob"),
-            p_RXOOB_CFG      = 0b0000110,
-            i_RXELECIDLEMODE = 0b00,
-            o_RXELECIDLE     = rx_idle,
-            i_TXELECIDLE     = self.tx_idle
+            p_PCS_RSVD_ATTR    = 0x000000000100,
+            p_RXOOB_CLK_CFG    = "FABRIC",
+            i_SIGVALIDCLK      = ClockSignal("oob"),
+            p_RXOOB_CFG        = 0b0000110,
+            i_RXELECIDLEMODE   = 0b00,
+            o_RXELECIDLE       = rx_idle,
+            i_TXPDELECIDLEMODE = 0b1,
+            i_TXELECIDLE       = self.tx_idle
         )
 
         self.specials += MultiReg(rx_idle, rx_idle_r)
