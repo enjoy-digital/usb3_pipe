@@ -3,62 +3,67 @@
                         / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
                        / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
                        \____/___/____/____/  /_/  /___/_/  /___/
-                             Copyright (c) 2019-2020, EnjoyDigital
-                                Powered by Migen & LiteX
+                             Copyright (c) 2019-2022, EnjoyDigital
+                                      Powered by LiteX
 ```
 [![](https://travis-ci.com/enjoy-digital/usb3_pipe.svg?branch=master)](https://travis-ci.com/enjoy-digital/usb3_pipe)
 ![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)
-# USB3 PIPE Experiments
+
+[> Intro
+--------
+
+![](doc/acorn_baseboard_sfp2usb_1.jpg)
 
 The aim of this project is to experiment with [High Speed Transceivers (SERDES)](https://en.wikipedia.org/wiki/Multi-gigabit_transceiver) of popular FPGAs to create a [USB3.0 PIPE interface](https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/phy-interface-pci-express-sata-usb30-architectures-3.1.pdf).
 
 Current solutions for USB3 connectivity with an FPGA require the use of an external SerDes chip ([TI TUSB1310A - SuperSpeed 5 Gbps USB 3.0 Transceiver with PIPE and ULPI Interfaces](http://www.ti.com/product/TUSB1310A)) or external FIFO chip ([FTDI FT60X](https://www.ftdichip.com/Products/ICs/FT600.html) or Cypress [FX3](https://www.cypress.com/products/ez-usb-fx3-superspeed-usb-30-peripheral-controller)). With this project, we want to see if it's possible to just use the transceivers of the FPGA for the USB3 connectivity and have the USB3 PIPE directly implemented in the fabric (and then avoid any external chip!)
 
-## Targets
+[> Targets
+----------
 While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) when used with a customized [Daisho USB3 core](https://github.com/enjoy-digital/daisho).
 
-It currently targets Xilinx Kintex7, Artix7 and Lattice ECP5 FPGAs.
+It currently targets Xilinx Kintex7 and Artix7.
 
-## Test Hardware
+[> Test Hardware
+----------------
 One of the following boards:
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
- - [NeTV2](https://www.crowdsupply.com/alphamax/netv2)
- - [Versa ECP5](http://www.latticesemi.com/en/Products/DevelopmentBoardsAndKits/ECP55GVersaDevKit)
+ - [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard)
 
-paired with the [PCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
-![PCIsh-to-USB3.0](https://raw.githubusercontent.com/enjoy-digital/usb3_pipe/master/doc/breakout_board.jpg)
-(If you are interested in a breakout board, please ask)
+paired with the [SFP2USB](http://xillybus.com/sfp2usb-module) from [XillyUSB](http://xillybus.com/xillyusb) project:
 
-## Toolchain
+![LiteX Acorn Baseboard + SFP2USB](doc/acorn_baseboard_sfp2usb_2.jpg)
 
-This project targets;
-  - Xilinx Vivado for Kintex7 / Artix7 support
-  - Yosys + nextpnr for ECP5 support
+ or with the [SFP2USBPCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
 
-There will also be a demo showing how to use a harness to expose the PIPE interface to the SymbiFlow Yosys + VPR flow.
+![PCIsh-to-USB3.0](doc/breakout_board.jpg)
+
+[> Toolchain
+------------
+This project targets Xilinx Vivado for Kintex7 / Artix7 support. In the future, it should also be possible to use [F4PGA](https://f4pga.org/) toolchains to build the design.
 
 
-## Prerequisites
+[> Prerequisites
+----------------
 ```sh
-$ sudo apt install build-essential  wget git python3-setuptools
+$ sudo apt install build-essential wget git python3-setuptools
 $ git clone ttps://github.com/enjoy-digital/usb3_pipe/
 $ cd usb3_pipe
 ```
 
-## Installing LiteX
-```sh
-$ wget https://raw.githubusercontent.com/enjoy-digital/litex/master/litex_setup.py
-$ chmod +x litex_setup.py
-$ sudo ./litex_setup.py init install
-```
+[> Installing LiteX
+-------------------
+Follow LiteX installation [guide](https://github.com/enjoy-digital/litex/wiki/Installation).
 
-## Installing Verilator
+[> Installing Verilator
+-----------------------
 ```sh
 $ sudo apt install verilator
 $ sudo apt install libevent-dev libjson-c-dev
 ```
 
-## Running the LiteX simulation
+[> Running the LiteX simulation
+-------------------------------
 ```sh
 $ ./sim.py
 ```
@@ -86,17 +91,18 @@ $ ./sim.py --trace
 $ gtkwave build/gateware/dut.vcd
 ```
 
-## Running on hardware
+[> Running on hardware
+----------------------
 ### Build the FPGA bitstream
 Once installed, build the bitstream with:
 ```sh
-$ ./target.py --build (can be kc705, netv2, or versa_ecp5)
+$ ./target.py --build (can be kc705 or acorn)
 ```
 
 ### Prepare the hardware:
-![Hardware Setup](https://raw.githubusercontent.com/enjoy-digital/usb3_pipe/master/doc/hardware_setup.jpg)
-- Plug the PCIsh-to-USB3.0 breakout board to the PCIe connector of the FPGA board.
-- Connect the USB3.0 type A cable between the breakout board and the computer.
+![Hardware Setup](doc/acorn_baseboard_sfp2usb_1.jpg)
+- Put the SFP2USB module into the SFP cage of the board.
+- Connect the USB3.0 cable between the SFP2USB module and the computer.
 - Connect the JTAG programming cable to the FPGA board.
 - Power on the hardware
 
@@ -108,4 +114,5 @@ $ ./target.py --load
 
 ### Verify USB3.0 link establishment
 Once the FPGA is loaded, the link will be automatically established with the computer and an Openmoko, Inc USB3.0 device should be enumerated.
+
 **Note:** Enumeration has only been done on a few hardware setups and there is still work in progress to improve reliability.
