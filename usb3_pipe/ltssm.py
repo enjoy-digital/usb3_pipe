@@ -174,6 +174,7 @@ class PollingFSM(Module):
     """ Polling Finite State Machine (section 7.5.4)"""
     def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq, with_timers=True):
         self.idle               = Signal()
+        self.recovery           = Signal()
         self.rx_ready           = Signal()
         self.tx_ready           = Signal()
         self.exit_to_compliance = Signal()
@@ -192,6 +193,10 @@ class PollingFSM(Module):
         # 12ms Timer -------------------------------------------------------------------------------
         _12_ms_timer = WaitTimer(int(12e-3*sys_clk_freq))
         self.submodules += _12_ms_timer
+
+        # 6ms Timer -------------------------------------------------------------------------------
+        _6_ms_timer = WaitTimer(int(6e-3*sys_clk_freq))
+        self.submodules += _6_ms_timer
 
         # FSM --------------------------------------------------------------------------------------
         self.submodules.fsm = fsm = FSM(reset_state="Polling.Entry")
@@ -251,13 +256,13 @@ class PollingFSM(Module):
             ),
             # Go to Configuration if at least 8 consecutive TS1 or TS1_INV seen (8 ensured by ts_unit)
             If(ts_unit.rx_ts1,
-                NextValue(serdes.rx_polarity, 0),
+                If(~self.recovery, NextValue(serdes.rx_polarity, 0)),
                 _12_ms_timer.wait.eq(0),
                 NextValue(rx_ts2_seen, 0),
                 NextState("Polling.Configuration")
             ),
             If(ts_unit.rx_ts1_inv,
-                NextValue(serdes.rx_polarity, 1),
+                If(~self.recovery, NextValue(serdes.rx_polarity, 1)),
                 _12_ms_timer.wait.eq(0),
                 NextValue(rx_ts2_seen, 0),
                 NextState("Polling.Configuration")
@@ -292,8 +297,10 @@ class PollingFSM(Module):
             self.idle.eq(1),
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
-            If(ts_unit.rx_ts1, # FIXME: for bringup, should be Recovery.Active
-                NextState("Polling.Active")
+            NextValue(self.recovery, 0),
+            If(ts_unit.rx_ts1_short, # FIXME: for bringup, should be Recovery.Active
+                NextValue(self.recovery, 1),
+                NextState("Recovery.Active")
             ).Elif(lfps_unit.rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
             )
@@ -316,6 +323,53 @@ class PollingFSM(Module):
             ),
             self.exit_to_rx_detect.eq(1)
         )
+
+
+        # Recovery ---------------------------------------------------------------------------------
+        fsm.act("Recovery.Active",
+            _12_ms_timer.wait.eq(with_timers),
+            ts_unit.rx_enable.eq(1),
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_ts1.eq(1),
+            # Go to RxDetect if no TS1/TS2 seen in the 12ms.
+            If(_12_ms_timer.done,
+                NextState("Polling.ExitToRxDetect")
+            ),
+            # Go to Configuration if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
+            If(ts_unit.rx_ts1,
+                _12_ms_timer.wait.eq(0),
+                NextValue(rx_ts2_seen, 0),
+                NextState("Recovery.Configuration")
+            ),
+            If(ts_unit.rx_ts2,
+                _12_ms_timer.wait.eq(0),
+                NextValue(rx_ts2_seen, 0),
+                NextState("Recovery.Configuration")
+            ),
+        )
+
+        fsm.act("Recovery.Configuration",
+            _6_ms_timer.wait.eq(with_timers),
+            ts_unit.rx_enable.eq(1),
+            ts_unit.tx_enable.eq(1),
+            ts_unit.tx_ts2.eq(1),
+            self.rx_ready.eq(rx_ts2_seen),
+            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
+            # Go to RxDetect if no TS2 seen in the 6ms.
+            If(_6_ms_timer.done,
+                _6_ms_timer.wait.eq(0),
+                NextState("Polling.ExitToRxDetect")
+            ),
+            # Go to Idle when:
+            # - 8 consecutive TS2 ordered sets are received. (8 ensured by ts_unit)
+            # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
+            If(ts_unit.tx_done,
+                If(rx_ts2_seen,
+                    NextState("Polling.Idle")
+                )
+            )
+        )
+
 
 # Link Training and Status State Machine -----------------------------------------------------------
 
