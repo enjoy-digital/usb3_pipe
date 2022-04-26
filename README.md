@@ -12,7 +12,7 @@
 [> Intro
 --------
 
-![](doc/acorn_baseboard_sfp2usb_1.jpg)
+![](doc/acorn_baseboard_sfp2usb_0.jpg)
 
 The aim of this project is to experiment with [High Speed Transceivers (SERDES)](https://en.wikipedia.org/wiki/Multi-gigabit_transceiver) of popular FPGAs to create a [USB3.0 PIPE interface](https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/phy-interface-pci-express-sata-usb30-architectures-3.1.pdf).
 
@@ -30,13 +30,15 @@ One of the following boards:
  - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
  - [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard)
 
-paired with the [SFP2USB](http://xillybus.com/sfp2usb-module) from [XillyUSB](http://xillybus.com/xillyusb) project:
+paired with the [SFP2USB](http://xillybus.com/sfp2usb-module) borrowed from [XillyUSB](http://xillybus.com/xillyusb) project:
 
 ![LiteX Acorn Baseboard + SFP2USB](doc/acorn_baseboard_sfp2usb_2.jpg)
 
  or with the [SFP2USBPCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
 
 ![PCIsh-to-USB3.0](doc/breakout_board.jpg)
+
+ **Note:** Any 7-Series board with a SFP or PCIe connector with also be suitable but will require creating a platform/target file if not already supported in [LiteX-Boards](https://github.com/litex-hub/litex-boards).
 
 [> Toolchain
 ------------
