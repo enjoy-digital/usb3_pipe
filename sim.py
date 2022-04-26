@@ -128,11 +128,16 @@ class USB3SerDesModel(Module):
 
 class USB3PIPESim(SoCMini):
     def __init__(self, phy_dw=20):
-        platform = Platform()
         sys_clk_freq = int(133e6)
+
+        # Platform.
+        platform = Platform()
+        self.comb += platform.trace.eq(1)
+
+        # SoC Mini.
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq)
 
-        # USB3 Host
+        # USB3 Host.
         host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         host_usb3_pipe   = USB3PIPE(
             serdes          = host_usb3_serdes,
@@ -147,9 +152,8 @@ class USB3PIPESim(SoCMini):
             host_usb3_core.source.connect(host_usb3_pipe.sink),
             host_usb3_core.reset.eq(~host_usb3_pipe.ready),
         ]
-        self.add_csr("host_usb3_core")
 
-        # USB3 Device
+        # USB3 Device.
         dev_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         dev_usb3_pipe   = USB3PIPE(
             serdes          = dev_usb3_serdes,
@@ -164,9 +168,8 @@ class USB3PIPESim(SoCMini):
             dev_usb3_core.source.connect(dev_usb3_pipe.sink),
             dev_usb3_core.reset.eq(~dev_usb3_pipe.ready),
         ]
-        self.add_csr("dev_usb3_core")
 
-        # Connect Host <--> Device
+        # Connect Host <--> Device.
         self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
 
         # Simulation Timer
@@ -186,7 +189,7 @@ class USB3PIPESim(SoCMini):
                     )
                 ]
 
-        # Simulation End
+        # Simulation End.
         end_timer = WaitTimer(2**16)
         self.submodules += end_timer
         self.comb += end_timer.wait.eq(host_usb3_pipe.ready & dev_usb3_pipe.ready)
