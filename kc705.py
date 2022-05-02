@@ -10,7 +10,7 @@ import sys
 
 from migen import *
 
-from litex_boards.platforms import kc705
+from litex_boards.platforms import xilinx_kc705
 
 from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
@@ -188,10 +188,10 @@ def main():
     if not args.build and not args.load:
         parser.print_help()
 
-    os.makedirs("build/kc705/gateware", exist_ok=True)
+    os.makedirs("build/xilinx_kc705/gateware", exist_ok=True)
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/kc705/gateware/")
-    platform = kc705.Platform()
+    os.system("cp usb3_core/daisho/usb3/*.init build/xilinx_kc705/gateware/")
+    platform = xilinx_kc705.Platform()
     platform.add_extension(_usb3_io)
     soc     = USB3SoC(platform)
     builder = Builder(soc, csr_csv="csr.csv")
