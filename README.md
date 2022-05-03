@@ -49,7 +49,7 @@ This project targets Xilinx Vivado for Kintex7 / Artix7 support. In the future, 
 ----------------
 ```sh
 $ sudo apt install build-essential wget git python3-setuptools
-$ git clone ttps://github.com/enjoy-digital/usb3_pipe/
+$ git clone https://github.com/enjoy-digital/usb3_pipe/
 $ cd usb3_pipe
 ```
 
