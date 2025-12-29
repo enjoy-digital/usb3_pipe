@@ -20,7 +20,6 @@ jobs:
           sudo apt-get install -y wget build-essential ninja-build
           sudo apt-get install -y libevent-dev libjson-c-dev flex bison
           sudo apt-get install -y libfl-dev libfl2 zlib1g-dev
-          sudo apt-get install -y verilator
 
       # Install Python.
       - name: Set up Python
@@ -42,6 +41,19 @@ jobs:
           cd third_party
           wget https://raw.githubusercontent.com/enjoy-digital/litex/master/litex_setup.py
           python3 litex_setup.py --config=standard --init --install --user
+
+      # Build / Install Verilator.
+      - name: Build Verilator
+        run: |
+          sudo apt-get install help2man
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          git clone https://github.com/verilator/verilator
+          cd verilator
+          git checkout 7d2d32420a630befa4097170ecbf227e04e32522
+          autoconf
+          ./configure
+          make -j$(nproc)
+          sudo make install
 
       # Install Project.
       - name: Install Project
