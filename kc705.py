@@ -136,8 +136,10 @@ class USB3SoC(SoCMini):
         ]
 
         # Leds -------------------------------------------------------------------------------------
-        self.comb += platform.request("user_led", 0).eq(usb3_serdes.ready)
-        self.comb += platform.request("user_led", 1).eq(usb3_pipe.ready)
+        self.comb += [
+            platform.request("user_led", 0).eq(usb3_serdes.ready),
+            platform.request("user_led", 1).eq(usb3_pipe.ready),
+        ]
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
