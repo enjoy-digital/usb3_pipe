@@ -215,6 +215,7 @@ def main():
     builder = Builder(soc)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",
+        interactive = False,
         trace       = args.trace,
         trace_start = int(args.trace_start),
         trace_end   = int(args.trace_end))
