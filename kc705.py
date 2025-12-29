@@ -10,6 +10,8 @@ import sys
 
 from migen import *
 
+from litex.gen import *
+
 from litex_boards.platforms import xilinx_kc705
 
 from litex.build.generic_platform import *
@@ -62,15 +64,15 @@ _usb3_io = [
 
 # CRG ----------------------------------------------------------------------------------------------
 
-class _CRG(Module):
+class _CRG(LiteXModule):
     def __init__(self, platform, sys_clk_freq):
-        self.clock_domains.cd_sys    = ClockDomain()
-        self.clock_domains.cd_oob    = ClockDomain()
-        self.clock_domains.cd_clk125 = ClockDomain()
+        self.cd_sys    = ClockDomain()
+        self.cd_oob    = ClockDomain()
+        self.cd_clk125 = ClockDomain()
 
         # # #
 
-        self.submodules.pll = pll = S7PLL(speedgrade=-2)
+        self.pll = pll = S7PLL(speedgrade=-2)
         pll.register_clkin(platform.request("clk200"), 200e6)
         pll.create_clkout(self.cd_sys,    sys_clk_freq)
         pll.create_clkout(self.cd_oob,    sys_clk_freq/8)
@@ -86,14 +88,14 @@ class USB3SoC(SoCMini):
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
         # CRG --------------------------------------------------------------------------------------
-        self.submodules.crg = _CRG(platform, sys_clk_freq)
+        self.crg = _CRG(platform, sys_clk_freq)
 
         # UARTBone ---------------------------------------------------------------------------------
         self.add_uartbone()
 
         # Etherbone --------------------------------------------------------------------------------
         if with_etherbone:
-            self.submodules.eth_phy = LiteEthPHY(
+            self.eth_phy = LiteEthPHY(
                 clock_pads = platform.request("eth_clocks"),
                 pads       = platform.request("eth"),
                 clk_freq   = sys_clk_freq)
@@ -111,13 +113,11 @@ class USB3SoC(SoCMini):
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-52]")
 
         # USB3 PIPE --------------------------------------------------------------------------------
-        usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
-        self.submodules.usb3_pipe = usb3_pipe
+        self.usb3_pipe = usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.comb += usb3_pipe.reset.eq(platform.request("cpu_reset"))
 
         # USB3 Core --------------------------------------------------------------------------------
-        usb3_core = USB3Core(platform)
-        self.submodules.usb3_core = usb3_core
+        self.usb3_core = usb3_core = USB3Core(platform)
         self.comb += [
             usb3_pipe.source.connect(usb3_core.sink),
             usb3_core.source.connect(usb3_pipe.sink),
@@ -142,7 +142,7 @@ class USB3SoC(SoCMini):
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
             analyzer_signals = [
-                # LFPS
+                # LFPS.
                 usb3_serdes.tx_idle,
                 usb3_serdes.rx_idle,
                 usb3_serdes.tx_pattern,
@@ -150,7 +150,7 @@ class USB3SoC(SoCMini):
                 usb3_pipe.lfps.rx_polling,
                 usb3_pipe.lfps.tx_polling,
 
-                # Training Sequence
+                # Training Sequence.
                 usb3_pipe.ts.tx_enable,
                 usb3_pipe.ts.rx_ts1,
                 usb3_pipe.ts.rx_ts2,
@@ -160,18 +160,18 @@ class USB3SoC(SoCMini):
                 usb3_pipe.ts.tx_ts2,
                 usb3_pipe.ts.tx_done,
 
-                # LTSSM
+                # LTSSM.
                 usb3_pipe.ltssm.polling.fsm,
                 usb3_pipe.ready,
 
-                # Endpoints
+                # Endpoints.
                 usb3_serdes.rx_datapath.skip_remover.skip,
                 usb3_serdes.source,
                 usb3_serdes.sink,
                 usb3_pipe.source,
                 usb3_pipe.sink,
             ]
-            self.submodules.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="analyzer.csv")
+            self.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="analyzer.csv")
 
 # Build --------------------------------------------------------------------------------------------
 
