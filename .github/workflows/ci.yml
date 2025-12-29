@@ -6,22 +6,24 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      # Checkout Repository
+      # Checkout Repository.
       - name: Checkout
         uses: actions/checkout@v3
 
       - name: Setup CCache
         uses: hendrikmuhs/ccache-action@v1.2
 
-      # Install Tools
+      # Install Tools.
       - name: Install Tools
         run: |
-          sudo apt-get install wget build-essential ninja-build
-          sudo apt-get install libevent-dev libjson-c-dev flex bison
-          sudo apt-get install libfl-dev libfl2 zlib1g-dev
-          sudo apt-get install verilator
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential ninja-build
+          sudo apt-get install -y libevent-dev libjson-c-dev flex bison
+          sudo apt-get install -y libfl-dev libfl2 zlib1g-dev
+          sudo apt-get install -y verilator
 
-      - name: Set up Python ${{ matrix.python-version }}
+      # Install Python.
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
@@ -30,19 +32,22 @@ jobs:
 
       - name: Install Python dependencies
         run: |
+          python3 -m pip install --upgrade pip
           python3 -m pip install setuptools requests pexpect meson pytest
 
-      # Install Migen / LiteX / Cores
+      # Install Migen / LiteX / Cores.
       - name: Install LiteX
         run: |
+          mkdir -p third_party
+          cd third_party
           wget https://raw.githubusercontent.com/enjoy-digital/litex/master/litex_setup.py
-          python3 litex_setup.py --init --install --user
+          python3 litex_setup.py --config=standard --init --install --user
 
-      # Install Project
+      # Install Project.
       - name: Install Project
         run: python3 setup.py develop --user
 
-      # Test
+      # Test.
       - name: Run Tests
         run: |
           python3 -m pytest -v test

@@ -3,7 +3,6 @@
 #
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
-#
 
 import re
 import sys
