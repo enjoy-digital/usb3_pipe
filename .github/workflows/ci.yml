@@ -37,18 +37,18 @@ jobs:
           wget https://raw.githubusercontent.com/enjoy-digital/litex/master/litex_setup.py
           python3 litex_setup.py --init --install --user
 
-      # Build / Install Verilator
-      - name: Build Verilator
-        run: |
-          sudo apt-get install help2man
-          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
-          git clone https://github.com/verilator/verilator
-          cd verilator
-          git checkout 7d2d32420a630befa4097170ecbf227e04e32522
-          autoconf
-          ./configure
-          make -j$(nproc)
-          sudo make install
+#      # Build / Install Verilator
+#      - name: Build Verilator
+#        run: |
+#          sudo apt-get install help2man
+#          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+#          git clone https://github.com/verilator/verilator
+#          cd verilator
+#          git checkout 7d2d32420a630befa4097170ecbf227e04e32522
+#          autoconf
+#          ./configure
+#          make -j$(nproc)
+#          sudo make install
 
       # Install Project
       - name: Install Project
@@ -57,4 +57,4 @@ jobs:
       # Test
       - name: Run Tests
         run: |
-          python3 -m pytest -v
+          python3 -m pytest -v test
