@@ -3,7 +3,7 @@
                         / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
                        / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
                        \____/___/____/____/  /_/  /___/_/  /___/
-                             Copyright (c) 2019-2022, EnjoyDigital
+                             Copyright (c) 2019-2025, EnjoyDigital
                                       Powered by LiteX
 ```
 [![](https://travis-ci.com/enjoy-digital/usb3_pipe.svg?branch=master)](https://travis-ci.com/enjoy-digital/usb3_pipe)
