@@ -181,8 +181,9 @@ def main():
     with open("README.md") as f:
         description = [str(f.readline()) for i in range(7)]
     parser = argparse.ArgumentParser(description="".join(description[1:]), formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--build", action="store_true", help="Build bitstream.")
-    parser.add_argument("--load",  action="store_true", help="Load bitstream.")
+    parser.add_argument("--build",         action="store_true", help="Build bitstream.")
+    parser.add_argument("--load",          action="store_true", help="Load bitstream.")
+    parser.add_argument("--with-analyzer", action="store_true", help="Enable LiteScope Analyzer.")
     args = parser.parse_args()
 
     if not args.build and not args.load:
@@ -193,7 +194,7 @@ def main():
     os.system("cp usb3_core/daisho/usb3/*.init build/xilinx_kc705/gateware/")
     platform = xilinx_kc705.Platform()
     platform.add_extension(_usb3_io)
-    soc     = USB3SoC(platform)
+    soc     = USB3SoC(platform, with_analyzer=args.with_analyzer)
     builder = Builder(soc, csr_csv="csr.csv")
     builder.build(run=args.build)
 
