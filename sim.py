@@ -11,6 +11,8 @@ import argparse
 from migen import *
 from migen.genlib.misc import WaitTimer
 
+from litex.gen import *
+
 from litex.build.generic_platform import *
 from litex.build.sim import SimPlatform
 from litex.build.sim.config import SimConfig
@@ -39,7 +41,7 @@ class Platform(SimPlatform):
 
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
-class USB3SerDesModel(Module):
+class USB3SerDesModel(LiteXModule):
     def __init__(self, phy_dw=20, rx_word_shift=0):
         assert phy_dw in [20, 40]
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -50,22 +52,22 @@ class USB3SerDesModel(Module):
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
 
-        self.tx_polarity = Signal()   # i
-        self.tx_idle     = Signal()   # i
+        self.tx_polarity = Signal()       # i
+        self.tx_idle     = Signal()       # i
         self.tx_pattern  = Signal(phy_dw) # i
 
-        self.rx_polarity = Signal()   # i
-        self.rx_idle     = Signal()   # o
-        self.rx_align    = Signal()   # i
+        self.rx_polarity = Signal() # i
+        self.rx_idle     = Signal() # o
+        self.rx_align    = Signal() # i
 
         # # #
 
         nwords = phy_dw//10
 
-        # Control
+        # Control.
         self.comb += self.ready.eq(self.enable) # Ready when enabled
 
-        # Datapath
+        # Datapath.
         tx_datapath = TXDatapath(phy_dw=nwords*8)
         rx_datapath = RXDatapath(phy_dw=nwords*8)
         self.submodules += tx_datapath, rx_datapath
@@ -75,7 +77,7 @@ class USB3SerDesModel(Module):
             rx_datapath.source.connect(self.source)
         ]
 
-        # 8b10b Encoders/Decoders
+        # 8b10b Encoders/Decoders.
         encoder  = Encoder(nwords, True)
         decoders = [Decoder(True) for _ in range(nwords)]
         self.submodules += encoder, decoders
@@ -89,7 +91,7 @@ class USB3SerDesModel(Module):
                 rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
 
-        # Pattern/Polarity/Shift emulation
+        # Pattern/Polarity/Shift emulation.
         tx_data    = Signal(phy_dw)
         rx_data    = Signal(phy_dw)
         rx_data_sr = Signal(2*phy_dw)
@@ -145,7 +147,7 @@ class USB3PIPESim(SoCMini):
         self.submodules += host_usb3_serdes, host_usb3_pipe
         host_usb3_pipe.finalize()
         host_usb3_core = USB3Core(platform)
-        self.submodules.host_usb3_core = host_usb3_core
+        self.host_usb3_core = host_usb3_core
         self.comb += [
             host_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
             host_usb3_pipe.source.connect(host_usb3_core.sink),
@@ -161,7 +163,7 @@ class USB3PIPESim(SoCMini):
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
         dev_usb3_pipe.finalize()
         dev_usb3_core = USB3Core(platform)
-        self.submodules.dev_usb3_core = dev_usb3_core
+        self.dev_usb3_core = dev_usb3_core
         self.comb += [
             dev_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
             dev_usb3_pipe.source.connect(dev_usb3_core.sink),
@@ -172,11 +174,11 @@ class USB3PIPESim(SoCMini):
         # Connect Host <--> Device.
         self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
 
-        # Simulation Timer
+        # Simulation Timer.
         timer = Signal(32)
         self.sync += timer.eq(timer + 1)
 
-        # Simulation Status
+        # Simulation Status.
         for pipe, fsm in [
             ["host",  host_usb3_pipe.ltssm.polling.fsm],
             ["dev ",  dev_usb3_pipe.ltssm.polling.fsm]]:
@@ -199,11 +201,9 @@ class USB3PIPESim(SoCMini):
 
 def main():
     parser = argparse.ArgumentParser(description="USB3 PIPE Simulation")
-    parser.add_argument("--trace", action="store_true", help="enable VCD tracing")
-    parser.add_argument("--trace-start", default=0,
-                        help="cycle to start VCD tracing")
-    parser.add_argument("--trace-end", default=-1,
-                        help="cycle to end VCD tracing")
+    parser.add_argument("--trace",       action="store_true", help="Enable VCD tracing.")
+    parser.add_argument("--trace-start", default=0,           help="Cycle to start VCD tracing.")
+    parser.add_argument("--trace-end",   default=-1,          help="Cycle to end VCD tracing.")
     args = parser.parse_args()
 
     sim_config = SimConfig(default_clk="sys_clk")
