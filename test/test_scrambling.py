@@ -8,6 +8,7 @@ import unittest
 
 from migen import *
 
+from usb3_pipe.common import COM, SKP
 from usb3_pipe.scrambling import Scrambler, Descrambler
 
 scrambler_ref = [
@@ -59,6 +60,81 @@ class TestScrambling(unittest.TestCase):
         dut = Scrambler(reset=0xffff)
         run_simulation(dut, generator(dut))
 
+    def test_scrambler_backpressure(self):
+        def generator(dut):
+            yield dut.sink.data.eq(0)
+            yield dut.sink.ctrl.eq(0b0000)
+            yield dut.sink.valid.eq(1)
+            yield
+            # Toggle ready to create stalls.
+            for i in range(256):
+                yield dut.source.ready.eq(i & 0x1)
+                yield
+            yield dut.sink.valid.eq(0)
+            for i in range(16):
+                yield
+
+        def checker(dut):
+            k = 0
+            yield
+            while k < 64:
+                if (yield dut.sink.valid) and (yield dut.sink.ready):
+                    self.assertEqual((yield dut.source.data), scrambler_ref[k])
+                    k += 1
+                yield
+            self.assertEqual(k, 64)
+
+        dut = Scrambler(reset=0xffff)
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_scrambler_mixed_ctrl(self):
+        def apply_expected(data, mask, ctrl):
+            r = 0
+            for i in range(4):
+                b = (data >> (8*i)) & 0xff
+                m = (mask >> (8*i)) & 0xff
+                if (ctrl >> i) & 1:
+                    o = b
+                else:
+                    o = b ^ m
+                r |= (o << (8*i))
+            return r
+
+        ctrl_pat = [0b0000, 0b0001, 0b0010, 0b0100, 0b1000, 0b0101, 0b1010, 0b1111]
+
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield dut.enable.eq(1)
+            yield dut.sink.data.eq(0x11223344)
+            yield dut.sink.ctrl.eq(ctrl_pat[0])
+            yield dut.sink.valid.eq(1)
+            yield
+            for i in range(1, len(ctrl_pat)):
+                yield dut.sink.data.eq(0x11223344 + i)
+                yield dut.sink.ctrl.eq(ctrl_pat[i])
+                yield
+            yield dut.sink.valid.eq(0)
+            for i in range(16):
+                yield
+            dut.run = False
+
+        def checker(dut):
+            k = 0
+            while dut.run:
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    data = 0x11223344 + k
+                    ctrl = ctrl_pat[k]
+                    expected = apply_expected(data, scrambler_ref[k], ctrl)
+                    self.assertEqual((yield dut.source.data), expected)
+                    k += 1
+                yield
+            self.assertEqual(k, len(ctrl_pat))
+
+        dut = Scrambler(reset=0xffff)
+        dut.run = True
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+
     def test_descrambler_data(self):
         def generator(dut):
             for i in range(16):
@@ -85,4 +161,115 @@ class TestScrambling(unittest.TestCase):
                 yield
 
         dut = Descrambler(reset=0xffff)
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_descrambler_com_resync_per_lane(self):
+        def generator(dut, lane):
+            # Create some activity first.
+            for i in range(8):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0b0000)
+                yield dut.sink.data.eq(scrambler_ref[i])
+                yield
+
+            # Emit a K-word with only one COM lane (others SKP).
+            data = 0
+            for i in range(4):
+                v = COM.value if i == lane else SKP.value
+                data |= (v << (8*i))
+            yield dut.sink.valid.eq(1)
+            yield dut.sink.ctrl.eq(0b1111)
+            yield dut.sink.data.eq(data)
+            yield
+
+            # After COM reset, feed the reference scrambler stream (scrambling of zeros).
+            for i in range(16):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0b0000)
+                yield dut.sink.data.eq(scrambler_ref[i])
+                yield
+
+            yield dut.sink.valid.eq(0)
+            for i in range(32):
+                yield
+
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            yield
+            # Skip initial stuff until we see the COM word.
+            while not ((yield dut.source.valid) and ((yield dut.source.ctrl) == 0b1111)):
+                yield
+            # Next 16 data words should descramble to zero.
+            for i in range(16):
+                yield
+                self.assertEqual((yield dut.source.data), 0)
+
+        for lane in range(4):
+            dut = Descrambler(reset=0xffff)
+            run_simulation(dut, [generator(dut, lane), checker(dut)])
+
+    def test_scrambler_descrambler_roundtrip(self):
+        class DUT(Module):
+            def __init__(self):
+                self.submodules.scr = Scrambler(reset=0xffff)
+                self.submodules.des = Descrambler(reset=0xffff)
+                self.comb += self.scr.source.connect(self.des.sink)
+                self.sink   = self.scr.sink
+                self.source = self.des.source
+
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield dut.sink.ctrl.eq(0b0000)
+            yield dut.sink.data.eq(0x01020300)
+            yield dut.sink.valid.eq(1)
+            yield
+            for i in range(1, 64):
+                yield dut.sink.data.eq(0x01020300 + i)
+                yield
+            yield dut.sink.valid.eq(0)
+            for i in range(16):
+                yield
+            dut.run = False
+
+        def checker(dut):
+            i = 0
+            while dut.run:
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    self.assertEqual((yield dut.source.data), 0x01020300 + i)
+                    i += 1
+                yield
+            self.assertEqual(i, 64)
+
+        dut = DUT()
+        dut.run = True
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+
+    def test_scrambler_enable_passthrough(self):
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield dut.enable.eq(0)
+            yield dut.sink.ctrl.eq(0b0000)
+            yield dut.sink.data.eq(0x11223344)
+            yield dut.sink.valid.eq(1)
+            yield
+            for i in range(1, 32):
+                yield dut.sink.data.eq(0x11223344 + i)
+                yield
+            yield dut.sink.valid.eq(0)
+            for i in range(16):
+                yield
+            dut.run = False
+
+        def checker(dut):
+            i = 0
+            while dut.run:
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    self.assertEqual((yield dut.source.data), 0x11223344 + i)
+                    i += 1
+                yield
+            self.assertEqual(i, 32)
+
+        dut = Scrambler(reset=0xffff)
+        dut.run = True
         run_simulation(dut, [generator(dut), checker(dut)])
