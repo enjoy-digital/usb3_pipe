@@ -83,7 +83,6 @@ class TestSerDes(unittest.TestCase):
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
 
-
     def test_rx_skip_remover(self):
         datas_input = [
             0x0302013c, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
@@ -142,6 +141,104 @@ class TestSerDes(unittest.TestCase):
                 yield
 
         dut = RXSKPRemover()
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(dut.datas_errors, 0)
+        self.assertEqual(dut.ctrls_errors, 0)
+
+    def test_rx_skip_remover_d3c_not_removed(self):
+        datas_input = [0x3c112233, 0x44556677]
+        ctrls_input = [0x0,        0x0]
+        datas_reference = datas_input
+        ctrls_reference = ctrls_input
+
+        def generator(dut):
+            for data, ctrl in zip(datas_input, ctrls_input):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(data)
+                yield dut.sink.ctrl.eq(ctrl)
+                yield
+            yield dut.sink.valid.eq(0)
+            for i in range(32):
+                yield
+
+        def checker(dut):
+            dut.datas_errors = 0
+            dut.ctrls_errors = 0
+            yield dut.source.ready.eq(1)
+            yield
+            k = 0
+            while k < len(datas_reference):
+                if (yield dut.source.valid):
+                    if (yield dut.source.data) != datas_reference[k]:
+                        dut.datas_errors += 1
+                    if (yield dut.source.ctrl) != ctrls_reference[k]:
+                        dut.ctrls_errors += 1
+                    k += 1
+                yield
+
+        dut = RXSKPRemover()
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(dut.datas_errors, 0)
+        self.assertEqual(dut.ctrls_errors, 0)
+
+    def test_rx_skip_remover_multi_skp(self):
+        datas_input = [
+            0x3c3c3c3c,  # 4x SKP K.
+            0x11223344,
+            0x3c00113c,  # 2x SKP K mixed with data bytes.
+            0x55667788,
+        ]
+        ctrls_input = [
+            0xf,
+            0x0,
+            0x9,         # lane0 + lane3 are K.
+            0x0,
+        ]
+
+        datas_reference = [
+            0x11223344,
+            0x77880011,
+        ]
+        ctrls_reference = [
+            0x0,
+            0x0,
+        ]
+
+        def generator(dut):
+            yield dut.sink.valid.eq(1)
+            k = 0
+            while k < len(datas_input):
+                yield dut.sink.data.eq(datas_input[k])
+                yield dut.sink.ctrl.eq(ctrls_input[k])
+                yield
+                if (yield dut.sink.ready):
+                    k += 1
+            yield dut.sink.valid.eq(0)
+            for i in range(128):
+                yield
+            dut.run = False
+
+        def checker(dut):
+            dut.datas_errors = 0
+            dut.ctrls_errors = 0
+            k = 0
+            cycles = 0
+            while dut.run and (cycles < 4096):
+                yield dut.source.ready.eq((cycles & 0x1) == 0)  # Backpressure.
+                yield
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    if (yield dut.source.data) != datas_reference[k]:
+                        dut.datas_errors += 1
+                    if (yield dut.source.ctrl) != ctrls_reference[k]:
+                        dut.ctrls_errors += 1
+                    k += 1
+                    if k == len(datas_reference):
+                        break
+                cycles += 1
+            self.assertEqual(k, len(datas_reference))
+
+        dut = RXSKPRemover()
+        dut.run = True
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
@@ -217,9 +314,143 @@ class TestSerDes(unittest.TestCase):
             for data, ctrl in zip(datas, ctrls):
                 while not (yield dut.rx.source.valid):
                     yield
-                if (yield dut.rx.source.data != data):
+                if (yield dut.rx.source.data) != data:
                     dut.data_errors += 1
-                if (yield dut.rx.source.ctrl != ctrl):
+                if (yield dut.rx.source.ctrl) != ctrl:
+                    dut.ctrl_errors += 1
+                yield
+
+        dut = DUT()
+        run_simulation(dut,
+            generators = [generator(dut), checker(dut)],
+            clocks     = {"sys": 1e9/133e6, "serdes": 1e9/125e6},
+        )
+        self.assertEqual(dut.data_errors, 0)
+        self.assertEqual(dut.ctrl_errors, 0)
+
+    def test_tx_skip_inserter_payload_integrity(self):
+        nwords = 512
+
+        def generator(dut):
+            for i in range(nwords):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(0x11223300 + i)
+                yield dut.sink.ctrl.eq(0)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+            for i in range(256):
+                yield
+
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            yield
+            k = 0
+            while k < nwords:
+                if (yield dut.source.valid):
+                    data = (yield dut.source.data)
+                    ctrl = (yield dut.source.ctrl)
+                    if ctrl == 0b1111 and data == 0x3c3c3c3c:
+                        yield
+                        continue
+                    self.assertEqual(data, 0x11223300 + k)
+                    self.assertEqual(ctrl, 0)
+                    k += 1
+                yield
+
+        dut = TXSKPInserter()
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_tx_skip_inserter_no_skp_in_packet(self):
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield
+
+            # One "packet" of 512 words.
+            for i in range(512):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(0x11223300 + i)
+                yield dut.sink.ctrl.eq(0)
+                yield dut.sink.first.eq(1 if i == 0 else 0)
+                yield dut.sink.last.eq(1 if i == 511 else 0)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+
+            # Then idle a bit to allow SKPs to drain.
+            yield dut.sink.valid.eq(0)
+            for _ in range(512):
+                yield
+            dut.run = False
+
+        def checker(dut):
+            skp_seen_in_packet = 0
+            in_packet = 0
+            yield
+            while dut.run:
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    data = (yield dut.source.data)
+                    ctrl = (yield dut.source.ctrl)
+                    if (yield dut.source.first):
+                        in_packet = 1
+                    if in_packet:
+                        if ctrl == 0b1111 and data == 0x3c3c3c3c:
+                            skp_seen_in_packet += 1
+                    if (yield dut.source.last):
+                        in_packet = 0
+                yield
+            self.assertEqual(skp_seen_in_packet, 0)
+
+        dut = TXSKPInserter()
+        dut.run = True
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_datapath_loopback_with_skps(self, nwords=128):
+        prng  = random.Random(42)
+        datas = [prng.randrange(2**32) for _ in range(nwords)]
+        ctrls = [0 for _ in range(nwords)]  # Payload only.
+
+        class DUT(Module):
+            def __init__(self):
+                self.submodules.tx = TXDatapath("serdes")
+                self.submodules.rx = RXDatapath("serdes")
+                self.comb += self.rx.word_aligner.enable.eq(0)
+                self.comb += self.tx.source.connect(self.rx.sink)
+
+        def generator(dut):
+            for data, ctrl in zip(datas, ctrls):
+                yield dut.tx.sink.valid.eq(1)
+                yield dut.tx.sink.data.eq(data)
+                yield dut.tx.sink.ctrl.eq(ctrl)
+                yield
+                while not (yield dut.tx.sink.ready):
+                    yield
+                yield dut.tx.sink.valid.eq(0)
+
+            # Flush word (helps drain aligner/windowing paths).
+            yield dut.tx.sink.valid.eq(1)
+            yield dut.tx.sink.data.eq(0)
+            yield dut.tx.sink.ctrl.eq(0)
+            yield
+            while not (yield dut.tx.sink.ready):
+                yield
+            yield dut.tx.sink.valid.eq(0)
+
+            for i in range(256):
+                yield
+
+        @passive
+        def checker(dut):
+            dut.data_errors = 0
+            dut.ctrl_errors = 0
+            yield dut.rx.source.ready.eq(1)
+            for data, ctrl in zip(datas, ctrls):
+                while not (yield dut.rx.source.valid):
+                    yield
+                if (yield dut.rx.source.data) != data:
+                    dut.data_errors += 1
+                if (yield dut.rx.source.ctrl) != ctrl:
                     dut.ctrl_errors += 1
                 yield
 
