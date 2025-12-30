@@ -49,7 +49,7 @@ class LFPS:
         self.repeat = repeat
         self.cycles = cycles
 
-def ns_to_cycles(clk_freq, t):
+def time_to_cycles(clk_freq, t):
     return ceil(t*clk_freq)
 
 # LFPS Patterns ------------------------------------------------------------------------------------
@@ -83,8 +83,8 @@ class LFPSChecker(Module):
         self.specials += MultiReg(self.idle, idle)
 
         # Polling LFPS Detection ------------------------------------------------------------------
-        burst_cycles  = ns_to_cycles(sys_clk_freq, lfps_pattern.burst.t_typ)
-        repeat_cycles = ns_to_cycles(sys_clk_freq, lfps_pattern.repeat.t_typ)
+        burst_cycles  = time_to_cycles(sys_clk_freq, lfps_pattern.burst.t_typ)
+        repeat_cycles = time_to_cycles(sys_clk_freq, lfps_pattern.repeat.t_typ)
         self.count = count = Signal(max=max(burst_cycles, repeat_cycles))
         self.found = found = Signal()
 
