@@ -517,12 +517,10 @@ class A7USB3SerDes(Module):
         ]
 
         # Override GTP RX termination for USB3 (800 mV Term Voltage) -------------------------------
-        rxcdr_cfgs = {
-            1 : 0x0000087FE406004441010,
-            2 : 0x0000087FE206004441010,
-            4 : 0x0000087FE106004441010,
-            8 : 0x0000087FE086004441010,
-           16 : 0x0000087FE086004441010,
+        rxcdr_cfgs = { # UG482 Table 4-14: CDR Recommended Settings for Protocols with SSC.
+            1 : 0x00000_87FE_2060_2448_1010,
+            2 : 0x00000_47FE_2060_2450_1010,
+            4 : 0x00000_47FE_1060_2450_1010,
         }
         gtp.gtp_params.update(
             p_RX_CM_SEL      = 0b11,
