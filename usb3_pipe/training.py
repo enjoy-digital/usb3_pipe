@@ -256,6 +256,8 @@ class TSUnit(LiteXModule):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
+        # Note: No arbitration between generators. Only one of tx_tseq/tx_ts1/tx_ts2 must be asserted
+        # at a time, otherwise multiple sources will connect to serdes.sink simultaneously.
         self.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
         self.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=16)
         self.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=16)
