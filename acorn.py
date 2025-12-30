@@ -84,6 +84,8 @@ class USB3SoC(SoCMini):
 
         # JTAGBone ---------------------------------------------------------------------------------
         self.add_jtagbone()
+        platform.add_period_constraint(self.jtagbone.phy.cd_jtag.clk, 1e9/20e6)
+        platform.add_false_path_constraints(self.jtagbone.phy.cd_jtag.clk, self.crg.cd_sys.clk)
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = A7USB3SerDes(platform,
