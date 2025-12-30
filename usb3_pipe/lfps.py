@@ -47,7 +47,7 @@ class LFPS:
     def __init__(self, burst, repeat=None, cycles=None):
         self.burst  = burst
         self.repeat = repeat
-        self.cycles = None
+        self.cycles = cycles
 
 def ns_to_cycles(clk_freq, t):
     return ceil(t*clk_freq)
