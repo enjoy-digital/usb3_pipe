@@ -8,7 +8,7 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common import TSEQ, TS1, TS1_INV, TS2
+from usb3_pipe.common import Symbol, TSEQ, TS1, TS1_INV, TS2
 
 # Training Sequence Checker ------------------------------------------------------------------------
 
@@ -42,18 +42,25 @@ class TSChecker(Module):
         port      = mem.get_port(async_read=True)
         self.specials += mem, port
 
+
+        # Ctrl check -------------------------------------------------------------------------------
+        ctrl_init = []
+        for i in range(mem_depth):
+            ctrl = 0
+            for b in range(4):
+                ctrl |= (isinstance(ordered_set[4*i + b], Symbol) << b)
+            ctrl_init.append(ctrl)
+        ctrl_expected = Signal(4)
+        self.comb += ctrl_expected.eq(Array(ctrl_init)[port.adr])
+
         # Data check -------------------------------------------------------------------------------
         error      = Signal()
-        error_mask = Signal(32, reset=2**32-1)
-        first_ctrl = 0b1111
+        error_mask = Signal(32, reset=0xffffffff)
         self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
         self.comb += [
             If(self.sink.valid,
-                # Check Comma
-                If((port.adr == 0) & (self.sink.ctrl != first_ctrl),
-                    error.eq(1)
-                ),
-                If((port.adr != 0) & (self.sink.ctrl != 0),
+                # Check Ctrl
+                If(self.sink.ctrl != ctrl_expected,
                     error.eq(1)
                 ),
                 # Check Word
