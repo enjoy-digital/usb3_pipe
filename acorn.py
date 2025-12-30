@@ -28,7 +28,7 @@ from usb3_core.core import USB3Core
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
-_usb3_io = [
+_usb3_io_standard = [
     # SFP.
     ("sfp_tx", 0,
         Subsignal("p", Pins("D7")),
@@ -38,6 +38,19 @@ _usb3_io = [
     ("sfp_rx", 0,
         Subsignal("p", Pins("D9")),
         Subsignal("n", Pins("C9")),
+    ),
+]
+
+_usb3_io_mini = [
+    # SFP.
+    ("sfp_tx", 0,
+        Subsignal("p", Pins("D5")),
+        Subsignal("n", Pins("C5")),
+    ),
+
+    ("sfp_rx", 0,
+        Subsignal("p", Pins("D11")),
+        Subsignal("n", Pins("C11")),
     ),
 ]
 
@@ -98,6 +111,8 @@ class USB3SoC(SoCMini):
         self.comb += [
             platform.request("user_led", 0).eq(~usb3_serdes.ready),
             platform.request("user_led", 1).eq(~usb3_pipe.ready),
+            platform.request("user_led", 2).eq(1), # Not Used.
+            platform.request("user_led", 3).eq(1), # Not Used.
         ]
 
         # Analyzer ---------------------------------------------------------------------------------
@@ -142,6 +157,7 @@ def main():
     with open("README.md") as f:
         description = [str(f.readline()) for i in range(7)]
     parser = argparse.ArgumentParser(description="".join(description[1:]), formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("--variant",       default="mini",      help="Select LiteX Acorn Baseboard variant (default: mini).",  choices=["mini", "standard"])
     parser.add_argument("--build",         action="store_true", help="Build bitstream.")
     parser.add_argument("--load",          action="store_true", help="Load bitstream.")
     parser.add_argument("--with-analyzer", action="store_true", help="Enable LiteScope Analyzer.")
@@ -154,7 +170,10 @@ def main():
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     os.system("cp usb3_core/daisho/usb3/*.init build/sqrl_acorn/gateware/")
     platform = sqrl_acorn.Platform()
-    platform.add_extension(_usb3_io)
+    if args.variant == "standard":
+        platform.add_extension(_usb3_io_standard)
+    if args.variant == "mini":
+        platform.add_extension(_usb3_io_mini)
     soc     = USB3SoC(platform, with_analyzer=args.with_analyzer)
     builder = Builder(soc, csr_csv="csr.csv")
     builder.build(run=args.build)
