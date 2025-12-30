@@ -76,7 +76,7 @@ TS1 = OrderedSet("TS1",
     [D( 0, 0), LinkConfig(reset=0, loopback=0, scrambling=1)] +
     [D(10, 2) for i in range(10)])
 
-TS1_INV = OrderedSet("TS1",
+TS1_INV = OrderedSet("TS1_INV",
     [COM for i in range(4)] +
     [D( 0, 0), LinkConfig(reset=0, loopback=0, scrambling=1)] +
     [D(21, 5) for i in range(10)])
@@ -86,7 +86,7 @@ TS2 = OrderedSet("TS2",
     [D( 0, 0), LinkConfig(reset=0, loopback=0, scrambling=1)] +
     [D(5, 2) for i in range(10)])
 
-ordered_sets = [TSEQ, TS1, TS2]
+ordered_sets = [TSEQ, TS1, TS1_INV, TS2]
 
 # Endianness Swap ----------------------------------------------------------------------------------
 
