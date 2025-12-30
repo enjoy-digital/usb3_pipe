@@ -153,7 +153,7 @@ class LFPSBurstGenerator(Module):
         fsm.act("IDLE",
             self.done.eq(1),
             clk_timer.reset.eq(1),
-            NextValue(count, self.length),
+            NextValue(count, self.length - 1),
             If(self.start,
                 NextState("BURST")
             )
@@ -186,7 +186,13 @@ class LFPSGenerator(Module):
 
         # # #
 
-        # Burst Generator ------------------------------------------------------------------------
+        # Build-time Quantization/Range Checks -----------------------------------------------------
+        repeat_cycles = time_to_cycles(sys_clk_freq, lfps_pattern.repeat.t_typ)
+        burst_cycles  = time_to_cycles(sys_clk_freq, lfps_pattern.burst.t_typ)
+        assert (lfps_pattern.burst.t_min  <= (burst_cycles/sys_clk_freq)  <= lfps_pattern.burst.t_max)
+        assert (lfps_pattern.repeat.t_min <= (repeat_cycles/sys_clk_freq) <= lfps_pattern.repeat.t_max)
+
+        # Burst Generator --------------------------------------------------------------------------
         burst_generator = LFPSBurstGenerator(sys_clk_freq=sys_clk_freq, lfps_clk_freq=lfps_clk_freq)
         self.submodules += burst_generator
 
@@ -198,8 +204,8 @@ class LFPSGenerator(Module):
             If(self.generate,
                 self.tx_idle.eq(1),
                 NextValue(burst_generator.start, 1),
-                NextValue(burst_generator.length, int(sys_clk_freq*lfps_pattern.burst.t_typ)),
-                NextValue(burst_repeat_count,     int(sys_clk_freq*lfps_pattern.repeat.t_typ)),
+                NextValue(burst_generator.length, burst_cycles),
+                NextValue(burst_repeat_count,     repeat_cycles),
                 NextState("RUN")
             ).Else(
                 NextValue(self.count, 0)
