@@ -477,10 +477,10 @@ class A7USB3SerDes(Module):
             refclk = Signal()
             self.specials += [
                 Instance("IBUFDS_GTE2",
-                    i_CEB=0,
-                    i_I=refclk_pads.p,
-                    i_IB=refclk_pads.n,
-                    o_O=refclk
+                    i_CEB = 0,
+                    i_I   = refclk_pads.p,
+                    i_IB  = refclk_pads.n,
+                    o_O   = refclk
                 )
             ]
 
