@@ -273,3 +273,137 @@ class TestScrambling(unittest.TestCase):
         dut = Scrambler(reset=0xffff)
         dut.run = True
         run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_descrambler_com_resync_multi_lane(self):
+        com_patterns = [0b0011, 0b0111, 0b1111]  # 2, 3, 4 COM symbols
+        for ctrl in com_patterns:
+            with self.subTest(ctrl=bin(ctrl)):
+                def generator(dut):
+                    # Initial scrambled data to get out of reset state
+                    for i in range(8):
+                        yield dut.sink.valid.eq(1)
+                        yield dut.sink.ctrl.eq(0)
+                        yield dut.sink.data.eq(scrambler_ref[i])
+                        yield
+                    # Emit COM word with selected lanes
+                    data = 0
+                    for i in range(4):
+                        if (ctrl >> i) & 1:
+                            data |= (COM.value << (8 * i))
+                        else:
+                            data |= (SKP.value << (8 * i))
+                    yield dut.sink.valid.eq(1)
+                    yield dut.sink.ctrl.eq(ctrl)
+                    yield dut.sink.data.eq(data)
+                    yield
+                    # Feed fresh scrambled zeros after resync
+                    for i in range(16):
+                        yield dut.sink.valid.eq(1)
+                        yield dut.sink.ctrl.eq(0)
+                        yield dut.sink.data.eq(scrambler_ref[i])
+                        yield
+                    yield dut.sink.valid.eq(0)
+
+                def checker(dut):
+                    yield dut.source.ready.eq(1)
+                    yield
+                    # Skip initial 8 data + 1 COM word
+                    for _ in range(9):
+                        while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                            yield
+                        yield
+                    # Next 16 words should descramble to zero
+                    for _ in range(16):
+                        while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                            yield
+                        self.assertEqual((yield dut.source.data), 0)
+                        yield
+
+                dut = Descrambler(reset=0xffff)
+                run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_scrambler_enable_toggle_midstream(self):
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield dut.enable.eq(1)
+            base = 0xA5A5A500
+            for i in range(16):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0)
+                yield dut.sink.data.eq(base + i)
+                yield
+            yield dut.enable.eq(0)  # disable scrambling
+            for i in range(16, 32):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0)
+                yield dut.sink.data.eq(base + i)
+                yield
+            yield dut.enable.eq(1)  # re-enable
+            for i in range(32, 48):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0)
+                yield dut.sink.data.eq(base + i)
+                yield
+            yield dut.sink.valid.eq(0)
+
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            base = 0xA5A5A500
+            for i in range(16):
+                while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                    yield
+                self.assertEqual((yield dut.source.data), (base + i) ^ scrambler_ref[i])
+                yield
+            for i in range(16, 32):
+                while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                    yield
+                self.assertEqual((yield dut.source.data), base + i)  # passthrough
+                yield
+            # LFSR continues from previous state
+            for i in range(32, 48):
+                while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                    yield
+                self.assertEqual((yield dut.source.data), (base + i) ^ scrambler_ref[i])
+                yield
+
+        dut = Scrambler(reset=0xffff)
+        run_simulation(dut, [generator(dut), checker(dut)])
+
+    def test_descrambler_recovery_from_bad_state(self):
+        def generator(dut):
+            # Feed completely wrong (inverted) scrambled data first
+            for i in range(16):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0)
+                yield dut.sink.data.eq(scrambler_ref[i] ^ 0xffffffff)
+                yield
+            # Send COM on all lanes to force resynchronization
+            yield dut.sink.valid.eq(1)
+            yield dut.sink.ctrl.eq(0b1111)
+            yield dut.sink.data.eq(COM.value * 0x01010101)
+            yield
+            # Now send correct scrambled zeros
+            for i in range(32):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.ctrl.eq(0)
+                yield dut.sink.data.eq(scrambler_ref[i])
+                yield
+            yield dut.sink.valid.eq(0)
+
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            yield
+            # First 16 outputs + COM word may be garbage — skip them
+            for _ in range(17):
+                while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                    yield
+                yield
+            # After resync, should get clean zeros
+            for _ in range(32):
+                while not ((yield dut.source.valid) and (yield dut.source.ready)):
+                    yield
+                self.assertEqual((yield dut.source.data), 0)
+                yield
+
+        dut = Descrambler(reset=0xffff)
+        run_simulation(dut, [generator(dut), checker(dut)])
