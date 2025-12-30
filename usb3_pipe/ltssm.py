@@ -245,6 +245,7 @@ class PollingFSM(LiteXModule):
 
         # Active State (7.5.4.5) -------------------------------------------------------------------
         fsm.act("Polling.Active",
+            serdes.rx_align.eq(1),
             _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
@@ -270,6 +271,7 @@ class PollingFSM(LiteXModule):
 
         # Configuration State (7.5.4.6) ------------------------------------------------------------
         fsm.act("Polling.Configuration",
+            serdes.rx_align.eq(1),
             _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
@@ -326,6 +328,7 @@ class PollingFSM(LiteXModule):
 
         # Recovery ---------------------------------------------------------------------------------
         fsm.act("Recovery.Active",
+            serdes.rx_align.eq(1),
             _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
@@ -348,6 +351,7 @@ class PollingFSM(LiteXModule):
         )
 
         fsm.act("Recovery.Configuration",
+            serdes.rx_align.eq(1),
             _6_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
