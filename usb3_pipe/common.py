@@ -6,6 +6,8 @@
 
 from migen import *
 
+from litex.gen import *
+
 # Helpers ------------------------------------------------------------------------------------------
 
 def K(x, y):
@@ -90,7 +92,7 @@ ordered_sets = [TSEQ, TS1, TS1_INV, TS2]
 
 # Endianness Swap ----------------------------------------------------------------------------------
 
-class EndiannessSwap(Module):
+class EndiannessSwap(LiteXModule):
     """Swap the data bytes/ctrl bits of stream"""
     def __init__(self, sink, source):
         assert len(sink.data) == len(source.data)

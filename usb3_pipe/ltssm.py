@@ -8,6 +8,8 @@ from migen import *
 
 from migen.genlib.misc import WaitTimer
 
+from litex.gen import *
+
 # Link Training and Status State Machine -----------------------------------------------------------
 
 # Note: Currently just FSM skeletons with states/transitions.
@@ -170,7 +172,7 @@ class RXDetectFSM(FSM):
 # Polling Finite State Machine ---------------------------------------------------------------------
 
 @ResetInserter()
-class PollingFSM(Module):
+class PollingFSM(LiteXModule):
     """ Polling Finite State Machine (section 7.5.4)"""
     def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq, with_timers=True):
         self.idle               = Signal()
@@ -187,19 +189,16 @@ class PollingFSM(Module):
         rx_ts2_seen   = Signal()
 
         # 360ms Timer ------------------------------------------------------------------------------
-        _360_ms_timer = WaitTimer(int(360e-3*sys_clk_freq))
-        self.submodules += _360_ms_timer
+        self._360_ms_timer = _360_ms_timer = WaitTimer(int(360e-3*sys_clk_freq))
 
         # 12ms Timer -------------------------------------------------------------------------------
-        _12_ms_timer = WaitTimer(int(12e-3*sys_clk_freq))
-        self.submodules += _12_ms_timer
+        self._12_ms_timer = _12_ms_timer = WaitTimer(int(12e-3*sys_clk_freq))
 
         # 6ms Timer -------------------------------------------------------------------------------
-        _6_ms_timer = WaitTimer(int(6e-3*sys_clk_freq))
-        self.submodules += _6_ms_timer
+        self._6_ms_timer = _6_ms_timer = WaitTimer(int(6e-3*sys_clk_freq))
 
         # FSM --------------------------------------------------------------------------------------
-        self.submodules.fsm = fsm = FSM(reset_state="Polling.Entry")
+        self.fsm = fsm = FSM(reset_state="Polling.Entry")
 
         # Entry State ------------------------------------------------------------------------------
         fsm.act("Polling.Entry",
@@ -373,20 +372,20 @@ class PollingFSM(Module):
 
 # Link Training and Status State Machine -----------------------------------------------------------
 
-class LTSSM(Module):
+class LTSSM(LiteXModule):
     def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq):
         # SS Inactive FSM --------------------------------------------------------------------------
-        self.submodules.ss_inactive = SSInactiveFSM()
+        self.ss_inactive = SSInactiveFSM()
 
         # RX Detect FSM ----------------------------------------------------------------------------
-        self.submodules.rx_detect   = RXDetectFSM()
+        self.rx_detect   = RXDetectFSM()
 
         # Polling FSM ------------------------------------------------------------------------------
-        self.submodules.polling     = PollingFSM(
+        self.polling     = PollingFSM(
             serdes       = serdes,
             lfps_unit    = lfps_unit,
             ts_unit      = ts_unit,
             sys_clk_freq = sys_clk_freq)
 
         # LTSSM FSM --------------------------------------------------------------------------------
-        self.submodules.ltssm       = LTSSMFSM()
+        self.ltssm       = LTSSMFSM()

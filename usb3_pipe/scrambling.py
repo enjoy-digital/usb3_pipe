@@ -9,6 +9,8 @@ from operator import xor
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import COM
@@ -17,7 +19,7 @@ from usb3_pipe.common import COM
 
 @ResetInserter()
 @CEInserter()
-class ScramblerUnit(Module):
+class ScramblerUnit(LiteXModule):
     """Scrambler Unit
 
     This module generates the scrambled datas for the USB3.0 link (X^16 + X^5 + X^4 + X^3 + 1 polynom).
@@ -85,7 +87,7 @@ class ScramblerUnit(Module):
 
 # Scrambler (Appendix B) ---------------------------------------------------------------------------
 
-class Scrambler(Module):
+class Scrambler(LiteXModule):
     """Scrambler
 
     This module scrambles the TX data/ctrl stream. K codes shall not be scrambled.
@@ -97,7 +99,7 @@ class Scrambler(Module):
 
         # # #
 
-        self.submodules.unit = unit = ScramblerUnit(reset=reset)
+        self.unit = unit = ScramblerUnit(reset=reset)
         self.comb += unit.ce.eq(sink.valid & sink.ready)
         self.comb += sink.connect(source)
         for i in range(4):
@@ -111,7 +113,7 @@ class Scrambler(Module):
 
 # Descrambler (Scrambler + Auto-Synchronization) (Appendix B) --------------------------------------
 
-class Descrambler(Module):
+class Descrambler(LiteXModule):
     """Descrambler
 
     This module descrambles the RX data/ctrl stream. K codes shall not be scrambled. The descrambler
@@ -125,8 +127,7 @@ class Descrambler(Module):
 
         # # #
 
-        scrambler = Scrambler(reset=reset)
-        self.submodules += scrambler
+        self.scrambler = scrambler = Scrambler(reset=reset)
         self.comb += scrambler.enable.eq(self.enable)
 
         # Synchronize on COM

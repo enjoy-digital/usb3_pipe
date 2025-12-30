@@ -6,6 +6,8 @@
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import *
@@ -17,7 +19,7 @@ from usb3_pipe.scrambling import Scrambler, Descrambler
 # USB3 PIPE ----------------------------------------------------------------------------------------
 
 @ResetInserter()
-class USB3PIPE(Module):
+class USB3PIPE(LiteXModule):
     """USB3.0 PIPE Core
 
     Wrap an FPGA transceiver exposing 2 TX and RX data/ctrl streams into a USB3.0 PIPE by adding:
@@ -51,32 +53,30 @@ class USB3PIPE(Module):
             source = self.source
 
         # LFPS -------------------------------------------------------------------------------------
-        lfps = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq)
-        self.submodules.lfps = lfps
+        self.lfps = lfps = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq)
 
         # TS----------------------------------------------------------------------------------------
-        ts = TSUnit(serdes=serdes)
-        self.submodules.ts = ts
+        self.ts = ts = TSUnit(serdes=serdes)
 
         # LTSSM ------------------------------------------------------------------------------------
-        ltssm = LTSSM(serdes=serdes, lfps_unit=lfps, ts_unit=ts, sys_clk_freq=sys_clk_freq)
-        self.submodules.ltssm = ltssm
+        self.ltssm = ltssm = LTSSM(serdes=serdes, lfps_unit=lfps, ts_unit=ts, sys_clk_freq=sys_clk_freq)
         self.comb += self.ready.eq(ltssm.polling.idle | ltssm.polling.recovery)
 
         # Scrambling -------------------------------------------------------------------------------
         scrambler = Scrambler()
         scrambler = ResetInserter()(scrambler)
         self.comb += scrambler.reset.eq(~ltssm.polling.tx_ready)
-        self.submodules.scrambler = scrambler
+        self.scrambler = scrambler
         self.comb += [
             sink.connect(scrambler.sink),
             If(ltssm.polling.tx_ready, scrambler.source.connect(serdes.sink))
         ]
 
-        descrambler = Descrambler()
-        self.submodules.descrambler = descrambler
+        self.descrambler = descrambler = Descrambler()
         self.comb += [
             serdes.source.connect(descrambler.sink, keep={"data", "ctrl"}),
-            If(ltssm.polling.rx_ready, serdes.source.connect(descrambler.sink, omit={"data", "ctrl"})),
+            If(ltssm.polling.rx_ready,
+                serdes.source.connect(descrambler.sink, omit={"data", "ctrl"})
+            ),
             descrambler.source.connect(source),
         ]

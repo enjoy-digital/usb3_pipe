@@ -8,6 +8,8 @@ from migen import *
 from migen.genlib.cdc import MultiReg
 from migen.genlib.misc import WaitTimer
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 from litex.soc.cores.code_8b10b import Encoder, Decoder
 
@@ -15,7 +17,7 @@ from usb3_pipe.common import K, COM, SKP
 
 # RX SKP Remover (6.4.3) ---------------------------------------------------------------------------
 
-class RXSKPRemover(Module):
+class RXSKPRemover(LiteXModule):
     """RX SKP Remover
 
     SKP Ordered Sets are inserted in the stream for clock compensation between partners with an
@@ -95,7 +97,7 @@ class RXSKPRemover(Module):
 
 # RX Aligner ---------------------------------------------------------------------------------------
 
-class RXWordAligner(Module):
+class RXWordAligner(LiteXModule):
     """RX Word Aligner
 
     Align RX Words by analyzing the location of the COM/K-codes (configurable) in the RX stream.
@@ -110,8 +112,7 @@ class RXWordAligner(Module):
         alignment   = Signal(2)
         alignment_d = Signal(2)
 
-        buf = stream.Buffer([("data", 32), ("ctrl", 4)])
-        self.submodules += buf
+        self.buf = buf = stream.Buffer([("data", 32), ("ctrl", 4)])
         self.comb += [
             sink.connect(buf.sink),
             source.valid.eq(sink.valid & buf.source.valid),
@@ -150,7 +151,7 @@ class RXWordAligner(Module):
 
 # RXErrorSubstitution (6.3.5) ----------------------------------------------------------------------
 
-class RXErrorSubstitution(Module):
+class RXErrorSubstitution(LiteXModule):
     """RX Error Substitution
 
     Substitutes 8b/10b decoder errors with K28.4 symbols.
@@ -172,7 +173,7 @@ class RXErrorSubstitution(Module):
 
 # TX SKP Inserter (6.4.3) --------------------------------------------------------------------------
 
-class TXSKPInserter(Module):
+class TXSKPInserter(LiteXModule):
     """TX SKP Inserter
 
     SKP Ordered Sets are inserted in the stream for clock compensation between partners with an
@@ -243,7 +244,7 @@ class TXSKPInserter(Module):
 
 # Datapath (Clock Domain Crossing & Converter) -----------------------------------------------------
 
-class TXDatapath(Module):
+class TXDatapath(LiteXModule):
     """TX Datapath
 
     This module realizes the:
@@ -258,13 +259,12 @@ class TXDatapath(Module):
         # # #
 
         # Clock compensation
-        skip_inserter = TXSKPInserter()
-        self.submodules += skip_inserter
+        self.skip_inserter = skip_inserter = TXSKPInserter()
 
         # Clock domain crossing
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
-        self.submodules.cdc = cdc
+        self.cdc = cdc
 
         # Data-width adaptation
         converter = stream.StrideConverter(
@@ -273,7 +273,7 @@ class TXDatapath(Module):
             reverse=False)
         converter = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
-        self.submodules.converter = converter
+        self.converter = converter
 
         # Flow
         self.comb += [
@@ -283,7 +283,7 @@ class TXDatapath(Module):
             converter.source.connect(self.source)
         ]
 
-class RXDatapath(Module):
+class RXDatapath(LiteXModule):
     """RX Datapath
 
     This module realizes the:
@@ -305,21 +305,20 @@ class RXDatapath(Module):
             reverse=False)
         converter = stream.BufferizeEndpoints({"sink":   stream.DIR_SINK})(converter)
         converter = ClockDomainsRenamer(clock_domain)(converter)
-        self.submodules.converter = converter
+        self.converter = converter
 
         # Clock domain crossing
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
-        self.submodules.cdc = cdc
+        self.cdc = cdc
 
         # Clock compensation
-        skip_remover = RXSKPRemover()
-        self.submodules.skip_remover = skip_remover
+        self.skip_remover = skip_remover = RXSKPRemover()
 
         # Words alignment
         word_aligner = RXWordAligner()
         word_aligner = stream.BufferizeEndpoints({"source": stream.DIR_SOURCE})(word_aligner)
-        self.submodules.word_aligner = word_aligner
+        self.word_aligner = word_aligner
 
         # Flow
         self.comb += [
@@ -332,7 +331,7 @@ class RXDatapath(Module):
 
 # Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
 
-class K7USB3SerDes(Module):
+class K7USB3SerDes(LiteXModule):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -367,11 +366,10 @@ class K7USB3SerDes(Module):
             ]
 
         # PLL --------------------------------------------------------------------------------------
-        pll = GTXChannelPLL(refclk, refclk_freq, 5e9)
-        self.submodules += pll
+        self.pll = pll = GTXChannelPLL(refclk, refclk_freq, 5e9)
 
         # Transceiver ------------------------------------------------------------------------------
-        gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
+        self.gtx = gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
             data_width       = 20,
             clock_aligner    = False,
             tx_buffer_enable = True,
@@ -379,13 +377,9 @@ class K7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtx.add_stream_endpoints()
-        tx_datapath     = TXDatapath("tx")
-        rx_substitution = RXErrorSubstitution(gtx, "rx")
-        rx_datapath     = RXDatapath("rx")
-        self.submodules.gtx             = gtx
-        self.submodules.tx_datapath     = tx_datapath
-        self.submodules.rx_substitution = rx_substitution
-        self.submodules.rx_datapath     = rx_datapath
+        self.tx_datapath     = tx_datapath     = TXDatapath("tx")
+        self.rx_substitution = rx_substitution = RXErrorSubstitution(gtx, "rx")
+        self.rx_datapath     = rx_datapath     = RXDatapath("rx")
         self.comb += [
             gtx.tx_enable.eq(self.enable),
             gtx.rx_enable.eq(self.enable),
@@ -433,8 +427,7 @@ class K7USB3SerDes(Module):
         )
 
         self.specials += MultiReg(rx_idle, rx_idle_r)
-        rx_idle_timer = WaitTimer(10)
-        self.submodules += rx_idle_timer
+        self.rx_idle_timer = rx_idle_timer = WaitTimer(10)
         self.comb += rx_idle_timer.wait.eq(rx_idle_r)
         self.comb += self.rx_idle.eq(rx_idle_timer.done)
 
@@ -450,7 +443,7 @@ class K7USB3SerDes(Module):
 
 # Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
-class A7USB3SerDes(Module):
+class A7USB3SerDes(LiteXModule):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -485,11 +478,10 @@ class A7USB3SerDes(Module):
             ]
 
         # PLL --------------------------------------------------------------------------------------
-        pll = GTPQuadPLL(refclk, refclk_freq, 5e9)
-        self.submodules += pll
+        self.pll = pll = GTPQuadPLL(refclk, refclk_freq, 5e9)
 
         # Transceiver ------------------------------------------------------------------------------
-        gtp = gtp = GTP(pll, tx_pads, rx_pads, sys_clk_freq,
+        self.gtp = gtp = GTP(pll, tx_pads, rx_pads, sys_clk_freq,
             data_width       = 20,
             clock_aligner    = False,
             tx_buffer_enable = True,
@@ -497,13 +489,9 @@ class A7USB3SerDes(Module):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         gtp.add_stream_endpoints()
-        tx_datapath     = TXDatapath("tx")
-        rx_substitution = RXErrorSubstitution(gtp, "rx")
-        rx_datapath     = RXDatapath("rx")
-        self.submodules.gtp             = gtp
-        self.submodules.tx_datapath     = tx_datapath
-        self.submodules.rx_substitution = rx_substitution
-        self.submodules.rx_datapath     = rx_datapath
+        self.tx_datapath     = tx_datapath     = TXDatapath("tx")
+        self.rx_substitution = rx_substitution = RXErrorSubstitution(gtp, "rx")
+        self.rx_datapath     = rx_datapath     = RXDatapath("rx")
         self.comb += [
             gtp.tx_enable.eq(self.enable),
             gtp.rx_enable.eq(self.enable),
@@ -550,8 +538,7 @@ class A7USB3SerDes(Module):
         )
 
         self.specials += MultiReg(rx_idle, rx_idle_r)
-        rx_idle_timer = WaitTimer(10)
-        self.submodules += rx_idle_timer
+        self.rx_idle_timer = rx_idle_timer = WaitTimer(10)
         self.comb += rx_idle_timer.wait.eq(rx_idle_r)
         self.comb += self.rx_idle.eq(rx_idle_timer.done)
 

@@ -6,13 +6,15 @@
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import Symbol, TSEQ, TS1, TS1_INV, TS2
 
 # Training Sequence Checker ------------------------------------------------------------------------
 
-class TSChecker(Module):
+class TSChecker(LiteXModule):
     """Training Sequence Checker
 
     Generic Training Sequence Ordered Set checker.
@@ -113,7 +115,7 @@ class TSChecker(Module):
 
 # Training Sequence Generator ----------------------------------------------------------------------
 
-class TSGenerator(Module):
+class TSGenerator(LiteXModule):
     """Training Sequence Generator
 
     Generic Training Sequence Ordered Set generator.
@@ -215,7 +217,7 @@ class TSGenerator(Module):
 
 # Training Sequence Unit ---------------------------------------------------------------------------
 
-class TSUnit(Module):
+class TSUnit(LiteXModule):
     """Training Sequence Unit
 
     Detect/generate the Training Sequence Ordered Sets required for a USB3.0 link with simple
@@ -237,10 +239,10 @@ class TSUnit(Module):
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
-        self.submodules.ts1_checker       =  ts1_checker       = TSChecker(ordered_set=TS1,     n_ordered_sets=8)
-        self.submodules.ts1_checker_short =  ts1_checker_short = TSChecker(ordered_set=TS1,     n_ordered_sets=1)
-        self.submodules.ts1_inv_checker   =  ts1_inv_checker   = TSChecker(ordered_set=TS1_INV, n_ordered_sets=8)
-        self.submodules.ts2_checker       =  ts2_checker       = TSChecker(ordered_set=TS2,     n_ordered_sets=8)
+        self.ts1_checker       =  ts1_checker       = TSChecker(ordered_set=TS1,     n_ordered_sets=8)
+        self.ts1_checker_short =  ts1_checker_short = TSChecker(ordered_set=TS1,     n_ordered_sets=1)
+        self.ts1_inv_checker   =  ts1_inv_checker   = TSChecker(ordered_set=TS1_INV, n_ordered_sets=8)
+        self.ts2_checker       =  ts2_checker       = TSChecker(ordered_set=TS2,     n_ordered_sets=8)
         self.comb += [
             serdes.source.connect(ts1_checker.sink,       omit={"ready"}),
             serdes.source.connect(ts1_checker_short.sink, omit={"ready"}),
@@ -254,9 +256,9 @@ class TSUnit(Module):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
-        self.submodules.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
-        self.submodules.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=16)
-        self.submodules.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=16)
+        self.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
+        self.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=16)
+        self.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=16)
         self.comb += [
             If(self.tx_enable,
                 If(self.tx_tseq,
