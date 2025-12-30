@@ -4,9 +4,6 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-from functools import reduce
-from operator import xor
-
 from migen import *
 
 from litex.gen import *
@@ -133,10 +130,7 @@ class Descrambler(LiteXModule):
         # Synchronize on COM
         for i in range(4):
             self.comb += [
-                If(sink.valid &
-                   sink.ready &
-                   (sink.data[8*i:8*(i+1)] == COM.value) &
-                   sink.ctrl[i],
+                If(sink.valid & sink.ready & (sink.data[8*i:8*(i+1)] == COM.value) & sink.ctrl[i],
                    scrambler.unit.reset.eq(1)
                 )
             ]
