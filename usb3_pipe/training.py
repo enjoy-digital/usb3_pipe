@@ -56,9 +56,7 @@ class TSChecker(LiteXModule):
         self.comb += ctrl_expected.eq(Array(ctrl_init)[port.adr])
 
         # Data check -------------------------------------------------------------------------------
-        error      = Signal()
-        error_mask = Signal(32, reset=0xffffffff)
-        self.comb += If(port.adr == 1, error_mask.eq(0xffff00ff))
+        error = Signal()
         self.comb += [
             If(self.sink.valid,
                 # Check Ctrl
@@ -66,7 +64,7 @@ class TSChecker(LiteXModule):
                     error.eq(1)
                 ),
                 # Check Word
-                If((self.sink.data & error_mask) != (port.dat_r & error_mask),
+                If(self.sink.data != port.dat_r,
                     error.eq(1)
                 )
             ),
