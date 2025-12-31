@@ -299,7 +299,7 @@ class PollingFSM(LiteXModule):
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
             NextValue(self.recovery, 0),
-            If(ts_unit.rx_ts1_short, # FIXME: for bringup, should be Recovery.Active
+            If(ts_unit.rx_ts1, # FIXME: for bringup, should be Recovery.Active
                 NextValue(self.recovery, 1),
                 NextState("Recovery.Active")
             ).Elif(lfps_unit.rx_polling, # FIXME: for bringup
