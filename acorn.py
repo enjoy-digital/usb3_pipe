@@ -171,7 +171,7 @@ def main():
     os.makedirs("build/sqrl_acorn/gateware", exist_ok=True)
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     os.system("cp usb3_core/daisho/usb3/*.init build/sqrl_acorn/gateware/")
-    platform = sqrl_acorn.Platform()
+    platform = sqrl_acorn.Platform(with_multiboot=False)
     if args.variant == "standard":
         platform.add_extension(_usb3_io_standard)
     if args.variant == "mini":
