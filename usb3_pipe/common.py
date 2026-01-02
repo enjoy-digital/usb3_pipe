@@ -73,20 +73,48 @@ TSEQ = OrderedSet("TSEQ",
     [D( 6, 5), D(30, 5), D(13, 3), D(31, 5)] +
     [D(10, 2) for i in range(16)])
 
+# TSEQ (32 bytes):
+# [0] : 0xc017ffbc
+# [1] : 0x02e7b214
+# [2] : 0x286e7282
+# [3] : 0xbf6dbea6
+# [4] : 0x4a4a4a4a
+# [5] : 0x4a4a4a4a
+# [6] : 0x4a4a4a4a
+# [7] : 0x4a4a4a4a
+
 TS1 = OrderedSet("TS1",
     [COM for i in range(4)] +
     [D( 0, 0), LinkConfig(reset=0, loopback=0, scrambling=1)] +
     [D(10, 2) for i in range(10)])
+
+# TS1 (16 bytes):
+# [0] : 0xbcbcbcbc
+# [1] : 0x4a4a0000
+# [2] : 0x4a4a4a4a
+# [3] : 0x4a4a4a4a
 
 TS1_INV = OrderedSet("TS1_INV",
     [COM for i in range(4)] +
     [D( 0, 0), LinkConfig(reset=0, loopback=0, scrambling=1)] +
     [D(21, 5) for i in range(10)])
 
+# TS1_INV (16 bytes):
+# [0] : 0xbcbcbcbc
+# [1] : 0xb5b50000
+# [2] : 0xb5b5b5b5
+# [3] : 0xb5b5b5b5
+
 TS2 = OrderedSet("TS2",
     [COM for i in range(4)] +
     [D( 0, 0), LinkConfig(reset=0, loopback=0, scrambling=1)] +
     [D(5, 2) for i in range(10)])
+
+# TS2 (16 bytes):
+# [0] : 0xbcbcbcbc
+# [1] : 0x45450000
+# [2] : 0x45454545
+# [3] : 0x45454545
 
 ordered_sets = [TSEQ, TS1, TS1_INV, TS2]
 

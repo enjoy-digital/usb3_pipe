@@ -201,7 +201,7 @@ class PollingFSM(LiteXModule):
         self.fsm = fsm = FSM(reset_state="Polling.Entry")
 
         # Entry State ------------------------------------------------------------------------------
-        fsm.act("Polling.Entry",
+        fsm.act("Polling.Entry", # 0.
             NextValue(tx_lfps_count, 16),
             NextValue(rx_lfps_seen, 0),
             NextValue(rx_ts2_seen, 0),
@@ -209,7 +209,7 @@ class PollingFSM(LiteXModule):
         )
 
         # LFPS State (7.5.4.3) ---------------------------------------------------------------------
-        fsm.act("Polling.LFPS",
+        fsm.act("Polling.LFPS", # 1.
             _360_ms_timer.wait.eq(with_timers),
             lfps_unit.tx_polling.eq(1),
             # Go to ExitToCompliance when:
@@ -232,7 +232,7 @@ class PollingFSM(LiteXModule):
         )
 
         # RxEQ State (7.5.4.4) ---------------------------------------------------------------------
-        fsm.act("Polling.RxEQ",
+        fsm.act("Polling.RxEQ", # 2.
             serdes.rx_align.eq(1),
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
@@ -244,7 +244,7 @@ class PollingFSM(LiteXModule):
         )
 
         # Active State (7.5.4.5) -------------------------------------------------------------------
-        fsm.act("Polling.Active",
+        fsm.act("Polling.Active", # 3.
             serdes.rx_align.eq(1),
             _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
@@ -270,7 +270,7 @@ class PollingFSM(LiteXModule):
         )
 
         # Configuration State (7.5.4.6) ------------------------------------------------------------
-        fsm.act("Polling.Configuration",
+        fsm.act("Polling.Configuration", # 4.
             serdes.rx_align.eq(1),
             _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
@@ -294,7 +294,7 @@ class PollingFSM(LiteXModule):
         )
 
         # Idle State (7.5.4.7) ---------------------------------------------------------------------
-        fsm.act("Polling.Idle",
+        fsm.act("Polling.Idle", # 5.
             self.idle.eq(1),
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
@@ -308,7 +308,7 @@ class PollingFSM(LiteXModule):
         )
 
         # Exit to Compliance -----------------------------------------------------------------------
-        fsm.act("Polling.ExitToCompliance",
+        fsm.act("Polling.ExitToCompliance", # 6.
             lfps_unit.tx_idle.eq(1), # FIXME: for bringup
             If(lfps_unit.rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
@@ -317,7 +317,7 @@ class PollingFSM(LiteXModule):
         )
 
         # Exit to RxDetect -------------------------------------------------------------------------
-        fsm.act("Polling.ExitToRxDetect",
+        fsm.act("Polling.ExitToRxDetect", # 7.
             lfps_unit.tx_idle.eq(1), # FIXME: for bringup
             If(lfps_unit.rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
@@ -327,7 +327,7 @@ class PollingFSM(LiteXModule):
 
 
         # Recovery ---------------------------------------------------------------------------------
-        fsm.act("Recovery.Active",
+        fsm.act("Recovery.Active", # 8.
             serdes.rx_align.eq(1),
             _12_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
@@ -350,7 +350,7 @@ class PollingFSM(LiteXModule):
             ),
         )
 
-        fsm.act("Recovery.Configuration",
+        fsm.act("Recovery.Configuration", # 9.
             serdes.rx_align.eq(1),
             _6_ms_timer.wait.eq(with_timers),
             ts_unit.rx_enable.eq(1),
