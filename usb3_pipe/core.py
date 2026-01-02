@@ -60,7 +60,7 @@ class USB3PIPE(LiteXModule):
 
         # LTSSM ------------------------------------------------------------------------------------
         self.ltssm = ltssm = LTSSM(serdes=serdes, lfps_unit=lfps, ts_unit=ts, sys_clk_freq=sys_clk_freq)
-        self.comb += self.ready.eq(ltssm.idle | ltssm.recovery)
+        self.comb += self.ready.eq(ltssm.u0)
 
         # Scrambling -------------------------------------------------------------------------------
         scrambler = Scrambler()

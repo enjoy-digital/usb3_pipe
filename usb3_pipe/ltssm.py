@@ -16,7 +16,7 @@ from litex.gen import *
 class LTSSM(LiteXModule):
     """ Link Training and Status State Machine (section 7.5)"""
     def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq, with_timers=True):
-        self.idle               = Signal()
+        self.u0                 = Signal()
         self.recovery           = Signal()
         self.rx_ready           = Signal()
         self.tx_ready           = Signal()
@@ -144,7 +144,7 @@ class LTSSM(LiteXModule):
 
         # U0 State ---------------------------------------------------------------------------------
         fsm.act("U0", # 5.
-            self.idle.eq(1),
+            self.u0.eq(1),
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
             NextValue(self.recovery, 0),
