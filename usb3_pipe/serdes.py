@@ -156,20 +156,21 @@ class RXErrorSubstitution(LiteXModule):
 
     Substitutes 8b/10b decoder errors with K28.4 symbols.
     """
-    def __init__(self, serdes, clock_domain):
+    def __init__(self, serdes, clock_domain, enable=False):
         self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
         self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
 
         # # #
 
         self.comb += self.sink.connect(self.source)
-        for i in range(2):
-            self.comb += [
-                If(serdes.decoders[i].invalid,
-                    self.source.ctrl[i].eq(1),
-                    self.source.data[8*i:8*(i+1)].eq(K(28, 4)),
-                )
-            ]
+        if enable:
+            for i in range(2):
+                self.comb += [
+                    If(serdes.decoders[i].invalid,
+                        self.source.ctrl[i].eq(1),
+                        self.source.data[8*i:8*(i+1)].eq(K(28, 4)),
+                    )
+                ]
 
 # TX SKP Inserter (6.4.3) --------------------------------------------------------------------------
 
