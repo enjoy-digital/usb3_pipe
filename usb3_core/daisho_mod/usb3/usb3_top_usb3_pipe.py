@@ -10,6 +10,7 @@ import os
 from migen import *
 from litex.gen import *
 
+from usb3_core.daisho_mod.usb3.usb3_protocol import USB3Protocol
 
 # USB3 Top (LiteX) ---------------------------------------------------------------------------------
 
@@ -152,7 +153,143 @@ class USB3TopUSB3Pipe(LiteXModule):
         prot_buf_out_arm_ack   = Signal()
 
         # ------------------------------------------------------------
-        # USB 3.0 Link layer interface
+        # USB 3.0 Protocol layer (LiteX)
+        # ------------------------------------------------------------
+
+        self.usb3_protocol = usb3_protocol = USB3Protocol()
+        self.submodules += usb3_protocol
+
+        # Clocks/resets.
+        self.comb += [
+            usb3_protocol.local_clk.eq(self.clk),
+            usb3_protocol.slow_clk.eq(self.clk),
+            usb3_protocol.ext_clk.eq(self.clk),
+
+            usb3_protocol.reset_n.eq(reset_n),
+            usb3_protocol.ltssm_state.eq(self.ltssm_state),
+        ]
+
+        # Link -> Protocol (RX).
+        self.comb += [
+            usb3_protocol.rx_tp.eq(prot_rx_tp),
+            usb3_protocol.rx_tp_hosterr.eq(prot_rx_tp_hosterr),
+            usb3_protocol.rx_tp_retry.eq(prot_rx_tp_retry),
+            usb3_protocol.rx_tp_pktpend.eq(prot_rx_tp_pktpend),
+            usb3_protocol.rx_tp_subtype.eq(prot_rx_tp_subtype),
+            usb3_protocol.rx_tp_endp.eq(prot_rx_tp_endp),
+            usb3_protocol.rx_tp_nump.eq(prot_rx_tp_nump),
+            usb3_protocol.rx_tp_seq.eq(prot_rx_tp_seq),
+            usb3_protocol.rx_tp_stream.eq(prot_rx_tp_stream),
+
+            usb3_protocol.rx_dph.eq(prot_rx_dph),
+            usb3_protocol.rx_dph_eob.eq(prot_rx_dph_eob),
+            usb3_protocol.rx_dph_setup.eq(prot_rx_dph_setup),
+            usb3_protocol.rx_dph_pktpend.eq(prot_rx_dph_pktpend),
+            usb3_protocol.rx_dph_endp.eq(prot_rx_dph_endp),
+            usb3_protocol.rx_dph_seq.eq(prot_rx_dph_seq),
+            usb3_protocol.rx_dph_len.eq(prot_rx_dph_len),
+            usb3_protocol.rx_dpp_start.eq(prot_rx_dpp_start),
+            usb3_protocol.rx_dpp_done.eq(prot_rx_dpp_done),
+            usb3_protocol.rx_dpp_crcgood.eq(prot_rx_dpp_crcgood),
+        ]
+
+        # Protocol -> Link (TX).
+        self.comb += [
+            prot_tx_tp_a.eq(usb3_protocol.tx_tp_a),
+            prot_tx_tp_a_retry.eq(usb3_protocol.tx_tp_a_retry),
+            prot_tx_tp_a_dir.eq(usb3_protocol.tx_tp_a_dir),
+            prot_tx_tp_a_subtype.eq(usb3_protocol.tx_tp_a_subtype),
+            prot_tx_tp_a_endp.eq(usb3_protocol.tx_tp_a_endp),
+            prot_tx_tp_a_nump.eq(usb3_protocol.tx_tp_a_nump),
+            prot_tx_tp_a_seq.eq(usb3_protocol.tx_tp_a_seq),
+            prot_tx_tp_a_stream.eq(usb3_protocol.tx_tp_a_stream),
+            usb3_protocol.tx_tp_a_ack.eq(prot_tx_tp_a_ack),
+
+            prot_tx_tp_b.eq(usb3_protocol.tx_tp_b),
+            prot_tx_tp_b_retry.eq(usb3_protocol.tx_tp_b_retry),
+            prot_tx_tp_b_dir.eq(usb3_protocol.tx_tp_b_dir),
+            prot_tx_tp_b_subtype.eq(usb3_protocol.tx_tp_b_subtype),
+            prot_tx_tp_b_endp.eq(usb3_protocol.tx_tp_b_endp),
+            prot_tx_tp_b_nump.eq(usb3_protocol.tx_tp_b_nump),
+            prot_tx_tp_b_seq.eq(usb3_protocol.tx_tp_b_seq),
+            prot_tx_tp_b_stream.eq(usb3_protocol.tx_tp_b_stream),
+            usb3_protocol.tx_tp_b_ack.eq(prot_tx_tp_b_ack),
+
+            prot_tx_tp_c.eq(usb3_protocol.tx_tp_c),
+            prot_tx_tp_c_retry.eq(usb3_protocol.tx_tp_c_retry),
+            prot_tx_tp_c_dir.eq(usb3_protocol.tx_tp_c_dir),
+            prot_tx_tp_c_subtype.eq(usb3_protocol.tx_tp_c_subtype),
+            prot_tx_tp_c_endp.eq(usb3_protocol.tx_tp_c_endp),
+            prot_tx_tp_c_nump.eq(usb3_protocol.tx_tp_c_nump),
+            prot_tx_tp_c_seq.eq(usb3_protocol.tx_tp_c_seq),
+            prot_tx_tp_c_stream.eq(usb3_protocol.tx_tp_c_stream),
+            usb3_protocol.tx_tp_c_ack.eq(prot_tx_tp_c_ack),
+
+            prot_tx_dph.eq(usb3_protocol.tx_dph),
+            prot_tx_dph_eob.eq(usb3_protocol.tx_dph_eob),
+            prot_tx_dph_dir.eq(usb3_protocol.tx_dph_dir),
+            prot_tx_dph_endp.eq(usb3_protocol.tx_dph_endp),
+            prot_tx_dph_seq.eq(usb3_protocol.tx_dph_seq),
+            prot_tx_dph_len.eq(usb3_protocol.tx_dph_len),
+            usb3_protocol.tx_dpp_ack.eq(prot_tx_dpp_ack),
+            usb3_protocol.tx_dpp_done.eq(prot_tx_dpp_done),
+        ]
+
+        # Link <-> Protocol buffer interface (prot_buf_*).
+        self.comb += [
+            # Protocol outputs driving link inputs.
+            prot_buf_in_addr.eq(usb3_protocol.buf_in_addr),
+            prot_buf_in_data.eq(usb3_protocol.buf_in_data),
+            prot_buf_in_wren.eq(usb3_protocol.buf_in_wren),
+            prot_buf_in_commit.eq(usb3_protocol.buf_in_commit),
+            prot_buf_in_commit_len.eq(usb3_protocol.buf_in_commit_len),
+
+            prot_buf_out_addr.eq(usb3_protocol.buf_out_addr),
+            prot_buf_out_arm.eq(usb3_protocol.buf_out_arm),
+
+            # Link outputs driving protocol inputs.
+            usb3_protocol.buf_in_ready.eq(prot_buf_in_ready),
+            usb3_protocol.buf_in_commit_ack.eq(prot_buf_in_commit_ack),
+
+            usb3_protocol.buf_out_q.eq(prot_buf_out_q),
+            usb3_protocol.buf_out_len.eq(prot_buf_out_len),
+            usb3_protocol.buf_out_hasdata.eq(prot_buf_out_hasdata),
+            usb3_protocol.buf_out_arm_ack.eq(prot_buf_out_arm_ack),
+        ]
+
+        # External interface (Top-level ports) -> protocol.
+        self.comb += [
+            usb3_protocol.ext_buf_in_addr.eq(self.buf_in_addr),
+            usb3_protocol.ext_buf_in_data.eq(self.buf_in_data),
+            usb3_protocol.ext_buf_in_wren.eq(self.buf_in_wren),
+            usb3_protocol.ext_buf_in_commit.eq(self.buf_in_commit),
+            usb3_protocol.ext_buf_in_commit_len.eq(self.buf_in_commit_len),
+
+            usb3_protocol.ext_buf_out_addr.eq(self.buf_out_addr),
+            usb3_protocol.ext_buf_out_arm.eq(self.buf_out_arm),
+
+            # Protocol -> top-level.
+            self.buf_in_request.eq(usb3_protocol.ext_buf_in_request),
+            self.buf_in_ready.eq(usb3_protocol.ext_buf_in_ready),
+            self.buf_in_commit_ack.eq(usb3_protocol.ext_buf_in_commit_ack),
+
+            self.buf_out_q.eq(usb3_protocol.ext_buf_out_q),
+            self.buf_out_len.eq(usb3_protocol.ext_buf_out_len),
+            self.buf_out_hasdata.eq(usb3_protocol.ext_buf_out_hasdata),
+            self.buf_out_arm_ack.eq(usb3_protocol.ext_buf_out_arm_ack),
+
+            self.vend_req_act.eq(usb3_protocol.vend_req_act),
+            self.vend_req_request.eq(usb3_protocol.vend_req_request),
+            self.vend_req_val.eq(usb3_protocol.vend_req_val),
+
+            prot_endp_mode_rx.eq(usb3_protocol.endp_mode_rx),
+            prot_endp_mode_tx.eq(usb3_protocol.endp_mode_tx),
+            prot_dev_addr.eq(usb3_protocol.dev_addr),
+            prot_configured.eq(usb3_protocol.configured),
+        ]
+
+        # ------------------------------------------------------------
+        # USB 3.0 Link layer interface (Verilog)
         # ------------------------------------------------------------
 
         # Unused/ignored in original top.
@@ -259,119 +396,4 @@ class USB3TopUSB3Pipe(LiteXModule):
             o_buf_out_arm_ack      = prot_buf_out_arm_ack,
 
             i_dev_addr             = prot_dev_addr,
-        )
-
-        # ------------------------------------------------------------
-        # USB 3.0 Protocol layer interface
-        # ------------------------------------------------------------
-
-        self.specials += Instance("usb3_protocol",
-            i_local_clk             = self.clk,  # FIXME ?
-            i_slow_clk              = self.clk,  # FIXME ?
-            i_ext_clk               = self.clk,  # FIXME ?
-
-            i_reset_n               = reset_n,
-            i_ltssm_state           = self.ltssm_state,
-
-            i_endp_mode_rx          = prot_endp_mode_rx,
-            i_endp_mode_tx          = prot_endp_mode_tx,
-
-            i_rx_tp                 = prot_rx_tp,
-            i_rx_tp_hosterr         = prot_rx_tp_hosterr,
-            i_rx_tp_retry           = prot_rx_tp_retry,
-            i_rx_tp_pktpend         = prot_rx_tp_pktpend,
-            i_rx_tp_subtype         = prot_rx_tp_subtype,
-            i_rx_tp_endp            = prot_rx_tp_endp,
-            i_rx_tp_nump            = prot_rx_tp_nump,
-            i_rx_tp_seq             = prot_rx_tp_seq,
-            i_rx_tp_stream          = prot_rx_tp_stream,
-
-            i_rx_dph                = prot_rx_dph,
-            i_rx_dph_eob            = prot_rx_dph_eob,
-            i_rx_dph_setup          = prot_rx_dph_setup,
-            i_rx_dph_pktpend        = prot_rx_dph_pktpend,
-            i_rx_dph_endp           = prot_rx_dph_endp,
-            i_rx_dph_seq            = prot_rx_dph_seq,
-            i_rx_dph_len            = prot_rx_dph_len,
-            i_rx_dpp_start          = prot_rx_dpp_start,
-            i_rx_dpp_done           = prot_rx_dpp_done,
-            i_rx_dpp_crcgood        = prot_rx_dpp_crcgood,
-
-            o_tx_tp_a               = prot_tx_tp_a,
-            o_tx_tp_a_retry         = prot_tx_tp_a_retry,
-            o_tx_tp_a_dir           = prot_tx_tp_a_dir,
-            o_tx_tp_a_subtype       = prot_tx_tp_a_subtype,
-            o_tx_tp_a_endp          = prot_tx_tp_a_endp,
-            o_tx_tp_a_nump          = prot_tx_tp_a_nump,
-            o_tx_tp_a_seq           = prot_tx_tp_a_seq,
-            o_tx_tp_a_stream        = prot_tx_tp_a_stream,
-            o_tx_tp_a_ack           = prot_tx_tp_a_ack,
-
-            o_tx_tp_b               = prot_tx_tp_b,
-            o_tx_tp_b_retry         = prot_tx_tp_b_retry,
-            o_tx_tp_b_dir           = prot_tx_tp_b_dir,
-            o_tx_tp_b_subtype       = prot_tx_tp_b_subtype,
-            o_tx_tp_b_endp          = prot_tx_tp_b_endp,
-            o_tx_tp_b_nump          = prot_tx_tp_b_nump,
-            o_tx_tp_b_seq           = prot_tx_tp_b_seq,
-            o_tx_tp_b_stream        = prot_tx_tp_b_stream,
-            o_tx_tp_b_ack           = prot_tx_tp_b_ack,
-
-            o_tx_tp_c               = prot_tx_tp_c,
-            o_tx_tp_c_retry         = prot_tx_tp_c_retry,
-            o_tx_tp_c_dir           = prot_tx_tp_c_dir,
-            o_tx_tp_c_subtype       = prot_tx_tp_c_subtype,
-            o_tx_tp_c_endp          = prot_tx_tp_c_endp,
-            o_tx_tp_c_nump          = prot_tx_tp_c_nump,
-            o_tx_tp_c_seq           = prot_tx_tp_c_seq,
-            o_tx_tp_c_stream        = prot_tx_tp_c_stream,
-            o_tx_tp_c_ack           = prot_tx_tp_c_ack,
-
-            o_tx_dph                = prot_tx_dph,
-            o_tx_dph_eob            = prot_tx_dph_eob,
-            o_tx_dph_dir            = prot_tx_dph_dir,
-            o_tx_dph_endp           = prot_tx_dph_endp,
-            o_tx_dph_seq            = prot_tx_dph_seq,
-            o_tx_dph_len            = prot_tx_dph_len,
-            o_tx_dpp_ack            = prot_tx_dpp_ack,
-            o_tx_dpp_done           = prot_tx_dpp_done,
-
-            o_buf_in_addr           = prot_buf_in_addr,
-            o_buf_in_data           = prot_buf_in_data,
-            o_buf_in_wren           = prot_buf_in_wren,
-            i_buf_in_ready          = prot_buf_in_ready,
-            o_buf_in_commit         = prot_buf_in_commit,
-            o_buf_in_commit_len     = prot_buf_in_commit_len,
-            i_buf_in_commit_ack     = prot_buf_in_commit_ack,
-
-            o_buf_out_addr          = prot_buf_out_addr,
-            i_buf_out_q             = prot_buf_out_q,
-            i_buf_out_len           = prot_buf_out_len,
-            i_buf_out_hasdata       = prot_buf_out_hasdata,
-            o_buf_out_arm           = prot_buf_out_arm,
-            i_buf_out_arm_ack       = prot_buf_out_arm_ack,
-
-            # External interface.
-            i_ext_buf_in_addr       = self.buf_in_addr,
-            i_ext_buf_in_data       = self.buf_in_data,
-            i_ext_buf_in_wren       = self.buf_in_wren,
-            o_ext_buf_in_request    = self.buf_in_request,
-            o_ext_buf_in_ready      = self.buf_in_ready,
-            i_ext_buf_in_commit     = self.buf_in_commit,
-            i_ext_buf_in_commit_len = self.buf_in_commit_len,
-            o_ext_buf_in_commit_ack = self.buf_in_commit_ack,
-
-            i_ext_buf_out_addr      = self.buf_out_addr,
-            o_ext_buf_out_q         = self.buf_out_q,
-            o_ext_buf_out_len       = self.buf_out_len,
-            o_ext_buf_out_hasdata   = self.buf_out_hasdata,
-            i_ext_buf_out_arm       = self.buf_out_arm,
-            o_ext_buf_out_arm_ack   = self.buf_out_arm_ack,
-
-            o_vend_req_act          = self.vend_req_act,
-            o_vend_req_request      = self.vend_req_request,
-            o_vend_req_val          = self.vend_req_val,
-
-            o_dev_addr              = prot_dev_addr,
-            o_configured            = prot_configured,
         )
