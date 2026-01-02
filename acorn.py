@@ -129,7 +129,7 @@ class USB3SoC(SoCMini):
         ]
 
         # USB3 Core --------------------------------------------------------------------------------
-        self.usb3_core = usb3_core = USB3Core(platform, daisho_core="daisho")
+        self.usb3_core = usb3_core = USB3Core(platform, daisho_core="daisho_mod")
         self.comb += [
             usb3_pipe.source.connect(usb3_core.sink),
             usb3_core.source.connect(usb3_pipe.sink),

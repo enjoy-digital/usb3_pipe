@@ -14,7 +14,8 @@ from litex.gen import *
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import stream
 
-from usb3_pipe.serdes import RXWordAligner
+from usb3_core.daisho_mod.usb3.usb3_top_usb3_pipe import USB3TopUSB3Pipe
+
 
 # USB3 Core Endpoint Control -----------------------------------------------------------------------
 
@@ -53,6 +54,7 @@ class USB3CoreEndpointControl(LiteXModule):
         self.buf_out_arm       = self._buf_out_arm.re & self._buf_out_arm.r
         self.buf_out_arm_ack   = self._buf_out_arm_ack.status
 
+
 # USB3 Core ----------------------------------------------------------------------------------------
 
 class USB3Core(LiteXModule):
@@ -68,9 +70,10 @@ class USB3Core(LiteXModule):
         self.reset  = Signal()
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
         # # #
 
-        # Artificial Reset Delay from LT_POLLING_IDLE to LT_POLLING_U0 ----------------------------
+        # Artificial Reset Delay from LT_POLLING_IDLE to LT_POLLING_U0 -----------------------------
 
         u0_timer = WaitTimer(32)
         u0_timer = ResetInserter()(u0_timer)
@@ -142,45 +145,46 @@ class USB3Core(LiteXModule):
         ]
 
         # Daisho USB3 core -------------------------------------------------------------------------
-        usb3_top_params = dict(
-            i_clk               = ClockSignal("sys"),
-            i_reset_n           = ~self.reset,
+        self.usb3_top = usb3_top = USB3TopUSB3Pipe(platform)
+        self.submodules += usb3_top
 
-            i_ltssm_state       = ltssm_state,
+        self.comb += [
+            usb3_top.clk.eq(ClockSignal("sys")),
+            usb3_top.reset.eq(self.reset),
+            usb3_top.ltssm_state.eq(ltssm_state),
 
-            i_in_data           = in_data,
-            i_in_datak          = in_datak,
-            i_in_active         = in_active,
+            usb3_top.in_data.eq(in_data),
+            usb3_top.in_datak.eq(in_datak),
+            usb3_top.in_active.eq(in_active),
 
-            o_out_data          = out_data,
-            o_out_datak         = out_datak,
-            o_out_active        = out_active,
-            i_out_stall         = out_stall,
-        )
+            out_data.eq(usb3_top.out_data),
+            out_datak.eq(usb3_top.out_datak),
+            out_active.eq(usb3_top.out_active),
+            usb3_top.out_stall.eq(out_stall),
+        ]
 
         # Daisho USB3 core endpoinst ---------------------------------------------------------------
         if with_endpoint:
             self.usb3_endpoint_control = usb3_endpoint_control = USB3CoreEndpointControl()
-            usb3_top_params.update(
-                i_buf_in_addr       = usb3_endpoint_control.buf_in_addr,
-                i_buf_in_data       = usb3_endpoint_control.buf_in_data,
-                i_buf_in_wren       = usb3_endpoint_control.buf_in_wren,
-                o_buf_in_request    = usb3_endpoint_control.buf_in_request,
-                o_buf_in_ready      = usb3_endpoint_control.buf_in_ready,
-                i_buf_in_commit     = usb3_endpoint_control.buf_in_commit,
-                i_buf_in_commit_len = usb3_endpoint_control.buf_in_commit_len,
-                o_buf_in_commit_ack = usb3_endpoint_control.buf_in_commit_ack,
+            self.comb += [
+                # IN buffer (host->device)
+                usb3_top.buf_in_addr.eq(usb3_endpoint_control.buf_in_addr),
+                usb3_top.buf_in_data.eq(usb3_endpoint_control.buf_in_data),
+                usb3_top.buf_in_wren.eq(usb3_endpoint_control.buf_in_wren),
+                usb3_endpoint_control.buf_in_request.eq(usb3_top.buf_in_request),
+                usb3_endpoint_control.buf_in_ready.eq(usb3_top.buf_in_ready),
+                usb3_top.buf_in_commit.eq(usb3_endpoint_control.buf_in_commit),
+                usb3_top.buf_in_commit_len.eq(usb3_endpoint_control.buf_in_commit_len),
+                usb3_endpoint_control.buf_in_commit_ack.eq(usb3_top.buf_in_commit_ack),
 
-                i_buf_out_addr      = usb3_endpoint_control.buf_out_addr,
-                o_buf_out_q         = usb3_endpoint_control.buf_out_q,
-                o_buf_out_len       = usb3_endpoint_control.buf_out_len,
-                o_buf_out_hasdata   = usb3_endpoint_control.buf_out_hasdata,
-                i_buf_out_arm       = usb3_endpoint_control.buf_out_arm,
-                o_buf_out_arm_ack   = usb3_endpoint_control.buf_out_arm_ack,
-            )
-
-        # Daisho USB3 instance ---------------------------------------------------------------------
-        self.specials += Instance("usb3_top_usb3_pipe", **usb3_top_params)
+                # OUT buffer (device->host)
+                usb3_top.buf_out_addr.eq(usb3_endpoint_control.buf_out_addr),
+                usb3_endpoint_control.buf_out_q.eq(usb3_top.buf_out_q),
+                usb3_endpoint_control.buf_out_len.eq(usb3_top.buf_out_len),
+                usb3_endpoint_control.buf_out_hasdata.eq(usb3_top.buf_out_hasdata),
+                usb3_top.buf_out_arm.eq(usb3_endpoint_control.buf_out_arm),
+                usb3_endpoint_control.buf_out_arm_ack.eq(usb3_top.buf_out_arm_ack),
+            ]
 
         # Daisho USB3 sources ----------------------------------------------------------------------
         daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), daisho_core)
