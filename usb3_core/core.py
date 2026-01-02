@@ -14,7 +14,7 @@ from litex.gen import *
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import stream
 
-from usb3_core.daisho_mod.usb3.usb3_top_usb3_pipe import USB3TopUSB3Pipe
+from usb3_core.daisho_mod.usb3.usb3_top import USB3Top
 
 
 # USB3 Core Endpoint Control -----------------------------------------------------------------------
@@ -145,7 +145,7 @@ class USB3Core(LiteXModule):
         ]
 
         # Daisho USB3 core -------------------------------------------------------------------------
-        self.usb3_top = usb3_top = USB3TopUSB3Pipe(platform)
+        self.usb3_top = usb3_top = USB3Top(platform)
         self.submodules += usb3_top
 
         self.comb += [

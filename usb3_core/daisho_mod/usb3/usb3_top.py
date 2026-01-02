@@ -12,9 +12,9 @@ from litex.gen import *
 
 from usb3_core.daisho_mod.usb3.usb3_protocol import USB3Protocol
 
-# USB3 Top (LiteX) ---------------------------------------------------------------------------------
+# USB3 Top -----------------------------------------------------------------------------------------
 
-class USB3TopUSB3Pipe(LiteXModule):
+class USB3Top(LiteXModule):
     """USB3.0 top-level (LiteX)
 
     LiteX/Migen equivalent of the Verilog usb3_top_usb3_pipe top-level:
