@@ -235,8 +235,8 @@ class TXSKPInserter(LiteXModule):
         self.comb += [
             If(skip_grant & (skip_count != 0),
                 source.valid.eq(1),
-                source.data.eq(Replicate(Signal(8, reset=SKP.value), 4)),
-                source.ctrl.eq(Replicate(Signal(1, reset=1)        , 4)),
+                source.data.eq(Replicate(Constant(SKP.value, 8), 4)),
+                source.ctrl.eq(0b1111),
                 skip_dequeue.eq(source.ready)
             ).Else(
                 sink.connect(source)
