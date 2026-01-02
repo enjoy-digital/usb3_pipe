@@ -60,22 +60,24 @@ class USB3PIPE(LiteXModule):
 
         # LTSSM ------------------------------------------------------------------------------------
         self.ltssm = ltssm = LTSSM(serdes=serdes, lfps_unit=lfps, ts_unit=ts, sys_clk_freq=sys_clk_freq)
-        self.comb += self.ready.eq(ltssm.polling.idle | ltssm.polling.recovery)
+        self.comb += self.ready.eq(ltssm.idle | ltssm.recovery)
 
         # Scrambling -------------------------------------------------------------------------------
         scrambler = Scrambler()
         scrambler = ResetInserter()(scrambler)
-        self.comb += scrambler.reset.eq(~ltssm.polling.tx_ready)
+        self.comb += scrambler.reset.eq(~ltssm.tx_ready)
         self.scrambler = scrambler
         self.comb += [
             sink.connect(scrambler.sink),
-            If(ltssm.polling.tx_ready, scrambler.source.connect(serdes.sink))
+            If(ltssm.tx_ready,
+                scrambler.source.connect(serdes.sink)
+            )
         ]
 
         self.descrambler = descrambler = Descrambler()
         self.comb += [
             serdes.source.connect(descrambler.sink, keep={"data", "ctrl"}),
-            If(ltssm.polling.rx_ready,
+            If(ltssm.rx_ready,
                 serdes.source.connect(descrambler.sink, omit={"data", "ctrl"})
             ),
             descrambler.source.connect(source),

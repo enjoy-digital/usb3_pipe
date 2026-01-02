@@ -42,11 +42,11 @@ class TestPHY(unittest.TestCase):
             self.fail(f"Simulation exited with code {p.returncode}.\n\n" + out[-4000:])
 
         # Look for both host/dev reaching Polling.Idle.
-        host_idle = re.search(r"HOST entering Polling\.Idle state",  out)
-        dev_idle  = re.search(r"DEV\s+entering Polling\.Idle state", out)
+        host_idle = re.search(r"HOST entering U0 state",  out)
+        dev_idle  = re.search(r"DEV\s+entering U0 state", out)
 
         if not (host_idle and dev_idle):
             self.fail(
-                "Did not observe both Host and Dev entering Polling.Idle.\n\n"
+                "Did not observe both Host and Dev entering U0.\n\n"
                 "---- tail ----\n" + out[-4000:]
             )
