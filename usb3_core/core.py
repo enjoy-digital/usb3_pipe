@@ -125,7 +125,10 @@ class USB3Core(LiteXModule):
             out_active_d.eq(out_active),
             out_fifo.sink.first.eq(out_active & ~out_active_d),
         ]
-        self.comb += out_fifo.sink.last.eq(~out_active & out_active_d)
+        self.comb += [
+            out_stall.eq(out_fifo.level > 64),
+            out_fifo.sink.last.eq(~out_active & out_active_d),
+        ]
 
         # Connect FIFO to source.
         self.comb += [
@@ -154,7 +157,7 @@ class USB3Core(LiteXModule):
             o_out_data          = out_data,
             o_out_datak         = out_datak,
             o_out_active        = out_active,
-            i_out_stall         = 0, # FIXME
+            i_out_stall         = out_stall,
         )
 
         # Daisho USB3 core endpoinst ---------------------------------------------------------------
