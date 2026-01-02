@@ -62,7 +62,6 @@ class USB3Core(LiteXModule):
     to make it compatible with the USB3.0 PIPE.
     - New top to only keep link/protocol layers and and endpoints.
     - Additional logic to emulate Daisho's internal ltssm states.
-    - Additional RX words alignment. FIXME: could we avoid it or do it or should we do it in the PIPE?
     - Additional TX FIFO to handle back-pressure from the SerDes. (not handled by Daisho)
     """
     def __init__(self, platform, with_endpoint=False):
@@ -71,7 +70,8 @@ class USB3Core(LiteXModule):
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         # # #
 
-        # Artificial after reset delay from LT_POLLING_IDLE to LT_POLLING_U0
+        # Artificial Reset Delay from LT_POLLING_IDLE to LT_POLLING_U0 ----------------------------
+
         u0_timer = WaitTimer(32)
         u0_timer = ResetInserter()(u0_timer)
         self.submodules += u0_timer
@@ -90,17 +90,15 @@ class USB3Core(LiteXModule):
         ]
 
         # RX (Sink) --------------------------------------------------------------------------------
-        self.aligner = aligner = RXWordAligner(check_ctrl_only=True) # FIXME: can we avoid alignment here?
-        self.comb += sink.connect(aligner.sink)
 
         in_data   = Signal(32)
         in_datak  = Signal(4)
         in_active = Signal()
         self.comb += [
-            aligner.source.ready.eq(1), # Always ready
-            in_data.eq(aligner.source.data),
-            in_datak.eq(aligner.source.ctrl),
-            in_active.eq(aligner.source.valid),
+            sink.ready.eq(1),
+            in_data.eq(sink.data),
+            in_datak.eq(sink.ctrl),
+            in_active.eq(sink.valid),
         ]
 
         # TX (Source) ------------------------------------------------------------------------------
@@ -150,9 +148,9 @@ class USB3Core(LiteXModule):
 
             i_ltssm_state       = ltssm_state,
 
-            i_in_data           = aligner.source.data,
-            i_in_datak          = aligner.source.ctrl,
-            i_in_active         = aligner.source.valid,
+            i_in_data           = in_data,
+            i_in_datak          = in_datak,
+            i_in_active         = in_active,
 
             o_out_data          = out_data,
             o_out_datak         = out_datak,
