@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 from migen import *
-
 from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
@@ -13,15 +12,38 @@ from litex.gen import *
 # Link Training and Status State Machine -----------------------------------------------------------
 
 @ResetInserter()
-class LTSSM(LiteXModule):
+class USB3LTSSM(LiteXModule):
     """ Link Training and Status State Machine (section 7.5)"""
-    def __init__(self, serdes, lfps_unit, ts_unit, sys_clk_freq, with_timers=True):
+    def __init__(self, sys_clk_freq, with_timers=True):
+        # Status -----------------------------------------------------------------------------------
         self.u0                 = Signal()
         self.recovery           = Signal()
         self.rx_ready           = Signal()
         self.tx_ready           = Signal()
         self.exit_to_compliance = Signal()
         self.exit_to_rx_detect  = Signal()
+
+        # SerDes control ---------------------------------------------------------------------------
+        self.serdes_rx_align    = Signal()         # o
+        self.serdes_rx_polarity = Signal(reset=0)  # o
+
+        # LFPS control/status ----------------------------------------------------------------------
+        self.lfps_tx_polling = Signal()     # o
+        self.lfps_tx_idle    = Signal()     # o
+        self.lfps_rx_polling = Signal()     # i
+        self.lfps_tx_count   = Signal(16)   # i
+
+        # TS control/status ------------------------------------------------------------------------
+        self.ts_rx_enable = Signal()  # o
+        self.ts_tx_enable = Signal()  # o
+        self.ts_tx_tseq   = Signal()  # o
+        self.ts_tx_ts1    = Signal()  # o
+        self.ts_tx_ts2    = Signal()  # o
+
+        self.ts_rx_ts1     = Signal() # i
+        self.ts_rx_ts1_inv = Signal() # i
+        self.ts_rx_ts2     = Signal() # i
+        self.ts_tx_done    = Signal() # i
 
         # # #
 
@@ -56,19 +78,13 @@ class LTSSM(LiteXModule):
         # LFPS State (7.5.4.3) ---------------------------------------------------------------------
         fsm.act("Polling.LFPS", # 1.
             _360_ms_timer.wait.eq(with_timers),
-            lfps_unit.tx_polling.eq(1),
-            # Go to ExitToCompliance when:
-            # - 360ms timer is expired.
+            self.lfps_tx_polling.eq(1),
             If(_360_ms_timer.done,
                 NextState("Polling.ExitToCompliance")
-            # Go to RxEQ when:
-            # - at least 16 LFPS Polling Bursts have been generated.
-            # - 2 consecutive LFPS Polling Bursts have been received (ensured by ts_unit).
-            # - 4 LFPS Polling Bursts have been sent since first LFPS Polling Bursts reception.
-            ).Elif(lfps_unit.tx_count >= tx_lfps_count,
-                If(lfps_unit.rx_polling & ~rx_lfps_seen,
+            ).Elif(self.lfps_tx_count >= tx_lfps_count,
+                If(self.lfps_rx_polling & ~rx_lfps_seen,
                     NextValue(rx_lfps_seen, 1),
-                    NextValue(tx_lfps_count, lfps_unit.tx_count + 4)
+                    NextValue(tx_lfps_count, self.lfps_tx_count + 4)
                 ),
                 If(rx_lfps_seen,
                     NextState("Polling.RxEQ"),
@@ -78,12 +94,11 @@ class LTSSM(LiteXModule):
 
         # RxEQ State (7.5.4.4) ---------------------------------------------------------------------
         fsm.act("Polling.RxEQ", # 2.
-            serdes.rx_align.eq(1),
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_tseq.eq(1),
-            # Go to Active when the 65536 TSEQ ordered sets are sent.
-            If(ts_unit.tx_done,
+            self.serdes_rx_align.eq(1),
+            self.ts_rx_enable.eq(1),
+            self.ts_tx_enable.eq(1),
+            self.ts_tx_tseq.eq(1),
+            If(self.ts_tx_done,
                 NextState("Polling.Active")
             ),
         )
@@ -91,28 +106,24 @@ class LTSSM(LiteXModule):
         # Active State (7.5.4.5) -------------------------------------------------------------------
         fsm.act("Polling.Active", # 3.
             _12_ms_timer.wait.eq(with_timers),
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_ts1.eq(1),
+            self.ts_rx_enable.eq(1),
+            self.ts_tx_enable.eq(1),
+            self.ts_tx_ts1.eq(1),
 
             # Latch what we saw from the host (rx_ts1 / rx_ts1_inv are pulses).
-            NextValue(rx_ts1_seen,     rx_ts1_seen     | ts_unit.rx_ts1),
-            NextValue(rx_ts1_inv_seen, rx_ts1_inv_seen | ts_unit.rx_ts1_inv),
+            NextValue(rx_ts1_seen,     rx_ts1_seen     | self.ts_rx_ts1),
+            NextValue(rx_ts1_inv_seen, rx_ts1_inv_seen | self.ts_rx_ts1_inv),
 
-            # Go to RxDetect if no TS1/TS2 seen in the 12ms.
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
 
-            # Go to Configuration only after:
-            # - we have completed a TS1 transmit burst (tx_done while tx_ts1 selected)
-            # - and we have seen TS1 (normal or inverted) from the host.
-            If(ts_unit.tx_done & (rx_ts1_seen | rx_ts1_inv_seen),
+            If(self.ts_tx_done & (rx_ts1_seen | rx_ts1_inv_seen),
                 If(rx_ts1_seen,
-                    If(~self.recovery, NextValue(serdes.rx_polarity, 0)),
+                    If(~self.recovery, NextValue(self.serdes_rx_polarity, 0)),
                 ),
                 If(rx_ts1_inv_seen,
-                    If(~self.recovery, NextValue(serdes.rx_polarity, 1)),
+                    If(~self.recovery, NextValue(self.serdes_rx_polarity, 1)),
                 ),
                 _12_ms_timer.wait.eq(0),
                 NextState("Polling.Configuration")
@@ -122,19 +133,15 @@ class LTSSM(LiteXModule):
         # Configuration State (7.5.4.6) ------------------------------------------------------------
         fsm.act("Polling.Configuration", # 4.
             _12_ms_timer.wait.eq(with_timers),
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_ts2.eq(1),
-            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
-            # Go to RxDetect if no TS2 seen in the 12ms.
+            self.ts_rx_enable.eq(1),
+            self.ts_tx_enable.eq(1),
+            self.ts_tx_ts2.eq(1),
+            NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
             If(_12_ms_timer.done,
                 _12_ms_timer.wait.eq(0),
                 NextState("Polling.ExitToRxDetect")
             ),
-            # Go to U0 when:
-            # - 8 consecutive TS2 ordered sets are received. (8 ensured by ts_unit)
-            # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
-            If(ts_unit.tx_done,
+            If(self.ts_tx_done,
                 If(rx_ts2_seen,
                     self.rx_ready.eq(1),
                     NextState("U0")
@@ -148,21 +155,21 @@ class LTSSM(LiteXModule):
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
             NextValue(self.recovery, 0),
-            If(ts_unit.rx_ts1, # FIXME: for bringup, should be Recovery.Active
+            If(self.ts_rx_ts1, # FIXME: for bringup, should be Recovery.Active
                 NextValue(self.recovery, 1),
                 NextValue(rx_ts1_seen,     0),
                 NextValue(rx_ts1_inv_seen, 0),
                 NextValue(rx_ts2_seen,     0),
                 NextState("Recovery.Active")
-            ).Elif(lfps_unit.rx_polling, # FIXME: for bringup
+            ).Elif(self.lfps_rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
             )
         )
 
         # Exit to Compliance -----------------------------------------------------------------------
         fsm.act("Polling.ExitToCompliance", # 6.
-            lfps_unit.tx_idle.eq(1), # FIXME: for bringup
-            If(lfps_unit.rx_polling, # FIXME: for bringup
+            self.lfps_tx_idle.eq(1), # FIXME: for bringup
+            If(self.lfps_rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
             ),
             self.exit_to_compliance.eq(1)
@@ -170,8 +177,8 @@ class LTSSM(LiteXModule):
 
         # Exit to RxDetect -------------------------------------------------------------------------
         fsm.act("Polling.ExitToRxDetect", # 7.
-            lfps_unit.tx_idle.eq(1), # FIXME: for bringup
-            If(lfps_unit.rx_polling, # FIXME: for bringup
+            self.lfps_tx_idle.eq(1), # FIXME: for bringup
+            If(self.lfps_rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
             ),
             self.exit_to_rx_detect.eq(1)
@@ -180,44 +187,34 @@ class LTSSM(LiteXModule):
         # Recovery ---------------------------------------------------------------------------------
         fsm.act("Recovery.Active", # 8.
             _12_ms_timer.wait.eq(with_timers),
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_ts1.eq(1),
+            self.ts_rx_enable.eq(1),
+            self.ts_tx_enable.eq(1),
+            self.ts_tx_ts1.eq(1),
 
-            # Latch what we saw from the host (rx_ts1 / rx_ts2 are pulses).
-            NextValue(rx_ts1_seen, rx_ts1_seen | ts_unit.rx_ts1),
-            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
+            NextValue(rx_ts1_seen, rx_ts1_seen | self.ts_rx_ts1),
+            NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
 
-            # Go to RxDetect if no TS1/TS2 seen in the 12ms.
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
 
-            # Go to Configuration only after:
-            # - we have completed a TS1 transmit burst (tx_done while tx_ts1 selected)
-            # - and we have seen TS1 or TS2 from the host.
-            If(ts_unit.tx_done & (rx_ts1_seen | rx_ts2_seen),
+            If(self.ts_tx_done & (rx_ts1_seen | rx_ts2_seen),
                 _12_ms_timer.wait.eq(0),
                 NextState("Recovery.Configuration")
             ),
         )
 
-
         fsm.act("Recovery.Configuration", # 9.
             _6_ms_timer.wait.eq(with_timers),
-            ts_unit.rx_enable.eq(1),
-            ts_unit.tx_enable.eq(1),
-            ts_unit.tx_ts2.eq(1),
-            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
-            # Go to RxDetect if no TS2 seen in the 6ms.
+            self.ts_rx_enable.eq(1),
+            self.ts_tx_enable.eq(1),
+            self.ts_tx_ts2.eq(1),
+            NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
             If(_6_ms_timer.done,
                 _6_ms_timer.wait.eq(0),
                 NextState("Polling.ExitToRxDetect")
             ),
-            # Go to Idle when:
-            # - 8 consecutive TS2 ordered sets are received. (8 ensured by ts_unit)
-            # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
-            If(ts_unit.tx_done,
+            If(self.ts_tx_done,
                 If(rx_ts2_seen,
                     self.rx_ready.eq(1),
                     NextState("U0")

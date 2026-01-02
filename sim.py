@@ -21,8 +21,9 @@ from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
 from usb3_pipe.serdes import *
-from usb3_pipe import USB3PIPE
-from usb3_core.core import USB3Core
+from usb3_pipe        import USB3PIPE
+from usb3_core.core   import USB3Core
+from usb3_ltssm       import USB3LTSSM
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -142,17 +143,47 @@ class USB3PIPESim(SoCMini):
         # USB3 Host.
         host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         host_usb3_pipe   = USB3PIPE(
-            serdes          = host_usb3_serdes,
-            sys_clk_freq    = sys_clk_freq)
+            serdes       = host_usb3_serdes,
+            sys_clk_freq = sys_clk_freq)
         self.submodules += host_usb3_serdes, host_usb3_pipe
-        host_usb3_pipe.finalize()
+
+        # USB3 Host LTSSM.
+        host_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
+        self.submodules += host_usb3_ltssm
+        self.comb += [
+            # LTSSM -> PIPE
+            host_usb3_pipe.lfps_tx_polling.eq(host_usb3_ltssm.lfps_tx_polling),
+            host_usb3_pipe.lfps_tx_idle.eq(host_usb3_ltssm.lfps_tx_idle),
+            host_usb3_pipe.ts_rx_enable.eq(host_usb3_ltssm.ts_rx_enable),
+            host_usb3_pipe.ts_tx_enable.eq(host_usb3_ltssm.ts_tx_enable),
+            host_usb3_pipe.ts_tx_tseq.eq(host_usb3_ltssm.ts_tx_tseq),
+            host_usb3_pipe.ts_tx_ts1.eq(host_usb3_ltssm.ts_tx_ts1),
+            host_usb3_pipe.ts_tx_ts2.eq(host_usb3_ltssm.ts_tx_ts2),
+
+            host_usb3_pipe.serdes_rx_align.eq(host_usb3_ltssm.serdes_rx_align),
+            host_usb3_pipe.serdes_rx_polarity.eq(host_usb3_ltssm.serdes_rx_polarity),
+
+            host_usb3_pipe.rx_ready.eq(host_usb3_ltssm.rx_ready),
+            host_usb3_pipe.tx_ready.eq(host_usb3_ltssm.tx_ready),
+
+            # PIPE -> LTSSM
+            host_usb3_ltssm.lfps_rx_polling.eq(host_usb3_pipe.lfps_rx_polling),
+            host_usb3_ltssm.lfps_tx_count.eq(host_usb3_pipe.lfps_tx_count),
+
+            host_usb3_ltssm.ts_rx_ts1.eq(host_usb3_pipe.ts_rx_ts1),
+            host_usb3_ltssm.ts_rx_ts1_inv.eq(host_usb3_pipe.ts_rx_ts1_inv),
+            host_usb3_ltssm.ts_rx_ts2.eq(host_usb3_pipe.ts_rx_ts2),
+            host_usb3_ltssm.ts_tx_done.eq(host_usb3_pipe.ts_tx_done),
+        ]
+        host_usb3_ltssm.finalize()
+
         host_usb3_core = USB3Core(platform)
         self.host_usb3_core = host_usb3_core
         self.comb += [
             host_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
             host_usb3_pipe.source.connect(host_usb3_core.sink),
             host_usb3_core.source.connect(host_usb3_pipe.sink),
-            host_usb3_core.reset.eq(~host_usb3_pipe.ready),
+            host_usb3_core.reset.eq(~host_usb3_ltssm.u0),
         ]
 
         # USB3 Device.
@@ -162,13 +193,44 @@ class USB3PIPESim(SoCMini):
             sys_clk_freq    = sys_clk_freq)
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
         dev_usb3_pipe.finalize()
+
+        # USB3 Host LTSSM.
+        dev_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
+        self.submodules += dev_usb3_ltssm
+        self.comb += [
+            # LTSSM -> PIPE
+            dev_usb3_pipe.lfps_tx_polling.eq(dev_usb3_ltssm.lfps_tx_polling),
+            dev_usb3_pipe.lfps_tx_idle.eq(dev_usb3_ltssm.lfps_tx_idle),
+            dev_usb3_pipe.ts_rx_enable.eq(dev_usb3_ltssm.ts_rx_enable),
+            dev_usb3_pipe.ts_tx_enable.eq(dev_usb3_ltssm.ts_tx_enable),
+            dev_usb3_pipe.ts_tx_tseq.eq(dev_usb3_ltssm.ts_tx_tseq),
+            dev_usb3_pipe.ts_tx_ts1.eq(dev_usb3_ltssm.ts_tx_ts1),
+            dev_usb3_pipe.ts_tx_ts2.eq(dev_usb3_ltssm.ts_tx_ts2),
+
+            dev_usb3_pipe.serdes_rx_align.eq(dev_usb3_ltssm.serdes_rx_align),
+            dev_usb3_pipe.serdes_rx_polarity.eq(dev_usb3_ltssm.serdes_rx_polarity),
+
+            dev_usb3_pipe.rx_ready.eq(dev_usb3_ltssm.rx_ready),
+            dev_usb3_pipe.tx_ready.eq(dev_usb3_ltssm.tx_ready),
+
+            # PIPE -> LTSSM
+            dev_usb3_ltssm.lfps_rx_polling.eq(dev_usb3_pipe.lfps_rx_polling),
+            dev_usb3_ltssm.lfps_tx_count.eq(dev_usb3_pipe.lfps_tx_count),
+
+            dev_usb3_ltssm.ts_rx_ts1.eq(dev_usb3_pipe.ts_rx_ts1),
+            dev_usb3_ltssm.ts_rx_ts1_inv.eq(dev_usb3_pipe.ts_rx_ts1_inv),
+            dev_usb3_ltssm.ts_rx_ts2.eq(dev_usb3_pipe.ts_rx_ts2),
+            dev_usb3_ltssm.ts_tx_done.eq(dev_usb3_pipe.ts_tx_done),
+        ]
+        dev_usb3_ltssm.finalize()
+
         dev_usb3_core = USB3Core(platform)
         self.dev_usb3_core = dev_usb3_core
         self.comb += [
             dev_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
             dev_usb3_pipe.source.connect(dev_usb3_core.sink),
             dev_usb3_core.source.connect(dev_usb3_pipe.sink),
-            dev_usb3_core.reset.eq(~dev_usb3_pipe.ready),
+            dev_usb3_core.reset.eq(~dev_usb3_ltssm.u0),
         ]
 
         # Connect Host <--> Device.
@@ -180,8 +242,8 @@ class USB3PIPESim(SoCMini):
 
         # Simulation Status.
         for pipe, fsm in [
-            ["host",  host_usb3_pipe.ltssm.fsm],
-            ["dev ",  dev_usb3_pipe.ltssm.fsm]]:
+            ["host",  host_usb3_ltssm.fsm],
+            ["dev ",  dev_usb3_ltssm.fsm]]:
             for state, value in fsm.encoding.items():
                 self.sync += [
                     If(fsm.next_state != fsm.state,
@@ -194,7 +256,7 @@ class USB3PIPESim(SoCMini):
         # Simulation End.
         end_timer = WaitTimer(2**16)
         self.submodules += end_timer
-        self.comb += end_timer.wait.eq(host_usb3_pipe.ready & dev_usb3_pipe.ready)
+        self.comb += end_timer.wait.eq(host_usb3_ltssm.u0 & dev_usb3_ltssm.u0)
         self.sync += If(end_timer.done, Finish())
 
 # Build --------------------------------------------------------------------------------------------

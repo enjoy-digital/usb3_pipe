@@ -25,7 +25,8 @@ from liteeth.phy import LiteEthPHY
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe import K7USB3SerDes, USB3PIPE
+from usb3_pipe      import K7USB3SerDes, USB3PIPE
+from usb3_ltssm     import USB3LTSSM
 from usb3_core.core import USB3Core
 
 # USB3 IOs -----------------------------------------------------------------------------------------
@@ -116,12 +117,40 @@ class USB3SoC(SoCMini):
         self.usb3_pipe = usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
         self.comb += usb3_pipe.reset.eq(platform.request("cpu_reset"))
 
+        # USB3 LTSSM -------------------------------------------------------------------------------
+        self.usb3_ltssm = usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
+        self.comb += [
+            # LTSSM -> PIPE
+            usb3_pipe.lfps_tx_polling.eq(usb3_ltssm.lfps_tx_polling),
+            usb3_pipe.lfps_tx_idle.eq(usb3_ltssm.lfps_tx_idle),
+            usb3_pipe.ts_rx_enable.eq(usb3_ltssm.ts_rx_enable),
+            usb3_pipe.ts_tx_enable.eq(usb3_ltssm.ts_tx_enable),
+            usb3_pipe.ts_tx_tseq.eq(usb3_ltssm.ts_tx_tseq),
+            usb3_pipe.ts_tx_ts1.eq(usb3_ltssm.ts_tx_ts1),
+            usb3_pipe.ts_tx_ts2.eq(usb3_ltssm.ts_tx_ts2),
+
+            usb3_pipe.serdes_rx_align.eq(usb3_ltssm.serdes_rx_align),
+            usb3_pipe.serdes_rx_polarity.eq(usb3_ltssm.serdes_rx_polarity),
+
+            usb3_pipe.rx_ready.eq(usb3_ltssm.rx_ready),
+            usb3_pipe.tx_ready.eq(usb3_ltssm.tx_ready),
+
+            # PIPE -> usb3_ltssm
+            usb3_ltssm.lfps_rx_polling.eq(usb3_pipe.lfps_rx_polling),
+            usb3_ltssm.lfps_tx_count.eq(usb3_pipe.lfps_tx_count),
+
+            usb3_ltssm.ts_rx_ts1.eq(usb3_pipe.ts_rx_ts1),
+            usb3_ltssm.ts_rx_ts1_inv.eq(usb3_pipe.ts_rx_ts1_inv),
+            usb3_ltssm.ts_rx_ts2.eq(usb3_pipe.ts_rx_ts2),
+            usb3_ltssm.ts_tx_done.eq(usb3_pipe.ts_tx_done),
+        ]
+
         # USB3 Core --------------------------------------------------------------------------------
         self.usb3_core = usb3_core = USB3Core(platform)
         self.comb += [
             usb3_pipe.source.connect(usb3_core.sink),
             usb3_core.source.connect(usb3_pipe.sink),
-            usb3_core.reset.eq(~usb3_pipe.ready),
+            usb3_core.reset.eq(~usb3_ltssm.u0),
         ]
 
         # Debug IOs (Through CYUSB3ACC-005) --------------------------------------------------------
@@ -138,7 +167,7 @@ class USB3SoC(SoCMini):
         # Leds -------------------------------------------------------------------------------------
         self.comb += [
             platform.request("user_led", 0).eq(usb3_serdes.ready),
-            platform.request("user_led", 1).eq(usb3_pipe.ready),
+            platform.request("user_led", 1).eq(usb3_ltssm.u0),
         ]
 
         # Analyzer ---------------------------------------------------------------------------------
