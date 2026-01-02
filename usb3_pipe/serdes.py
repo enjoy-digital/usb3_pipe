@@ -156,7 +156,7 @@ class RXErrorSubstitution(LiteXModule):
 
     Substitutes 8b/10b decoder errors with K28.4 symbols.
     """
-    def __init__(self, serdes, clock_domain, enable=False):
+    def __init__(self, serdes, clock_domain, enable=True):
         self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
         self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
 
