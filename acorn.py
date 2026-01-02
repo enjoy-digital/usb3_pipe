@@ -66,9 +66,9 @@ class _CRG(LiteXModule):
 
         self.pll = pll = S7PLL(speedgrade=-2)
         pll.register_clkin(platform.request("clk200"), 200e6)
-        pll.create_clkout(self.cd_sys,    sys_clk_freq)
-        pll.create_clkout(self.cd_oob,    sys_clk_freq/8)
-        pll.create_clkout(self.cd_clk125, 125e6)
+        pll.create_clkout(self.cd_sys,    sys_clk_freq,   margin=0)
+        pll.create_clkout(self.cd_oob,    sys_clk_freq/8, margin=0)
+        pll.create_clkout(self.cd_clk125, 125e6,          margin=0)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
