@@ -64,7 +64,7 @@ class USB3Core(LiteXModule):
     - Additional logic to emulate Daisho's internal ltssm states.
     - Additional TX FIFO to handle back-pressure from the SerDes. (not handled by Daisho)
     """
-    def __init__(self, platform, with_endpoint=False):
+    def __init__(self, platform, with_endpoint=False, daisho_core="daisho"):
         self.reset  = Signal()
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -183,7 +183,7 @@ class USB3Core(LiteXModule):
         self.specials += Instance("usb3_top_usb3_pipe", **usb3_top_params)
 
         # Daisho USB3 sources ----------------------------------------------------------------------
-        daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "daisho")
+        daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), daisho_core)
         platform.add_verilog_include_path(os.path.join(daisho_path))
         platform.add_verilog_include_path(os.path.join(daisho_path, "usb3"))
         platform.add_source_dir(os.path.join(daisho_path, "usb3"))

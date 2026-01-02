@@ -129,7 +129,7 @@ class USB3SoC(SoCMini):
         ]
 
         # USB3 Core --------------------------------------------------------------------------------
-        self.usb3_core = usb3_core = USB3Core(platform)
+        self.usb3_core = usb3_core = USB3Core(platform, daisho_core="daisho")
         self.comb += [
             usb3_pipe.source.connect(usb3_core.sink),
             usb3_core.source.connect(usb3_pipe.sink),
@@ -201,8 +201,8 @@ def main():
         parser.print_help()
 
     os.makedirs("build/sqrl_acorn/gateware", exist_ok=True)
-    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/sqrl_acorn/gateware/")
+    os.system("cd usb3_core/daisho_mod && make && ./usb_descrip_gen")
+    os.system("cp usb3_core/daisho_mod/usb3/*.init build/sqrl_acorn/gateware/")
     platform = sqrl_acorn.Platform(with_multiboot=False)
     if args.variant == "standard":
         platform.add_extension(_usb3_io_standard)
