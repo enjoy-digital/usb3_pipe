@@ -108,7 +108,7 @@ class USB3Core(LiteXModule):
         # and should be fixed correctly in the core.
 
         # FIFO
-        self.out_fifo = out_fifo = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 128)
+        self.out_fifo = out_fifo = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 32)
 
         # Map core signals to stream, re-generate first/last delimiters from active signal.
         out_data     = Signal(32)
@@ -124,7 +124,7 @@ class USB3Core(LiteXModule):
             out_fifo.sink.first.eq(out_active & ~out_active_d),
         ]
         self.comb += [
-            out_stall.eq(out_fifo.level > 64),
+            out_stall.eq(out_fifo.level > 16),
             out_fifo.sink.last.eq(~out_active & out_active_d),
         ]
 
