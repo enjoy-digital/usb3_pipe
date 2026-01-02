@@ -177,7 +177,7 @@ class USB3PIPESim(SoCMini):
         ]
         host_usb3_ltssm.finalize()
 
-        host_usb3_core = USB3Core(platform)
+        host_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
         self.host_usb3_core = host_usb3_core
         self.comb += [
             host_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
@@ -224,7 +224,7 @@ class USB3PIPESim(SoCMini):
         ]
         dev_usb3_ltssm.finalize()
 
-        dev_usb3_core = USB3Core(platform)
+        dev_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
         self.dev_usb3_core = dev_usb3_core
         self.comb += [
             dev_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
