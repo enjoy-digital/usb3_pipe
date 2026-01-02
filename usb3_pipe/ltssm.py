@@ -184,9 +184,11 @@ class PollingFSM(LiteXModule):
 
         # # #
 
-        tx_lfps_count = Signal(16)
-        rx_lfps_seen  = Signal()
-        rx_ts2_seen   = Signal()
+        tx_lfps_count   = Signal(16)
+        rx_lfps_seen    = Signal()
+        rx_ts1_seen     = Signal()
+        rx_ts1_inv_seen = Signal()
+        rx_ts2_seen     = Signal()
 
         # 360ms Timer ------------------------------------------------------------------------------
         self._360_ms_timer = _360_ms_timer = WaitTimer(int(360e-3*sys_clk_freq))
@@ -202,9 +204,11 @@ class PollingFSM(LiteXModule):
 
         # Entry State ------------------------------------------------------------------------------
         fsm.act("Polling.Entry", # 0.
-            NextValue(tx_lfps_count, 16),
-            NextValue(rx_lfps_seen, 0),
-            NextValue(rx_ts2_seen, 0),
+            NextValue(tx_lfps_count,  16),
+            NextValue(rx_lfps_seen,    0),
+            NextValue(rx_ts1_seen,     0),
+            NextValue(rx_ts1_inv_seen, 0),
+            NextValue(rx_ts2_seen,     0),
             NextState("Polling.LFPS"),
         )
 
@@ -250,19 +254,26 @@ class PollingFSM(LiteXModule):
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts1.eq(1),
+
+            # Latch what we saw from the host (rx_ts1 / rx_ts1_inv are pulses).
+            NextValue(rx_ts1_seen,     rx_ts1_seen     | ts_unit.rx_ts1),
+            NextValue(rx_ts1_inv_seen, rx_ts1_inv_seen | ts_unit.rx_ts1_inv),
+
             # Go to RxDetect if no TS1/TS2 seen in the 12ms.
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
-            # Go to Configuration if at least 8 consecutive TS1 or TS1_INV seen (8 ensured by ts_unit)
-            If(ts_unit.rx_ts1,
-                If(~self.recovery, NextValue(serdes.rx_polarity, 0)),
-                _12_ms_timer.wait.eq(0),
-                NextValue(rx_ts2_seen, 0),
-                NextState("Polling.Configuration")
-            ),
-            If(ts_unit.rx_ts1_inv,
-                If(~self.recovery, NextValue(serdes.rx_polarity, 1)),
+
+            # Go to Configuration only after:
+            # - we have completed a TS1 transmit burst (tx_done while tx_ts1 selected)
+            # - and we have seen TS1 (normal or inverted) from the host.
+            If(ts_unit.tx_done & (rx_ts1_seen | rx_ts1_inv_seen),
+                If(rx_ts1_seen,
+                    If(~self.recovery, NextValue(serdes.rx_polarity, 0)),
+                ),
+                If(rx_ts1_inv_seen,
+                    If(~self.recovery, NextValue(serdes.rx_polarity, 1)),
+                ),
                 _12_ms_timer.wait.eq(0),
                 NextValue(rx_ts2_seen, 0),
                 NextState("Polling.Configuration")
@@ -301,6 +312,9 @@ class PollingFSM(LiteXModule):
             NextValue(self.recovery, 0),
             If(ts_unit.rx_ts1, # FIXME: for bringup, should be Recovery.Active
                 NextValue(self.recovery, 1),
+                NextValue(rx_ts1_seen,     0),
+                NextValue(rx_ts1_inv_seen, 0),
+                NextValue(rx_ts2_seen,     0),
                 NextState("Recovery.Active")
             ).Elif(lfps_unit.rx_polling, # FIXME: for bringup
                 NextState("Polling.Entry")
@@ -333,22 +347,25 @@ class PollingFSM(LiteXModule):
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts1.eq(1),
+
+            # Latch what we saw from the host (rx_ts1 / rx_ts2 are pulses).
+            NextValue(rx_ts1_seen, rx_ts1_seen | ts_unit.rx_ts1),
+            NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
+
             # Go to RxDetect if no TS1/TS2 seen in the 12ms.
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
-            # Go to Configuration if at least 8 consecutive TS1 or TS2 seen (8 ensured by ts_unit)
-            If(ts_unit.rx_ts1,
+
+            # Go to Configuration only after:
+            # - we have completed a TS1 transmit burst (tx_done while tx_ts1 selected)
+            # - and we have seen TS1 or TS2 from the host.
+            If(ts_unit.tx_done & (rx_ts1_seen | rx_ts2_seen),
                 _12_ms_timer.wait.eq(0),
-                NextValue(rx_ts2_seen, 0),
-                NextState("Recovery.Configuration")
-            ),
-            If(ts_unit.rx_ts2,
-                _12_ms_timer.wait.eq(0),
-                NextValue(rx_ts2_seen, 0),
                 NextState("Recovery.Configuration")
             ),
         )
+
 
         fsm.act("Recovery.Configuration", # 9.
             serdes.rx_align.eq(1),
