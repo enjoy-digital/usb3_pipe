@@ -82,10 +82,8 @@ class USB3SoC(SoCMini):
         # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
-        # JTAGBone ---------------------------------------------------------------------------------
-        self.add_jtagbone()
-        platform.add_period_constraint(self.jtagbone.phy.cd_jtag.clk, 1e9/20e6)
-        platform.add_false_path_constraints(self.jtagbone.phy.cd_jtag.clk, self.crg.cd_sys.clk)
+        # UARTBone ---------------------------------------------------------------------------------
+        self.add_uartbone(baudrate=115200)
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = A7USB3SerDes(platform,
@@ -149,7 +147,12 @@ class USB3SoC(SoCMini):
                 usb3_pipe.source,
                 usb3_pipe.sink,
             ]
-            self.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="analyzer.csv")
+            self.analyzer = LiteScopeAnalyzer(analyzer_signals,
+                depth        = 4096,
+                clock_domain = "sys",
+                register     = True,
+                csr_csv      = "analyzer.csv"
+            )
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -176,6 +179,7 @@ def main():
         platform.add_extension(_usb3_io_standard)
     if args.variant == "mini":
         platform.add_extension(_usb3_io_mini)
+        platform.add_extension(sqrl_acorn._litex_acorn_baseboard_mini_io, prepend=True)
     soc     = USB3SoC(platform, with_analyzer=args.with_analyzer)
     builder = Builder(soc, csr_csv="csr.csv")
     builder.build(run=args.build)
