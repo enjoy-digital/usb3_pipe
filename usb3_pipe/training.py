@@ -26,12 +26,12 @@ class TSChecker(LiteXModule):
     """
     def __init__(self, ordered_set, n_ordered_sets=1):
         self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.detected = Signal() # o
-        self.error    = Signal() # o
+        self.detected = Signal() # o (Pulse)
+        self.error    = Signal() # o (Pulse)
 
-        self.reset      = Signal()        # o
-        self.loopback   = Signal()        # o
-        self.scrambling = Signal(reset=1) # o
+        self.reset      = Signal()        # o (Level)
+        self.loopback   = Signal()        # o (Level)
+        self.scrambling = Signal(reset=1) # o (Level)
 
         # # #
 
@@ -109,7 +109,7 @@ class TSChecker(LiteXModule):
         ]
 
         # Result -----------------------------------------------------------------------------------
-        self.comb += self.detected.eq(self.sink.valid & count_done)
+        self.comb += self.detected.eq(self.sink.valid & self.sink.ready & count_done)
 
 # Training Sequence Generator ----------------------------------------------------------------------
 
@@ -124,14 +124,14 @@ class TSGenerator(LiteXModule):
     Sets.
     """
     def __init__(self, ordered_set, n_ordered_sets=1):
-        self.start  = Signal() # i
-        self.done   = Signal() # o
+        self.start  = Signal() # i (Level)
+        self.done   = Signal() # o (Pulse)
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         if ordered_set.name in ["TS1", "TS2"]:
-            self.reset      = Signal()        # i
-            self.loopback   = Signal()        # i
-            self.scrambling = Signal(reset=1) # i
+            self.reset      = Signal()        # i (Level)
+            self.loopback   = Signal()        # i (Level)
+            self.scrambling = Signal(reset=1) # i (Level)
 
         # # #
 
@@ -211,7 +211,7 @@ class TSGenerator(LiteXModule):
         ]
 
         # Result -----------------------------------------------------------------------------------
-        self.comb += self.done.eq(self.source.ready & run & count_done)
+        self.comb += self.done.eq(run & self.source.valid & self.source.last & self.source.ready)
 
 # Training Sequence Unit ---------------------------------------------------------------------------
 
@@ -222,16 +222,16 @@ class TSUnit(LiteXModule):
     control/status signals.
     """
     def __init__(self, serdes):
-        self.rx_enable    = Signal() # i
-        self.rx_ts1       = Signal() # o
-        self.rx_ts1_inv   = Signal() # o
-        self.rx_ts2       = Signal() # o
+        self.rx_enable    = Signal() # i (Level)
+        self.rx_ts1       = Signal() # o (Pulse)
+        self.rx_ts1_inv   = Signal() # o (Pulse)
+        self.rx_ts2       = Signal() # o (Pulse)
 
-        self.tx_enable    = Signal() # i
-        self.tx_tseq      = Signal() # i
-        self.tx_ts1       = Signal() # i
-        self.tx_ts2       = Signal() # i
-        self.tx_done      = Signal() # o
+        self.tx_enable    = Signal() # i (Level)
+        self.tx_tseq      = Signal() # i (Level)
+        self.tx_ts1       = Signal() # i (Level)
+        self.tx_ts2       = Signal() # i (Level)
+        self.tx_done      = Signal() # o (Pulse)
 
         # # #
 
