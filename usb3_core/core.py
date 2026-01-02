@@ -16,9 +16,9 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.serdes import RXWordAligner
 
-# USB3 Core Endpoint --------------------------------------------------------------------------------
+# USB3 Core Endpoint Control -----------------------------------------------------------------------
 
-class USB3CoreEndpoint(LiteXModule):
+class USB3CoreEndpointControl(LiteXModule):
     def __init__(self):
         # Not functional but prevents synthesis optimizations
         self._buf_in_addr       = CSRStorage(9)
@@ -160,23 +160,23 @@ class USB3Core(LiteXModule):
 
         # Daisho USB3 core endpoinst ---------------------------------------------------------------
         if with_endpoint:
-            self.usb3_control = usb3_control = USB3CoreControl()
+            self.usb3_endpoint_control = usb3_endpoint_control = USB3CoreEndpointControl()
             usb3_top_params.update(
-                i_buf_in_addr       = usb3_control.buf_in_addr,
-                i_buf_in_data       = usb3_control.buf_in_data,
-                i_buf_in_wren       = usb3_control.buf_in_wren,
-                o_buf_in_request    = usb3_control.buf_in_request,
-                o_buf_in_ready      = usb3_control.buf_in_ready,
-                i_buf_in_commit     = usb3_control.buf_in_commit,
-                i_buf_in_commit_len = usb3_control.buf_in_commit_len,
-                o_buf_in_commit_ack = usb3_control.buf_in_commit_ack,
+                i_buf_in_addr       = usb3_endpoint_control.buf_in_addr,
+                i_buf_in_data       = usb3_endpoint_control.buf_in_data,
+                i_buf_in_wren       = usb3_endpoint_control.buf_in_wren,
+                o_buf_in_request    = usb3_endpoint_control.buf_in_request,
+                o_buf_in_ready      = usb3_endpoint_control.buf_in_ready,
+                i_buf_in_commit     = usb3_endpoint_control.buf_in_commit,
+                i_buf_in_commit_len = usb3_endpoint_control.buf_in_commit_len,
+                o_buf_in_commit_ack = usb3_endpoint_control.buf_in_commit_ack,
 
-                i_buf_out_addr      = usb3_control.buf_out_addr,
-                o_buf_out_q         = usb3_control.buf_out_q,
-                o_buf_out_len       = usb3_control.buf_out_len,
-                o_buf_out_hasdata   = usb3_control.buf_out_hasdata,
-                i_buf_out_arm       = usb3_control.buf_out_arm,
-                o_buf_out_arm_ack   = usb3_control.buf_out_arm_ack,
+                i_buf_out_addr      = usb3_endpoint_control.buf_out_addr,
+                o_buf_out_q         = usb3_endpoint_control.buf_out_q,
+                o_buf_out_len       = usb3_endpoint_control.buf_out_len,
+                o_buf_out_hasdata   = usb3_endpoint_control.buf_out_hasdata,
+                i_buf_out_arm       = usb3_endpoint_control.buf_out_arm,
+                o_buf_out_arm_ack   = usb3_endpoint_control.buf_out_arm_ack,
             )
 
         # Daisho USB3 instance ---------------------------------------------------------------------
