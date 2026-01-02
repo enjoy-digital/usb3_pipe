@@ -275,7 +275,6 @@ class PollingFSM(LiteXModule):
                     If(~self.recovery, NextValue(serdes.rx_polarity, 1)),
                 ),
                 _12_ms_timer.wait.eq(0),
-                NextValue(rx_ts2_seen, 0),
                 NextState("Polling.Configuration")
             ),
         )
@@ -287,7 +286,6 @@ class PollingFSM(LiteXModule):
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
-            self.rx_ready.eq(rx_ts2_seen),
             NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
             # Go to RxDetect if no TS2 seen in the 12ms.
             If(_12_ms_timer.done,
@@ -299,6 +297,7 @@ class PollingFSM(LiteXModule):
             # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
             If(ts_unit.tx_done,
                 If(rx_ts2_seen,
+                    self.rx_ready.eq(1),
                     NextState("Polling.Idle")
                 )
             )
@@ -373,7 +372,6 @@ class PollingFSM(LiteXModule):
             ts_unit.rx_enable.eq(1),
             ts_unit.tx_enable.eq(1),
             ts_unit.tx_ts2.eq(1),
-            self.rx_ready.eq(rx_ts2_seen),
             NextValue(rx_ts2_seen, rx_ts2_seen | ts_unit.rx_ts2),
             # Go to RxDetect if no TS2 seen in the 6ms.
             If(_6_ms_timer.done,
@@ -385,6 +383,7 @@ class PollingFSM(LiteXModule):
             # - 16 TS2 ordered sets are sent after receiving the first 8 TS2 ordered sets. FIXME
             If(ts_unit.tx_done,
                 If(rx_ts2_seen,
+                    self.rx_ready.eq(1),
                     NextState("Polling.Idle")
                 )
             )
