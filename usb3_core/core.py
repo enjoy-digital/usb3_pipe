@@ -9,6 +9,8 @@ import os
 from migen import *
 from migen.genlib.misc import WaitTimer
 
+from litex.gen import *
+
 from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import stream
 
@@ -16,7 +18,7 @@ from usb3_pipe.serdes import RXWordAligner
 
 # USB3 Core Endpoint --------------------------------------------------------------------------------
 
-class USB3CoreEndpoint(Module, AutoCSR):
+class USB3CoreEndpoint(LiteXModule):
     def __init__(self):
         # Not functional but prevents synthesis optimizations
         self._buf_in_addr       = CSRStorage(9)
@@ -53,7 +55,7 @@ class USB3CoreEndpoint(Module, AutoCSR):
 
 # USB3 Core ----------------------------------------------------------------------------------------
 
-class USB3Core(Module, AutoCSR):
+class USB3Core(LiteXModule):
     """USB3.0 Core
 
     Wrap the Daisho USB3.0 Core (https://github.com/mossmann/daisho) in a Module with small adaptations
@@ -88,8 +90,7 @@ class USB3Core(Module, AutoCSR):
         ]
 
         # RX (Sink) --------------------------------------------------------------------------------
-        aligner = RXWordAligner(check_ctrl_only=True) # FIXME: can we avoid alignment here?
-        self.submodules.aligner = aligner
+        self.aligner = aligner = RXWordAligner(check_ctrl_only=True) # FIXME: can we avoid alignment here?
         self.comb += sink.connect(aligner.sink)
 
         in_data   = Signal(32)
@@ -109,8 +110,7 @@ class USB3Core(Module, AutoCSR):
         # and should be fixed correctly in the core.
 
         # FIFO
-        out_fifo = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 128)
-        self.submodules += out_fifo
+        self.out_fifo = out_fifo = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 128)
 
         # Map core signals to stream, re-generate first/last delimiters from active signal.
         out_data     = Signal(32)
@@ -142,7 +142,7 @@ class USB3Core(Module, AutoCSR):
 
         # Daisho USB3 core -------------------------------------------------------------------------
         usb3_top_params = dict(
-            i_clk               = ClockSignal(),
+            i_clk               = ClockSignal("sys"),
             i_reset_n           = ~self.reset,
 
             i_ltssm_state       = ltssm_state,
@@ -159,7 +159,7 @@ class USB3Core(Module, AutoCSR):
 
         # Daisho USB3 core endpoinst ---------------------------------------------------------------
         if with_endpoint:
-            self.submodules.usb3_control = usb3_control = USB3CoreControl()
+            self.usb3_control = usb3_control = USB3CoreControl()
             usb3_top_params.update(
                 i_buf_in_addr       = usb3_control.buf_in_addr,
                 i_buf_in_data       = usb3_control.buf_in_data,
