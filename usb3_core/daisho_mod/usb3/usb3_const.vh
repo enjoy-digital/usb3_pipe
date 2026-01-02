@@ -43,48 +43,11 @@ parameter	[4:0]	LT_SS_DISABLED			= 'd01,
 					LT_RECOVERY_IDLE		= 'd29,
 					LT_RESET				= 'd30,
 					LT_LAST					= 'b11111;
-
-parameter	[4:0]	LFPS_RESET			= 'h00,
-					LFPS_IDLE			= 'h01,
-					LFPS_RECV_1			= 'h02,
-					LFPS_RECV_2			= 'h03,
-					LFPS_RECV_3			= 'h04,
-					LFPS_SEND_1			= 'h05,
-					LFPS_SEND_2			= 'h06,
-					LFPS_SEND_3			= 'h07,
-					LFPS_0				= 'h08,
-					LFPS_LAST			= 'b11111;
 					
 // timing parameters
 // all are calculated for local clock of 62.5 MHz (1/4 PIPE CLK)
 // except those denoted by *2 which compensates for 125 MHz Link clock domain.
 //
-parameter	[23:0]	LFPS_POLLING_MIN	= 'd37;			// 0.6 uS (nom 1.0 us)
-parameter	[23:0]	LFPS_POLLING_NOM	= 'd62;			// 1.0 uS
-parameter	[23:0]	LFPS_POLLING_MAX	= 'd87;			// 1.4 uS
-parameter	[23:0]	LFPS_PING_MIN		= 'd2;			// 40 ns
-parameter	[23:0]	LFPS_PING_NOM		= 'd6;			// 96 ns
-parameter	[23:0]	LFPS_PING_MAX		= 'd12;			// 200 ns
-parameter	[23:0]	LFPS_RESET_MIN		= 'd5000000;	// 80 ms (nom 100 ms)
-parameter	[23:0]	LFPS_RESET_DELAY	= 'd1875000;	// 30 ms
-parameter	[23:0]	LFPS_RESET_MAX		= 'd7500000;	// 120 ms
-parameter	[23:0]	LFPS_U1EXIT_MIN		= 'd36;			// 656 ns // now 616ns due to lecroy
-parameter	[23:0]	LFPS_U1EXIT_NOM		= 'd42;			// 656 ns // was 625*4 in testing
-parameter	[23:0]	LFPS_U1EXIT_MAX		= 'd125000;		// 2 ms (1.5, fudged)
-parameter	[23:0]	LFPS_U2LBEXIT_MIN	= 'd5100;		// 80 us
-parameter	[23:0]	LFPS_U2LBEXIT_NOM	= 'd6250;		// 100 us // 5362
-parameter	[23:0]	LFPS_U2LBEXIT_MAX	= 'd125000+62500;		// 2 ms
-parameter	[23:0]	LFPS_U3WAKEUP_MIN	= 'd5000;		// 80 us
-parameter	[23:0]	LFPS_U3WAKEUP_NOM	= 'd62500;		// 1 ms
-parameter	[23:0]	LFPS_U3WAKEUP_MAX	= 'd625000;		// 10 ms
-
-parameter	[23:0]	LFPS_BURST_POLL_MIN	= 'd375;		// 6 us (nom 10 uS)
-parameter	[23:0]	LFPS_BURST_POLL_NOM	= 'd625;		// 10 uS
-parameter	[23:0]	LFPS_BURST_POLL_MAX	= 'd875;		// 14 us
-parameter	[23:0]	LFPS_BURST_PING_MIN	= 'd10000000;	// 160 ms (nom 200 ms)
-parameter	[23:0]	LFPS_BURST_PING_NOM	= 'd12500000;	// 200 ms
-parameter	[23:0]	LFPS_BURST_PING_MAX	= 'd15000000;	// 240 ms
-
 parameter	[24:0]	T_SS_INACTIVE_QUIET	= 'd750000;		// 12 ms
 parameter	[24:0]	T_RX_DETECT_QUIET	= 'd7500000;	// 120 ms
 parameter	[24:0]	T_POLLING_LFPS		= 'd22500000;	// 360 ms
