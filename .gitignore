@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+build/
+csr.csv
+
+usb3_core/daisho/usb2/usb2_descrip.bin
+usb3_core/daisho/usb2/usb2_descrip_rom.init
+usb3_core/daisho/usb3/usb3_descrip.bin
+usb3_core/daisho/usb3/usb3_descrip_rom.init
+usb3_core/daisho/usb_descrip.vh
+usb3_core/daisho/usb_descrip_gen
+usb3_core/daisho/usb_descrip_gen.o
