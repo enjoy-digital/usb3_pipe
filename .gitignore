@@ -11,3 +11,5 @@ usb3_core/daisho/usb3/usb3_descrip_rom.init
 usb3_core/daisho/usb_descrip.vh
 usb3_core/daisho/usb_descrip_gen
 usb3_core/daisho/usb_descrip_gen.o
+
+prog/
