@@ -155,32 +155,24 @@ class USB3LTSSM(LiteXModule):
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
             NextValue(self.recovery, 0),
-            If(self.ts_rx_ts1, # FIXME: for bringup, should be Recovery.Active
+            If(self.ts_rx_ts1,
                 NextValue(self.recovery, 1),
                 NextValue(rx_ts1_seen,     0),
                 NextValue(rx_ts1_inv_seen, 0),
                 NextValue(rx_ts2_seen,     0),
                 NextState("Recovery.Active")
-            ).Elif(self.lfps_rx_polling, # FIXME: for bringup
-                NextState("Polling.Entry")
             )
         )
 
         # Exit to Compliance -----------------------------------------------------------------------
         fsm.act("Polling.ExitToCompliance", # 6.
-            self.lfps_tx_idle.eq(1), # FIXME: for bringup
-            If(self.lfps_rx_polling, # FIXME: for bringup
-                NextState("Polling.Entry")
-            ),
+            self.lfps_tx_idle.eq(1),
             self.exit_to_compliance.eq(1)
         )
 
         # Exit to RxDetect -------------------------------------------------------------------------
         fsm.act("Polling.ExitToRxDetect", # 7.
-            self.lfps_tx_idle.eq(1), # FIXME: for bringup
-            If(self.lfps_rx_polling, # FIXME: for bringup
-                NextState("Polling.Entry")
-            ),
+            self.lfps_tx_idle.eq(1),
             self.exit_to_rx_detect.eq(1)
         )
 
