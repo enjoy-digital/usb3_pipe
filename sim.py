@@ -234,7 +234,7 @@ class USB3PIPESim(SoCMini):
         ]
 
         # Connect Host <--> Device.
-        self.comb += host_usb3_serdes.connect(dev_usb3_serdes)
+        host_usb3_serdes.connect(dev_usb3_serdes)
 
         # Simulation Timer.
         timer = Signal(32)
