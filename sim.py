@@ -130,7 +130,7 @@ class USB3SerDesModel(LiteXModule):
 # USB3PIPESim --------------------------------------------------------------------------------------
 
 class USB3PIPESim(SoCMini):
-    def __init__(self, phy_dw=20):
+    def __init__(self, phy_dw=20, timer_scale=1):
         sys_clk_freq = int(133e6)
 
         # Platform.
@@ -144,37 +144,15 @@ class USB3PIPESim(SoCMini):
         host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         host_usb3_pipe   = USB3PIPE(
             serdes       = host_usb3_serdes,
-            sys_clk_freq = sys_clk_freq)
+            sys_clk_freq = sys_clk_freq,
+            timer_scale  = timer_scale)
         self.submodules += host_usb3_serdes, host_usb3_pipe
 
         # USB3 Host LTSSM.
-        host_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
+        host_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
         self.submodules += host_usb3_ltssm
-        self.comb += [
-            # LTSSM -> PIPE
-            host_usb3_pipe.lfps_tx_polling.eq(host_usb3_ltssm.lfps_tx_polling),
-            host_usb3_pipe.lfps_tx_idle.eq(host_usb3_ltssm.lfps_tx_idle),
-            host_usb3_pipe.ts_rx_enable.eq(host_usb3_ltssm.ts_rx_enable),
-            host_usb3_pipe.ts_tx_enable.eq(host_usb3_ltssm.ts_tx_enable),
-            host_usb3_pipe.ts_tx_tseq.eq(host_usb3_ltssm.ts_tx_tseq),
-            host_usb3_pipe.ts_tx_ts1.eq(host_usb3_ltssm.ts_tx_ts1),
-            host_usb3_pipe.ts_tx_ts2.eq(host_usb3_ltssm.ts_tx_ts2),
-
-            host_usb3_pipe.serdes_rx_align.eq(host_usb3_ltssm.serdes_rx_align),
-            host_usb3_pipe.serdes_rx_polarity.eq(host_usb3_ltssm.serdes_rx_polarity),
-
-            host_usb3_pipe.rx_ready.eq(host_usb3_ltssm.rx_ready),
-            host_usb3_pipe.tx_ready.eq(host_usb3_ltssm.tx_ready),
-
-            # PIPE -> LTSSM
-            host_usb3_ltssm.lfps_rx_polling.eq(host_usb3_pipe.lfps_rx_polling),
-            host_usb3_ltssm.lfps_tx_count.eq(host_usb3_pipe.lfps_tx_count),
-
-            host_usb3_ltssm.ts_rx_ts1.eq(host_usb3_pipe.ts_rx_ts1),
-            host_usb3_ltssm.ts_rx_ts1_inv.eq(host_usb3_pipe.ts_rx_ts1_inv),
-            host_usb3_ltssm.ts_rx_ts2.eq(host_usb3_pipe.ts_rx_ts2),
-            host_usb3_ltssm.ts_tx_done.eq(host_usb3_pipe.ts_tx_done),
-        ]
+        self.comb += host_usb3_ltssm.ds_port.eq(1) # Host = Downstream Port.
+        self.comb += self.wire_ltssm_pipe(host_usb3_ltssm, host_usb3_pipe)
         host_usb3_ltssm.finalize()
 
         host_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
@@ -189,39 +167,17 @@ class USB3PIPESim(SoCMini):
         # USB3 Device.
         dev_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
         dev_usb3_pipe   = USB3PIPE(
-            serdes          = dev_usb3_serdes,
-            sys_clk_freq    = sys_clk_freq)
+            serdes       = dev_usb3_serdes,
+            sys_clk_freq = sys_clk_freq,
+            timer_scale  = timer_scale)
         self.submodules += dev_usb3_serdes, dev_usb3_pipe
         dev_usb3_pipe.finalize()
 
-        # USB3 Host LTSSM.
-        dev_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
+        # USB3 Device LTSSM.
+        dev_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
         self.submodules += dev_usb3_ltssm
-        self.comb += [
-            # LTSSM -> PIPE
-            dev_usb3_pipe.lfps_tx_polling.eq(dev_usb3_ltssm.lfps_tx_polling),
-            dev_usb3_pipe.lfps_tx_idle.eq(dev_usb3_ltssm.lfps_tx_idle),
-            dev_usb3_pipe.ts_rx_enable.eq(dev_usb3_ltssm.ts_rx_enable),
-            dev_usb3_pipe.ts_tx_enable.eq(dev_usb3_ltssm.ts_tx_enable),
-            dev_usb3_pipe.ts_tx_tseq.eq(dev_usb3_ltssm.ts_tx_tseq),
-            dev_usb3_pipe.ts_tx_ts1.eq(dev_usb3_ltssm.ts_tx_ts1),
-            dev_usb3_pipe.ts_tx_ts2.eq(dev_usb3_ltssm.ts_tx_ts2),
-
-            dev_usb3_pipe.serdes_rx_align.eq(dev_usb3_ltssm.serdes_rx_align),
-            dev_usb3_pipe.serdes_rx_polarity.eq(dev_usb3_ltssm.serdes_rx_polarity),
-
-            dev_usb3_pipe.rx_ready.eq(dev_usb3_ltssm.rx_ready),
-            dev_usb3_pipe.tx_ready.eq(dev_usb3_ltssm.tx_ready),
-
-            # PIPE -> LTSSM
-            dev_usb3_ltssm.lfps_rx_polling.eq(dev_usb3_pipe.lfps_rx_polling),
-            dev_usb3_ltssm.lfps_tx_count.eq(dev_usb3_pipe.lfps_tx_count),
-
-            dev_usb3_ltssm.ts_rx_ts1.eq(dev_usb3_pipe.ts_rx_ts1),
-            dev_usb3_ltssm.ts_rx_ts1_inv.eq(dev_usb3_pipe.ts_rx_ts1_inv),
-            dev_usb3_ltssm.ts_rx_ts2.eq(dev_usb3_pipe.ts_rx_ts2),
-            dev_usb3_ltssm.ts_tx_done.eq(dev_usb3_pipe.ts_tx_done),
-        ]
+        self.comb += dev_usb3_ltssm.ds_port.eq(0) # Device = Upstream Port.
+        self.comb += self.wire_ltssm_pipe(dev_usb3_ltssm, dev_usb3_pipe)
         dev_usb3_ltssm.finalize()
 
         dev_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
@@ -235,6 +191,13 @@ class USB3PIPESim(SoCMini):
 
         # Connect Host <--> Device.
         host_usb3_serdes.connect(dev_usb3_serdes)
+
+        # LTSSM lower-layer inputs: default idle handshake pre-completed, no PM activity.
+        for ltssm in [host_usb3_ltssm, dev_usb3_ltssm]:
+            self.comb += [
+                ltssm.rx_idle8.eq(1),
+                ltssm.link_activity.eq(1),
+            ]
 
         # Simulation Timer.
         timer = Signal(32)
@@ -253,19 +216,59 @@ class USB3PIPESim(SoCMini):
                     )
                 ]
 
-        # Simulation End.
+        # Simulation End (Finish on dual U0, 2^16 cycles).
         end_timer = WaitTimer(2**16)
         self.submodules += end_timer
         self.comb += end_timer.wait.eq(host_usb3_ltssm.u0 & dev_usb3_ltssm.u0)
         self.sync += If(end_timer.done, Finish())
 
+    @staticmethod
+    def wire_ltssm_pipe(ltssm, pipe):
+        """LTSSM <-> PIPE wiring (LFPS/TS face)."""
+        return [
+            # LTSSM -> PIPE
+            pipe.lfps_tx_polling.eq(ltssm.lfps_tx_polling),
+            pipe.lfps_tx_idle.eq(ltssm.lfps_tx_idle),
+            pipe.lfps_tx_ping.eq(ltssm.lfps_tx_ping),
+            pipe.lfps_tx_exit_u1.eq(ltssm.lfps_tx_exit_u1),
+            pipe.lfps_tx_exit_u2.eq(ltssm.lfps_tx_exit_u2),
+            pipe.lfps_tx_wakeup_u3.eq(ltssm.lfps_tx_wakeup_u3),
+            pipe.lfps_tx_reset.eq(ltssm.lfps_tx_reset),
+            pipe.ts_rx_enable.eq(ltssm.ts_rx_enable),
+            pipe.ts_tx_enable.eq(ltssm.ts_tx_enable),
+            pipe.ts_tx_tseq.eq(ltssm.ts_tx_tseq),
+            pipe.ts_tx_ts1.eq(ltssm.ts_tx_ts1),
+            pipe.ts_tx_ts2.eq(ltssm.ts_tx_ts2),
+
+            pipe.serdes_rx_align.eq(ltssm.serdes_rx_align),
+            pipe.serdes_rx_polarity.eq(ltssm.serdes_rx_polarity),
+
+            pipe.rx_ready.eq(ltssm.rx_ready),
+            pipe.tx_ready.eq(ltssm.tx_ready),
+
+            # PIPE -> LTSSM
+            ltssm.lfps_rx_polling.eq(pipe.lfps_rx_polling),
+            ltssm.lfps_tx_count.eq(pipe.lfps_tx_count),
+            ltssm.lfps_rx_ping.eq(pipe.lfps_rx_ping),
+            ltssm.lfps_rx_exit_u1.eq(pipe.lfps_rx_exit_u1),
+            ltssm.lfps_rx_exit_u2.eq(pipe.lfps_rx_exit_u2),
+            ltssm.lfps_rx_wakeup_u3.eq(pipe.lfps_rx_wakeup_u3),
+            ltssm.lfps_rx_reset.eq(pipe.lfps_rx_reset),
+
+            ltssm.ts_rx_ts1.eq(pipe.ts_rx_ts1),
+            ltssm.ts_rx_ts1_inv.eq(pipe.ts_rx_ts1_inv),
+            ltssm.ts_rx_ts2.eq(pipe.ts_rx_ts2),
+            ltssm.ts_tx_done.eq(pipe.ts_tx_done),
+        ]
+
 # Build --------------------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="USB3 PIPE Simulation")
-    parser.add_argument("--trace",       action="store_true", help="Enable VCD tracing.")
-    parser.add_argument("--trace-start", default=0,           help="Cycle to start VCD tracing.")
-    parser.add_argument("--trace-end",   default=-1,          help="Cycle to end VCD tracing.")
+    parser.add_argument("--trace",        action="store_true", help="Enable VCD tracing.")
+    parser.add_argument("--trace-start",  default=0,           help="Cycle to start VCD tracing.")
+    parser.add_argument("--trace-end",    default=-1,          help="Cycle to end VCD tracing.")
+    parser.add_argument("--timer-scale",  default=1,           help="LTSSM/LFPS timers scale factor (1 = spec exact).")
     args = parser.parse_args()
 
     sim_config = SimConfig(default_clk="sys_clk")
@@ -273,7 +276,7 @@ def main():
     os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
     os.system("cp usb3_core/daisho/usb3/*.init build/sim/gateware/")
 
-    soc = USB3PIPESim()
+    soc = USB3PIPESim(timer_scale=int(args.timer_scale))
     builder = Builder(soc)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",
