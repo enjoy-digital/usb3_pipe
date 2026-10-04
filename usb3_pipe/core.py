@@ -30,7 +30,7 @@ class USB3PIPE(LiteXModule):
     - RX words alignment.
     - TX scrambling/RX descrambling.
     """
-    def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True):
+    def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True, timer_scale=1):
         assert sys_clk_freq >= 125e6
 
         # Endpoints --------------------------------------------------------------------------------
@@ -50,6 +50,18 @@ class USB3PIPE(LiteXModule):
         self.lfps_tx_idle       = Signal()   # i
         self.lfps_rx_polling    = Signal()   # o
         self.lfps_tx_count      = Signal(16) # o
+
+        self.lfps_tx_ping       = Signal()   # i
+        self.lfps_tx_exit_u1    = Signal()   # i
+        self.lfps_tx_exit_u2    = Signal()   # i
+        self.lfps_tx_wakeup_u3  = Signal()   # i
+        self.lfps_tx_reset      = Signal()   # i
+
+        self.lfps_rx_ping       = Signal()   # o
+        self.lfps_rx_exit_u1    = Signal()   # o
+        self.lfps_rx_exit_u2    = Signal()   # o
+        self.lfps_rx_wakeup_u3  = Signal()   # o
+        self.lfps_rx_reset      = Signal()   # o
 
         self.ts_rx_enable       = Signal()   # i
         self.ts_rx_ts1          = Signal()   # o
@@ -82,15 +94,25 @@ class USB3PIPE(LiteXModule):
             source = self.source
 
         # LFPS -------------------------------------------------------------------------------------
-        self.lfps = lfps = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq)
+        self.lfps = lfps = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
         self.comb += [
             # LFPS Control.
             lfps.tx_polling.eq(self.lfps_tx_polling),
             lfps.tx_idle.eq(self.lfps_tx_idle),
+            lfps.tx_ping.eq(     self.lfps_tx_ping),
+            lfps.tx_exit_u1.eq(  self.lfps_tx_exit_u1),
+            lfps.tx_exit_u2.eq(  self.lfps_tx_exit_u2),
+            lfps.tx_wakeup_u3.eq(self.lfps_tx_wakeup_u3),
+            lfps.tx_reset.eq(    self.lfps_tx_reset),
 
             # LFPS Status.
             self.lfps_rx_polling.eq(lfps.rx_polling),
             self.lfps_tx_count.eq(lfps.tx_count),
+            self.lfps_rx_ping.eq(     lfps.rx_ping),
+            self.lfps_rx_exit_u1.eq(  lfps.rx_exit_u1),
+            self.lfps_rx_exit_u2.eq(  lfps.rx_exit_u2),
+            self.lfps_rx_wakeup_u3.eq(lfps.rx_wakeup_u3),
+            self.lfps_rx_reset.eq(    lfps.rx_reset),
         ]
 
         # TS ---------------------------------------------------------------------------------------
