@@ -244,17 +244,23 @@ class USB3Top(LiteXModule):
             prot_buf_in_commit.eq(usb3_protocol.buf_in_commit),
             prot_buf_in_commit_len.eq(usb3_protocol.buf_in_commit_len),
 
-            prot_buf_out_addr.eq(usb3_protocol.buf_out_addr),
-            prot_buf_out_arm.eq(usb3_protocol.buf_out_arm),
+            # Link outputs driving protocol inputs: buf_out_addr/arm are
+            # link OUTPUTS in usb3_link.v. The original assignment
+            # directions were inverted, leaving prot_buf_out_q undriven
+            # (so the DPP payload read 0) and never forwarding the link's
+            # DPP read address to ep0's buffer ROM.
+            usb3_protocol.buf_out_addr.eq(prot_buf_out_addr),
+            usb3_protocol.buf_out_arm.eq(prot_buf_out_arm),
 
             # Link outputs driving protocol inputs.
             usb3_protocol.buf_in_ready.eq(prot_buf_in_ready),
             usb3_protocol.buf_in_commit_ack.eq(prot_buf_in_commit_ack),
 
-            usb3_protocol.buf_out_q.eq(prot_buf_out_q),
-            usb3_protocol.buf_out_len.eq(prot_buf_out_len),
-            usb3_protocol.buf_out_hasdata.eq(prot_buf_out_hasdata),
-            usb3_protocol.buf_out_arm_ack.eq(prot_buf_out_arm_ack),
+            # Protocol outputs driving link inputs.
+            prot_buf_out_q.eq(usb3_protocol.buf_out_q),
+            prot_buf_out_len.eq(usb3_protocol.buf_out_len),
+            prot_buf_out_hasdata.eq(usb3_protocol.buf_out_hasdata),
+            prot_buf_out_arm_ack.eq(usb3_protocol.buf_out_arm_ack),
         ]
 
         # External interface (Top-level ports) -> protocol.
