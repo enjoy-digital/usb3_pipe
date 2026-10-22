@@ -117,7 +117,7 @@ class USB3LTSSM(LiteXModule):
         self.warm_reset_req    = Signal()        # i: DS directed BH_PORT_RESET (Warm Reset LFPS)
         self.exit_u1_req       = Signal()        # i: initiate U1 exit (upper layer/traffic)
         self.exit_u2_req       = Signal()        # i: initiate U2 exit
-        self.wakeup_u3_req     = Signal()        # i: initiate U3 wakeup (DS)
+        self.wakeup_u3_req     = Signal()        # i: initiate U3 wakeup (DS, or UFP remote wakeup)
 
         # U2 inactivity (PORT_U2_TIMEOUT LMP, 0 = disabled, 7.5.7.2) --------------------------------
         self.u2_inactivity_enable = Signal(reset=0) # i
@@ -323,7 +323,6 @@ class USB3LTSSM(LiteXModule):
 
         # U3 wakeup retry (DS, 7.2.4.2.4: 2 retries then eSS.Inactive) -------------------------------
         u3_wakeup_pending = Signal()
-        u3_retry_cnt      = Signal(2)
         u3_retry_wait     = Signal()
         u3_entry_cnt      = Signal(2) # consecutive U3 entry PM_LC failures (7.2.4.2.4)
 
@@ -331,6 +330,7 @@ class USB3LTSSM(LiteXModule):
         self.pm_kind = pm_kind = Signal(2)  # requested Ux: 1/2/3
         self.pm_sent_lgo = pm_sent_lgo = Signal() # LGO sent, LAU/LXU pending (PM_LC_TIMER armed)
         self.pm_acc_kind = pm_acc_kind = Signal(2) # partner request accepted (LAU sent)
+        pm_conc_kind = Signal(2) # UFP: DS request received while our own LGO is pending (7.2.4.2.5)
         pm_lgo_fire  = Signal(2)
         pm_lau_fire  = Signal()
         pm_lxu_fire  = Signal()
@@ -527,7 +527,6 @@ class USB3LTSSM(LiteXModule):
             NextValue(ux_armed, 0),
             NextValue(rx_lb_seen, 0),
             NextValue(u3_wakeup_pending, 0),
-            NextValue(u3_retry_cnt, 0),
             NextValue(u3_retry_wait, 0),
             NextValue(pm_lgo_fire,  0),
             NextValue(pm_lau_fire,  0),
@@ -594,10 +593,20 @@ class USB3LTSSM(LiteXModule):
             ).Elif(self.lgo_u2 & ~pm_sent_lgo & (pm_acc_kind == 0),
                 NextValue(pm_acc_kind, 2),
                 NextValue(pm_lau_fire, 1)
-            # PM concurrency (7.2.4.2.5, simplified): LGO sent + LGO received -> LXU, stay U0.
-            ).Elif(pm_sent_lgo & (self.lgo_u1 | self.lgo_u2 | self.lgo_u3),
-                NextValue(pm_sent_lgo, 0),
+            # PM concurrency (7.2.4.2.5): LGO sent + LGO received.
+            # - DS: rejects the UFP LGO_U1/U2 (LXU), its own request stays outstanding.
+            # - UFP: waits for the DS LXU (rejecting its own request), then answers the DS request
+            #   (LAU: an upstream port shall not reject U3, 7.2.4.2.4).
+            ).Elif(pm_sent_lgo & self.ds_port & (self.lgo_u1 | self.lgo_u2),
                 NextValue(pm_lxu_fire, 1)
+            ).Elif(pm_sent_lgo & ~self.ds_port & (self.lgo_u1 | self.lgo_u2 | self.lgo_u3),
+                If(self.lgo_u3,
+                    NextValue(pm_conc_kind, 3)
+                ).Elif(self.lgo_u2,
+                    NextValue(pm_conc_kind, 2)
+                ).Else(
+                    NextValue(pm_conc_kind, 1)
+                )
             # PM: requester trigger (conditions of 7.2.4.2.2 assumed met by upper layers).
             ).Elif(~pm_sent_lgo & (pm_acc_kind == 0) & (self.req_u1 | self.req_u2 | (self.req_u3 & self.ds_port)),
                 If(self.req_u3 & self.ds_port,
@@ -613,6 +622,7 @@ class USB3LTSSM(LiteXModule):
                 # Requester resolution (7.2.4.2.3).
                 If(self.lau,
                     NextValue(pm_sent_lgo, 0),
+                    NextValue(pm_conc_kind, 0),
                     NextValue(pm_lpma_fire, 1),
                     NextValue(u3_entry_cnt, 0), # entry success breaks the failure streak
                     If(pm_kind == 1,
@@ -624,12 +634,19 @@ class USB3LTSSM(LiteXModule):
                     )
                 ).Elif(self.lxu,
                     NextValue(pm_sent_lgo, 0), # rejected: remain in U0
-                    NextValue(u3_entry_cnt, 0) # resolved handshake is not a timeout failure
+                    NextValue(u3_entry_cnt, 0), # resolved handshake is not a timeout failure
+                    # UFP: answer the DS request received while our own LGO was pending (7.2.4.2.5).
+                    If(pm_conc_kind != 0,
+                        NextValue(pm_acc_kind, pm_conc_kind),
+                        NextValue(pm_conc_kind, 0),
+                        NextValue(pm_lau_fire, 1)
+                    )
                 ).Elif(t_pm_lc.done,
                     # PM_LC_TIMER timeout -> Recovery (7.2.4.2.3). U3 entry (pm_kind==3)
                     # counts consecutive failures: the 3rd strike -> eSS.Inactive
                     # (7.2.4.2.4) instead of another Recovery round trip.
                     NextValue(pm_sent_lgo, 0),
+                    NextValue(pm_conc_kind, 0),
                     If((pm_kind == 3) & (u3_entry_cnt == 2),
                         NextState("eSS.Inactive")
                     ).Else(
@@ -706,7 +723,7 @@ class USB3LTSSM(LiteXModule):
                 NextValue(hs_run,  1),
                 NextValue(hs_send, 1),
                 NextValue(hs_rx,   1),
-                NextValue(ux_armed, 1)
+                # Ux_EXIT_TIMER is only started by the port initiating the exit (7.2.4.2.1).
             ).Elif(~hs_run & ((self.exit_u1_req & (self.ds_port | u1_residency_done))
                               | (self.hot_reset_req & self.ds_port)),
                 # U1 exit initiator (UFP only after U1_MIN_RESIDENCY). DS-directed
@@ -747,7 +764,7 @@ class USB3LTSSM(LiteXModule):
                 NextValue(hs_run,  1),
                 NextValue(hs_send, 1),
                 NextValue(hs_rx,   1),
-                NextValue(ux_armed, 1)
+                # Ux_EXIT_TIMER is only started by the port initiating the exit (7.2.4.2.1).
             ).Elif(~hs_run & (self.exit_u2_req | (self.hot_reset_req & self.ds_port)),
                 # U2 exit initiator; DS-directed PORT_RESET rides the same
                 # handshake (p189-190) and completes in Recovery.Idle -> Hot Reset.
@@ -781,7 +798,6 @@ class USB3LTSSM(LiteXModule):
             ).Elif(hs_done_ok,
                 # U3 wakeup handshake success -> Recovery (7.2.4.2.7).
                 NextValue(u3_wakeup_pending, 0),
-                NextValue(u3_retry_cnt, 0),
                 NextValue(u3_retry_wait, 0),
                 NextValue(self.recovery, 1),
                 NextValue(rx_ts1_seen,     0),
@@ -789,26 +805,19 @@ class USB3LTSSM(LiteXModule):
                 NextValue(rx_ts2_seen,     0),
                 NextState("Recovery.Active")
             ).Elif(hs_done_err,
-                If(self.ds_port,
-                    If(u3_retry_cnt == 2,
-                        # 3 consecutive failures -> eSS.Inactive (7.2.4.2.4).
-                        NextState("eSS.Inactive")
-                    ).Else(
-                        NextValue(u3_retry_cnt, u3_retry_cnt + 1),
-                        NextValue(u3_retry_wait, 1) # tU3WakeupRetryDelay (100ms)
-                    )
-                ).Else(
-                    NextState("eSS.Inactive")
-                )
-            ).Elif(self.wakeup_u3_req & self.ds_port,
+                # Wakeup failure: remain in U3 and retry after tU3WakeupRetryDelay (100ms) (7.2.4.2.7,
+                # no failure limit: the 3 failures -> eSS.Inactive rule is for U3 entry, 7.2.4.2.4).
+                NextValue(u3_retry_wait, 1)
+            ).Elif(self.wakeup_u3_req,
+                # U3 wakeup initiated by either port (UFP: function remote wakeup, 7.2.4.2.7).
                 NextValue(u3_wakeup_pending, 1)
-            ).Elif(self.ds_port & u3_wakeup_pending & ~hs_run & ~u3_retry_wait,
-                # DS initiates/retries wakeup (Ux_EXIT_TIMER not applied to U3, 7.2.4.2.1).
+            ).Elif(u3_wakeup_pending & ~hs_run & ~u3_retry_wait,
+                # Initiate/retry wakeup (Ux_EXIT_TIMER not applied to U3, 7.2.4.2.1).
                 NextValue(hs_mode, 3),
                 NextValue(hs_run,  1),
                 NextValue(hs_send, 1)
-            ).Elif(~self.ds_port & self.rx_burst_ok,
-                # UFP responds to wakeup (qualified single burst, hs_rx pre-latched).
+            ).Elif(~hs_run & self.rx_burst_ok,
+                # Respond to the partner wakeup (qualified single burst, hs_rx pre-latched).
                 NextValue(hs_mode, 3),
                 NextValue(hs_run,  1),
                 NextValue(hs_send, 1),

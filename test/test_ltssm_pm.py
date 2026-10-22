@@ -386,11 +386,9 @@ class TestLTSSMPMConcurrency(PMTestCase):
         dut = self.make_dut()
         run_simulation(dut, generator(dut))
 
-    @unittest.expectedFailure
     def test_ds_concurrent_lgo_keeps_own_request(self):
         # 7.2.4.2.5: the downstream port rejects the upstream port LGO_Ux (LXU) but its own
         # LGO_Uy stays outstanding: the upstream port answers it (LAU -> DS enters Uy).
-        # The model drops its own request (pm_sent_lgo cleared) and the LAU is then ignored.
         def generator(dut):
             yield from self.go_u0(dut, ds_port=1)
             yield from self.pulse(dut.req_u1)
@@ -404,16 +402,21 @@ class TestLTSSMPMConcurrency(PMTestCase):
         dut = self.make_dut()
         run_simulation(dut, generator(dut))
 
-    @unittest.expectedFailure
     def test_ufp_concurrent_lgo_u3_accepted(self):
-        # 7.2.4.2.4/7.2.4.2.5: an upstream port shall not reject LGO_U3, even with its own
-        # LGO_Ux outstanding (the downstream port rejects the upstream request). The model
-        # answers LXU to any LGO received while its own LGO is pending.
+        # 7.2.4.2.4/7.2.4.2.5: an upstream port with its own LGO_Ux outstanding that receives an
+        # LGO_U3 shall wait until the reception of an LXU (the DS rejecting its request) and then send
+        # an LAU (an upstream port shall not reject U3) -> U3.
         def generator(dut):
             yield from self.go_u0(dut, ds_port=0)
             yield from self.pulse(dut.req_u1)
             self.assertTrue((yield from self.wait_for(dut, dut.pm_sent_lgo, timeout=4)))
             yield from self.pulse(dut.lgo_u3)
+            # No answer before the DS LXU.
+            for _ in range(4):
+                self.assertEqual((yield dut.tx_lau), 0)
+                self.assertEqual((yield dut.tx_lxu), 0)
+                yield
+            yield from self.pulse(dut.lxu)
             lau = lxu = 0
             for _ in range(4):
                 lau += (yield dut.tx_lau)
@@ -551,11 +554,10 @@ class TestLTSSMUxExit(PMTestCase):
                 dut = self.make_exit_dut()
                 run_simulation(dut, generator(dut))
 
-    @unittest.expectedFailure
     def test_ux_exit_timer_not_applied_to_responder(self):
         # 7.2.4.2.1/7.2.4.2.7: Ux_EXIT_TIMER is only started by the port initiating the U1/U2
         # exit; a responder stuck in Recovery.Active stays there (until its own Recovery timeouts,
-        # disabled here). The model also starts it on the responder side -> eSS.Inactive.
+        # disabled here).
         for kind in [1, 2]:
             with self.subTest(kind=kind):
                 ux_exit = scaled(6e-3, EXIT_CLK_FREQ, EXIT_SCALE)
@@ -608,10 +610,9 @@ class TestLTSSMUxExit(PMTestCase):
         dut = self.make_exit_dut()
         run_simulation(dut, generator(dut))
 
-    @unittest.expectedFailure
     def test_ufp_u3_remote_wakeup(self):
         # 7.5.9.2 / 7.2.4.2.7: either port may initiate the U3 wakeup handshake (upstream port:
-        # function remote wakeup). The model only lets a downstream port initiate it.
+        # function remote wakeup).
         def generator(dut):
             yield from self.go_u0(dut, ds_port=0)
             yield from self.enter_ux_as_acceptor(dut, 3)
@@ -624,12 +625,11 @@ class TestLTSSMUxExit(PMTestCase):
 # U3 Wakeup retries (7.2.4.2.4, tU3WakeupRetryDelay) ------------------------------------------------
 
 class TestLTSSMU3WakeupRetry(PMTestCase):
-    @unittest.expectedFailure
     def test_ds_wakeup_retries_stays_u3(self):
         # 7.2.4.2.7: a port initiating U3 wakeup shall remain in U3 when the LFPS handshake fails
         # (tNoLFPSResponseTimeout) and may initiate it again after tU3WakeupRetryDelay (100ms):
         # no failure limit (the 3 consecutive failures -> eSS.Inactive rule is for U3 entry,
-        # 7.2.4.2.4). The model goes to eSS.Inactive after 3 wakeup failures.
+        # 7.2.4.2.4).
         guard = scaled(10e-3,  LONG_CLK_FREQ, LONG_SCALE)
         delay = scaled(100e-3, LONG_CLK_FREQ, LONG_SCALE)
         def generator(dut):

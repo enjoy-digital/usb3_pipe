@@ -450,25 +450,22 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
         # tU1PingTimeout is not gated by with_timers: disable the other timers to use a large scale.
         run(new_dut(COMPLIANCE_SCALE, with_timers=False), generator)
 
-    def test_u3_ds_wakeup_retries_then_ess_inactive(self):
-        # DS U3 wakeup without response: tNoLFPSResponseTimeout (10ms), 2 retries after
-        # tU3WakeupRetryDelay (100ms), then eSS.Inactive (7.2.4.2.4).
+    def test_u3_ds_wakeup_retries_stay_u3(self):
+        # DS U3 wakeup without response: tNoLFPSResponseTimeout (10ms), then retry after
+        # tU3WakeupRetryDelay (100ms), remaining in U3 (7.2.4.2.7, no failure limit).
         def generator(dut):
             yield dut.ds_port.eq(1)
             yield from self.goto(dut, "U3")
             yield from pulse(dut.wakeup_u3_req)
             bursts = 0
             prev   = 0
-            for _ in range(3*cycles(10e-3) + 2*cycles(100e-3) + 64):
-                s   = yield from state(dut)
+            for _ in range(4*cycles(10e-3) + 3*cycles(100e-3) + 64):
+                self.assertEqual((yield from state(dut)), "U3")
                 cur = yield dut.lfps_tx_wakeup_u3
                 bursts += (cur & ~prev) & 1
                 prev = cur
-                if s == "eSS.Inactive":
-                    break
                 yield
-            self.assertEqual((yield from state(dut)), "eSS.Inactive")
-            self.assertEqual(bursts, 3)
+            self.assertGreaterEqual(bursts, 4)
         run(new_dut(), generator)
 
     def test_pm_lc_timer_timeout(self):
