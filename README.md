@@ -142,5 +142,6 @@ The generator produces in the output directory:
  - `gateware/usb3_pipe_core.xdc`: Timing constraints of the core (to be scoped to the core).
  - `gateware/*.init`: Memories initialization files.
  - `usb3_pipe_core_inst.v`: Instantiation template.
+ - `usb3_pipe_core_ltssm.vh`: LTSSM states encoding of the `ltssm_state` port (Verilog `localparam`s).
  - `usb3_pipe_core.md`: Documentation of the core (ports, clocking, data format, link bring-up and
    integration notes) for the selected configuration.
