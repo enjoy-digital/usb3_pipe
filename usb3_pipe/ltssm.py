@@ -143,6 +143,7 @@ class USB3LTSSM(LiteXModule):
 
         tx_lfps_count   = Signal(16)
         rx_lfps_seen    = Signal()
+        polling_lfps_ok = Signal() # Polling.LFPS handshake completed since power-on/Warm Reset.
         rx_ts1_seen     = Signal()
         rx_ts1_inv_seen = Signal()
         rx_ts2_seen     = Signal()
@@ -375,8 +376,10 @@ class USB3LTSSM(LiteXModule):
             self.lfps_tx_polling.eq(1),
             If(_360_ms_timer.done,
                 # 360ms timeout: Compliance for UFP (always enabled) and DS when directed
-                # (compliance_enable); DS without enable retries training (7.5.4.3).
-                If(self.ds_port & ~self.compliance_enable,
+                # (compliance_enable), only if the Polling.LFPS handshake has never been completed
+                # since power-on/Warm Reset (7.5.4.3.2: a later timeout is a training failure, not a
+                # passive compliance load). Otherwise retry training.
+                If(polling_lfps_ok | (self.ds_port & ~self.compliance_enable),
                     NextState("Polling.ExitToRxDetect")
                 ).Else(
                     NextState("Compliance")
@@ -387,6 +390,7 @@ class USB3LTSSM(LiteXModule):
                     NextValue(tx_lfps_count, self.lfps_tx_count + 4)
                 ),
                 If(rx_lfps_seen,
+                    NextValue(polling_lfps_ok, 1),
                     NextState("Polling.RxEQ"),
                 )
             )
@@ -940,6 +944,7 @@ class USB3LTSSM(LiteXModule):
                 # Warm Reset burst State (6.9, DS originator / UFP responder) ---------------------------------
         fsm.act("WarmReset", # 15.
             *timers_off,
+            NextValue(polling_lfps_ok, 0),
             self.lfps_tx_idle.eq(1),
             NextValue(self.pm_sent_lgo, 0),
             NextValue(self.pm_acc_kind, 0),
@@ -1194,8 +1199,14 @@ class USB3LTSSM(LiteXModule):
         self.comb += [
             self.lfps_tx_ping.eq((fsm.state == fsm.encoding["U1"]) &
                                  ~self.ds_port & self.u1_residency_done),
-            self.tx_ts2_loopback.eq(self.lb_pending &
-                ((fsm.state == fsm.encoding["Recovery.Configuration"]) |
-                 (fsm.state == fsm.encoding["Recovery.Idle"]))),
+            # Loopback bit of the transmitted TS2 (7.5.4.9.1, 7.5.10.4.1): directed loopback master,
+            # in Polling.Configuration or (directed from U0) in Recovery.Configuration/Idle.
+            self.tx_ts2_loopback.eq(
+                (self.lb_pending &
+                    ((fsm.state == fsm.encoding["Recovery.Configuration"]) |
+                     (fsm.state == fsm.encoding["Recovery.Idle"]))) |
+                (self.directed_loopback & self.loopback_capable &
+                    ((fsm.state == fsm.encoding["Polling.Configuration"]) |
+                     (fsm.state == fsm.encoding["Polling.Idle"])))),
         ]
 
