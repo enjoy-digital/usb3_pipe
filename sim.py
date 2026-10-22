@@ -10,10 +10,12 @@ import argparse
 
 from migen import *
 from migen.genlib.misc import WaitTimer
+from migen.genlib.cdc  import MultiReg
 
 from litex.gen import *
 
 from litex.build.generic_platform import *
+from litex.build.io import CRG
 from litex.build.sim import SimPlatform
 from litex.build.sim.config import SimConfig
 
@@ -42,7 +44,13 @@ class Platform(SimPlatform):
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
 class USB3SerDesModel(LiteXModule):
-    def __init__(self, phy_dw=20, rx_word_shift=0):
+    """SerDes model: 8b/10b, TX pattern/LFPS, polarity and RX word shift emulation.
+
+    The RX side (decoders, word aligner, SKP remover) runs in `rx_clock_domain`: the partner's TX
+    clock, as recovered by the CDR of a real transceiver. The RX datapath's CDC then moves the data
+    to the local sys clock domain.
+    """
+    def __init__(self, phy_dw=20, rx_word_shift=0, rx_clock_domain="sys"):
         assert phy_dw in [20, 40]
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -66,24 +74,25 @@ class USB3SerDesModel(LiteXModule):
         # # #
 
         nwords = phy_dw//10
+        assert 0 <= rx_word_shift <= nwords
 
         # Control.
         self.comb += self.ready.eq(self.enable) # Ready when enabled
 
         # Datapath.
         tx_datapath = TXDatapath(phy_dw=nwords*8)
-        rx_datapath = RXDatapath(phy_dw=nwords*8)
+        rx_datapath = RXDatapath(phy_dw=nwords*8, clock_domain=rx_clock_domain)
         self.submodules += tx_datapath, rx_datapath
         self.comb += [
             self.sink.connect(tx_datapath.sink),
             tx_datapath.skp_enable.eq(self.tx_skp_enable),
-            rx_datapath.word_aligner.enable.eq(self.rx_align),
             rx_datapath.source.connect(self.source)
         ]
+        self.specials += MultiReg(self.rx_align, rx_datapath.word_aligner.enable, rx_clock_domain)
 
         # 8b10b Encoders/Decoders.
         encoder  = Encoder(nwords, True)
-        decoders = [Decoder(True) for _ in range(nwords)]
+        decoders = [ClockDomainsRenamer(rx_clock_domain)(Decoder(True)) for _ in range(nwords)]
         self.submodules += encoder, decoders
         self.comb += tx_datapath.source.ready.eq(1)
         self.comb += rx_datapath.sink.valid.eq(1)
@@ -97,8 +106,10 @@ class USB3SerDesModel(LiteXModule):
 
         # Pattern/Polarity/Shift emulation.
         tx_data    = Signal(phy_dw)
-        rx_data    = Signal(phy_dw)
-        rx_data_sr = Signal(2*phy_dw)
+        rx_data     = Signal(phy_dw)
+        rx_data_sr  = Signal(2*phy_dw)
+        rx_polarity = Signal()
+        self.specials += MultiReg(self.rx_polarity, rx_polarity, rx_clock_domain)
         self.comb += [
             If(self.tx_lfps | (self.tx_pattern != 0),
                 tx_data.eq(self.tx_pattern)
@@ -112,32 +123,193 @@ class USB3SerDesModel(LiteXModule):
             )
         ]
         self.comb += [
-            If(self.rx_polarity,
+            If(rx_polarity,
                 rx_data.eq(~self.rx.data)
             ).Else(
                 rx_data.eq(self.rx.data)
             )
         ]
-        self.sync += rx_data_sr.eq(Cat(rx_data, rx_data_sr))
+        sync_rx = getattr(self.sync, rx_clock_domain)
+        sync_rx += rx_data_sr.eq(Cat(rx_data_sr[phy_dw:], rx_data)) # Previous word in LSBs.
         for i in range(nwords):
             self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
 
         # RX decode errors.
-        self.rx_error_monitor = RXErrorMonitor(decoders)
+        self.rx_error_monitor = RXErrorMonitor(decoders, clock_domain=rx_clock_domain)
         self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
 
     def connect(self, serdes):
         self.comb += [
             self.tx.connect(serdes.rx),
             serdes.tx.connect(self.rx),
-            self.rx_idle.eq(serdes.tx_idle),
-            serdes.rx_idle.eq(self.tx_idle),
+        ]
+        self.specials   += MultiReg(serdes.tx_idle, self.rx_idle)
+        serdes.specials += MultiReg(self.tx_idle, serdes.rx_idle)
+
+# Link-Layer Stand-In (PRBS Packets) ---------------------------------------------------------------
+
+PRBS_START = (0xfbfbfbfb, 0b1111) # K27.7 x4: Packet start marker.
+PRBS_END   = (0xfdfdfdfd, 0b1111) # K29.7 x4: Packet end marker.
+
+def xorshift32(x, name):
+    """Next state of a 32-bit xorshift PRBS (combinatorial), as (statements, signal)."""
+    a = Signal(32, name=name + "_a")
+    b = Signal(32, name=name + "_b")
+    c = Signal(32, name=name + "_c")
+    return [a.eq(x ^ (x << 13)), b.eq(a ^ (a >> 17)), c.eq(b ^ (b << 5))], c
+
+class PRBSPacketGenerator(LiteXModule):
+    """Link-Layer stand-in (TX): random length packets of PRBS data words, framed by K-code start/end
+    markers (first/last) and separated by random gaps (Logical Idle sent by the PIPE).
+    """
+    def __init__(self):
+        self.enable = Signal()   # i
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.words  = Signal(32) # o: Data words sent.
+
+        # # #
+
+        prbs = Signal(32, reset=1)
+        prbs_next_stmts, prbs_next = xorshift32(prbs, "prbs_gen")
+        self.comb += prbs_next_stmts
+
+        count = Signal(5)
+        self.fsm = fsm = FSM(reset_state="GAP")
+        fsm.act("GAP",
+            If(count != 0,
+                NextValue(count, count - 1)
+            ).Elif(self.enable,
+                NextValue(count, prbs[0:5]), # 1-32 data words.
+                NextState("START")
+            )
+        )
+        fsm.act("START",
+            source.valid.eq(1),
+            source.first.eq(1),
+            source.data.eq(PRBS_START[0]),
+            source.ctrl.eq(PRBS_START[1]),
+            If(source.ready,
+                NextState("DATA")
+            )
+        )
+        fsm.act("DATA",
+            source.valid.eq(1),
+            source.data.eq(prbs),
+            source.ctrl.eq(0),
+            If(source.ready,
+                NextValue(prbs, prbs_next),
+                NextValue(self.words, self.words + 1),
+                NextValue(count, count - 1),
+                If(count == 0,
+                    NextState("END")
+                )
+            )
+        )
+        fsm.act("END",
+            source.valid.eq(1),
+            source.last.eq(1),
+            source.data.eq(PRBS_END[0]),
+            source.ctrl.eq(PRBS_END[1]),
+            If(source.ready,
+                NextValue(count, prbs[8:12]), # 0-15 cycles gap.
+                NextState("GAP")
+            )
+        )
+
+class PRBSPacketChecker(LiteXModule):
+    """Link-Layer stand-in (RX): checks the packets of PRBSPacketGenerator.
+
+    Inside packets, each data word must be the PRBS successor of the previous one (self-synchronizing:
+    a corrupted/lost word only gives a bounded number of errors). Outside packets, only Logical Idle
+    (descrambled 00h data symbols) is expected.
+    """
+    def __init__(self):
+        self.enable  = Signal()   # i
+        self.sink    = sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.words   = Signal(32) # o: Data words checked.
+        self.packets = Signal(32) # o: Packets received.
+        self.errors  = Signal(32) # o: Errors.
+
+        # # #
+
+        prev      = Signal(32)
+        prev_ok   = Signal()
+        in_packet = Signal()
+        prev_next_stmts, prev_next = xorshift32(prev, "prbs_chk")
+        self.comb += prev_next_stmts
+        self.comb += sink.ready.eq(1)
+
+        is_start = (sink.data == PRBS_START[0]) & (sink.ctrl == PRBS_START[1])
+        is_end   = (sink.data == PRBS_END[0])   & (sink.ctrl == PRBS_END[1])
+        self.sync += If(self.enable & sink.valid,
+            If(is_start,
+                If(in_packet, self.errors.eq(self.errors + 1)),
+                in_packet.eq(1)
+            ).Elif(is_end,
+                If(~in_packet, self.errors.eq(self.errors + 1)),
+                in_packet.eq(0),
+                self.packets.eq(self.packets + 1)
+            ).Elif(in_packet,
+                self.words.eq(self.words + 1),
+                prev.eq(sink.data),
+                prev_ok.eq(1),
+                If((sink.ctrl != 0) | (prev_ok & (sink.data != prev_next)),
+                    self.errors.eq(self.errors + 1)
+                )
+            ).Elif((sink.data != 0) | (sink.ctrl != 0),
+                self.errors.eq(self.errors + 1)
+            )
+        )
+
+# Clock Generator (NCO) ----------------------------------------------------------------------------
+
+class NCOClockGenerator(LiteXModule):
+    """Clock domain generated from the sys clock by a 32-bit phase accumulator (sim only).
+
+    The generated clock runs at ratio x the sys clock frequency (with 1 sys clock cycle of jitter).
+    `ppm` offsets its frequency and `ssc` adds a 0/-5000ppm triangular down-spread at 31.5kHz (USB 3.2
+    6.5.4) relative to `nominal_freq`.
+    """
+    def __init__(self, cd, ratio=0.25, ppm=0, ssc=False, nominal_freq=133e6):
+        phase  = Signal(32)
+        inc    = int(2**32*ratio*(1 + ppm*1e-6))
+        offset = Signal(32)
+
+        if ssc:
+            ssc_max    = int(2**32*ratio*5000e-6)
+            half_ticks = int(nominal_freq/31.5e3/2/ratio)
+            ssc_step   = max(1, ssc_max//half_ticks)
+            ssc_up     = Signal(reset=1)
+            self.sync += [
+                If(ssc_up,
+                    offset.eq(offset + ssc_step),
+                    If(offset >= ssc_max - ssc_step, ssc_up.eq(0))
+                ).Else(
+                    offset.eq(offset - ssc_step),
+                    If(offset <= ssc_step, ssc_up.eq(1))
+                )
+            ]
+
+        self.sync += phase.eq(phase + inc - offset)
+        self.comb += [
+            cd.clk.eq(phase[31]),
+            cd.rst.eq(ResetSignal("sys")),
         ]
 
 # USB3PIPESim --------------------------------------------------------------------------------------
 
 class USB3PIPESim(SoCMini):
-    def __init__(self, phy_dw=20, timer_scale=1):
+    """Host <-> Device USB3 PHY simulation.
+
+    - with_core:     Daisho USB3 Core on both sides, else PRBS Link-Layer stand-ins with the payload
+                     checked on both sides in U0.
+    - rx_word_shift: RX shift (in 10-bit symbols) of the SerDes models.
+    - ppm/ssc:       Host/Device in separate clock domains, the Device clock offset by ppm and/or with
+                     SSC. Each SerDes model receives in the partner's (recovered) clock domain.
+    - prbs_words:    Words to check on both sides before ending the simulation (without core).
+    """
+    def __init__(self, phy_dw=20, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
+        prbs_words=2**16, max_cycles=2**24):
         sys_clk_freq = int(133e6)
 
         # Platform.
@@ -147,93 +319,148 @@ class USB3PIPESim(SoCMini):
         # SoC Mini.
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq)
 
-        # USB3 Host (Host = Downstream Port).
-        host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
-        host_usb3_phy    = USB3PHY(
-            serdes       = host_usb3_serdes,
-            sys_clk_freq = sys_clk_freq,
-            role         = "host",
-            timer_scale  = timer_scale)
-        self.submodules += host_usb3_serdes, host_usb3_phy
-        host_usb3_ltssm = host_usb3_phy.ltssm
-        host_usb3_ltssm.finalize()
+        # Clock Domains.
+        self.crg = CRG(platform.request("sys_clk"))
+        if (ppm != 0) or ssc:
+            self.cd_host  = ClockDomain()
+            self.cd_dev   = ClockDomain()
+            self.host_crg = NCOClockGenerator(self.cd_host)
+            self.dev_crg  = NCOClockGenerator(self.cd_dev, ppm=ppm, ssc=ssc)
+            cds = {"host": "host", "dev": "dev"}
+        else:
+            cds = {"host": "sys", "dev": "sys"}
 
-        host_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
-        self.host_usb3_core = host_usb3_core
-        self.comb += [
-            host_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
-            host_usb3_phy.source.connect(host_usb3_core.sink),
-            host_usb3_core.source.connect(host_usb3_phy.sink),
-            host_usb3_core.reset.eq(~host_usb3_ltssm.u0),
-        ]
+        # USB3 Host (Host = Downstream Port) / Device (Device = Upstream Port).
+        ltssms   = {}
+        serdeses = {}
+        checkers = {}
+        for name, role, partner in [("host", "host", "dev"), ("dev", "device", "host")]:
+            renamer = ClockDomainsRenamer({"sys": cds[name], "rx": cds[partner]})
+            serdes  = renamer(USB3SerDesModel(
+                phy_dw          = phy_dw,
+                rx_word_shift   = rx_word_shift,
+                rx_clock_domain = "rx"))
+            phy     = renamer(USB3PHY(
+                serdes       = serdes,
+                sys_clk_freq = sys_clk_freq,
+                role         = role,
+                timer_scale  = timer_scale))
+            self.add_module(name=f"{name}_usb3_serdes", module=serdes)
+            self.add_module(name=f"{name}_usb3_phy",    module=phy)
+            ltssm = phy.ltssm
+            self.comb += serdes.tx_polarity.eq(1) # Inverse TX polarity to test RX auto-polarity
 
-        # USB3 Device (Device = Upstream Port).
-        dev_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
-        dev_usb3_phy    = USB3PHY(
-            serdes       = dev_usb3_serdes,
-            sys_clk_freq = sys_clk_freq,
-            role         = "device",
-            timer_scale  = timer_scale)
-        self.submodules += dev_usb3_serdes, dev_usb3_phy
-        dev_usb3_ltssm = dev_usb3_phy.ltssm
-        dev_usb3_ltssm.finalize()
+            if with_core:
+                core = renamer(USB3Core(platform, daisho_core="daisho_mod"))
+                self.add_module(name=f"{name}_usb3_core", module=core)
+                self.comb += [
+                    phy.source.connect(core.sink),
+                    core.source.connect(phy.sink),
+                    core.reset.eq(~ltssm.u0),
+                ]
+            else:
+                generator = renamer(PRBSPacketGenerator())
+                checker   = renamer(PRBSPacketChecker())
+                self.add_module(name=f"{name}_prbs_generator", module=generator)
+                self.add_module(name=f"{name}_prbs_checker",   module=checker)
+                self.comb += [
+                    generator.enable.eq(ltssm.u0),
+                    generator.source.connect(phy.sink),
+                    checker.enable.eq(ltssm.u0),
+                    phy.source.connect(checker.sink),
+                ]
+                checkers[name] = checker
 
-        dev_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
-        self.dev_usb3_core = dev_usb3_core
-        self.comb += [
-            dev_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
-            dev_usb3_phy.source.connect(dev_usb3_core.sink),
-            dev_usb3_core.source.connect(dev_usb3_phy.sink),
-            dev_usb3_core.reset.eq(~dev_usb3_ltssm.u0),
-        ]
+            # LTSSM lower-layer inputs: no PM activity.
+            self.comb += ltssm.link_activity.eq(1)
+
+            ltssms[name]   = ltssm
+            serdeses[name] = serdes
 
         # Connect Host <--> Device.
-        host_usb3_serdes.connect(dev_usb3_serdes)
-
-        # LTSSM lower-layer inputs: no PM activity.
-        for ltssm in [host_usb3_ltssm, dev_usb3_ltssm]:
-            self.comb += ltssm.link_activity.eq(1)
+        serdeses["host"].connect(serdeses["dev"])
 
         # Simulation Timer.
         timer = Signal(32)
         self.sync += timer.eq(timer + 1)
 
         # Simulation Status.
-        for pipe, fsm in [
-            ["host",  host_usb3_ltssm.fsm],
-            ["dev ",  dev_usb3_ltssm.fsm]]:
+        for name, ltssm in ltssms.items():
+            fsm  = ltssm.fsm
+            sync = getattr(self.sync, cds[name])
             for state, value in fsm.encoding.items():
-                self.sync += [
+                sync += [
                     If(fsm.next_state != fsm.state,
                         If(fsm.next_state == value,
-                            Display("[%08d] {} entering {} state".format(pipe.upper(), state), timer)
+                            Display("[%08d] {} entering {} state".format(
+                                {"host": "HOST", "dev": "DEV "}[name], state), timer)
                         )
                     )
                 ]
 
-        # Simulation End (Finish on dual U0, 2^16 cycles).
-        end_timer = WaitTimer(2**16)
-        self.submodules += end_timer
-        self.comb += end_timer.wait.eq(host_usb3_ltssm.u0 & dev_usb3_ltssm.u0)
-        self.sync += If(end_timer.done, Finish())
+        # Simulation End.
+        done   = Signal()
+        report = Signal()
+        if with_core:
+            # Dual U0 for 2^16 cycles.
+            end_timer = WaitTimer(2**16)
+            self.submodules += end_timer
+            self.comb += [
+                end_timer.wait.eq(ltssms["host"].u0 & ltssms["dev"].u0),
+                done.eq(end_timer.done),
+            ]
+        else:
+            # prbs_words checked on both sides.
+            self.comb += done.eq(
+                (checkers["host"].words >= prbs_words) &
+                (checkers["dev"].words  >= prbs_words))
+            for name, checker in checkers.items():
+                self.sync += If(done & ~report,
+                    Display("{} PRBS: %d words, %d packets, %d errors".format(name.upper()),
+                        checker.words, checker.packets, checker.errors)
+                )
+        self.sync += [
+            If(done | (timer >= max_cycles),
+                report.eq(1),
+                If(~done & ~report, Display("[%08d] Simulation timeout", timer))
+            ),
+            If(report, Finish())
+        ]
 
 # Build --------------------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="USB3 PIPE Simulation")
-    parser.add_argument("--trace",        action="store_true", help="Enable VCD tracing.")
-    parser.add_argument("--trace-start",  default=0,           help="Cycle to start VCD tracing.")
-    parser.add_argument("--trace-end",    default=-1,          help="Cycle to end VCD tracing.")
-    parser.add_argument("--timer-scale",  default=1,           help="LTSSM/LFPS timers scale factor (1 = spec exact).")
+    parser.add_argument("--trace",         action="store_true", help="Enable VCD tracing.")
+    parser.add_argument("--trace-start",   default=0,           help="Cycle to start VCD tracing.")
+    parser.add_argument("--trace-end",     default=-1,          help="Cycle to end VCD tracing.")
+    parser.add_argument("--timer-scale",   default=1,           help="LTSSM/LFPS timers scale factor (1 = spec exact).")
+    parser.add_argument("--no-core",       action="store_true", help="Replace the USB3 Core with PRBS Link-Layer stand-ins.")
+    parser.add_argument("--prbs-words",    default=2**16,       help="Words to check on both sides (with --no-core).")
+    parser.add_argument("--rx-word-shift", default=0,           help="SerDes models RX shift (0-3 symbols).")
+    parser.add_argument("--ppm",           default=0,           help="Device clock offset vs Host clock (ppm).")
+    parser.add_argument("--ssc",           action="store_true", help="Enable SSC (0/-5000ppm down-spread) on the Device clock.")
+    parser.add_argument("--max-cycles",    default=2**24,       help="Simulation timeout (sys clock cycles).")
+    parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
     sim_config = SimConfig(default_clk="sys_clk")
 
-    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/sim/gateware/")
+    with_core = not args.no_core
+    if with_core:
+        os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+        os.makedirs(os.path.join(args.output_dir, "gateware"), exist_ok=True)
+        os.system(f"cp usb3_core/daisho/usb3/*.init {args.output_dir}/gateware/")
 
-    soc = USB3PIPESim(timer_scale=int(args.timer_scale))
-    builder = Builder(soc)
+    soc = USB3PIPESim(
+        timer_scale   = int(args.timer_scale),
+        with_core     = with_core,
+        rx_word_shift = int(args.rx_word_shift),
+        ppm           = float(args.ppm),
+        ssc           = args.ssc,
+        prbs_words    = int(args.prbs_words),
+        max_cycles    = int(args.max_cycles))
+    builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",
         interactive = False,
