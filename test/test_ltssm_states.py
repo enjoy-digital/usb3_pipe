@@ -695,13 +695,10 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
             yield from self.expect(dut, "Loopback.Exit", 4)
         run(new_dut(), generator)
 
-    @unittest.expectedFailure
     def test_polling_configuration_directed_loopback_sets_ts2_loopback_bit(self):
-        # SPEC: a port directed to Loopback as master sets the Loopback bit in the Link
-        # Configuration field of the TS2 it transmits in Polling.Configuration (7.5.4.9.1, Table
-        # 6-6), which is how the slave learns it must enter Loopback from Polling.Idle (7.5.4.10.2).
-        # tx_ts2_loopback is only asserted in Recovery.Configuration/Idle (lb_pending from U0), so a
-        # master directed during Polling enters Loopback alone and the partner goes to U0.
+        # A port directed to Loopback as master sets the Loopback bit in the Link Configuration field
+        # of the TS2 it transmits in Polling.Configuration (7.5.4.9.1, Table 6-6), which is how the
+        # slave learns it must enter Loopback from Polling.Idle (7.5.4.10.2).
         def generator(dut):
             yield dut.loopback_capable.eq(1)
             yield dut.directed_loopback.eq(1)
@@ -887,13 +884,10 @@ class TestLTSSMCompliance(unittest.TestCase, LTSSMDriver):
                     self.assertTrue((yield from stay_in(dut, "Compliance", 64)))
                 run(new_dut(COMPLIANCE_SCALE), generator)
 
-    @unittest.expectedFailure
     def test_ufp_polling_lfps_timeout_after_link_up_is_not_compliance(self):
-        # SPEC: Polling.LFPS -> Compliance Mode on the 360ms timeout only if the port has not yet
-        # successfully completed Polling.LFPS since power-on / Warm Reset (first-time entry,
-        # 7.5.4.3.2); otherwise the port goes to Rx.Detect (DS) / eSS.Disabled (UFP), never to
-        # Compliance. The implementation has no such qualifier: a UFP that was in U0 and re-trains
-        # (e.g. after eSS.Inactive) enters Compliance when the partner is silent for 360ms.
+        # Polling.LFPS -> Compliance Mode on the 360ms timeout only if the port has not yet
+        # successfully completed Polling.LFPS since power-on / Warm Reset (7.5.4.3.2): a UFP that was
+        # in U0 and re-trains (e.g. after eSS.Inactive) must not enter Compliance.
         def generator(dut):
             yield from self.goto(dut, "eSS.Inactive") # Was in U0 before.
             yield from self.expect(dut, "Polling.LFPS", cycles(12e-3, dut.scale) + 32)
