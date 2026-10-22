@@ -34,6 +34,17 @@ from litex.gen import *
 lfps_clk_freq_min = 1/100e-9
 lfps_clk_freq_max = 1/20e-9
 
+def lfps_clk_half_period_cycles(sys_clk_freq, lfps_clk_freq):
+    """Half period (in sys_clk cycles) of the generated LFPS clock. The generated period is rounded
+    to an even number of sys_clk cycles: check it (not the requested frequency) against tPeriod
+    (20-100ns, Table 6-29)."""
+    half_period_cycles = ceil(sys_clk_freq/(2*lfps_clk_freq))
+    period = 2*half_period_cycles/sys_clk_freq
+    assert 1/lfps_clk_freq_max <= period <= 1/lfps_clk_freq_min, \
+        "LFPS period {:.1f}ns (lfps_clk_freq={:.3f}MHz at sys_clk_freq={:.3f}MHz) outside of " \
+        "20-100ns (Table 6-29).".format(period*1e9, lfps_clk_freq/1e6, sys_clk_freq/1e6)
+    return half_period_cycles
+
 class LFPSTiming:
     """LPFS timings with typical, minimum and maximum timing values."""
     def __init__(self, t_typ=None, t_min=None, t_max=None):
@@ -290,14 +301,9 @@ class LFPSBurstGenerator(LiteXModule):
 
         # # #
 
-        # Assertions -------------------------------------------------------------------------------
-        # The LFPS Burst has a minimum and maximum allowed period.
-        assert lfps_clk_freq >= lfps_clk_freq_min
-        assert lfps_clk_freq <= lfps_clk_freq_max
-
-        # LFPS Burst Clock generation --------------------------------------------------------------
+        # LFPS Burst Clock generation (period checked against tPeriod, Table 6-29) -----------------
         clk = Signal()
-        clk_timer = WaitTimer(ceil(sys_clk_freq/(2*lfps_clk_freq)) - 1)
+        clk_timer = WaitTimer(lfps_clk_half_period_cycles(sys_clk_freq, lfps_clk_freq) - 1)
         clk_timer = ResetInserter()(clk_timer)
         self.submodules += clk_timer
         self.comb += clk_timer.wait.eq(~clk_timer.done)
@@ -422,10 +428,8 @@ class LFPSUnit(LiteXModule):
         # # #
 
         # LFPS Clock (free running, unscaled: LFPS bitrate is not affected by timer_scale) ----------
-        assert lfps_clk_freq >= lfps_clk_freq_min
-        assert lfps_clk_freq <= lfps_clk_freq_max
         lfps_clk       = Signal()
-        lfps_clk_timer = WaitTimer(ceil(sys_clk_freq/(2*lfps_clk_freq)) - 1)
+        lfps_clk_timer = WaitTimer(lfps_clk_half_period_cycles(sys_clk_freq, lfps_clk_freq) - 1)
         self.submodules += lfps_clk_timer
         self.comb += lfps_clk_timer.wait.eq(~lfps_clk_timer.done) # free-running (else pattern stuck 0)
         self.sync += If(lfps_clk_timer.done, lfps_clk.eq(~lfps_clk))
