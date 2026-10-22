@@ -640,8 +640,6 @@ class USB3LTSSM(LiteXModule):
                     NextValue(rx_ts2_seen,     0),
                     NextState("Recovery.Active")
                 )
-            ).Elif(self.lfps_rx_polling, # FIXME: for bringup (legacy bring-up trigger).
-                NextState("Polling.Entry")
             )
         )
 

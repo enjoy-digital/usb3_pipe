@@ -11,6 +11,8 @@ from migen import *
 from usb3_pipe.common import COM, SKP
 from usb3_pipe.scrambling import Scrambler, Descrambler
 
+from test.common import ScramblerModel, symbols_to_words
+
 scrambler_ref = [
     0x14c017ff, 0x8202e7b2, 0xa6286e72, 0x8dbf6dbe,
     0xe6a740be, 0xb2e2d32c, 0x2a770207, 0xe0be34cd,
@@ -31,6 +33,17 @@ scrambler_ref = [
 ]
 
 class TestScrambling(unittest.TestCase):
+    def test_reference_model_matches_table(self):
+        # The golden table is the Gen1 LFSR keystream (scrambled zeros) from FFFFh (6.3.1.3).
+        symbols = ScramblerModel().process([(0x00, 0)]*4*len(scrambler_ref))
+        self.assertEqual([data for data, ctrl in symbols_to_words(symbols)], scrambler_ref)
+
+    def test_reference_model_tx_seed_after_ts2(self):
+        # Scrambler(reset=0x7dbd) default: LFSR state after a TS2 (4 COM + 12 D symbols).
+        model = ScramblerModel()
+        model.process([(COM.value, 1)]*4 + [(0x00, 0)]*12)
+        self.assertEqual(model.lfsr, 0x7dbd)
+
     def test_scrambler_data(self):
         def generator(dut):
             yield dut.source.ready.eq(1)

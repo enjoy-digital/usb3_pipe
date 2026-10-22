@@ -11,6 +11,57 @@ from migen import *
 from usb3_pipe import lfps
 
 class TestLFPS(unittest.TestCase):
+    def test_lfps_checker_detects_polling_pattern(self):
+        sys_clk_freq = int(100e6)
+        burst_cycles = lfps.time_to_cycles(sys_clk_freq, lfps.PollingLFPS.burst.t_typ)
+        repeat_cycles = lfps.time_to_cycles(sys_clk_freq, lfps.PollingLFPS.repeat.t_typ)
+
+        def generator(dut, n_repeats):
+            for i in range(repeat_cycles*n_repeats):
+                in_burst = (i % repeat_cycles) < burst_cycles
+                yield dut.idle.eq(0 if in_burst else 1)
+                yield
+            for i in range(32):
+                yield dut.idle.eq(1)
+                yield
+            dut.run = False
+
+        def checker(dut):
+            detections = 0
+            while dut.run:
+                if (yield dut.detect):
+                    detections += 1
+                yield
+            self.assertGreaterEqual(detections, 2)
+
+        dut = lfps.LFPSChecker(lfps.PollingLFPS, sys_clk_freq)
+        dut.run = True
+        run_simulation(dut, [generator(dut, n_repeats=4), checker(dut)])
+
+    def test_lfps_checker_ignores_short_glitch(self):
+        def generator(dut):
+            for i in range(32):
+                yield dut.idle.eq(1)
+                yield
+            yield dut.idle.eq(0)
+            yield
+            for i in range(512):
+                yield dut.idle.eq(1)
+                yield
+            dut.run = False
+
+        def checker(dut):
+            detections = 0
+            while dut.run:
+                if (yield dut.detect):
+                    detections += 1
+                yield
+            self.assertEqual(detections, 0)
+
+        dut = lfps.LFPSChecker(lfps.PollingLFPS, int(100e6))
+        dut.run = True
+        run_simulation(dut, [generator(dut), checker(dut)])
+
     def test_lfps_burst_generator(self):
         def burst_generator(dut, nbursts, burst_length):
             for i in range(nbursts):
