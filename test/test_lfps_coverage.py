@@ -372,11 +372,9 @@ class TestLFPSBurstDetection(unittest.TestCase):
             with self.subTest(sys_clk_freq=f):
                 self.check_u2_u3_threshold(f)
 
-    @unittest.expectedFailure
     def test_u2_u3_detection_threshold_150mhz(self):
-        # BUG candidate: time_to_cycles() float ceil: 80e-6*150e6 = 12000.000000000002 -> 12001,
-        # an exact 80us burst (12000 cycles) is not detected as U2/Loopback Exit / U3 Wakeup.
-        # (Masked in hardware by the RXIdleFilter stretch.)
+        # An exact 80us burst (12000 cycles at 150MHz) is detected as U2/Loopback Exit / U3 Wakeup
+        # (time_to_cycles() rounding: 80e-6*150e6 = 12000.000000000002 must give 12000).
         self.check_u2_u3_threshold(150e6)
 
     def test_exit_levels_released_at_burst_end(self):
