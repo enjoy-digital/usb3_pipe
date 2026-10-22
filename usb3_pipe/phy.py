@@ -29,6 +29,8 @@ def connect_ltssm_pipe(ltssm, pipe):
         pipe.ts_tx_tseq.eq(ltssm.ts_tx_tseq),
         pipe.ts_tx_ts1.eq(ltssm.ts_tx_ts1),
         pipe.ts_tx_ts2.eq(ltssm.ts_tx_ts2),
+        pipe.ts_tx_ts2_reset.eq(ltssm.tx_ts2_reset),
+        pipe.ts_tx_ts2_loopback.eq(ltssm.tx_ts2_loopback),
 
         pipe.serdes_rx_align.eq(ltssm.serdes_rx_align),
         pipe.serdes_rx_polarity.eq(ltssm.serdes_rx_polarity),
@@ -48,6 +50,8 @@ def connect_ltssm_pipe(ltssm, pipe):
         ltssm.ts_rx_ts1.eq(pipe.ts_rx_ts1),
         ltssm.ts_rx_ts1_inv.eq(pipe.ts_rx_ts1_inv),
         ltssm.ts_rx_ts2.eq(pipe.ts_rx_ts2),
+        ltssm.rx_ts2_reset.eq(pipe.ts_rx_ts2_reset),
+        ltssm.rx_ts2_loopback.eq(pipe.ts_rx_ts2_loopback),
         ltssm.ts_tx_done.eq(pipe.ts_tx_done),
     ]
 
