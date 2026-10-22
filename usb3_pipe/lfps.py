@@ -130,6 +130,11 @@ PingLFPS          = LFPS(burst=PingLFPSBurst, repeat=PingLFPSRepeat)
 ResetLFPSBurst    = LFPSTiming(t_typ=100.0e-3, t_min=80.0e-3,  t_max=120.0e-3)
 ResetLFPS         = LFPS(burst=ResetLFPSBurst)
 
+# Warm Reset detection delay (tResetDelay, 6.9.3): an upstream port shall declare the detection of
+# Warm Reset within 18-50ms. Also above the longest exit/wakeup LFPS bursts (U3 Wakeup 10ms max,
+# Table 6-30/6-31) so that they are not detected as Warm Reset.
+ResetDetectDelay  = 25.0e-3
+
 # U1 Exit: single burst, 900ns min (2ms max). Detection minimum is 300ns (Table 6-30 note 7:
 # guard band for the handshake). Enforced by the LTSSM handshake, not by the checker alone.
 U1ExitLFPSBurst   = LFPSTiming(t_typ=900e-9, t_min=300e-9,  t_max=2e-3)
@@ -488,10 +493,14 @@ class LFPSUnit(LiteXModule):
         ]
 
         # Warm Reset ---------------------------------------------------------------------------------
+        # A non electrical idle line is also seen with SuperSpeed data (U0, Recovery...): the LFPS is
+        # differentiated from data by the RX decode errors it produces (see RXErrorMonitor). SerDes
+        # without rx_errors fall back to the electrical idle detection only.
+        rx_errors = getattr(serdes, "rx_errors", None)
         self.reset_checker = reset_checker = LFPSBurstChecker(sys_clk_freq,
-            min_cycles=scaled_cycles(sys_clk_freq, ResetLFPSBurst.t_min, timer_scale))
+            min_cycles=scaled_cycles(sys_clk_freq, ResetDetectDelay, timer_scale))
         self.comb += [
-            reset_checker.idle.eq(serdes.rx_idle),
+            reset_checker.idle.eq(serdes.rx_idle | ((~rx_errors) if rx_errors is not None else 0)),
             self.rx_reset.eq(reset_checker.detect),
         ]
 

@@ -172,6 +172,40 @@ class RXErrorSubstitution(LiteXModule):
                     )
                 ]
 
+# RX Error Monitor ---------------------------------------------------------------------------------
+
+class RXErrorMonitor(LiteXModule):
+    """RX Error Monitor
+
+    Reports (in the sys clock domain) whether 8b/10b decode errors are being received: `errors` is
+    set while decode errors are seen with no more than `window` RX clock cycles between them.
+
+    A LFPS signal (10-50MHz square wave, Table 6-29) sampled at the 5Gbps line rate never decodes as
+    valid 8b/10b symbols while SuperSpeed data does: this is used to differentiate a Warm Reset LFPS
+    from data, both seen as a non electrical idle line.
+    """
+    def __init__(self, decoders, clock_domain="sys", window=256):
+        self.errors = Signal() # o
+
+        # # #
+
+        invalid = Signal()
+        errors  = Signal()
+        count   = Signal(max=window + 1)
+        self.comb += invalid.eq(Reduce("OR", [decoder.invalid for decoder in decoders]))
+        sync = getattr(self.sync, clock_domain)
+        sync += [
+            If(invalid,
+                count.eq(window),
+                errors.eq(1),
+            ).Elif(count != 0,
+                count.eq(count - 1),
+            ).Else(
+                errors.eq(0),
+            )
+        ]
+        self.specials += MultiReg(errors, self.errors)
+
 # RX Idle Filter -----------------------------------------------------------------------------------
 
 class RXIdleFilter(LiteXModule):
@@ -375,6 +409,7 @@ class K7USB3SerDes(LiteXModule):
 
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
+        self.rx_errors   = Signal()   # o
         self.rx_align    = Signal()   # i
 
         # # #
@@ -459,6 +494,10 @@ class K7USB3SerDes(LiteXModule):
         self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
         self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
 
+        # RX decode errors (Warm Reset LFPS detection) ---------------------------------------------
+        self.rx_error_monitor = RXErrorMonitor(gtx.decoders, clock_domain="rx")
+        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
+
         self.comb += [
             gtx.tx_produce_pattern.eq(self.tx_pattern != 0),
             gtx.tx_pattern.eq(self.tx_pattern)
@@ -485,6 +524,7 @@ class A7USB3SerDes(LiteXModule):
 
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
+        self.rx_errors   = Signal()   # o
         self.rx_align    = Signal()   # i
 
         # # #
@@ -567,6 +607,10 @@ class A7USB3SerDes(LiteXModule):
         self.rx_idle_filter = RXIdleFilter(rx_idle)
         self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
         self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
+
+        # RX decode errors (Warm Reset LFPS detection) ---------------------------------------------
+        self.rx_error_monitor = RXErrorMonitor(gtp.decoders, clock_domain="rx")
+        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
 
         self.comb += [
             gtp.tx_produce_pattern.eq(self.tx_pattern != 0),
