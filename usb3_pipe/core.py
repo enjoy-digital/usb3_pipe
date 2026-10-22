@@ -154,11 +154,14 @@ class USB3PIPE(LiteXModule):
         ]
 
         # Descrambling -----------------------------------------------------------------------------
+        # The descrambler processes all received symbols, including the Training Sequences received
+        # before U0: its LFSR is initialized on every received COM and advances on every non-SKP
+        # symbol (6.3.1.3), so it is synchronized with the partner's scrambler when rx_ready is set.
+        # Only the output to the Link Layer is gated by rx_ready.
         self.descrambler = descrambler = Descrambler()
         self.comb += [
-            serdes.source.connect(descrambler.sink, keep={"data", "ctrl"}),
-            If(self.rx_ready,
-                serdes.source.connect(descrambler.sink, omit={"data", "ctrl"})
-            ),
-            descrambler.source.connect(source),
+            serdes.source.connect(descrambler.sink),
+            descrambler.source.connect(source, omit={"valid", "ready"}),
+            source.valid.eq(descrambler.source.valid & self.rx_ready),
+            descrambler.source.ready.eq(source.ready | ~self.rx_ready),
         ]

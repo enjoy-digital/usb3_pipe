@@ -243,7 +243,6 @@ class TSUnit(LiteXModule):
             serdes.source.connect(ts1_checker.sink,       omit={"ready"}),
             serdes.source.connect(ts1_inv_checker.sink,   omit={"ready"}),
             serdes.source.connect(ts2_checker.sink,       omit={"ready"}),
-            If(self.rx_enable, serdes.source.ready.eq(1)),
             self.rx_ts1.eq(ts1_checker.detected),
             self.rx_ts1_inv.eq(ts1_inv_checker.detected),
             self.rx_ts2.eq(ts2_checker.detected),
