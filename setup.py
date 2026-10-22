@@ -36,4 +36,9 @@ setup(
     ],
     packages=find_packages(exclude=("test*", "sim*", "doc*", "examples*")),
     include_package_data=True,
+    entry_points={
+        "console_scripts": [
+            "usb3_pipe_gen=usb3_pipe.gen:main",
+        ],
+    },
 )
