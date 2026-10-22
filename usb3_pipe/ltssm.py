@@ -155,8 +155,11 @@ class USB3LTSSM(LiteXModule):
         # 360ms Timer (tPollingLFPSTimeout, Table 7-12) ----------------------------------------------
         self._360_ms_timer = _360_ms_timer = WaitTimer(scaled(360e-3))
 
-        # 12ms Timer (tPollingActive/tPollingConfiguration/tRecoveryActive/tHotResetActive) ----------
+        # 12ms Timer (tPollingActive/tRecoveryActive/tHotResetActive) --------------------------------
         self._12_ms_timer = _12_ms_timer = WaitTimer(scaled(12e-3))
+
+        # 12ms Timer (tPollingConfigurationTimeout, started upon entry to Polling.Configuration) -----
+        self.t_polling_cfg = t_polling_cfg = WaitTimer(scaled(12e-3))
 
         # 6ms Timer (tRecoveryConfigurationTimeout) --------------------------------------------------
         self._6_ms_timer = _6_ms_timer = WaitTimer(scaled(6e-3))
@@ -196,7 +199,7 @@ class USB3LTSSM(LiteXModule):
 
         timers = [
             _360_ms_timer, _12_ms_timer, _6_ms_timer,
-            t_polling_idle, t_u0_recovery, t_recov_idle, t_hotreset_exit,
+            t_polling_cfg, t_polling_idle, t_u0_recovery, t_recov_idle, t_hotreset_exit,
             t_ux_exit, t_pm_lc, t_pm_entry, t_u2_inact, t_ss_quiet, t_u3_retry, t_rx_detect,
         ]
 
@@ -439,13 +442,13 @@ class USB3LTSSM(LiteXModule):
         fsm.act("Polling.Configuration", # 4.
             *timers_off,
             self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
-            _12_ms_timer.wait.eq(with_timers),
+            t_polling_cfg.wait.eq(with_timers),
             self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
             NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
             NextValue(rx_lb_seen,  rx_lb_seen  | self.rx_ts2_loopback),
-            If(_12_ms_timer.done,
+            If(t_polling_cfg.done,
                 NextState("Polling.ExitToRxDetect")
             ),
             # 8 consecutive TS2 received and 16 TS2 sent after receiving the first of them
