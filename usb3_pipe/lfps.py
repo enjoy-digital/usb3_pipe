@@ -65,7 +65,7 @@ def scaled_cycles(clk_freq, t, timer_scale=1, floor=1):
 
 # Single-burst handshake timing contract (USB 3.2 Rev 1.1 Table 6-31, section 6.9) -------------
 # Shared by the LFPS checkers below (detection min_cycles) and the LTSSM exit-handshake
-# generator (burst length, usb3_ltssm.py) so both derive from the same source and scale the
+# generator (burst length, ltssm.py) so both derive from the same source and scale the
 # same way: at any timer_scale the initiator's burst must outlast the partner's detection
 # latency (2-cycle MultiReg resync + 2-cycle idle deglitcher + min_cycles count) plus a
 # sampling margin, so the responder still sees the initiator burst in flight when its own
