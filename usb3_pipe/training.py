@@ -149,6 +149,7 @@ class TSGenerator(LiteXModule):
     """
     def __init__(self, ordered_set, n_ordered_sets=1):
         self.start  = Signal() # i (Level)
+        self.abort  = Signal() # i (Level): Abort the generation (next one restarts with COM).
         self.done   = Signal() # o (Pulse)
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -226,6 +227,10 @@ class TSGenerator(LiteXModule):
                     run.eq(1),
                     count.eq(1)
                 )
+            ),
+            If(self.abort,
+                run.eq(0),
+                count.eq(0)
             )
         ]
         # Delimiters -------------------------------------------------------------------------------
@@ -288,6 +293,14 @@ class TSUnit(LiteXModule):
         self.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
         self.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=16)
         self.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=16)
+        # Generations are aborted when no longer requested (tx_enable deasserted or other TS requested
+        # by the LTSSM): an interrupted burst restarts on an Ordered Set boundary (with COM, 6.4.1.1)
+        # and with a full burst.
+        self.comb += [
+            tseq_generator.abort.eq(~(self.tx_enable & self.tx_tseq)),
+            ts1_generator.abort.eq( ~(self.tx_enable & self.tx_ts1)),
+            ts2_generator.abort.eq( ~(self.tx_enable & self.tx_ts2)),
+        ]
         self.comb += [
             If(self.tx_enable,
                 If(self.tx_tseq,
