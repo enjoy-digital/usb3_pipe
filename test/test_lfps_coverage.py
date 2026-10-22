@@ -499,16 +499,13 @@ class TestLFPSUnitArbitration(unittest.TestCase):
         for _, length in bursts:
             self.assertTrue(0.6e-6 <= length/f <= 1.4e-6)
 
-    @unittest.expectedFailure
     def test_polling_restart_while_busy_no_runt_burst(self):
-        # BUG candidate: tx_polling dropped mid-burst and re-asserted within the 10us repeat period:
-        # LFPSGenerator is still in RUN (not restarted), the remaining part of the burst is sent:
-        # runt burst shorter than Polling tBurst min (0.6us, Table 6-30).
+        # tx_polling dropped mid-burst and re-asserted within the 10us repeat period: the generation
+        # restarts with a full burst (no runt burst shorter than tBurst min 0.6us, Table 6-30).
         f     = 125e6
         trace = self.record(f, [(60, {"tx_polling": 1, "tx_idle": 1}), (40, {"tx_polling": 0}),
             (2000, {"tx_polling": 1})])
-        # Bursts after the re-assertion (the first one is truncated by the request drop itself):
-        # currently a 27 cycles (216ns) runt at 125MHz, then full 1us bursts.
+        # Bursts after the re-assertion (the first one is truncated by the request drop itself).
         bursts = [(s, l) for s, l in runs([t[0] for t in trace], 0) if s >= 100]
         self.assertGreaterEqual(len(bursts), 1)
         for _, length in bursts:
