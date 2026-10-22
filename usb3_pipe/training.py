@@ -252,6 +252,7 @@ class TSUnit(LiteXModule):
         self.rx_ts2          = Signal() # o (Pulse)
         self.rx_ts2_reset    = Signal() # o (Level)
         self.rx_ts2_loopback = Signal() # o (Level)
+        self.rx_ts2_scrambling = Signal(reset=1) # o (Level)
 
         self.tx_enable       = Signal() # i (Level)
         self.tx_tseq         = Signal() # i (Level)
@@ -259,6 +260,7 @@ class TSUnit(LiteXModule):
         self.tx_ts2          = Signal() # i (Level)
         self.tx_ts2_reset    = Signal() # i (Level)
         self.tx_ts2_loopback = Signal() # i (Level)
+        self.tx_ts2_scrambling = Signal(reset=1) # i (Level)
         self.tx_done         = Signal() # o (Pulse)
 
         # # #
@@ -277,6 +279,7 @@ class TSUnit(LiteXModule):
             # Link Functionality of the last received TS2 (6.4.1.1.2, Table 6-6).
             self.rx_ts2_reset.eq(ts2_checker.reset),
             self.rx_ts2_loopback.eq(ts2_checker.loopback),
+            self.rx_ts2_scrambling.eq(ts2_checker.scrambling),
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
@@ -304,4 +307,5 @@ class TSUnit(LiteXModule):
             # Link Functionality of the transmitted TS2 (Hot Reset/Loopback, 7.5.4.9.1).
             ts2_generator.reset.eq(self.tx_ts2_reset),
             ts2_generator.loopback.eq(self.tx_ts2_loopback),
+            ts2_generator.scrambling.eq(self.tx_ts2_scrambling),
         ]
