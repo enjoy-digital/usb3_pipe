@@ -104,3 +104,9 @@ class USB3PHY(LiteXModule):
         for name in USB3PHY_STATUS:
             setattr(self, name, Signal(name=name))
             self.comb += getattr(self, name).eq(getattr(ltssm, name))
+
+        # LTSSM State ------------------------------------------------------------------------------
+        ltssm.finalize() # Elaborate the FSM to expose its state/encoding.
+        self.ltssm_states = ltssm.fsm.encoding # {state name: value}.
+        self.ltssm_state  = Signal(len(ltssm.fsm.state))
+        self.comb += self.ltssm_state.eq(ltssm.fsm.state)

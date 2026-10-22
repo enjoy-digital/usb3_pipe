@@ -14,7 +14,7 @@ import subprocess
 
 import yaml
 
-from usb3_pipe.gen import ConfigError, get_config, get_ports
+from usb3_pipe.gen import ConfigError, get_config, get_ports, get_ltssm_states, get_ltssm_state_localparam
 
 root_dir     = os.path.join(os.path.dirname(__file__), "..")
 examples_dir = os.path.join(root_dir, "examples")
@@ -52,7 +52,8 @@ class TestGen(unittest.TestCase):
             os.path.join(gateware, f"{name}.v"),
             os.path.join(gateware, f"{name}.xdc"),
             os.path.join(output_dir, f"{name}.md"),
-            os.path.join(output_dir, f"{name}_inst.v")]:
+            os.path.join(output_dir, f"{name}_inst.v"),
+            os.path.join(output_dir, f"{name}_ltssm.vh")]:
             self.assertTrue(os.path.isfile(filename), filename)
 
         # Verilog ports match the ports table.
@@ -68,6 +69,17 @@ class TestGen(unittest.TestCase):
         for port in expected:
             self.assertIn(f"| `{port}` |", doc)
             self.assertIn(f".{port} ", inst)
+
+        # LTSSM states encoding: documented and in the Verilog header, fits ltssm_state.
+        with open(os.path.join(output_dir, f"{name}_ltssm.vh")) as f:
+            header = f.read()
+        states = get_ltssm_states()
+        self.assertIn("U0", states)
+        for state, value in states.items():
+            self.assertIn(f"| {value} | {state} |", doc)
+            self.assertRegex(header, r"localparam {}\s+= {}'d{};".format(
+                get_ltssm_state_localparam(name, state), expected["ltssm_state"][1], value))
+            self.assertLess(value, 2**expected["ltssm_state"][1])
 
         # Memories initialization files referenced by the Verilog are generated.
         with open(os.path.join(gateware, f"{name}.v")) as f:
