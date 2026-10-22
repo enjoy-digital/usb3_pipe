@@ -15,6 +15,51 @@ from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler
 
+# Idle Handshake -----------------------------------------------------------------------------------
+
+class IdleHandshake(LiteXModule):
+    """Idle Symbol Handshake (7.5.4.10.2, 7.5.10.4.2, 7.5.12.4.2)
+
+    While enabled, reports `done` when:
+    1. Eight consecutive Idle Symbols are received.
+    2. Sixteen Idle Symbols are sent after receiving one Idle Symbol.
+
+    Checked on 32-bit words (4 symbols): 2 consecutive Idle words received, 4 Idle words sent
+    after the first Idle word received.
+    """
+    def __init__(self):
+        self.enable  = Signal() # i
+        self.rx_idle = Signal() # i: Idle word received (descrambled 00h, valid cycle).
+        self.rx_data = Signal() # i: Non-Idle word received (valid cycle).
+        self.tx_idle = Signal() # i: Idle word sent.
+        self.done    = Signal() # o
+
+        # # #
+
+        rx_count = Signal(max=3)
+        rx_seen  = Signal()
+        tx_count = Signal(max=5)
+        self.sync += [
+            If(~self.enable,
+                rx_count.eq(0),
+                rx_seen.eq(0),
+                tx_count.eq(0),
+            ).Else(
+                If(self.rx_idle,
+                    rx_seen.eq(1),
+                    If(rx_count != 2,
+                        rx_count.eq(rx_count + 1)
+                    )
+                ).Elif(self.rx_data,
+                    rx_count.eq(0)
+                ),
+                If(rx_seen & self.tx_idle & (tx_count != 4),
+                    tx_count.eq(tx_count + 1)
+                )
+            )
+        ]
+        self.comb += self.done.eq(self.enable & (rx_count == 2) & (tx_count == 4))
+
 # USB3 PIPE ----------------------------------------------------------------------------------------
 
 @ResetInserter()
@@ -42,6 +87,9 @@ class USB3PIPE(LiteXModule):
 
         self.rx_ready           = Signal()   # i
         self.tx_ready           = Signal()   # i
+
+        self.idle_handshake     = Signal()   # i
+        self.idle_done          = Signal()   # o
 
         self.serdes_rx_align    = Signal()   # i
         self.serdes_rx_polarity = Signal()   # i
@@ -141,22 +189,28 @@ class USB3PIPE(LiteXModule):
         ]
 
         # Scrambling -------------------------------------------------------------------------------
+        # Scrambled transmission starts with the Idle Symbol handshake (Polling.Idle, Recovery.Idle,
+        # Hot Reset.Exit) and continues in U0, the Link Layer data is only accepted with tx_ready.
+        tx_enable = Signal()
+        self.comb += tx_enable.eq(self.tx_ready | self.idle_handshake)
         scrambler = Scrambler()
         scrambler = ResetInserter()(scrambler)
-        self.comb += scrambler.reset.eq(~self.tx_ready)
+        self.comb += scrambler.reset.eq(~tx_enable)
         self.scrambler = scrambler
+        tx_idle = Signal()
         self.comb += [
             # Logical Idle (7.2.3): send Idle Symbols (00h, scrambled) when the Link Layer has no data,
             # the transceiver would otherwise re-transmit stale symbols and desync the partner's
             # descrambler.
-            If(sink.valid,
+            If(sink.valid & self.tx_ready,
                 sink.connect(scrambler.sink),
             ).Else(
+                tx_idle.eq(1),
                 scrambler.sink.valid.eq(1),
                 scrambler.sink.data.eq(0x00000000),
                 scrambler.sink.ctrl.eq(0b0000),
             ),
-            If(self.tx_ready,
+            If(tx_enable,
                 scrambler.source.connect(serdes.sink)
             )
         ]
@@ -172,4 +226,16 @@ class USB3PIPE(LiteXModule):
             descrambler.source.connect(source, omit={"valid", "ready"}),
             source.valid.eq(descrambler.source.valid & self.rx_ready),
             descrambler.source.ready.eq(source.ready | ~self.rx_ready),
+        ]
+
+        # Idle Handshake ---------------------------------------------------------------------------
+        self.idle_handshake_unit = idle_handshake = IdleHandshake()
+        rx_valid = Signal()
+        self.comb += [
+            rx_valid.eq(descrambler.source.valid & descrambler.source.ready),
+            idle_handshake.enable.eq(self.idle_handshake),
+            idle_handshake.rx_idle.eq(rx_valid & (descrambler.source.data == 0) & (descrambler.source.ctrl == 0)),
+            idle_handshake.rx_data.eq(rx_valid & ((descrambler.source.data != 0) | (descrambler.source.ctrl != 0))),
+            idle_handshake.tx_idle.eq(tx_enable & tx_idle & scrambler.sink.ready),
+            self.idle_done.eq(idle_handshake.done),
         ]
