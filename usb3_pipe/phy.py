@@ -37,6 +37,7 @@ def connect_ltssm_pipe(ltssm, pipe):
 
         pipe.rx_ready.eq(ltssm.rx_ready),
         pipe.tx_ready.eq(ltssm.tx_ready),
+        pipe.idle_handshake.eq(ltssm.idle_handshake),
 
         # PIPE -> LTSSM
         ltssm.lfps_rx_polling.eq(pipe.lfps_rx_polling),
@@ -53,6 +54,7 @@ def connect_ltssm_pipe(ltssm, pipe):
         ltssm.rx_ts2_reset.eq(pipe.ts_rx_ts2_reset),
         ltssm.rx_ts2_loopback.eq(pipe.ts_rx_ts2_loopback),
         ltssm.ts_tx_done.eq(pipe.ts_tx_done),
+        ltssm.rx_idle8.eq(pipe.idle_done),
     ]
 
 # USB3 PHY -----------------------------------------------------------------------------------------

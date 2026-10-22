@@ -187,12 +187,9 @@ class USB3PIPESim(SoCMini):
         # Connect Host <--> Device.
         host_usb3_serdes.connect(dev_usb3_serdes)
 
-        # LTSSM lower-layer inputs: default idle handshake pre-completed, no PM activity.
+        # LTSSM lower-layer inputs: no PM activity.
         for ltssm in [host_usb3_ltssm, dev_usb3_ltssm]:
-            self.comb += [
-                ltssm.rx_idle8.eq(1),
-                ltssm.link_activity.eq(1),
-            ]
+            self.comb += ltssm.link_activity.eq(1)
 
         # Simulation Timer.
         timer = Signal(32)
