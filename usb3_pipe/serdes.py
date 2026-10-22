@@ -70,7 +70,9 @@ class RXSKPRemover(LiteXModule):
                 sr_data.eq(Cat(sr_data[8*i:], frag_data[0:8*i])),
                 sr_ctrl.eq(Cat(sr_ctrl[1*i:], frag_ctrl[0:1*i])),
             ]
-        self.comb += sink.ready.eq(sr_bytes <= 7)
+        # Accept a fragment (up to 4 bytes) only if it fits in the Shift Register, taking into account
+        # the word output on the same cycle.
+        self.comb += sink.ready.eq((sr_bytes <= 4) | (source.ready & (sr_bytes <= 8)))
         self.sync += [
             If(sink.valid & sink.ready,
                 If(source.valid & source.ready,
@@ -87,7 +89,7 @@ class RXSKPRemover(LiteXModule):
         # Output Data/Ctrl when there is a full 32/4-bit word --------------------------------------
         self.comb += source.valid.eq(sr_bytes >= 4)
         cases = {}
-        for i in range(4, 8):
+        for i in range(4, 9):
             cases[i] = [
                 source.data.eq(sr_data[8*(8-i):8*(8-i+4)]),
                 source.ctrl.eq(sr_ctrl[1*(8-i):1*(8-i+4)]),
