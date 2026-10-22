@@ -119,19 +119,24 @@ class RXWordAligner(LiteXModule):
             buf.source.ready.eq(sink.valid & source.ready),
         ]
 
-        # Alignment detection
+        # Alignment markers (COM, or any K-code with check_ctrl_only).
+        marker   = Signal(4)
+        marker_d = Signal(4)
+        for i in range(4):
+            self.comb += marker[i].eq(sink.ctrl[i] & (check_ctrl_only | (sink.data[8*i:8*(i+1)] == COM.value)))
+            self.comb += marker_d[i].eq(buf.source.ctrl[i] & (check_ctrl_only | (buf.source.data[8*i:8*(i+1)] == COM.value)))
+
+        # Alignment detection: first marker of the word.
         for i in reversed(range(4)):
-            self.comb += [
-                If(sink.valid & sink.ready,
-                    If(sink.ctrl[i] & (check_ctrl_only | (sink.data[8*i:8*(i+1)] == COM.value)),
-                        alignment.eq(i)
-                    )
-                )
-            ]
+            self.comb += If(marker[i], alignment.eq(i))
+
+        # Alignment update: only at the start of a marker run (markers in the word and no marker on the
+        # last symbol of the previous word), so that alignment is kept on non-marker K-codes (ex: Link
+        # Layer framing in U0) and on marker runs spanning 2 words.
         self.sync += [
             If(sink.valid & sink.ready,
                 If(self.enable,
-                    If((sink.ctrl != 0) & (buf.source.ctrl == 0),
+                    If((marker != 0) & ~marker_d[3],
                         alignment_d.eq(alignment),
                     )
                 )
