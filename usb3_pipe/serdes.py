@@ -296,9 +296,13 @@ class RXDatapath(LiteXModule):
 
     This module realizes the:
     - Data-width adaptation (from transceiver's data-width to 32-bit).
-    - Clock domain crossing (from transceiver's RX clock to system clock).
     - Clock compensation (SKP removing).
+    - Clock domain crossing (from transceiver's RX clock to system clock).
     - Words alignment.
+
+    SKP removal is done in the transceiver's RX clock domain, before the clock domain crossing: the
+    partner's clock can be faster than the local one (6.4.3), SKP Ordered Sets are then needed to
+    compensate the difference and only data symbols have to cross to the system clock domain.
     """
     def __init__(self, clock_domain="sys", phy_dw=16):
         self.sink   = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
@@ -315,13 +319,15 @@ class RXDatapath(LiteXModule):
         converter = ClockDomainsRenamer(clock_domain)(converter)
         self.converter = converter
 
+        # Clock compensation
+        skip_remover = RXSKPRemover()
+        skip_remover = ClockDomainsRenamer(clock_domain)(skip_remover)
+        self.skip_remover = skip_remover
+
         # Clock domain crossing
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
         cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.cdc = cdc
-
-        # Clock compensation
-        self.skip_remover = skip_remover = RXSKPRemover()
 
         # Words alignment
         word_aligner = RXWordAligner()
@@ -331,9 +337,9 @@ class RXDatapath(LiteXModule):
         # Flow
         self.comb += [
             self.sink.connect(converter.sink),
-            converter.source.connect(cdc.sink),
-            cdc.source.connect(skip_remover.sink),
-            skip_remover.source.connect(word_aligner.sink),
+            converter.source.connect(skip_remover.sink),
+            skip_remover.source.connect(cdc.sink),
+            cdc.source.connect(word_aligner.sink),
             word_aligner.source.connect(self.source),
         ]
 
