@@ -361,6 +361,7 @@ class LFPSGenerator(LiteXModule):
 
         # Burst Generator --------------------------------------------------------------------------
         burst_generator = LFPSBurstGenerator(sys_clk_freq=sys_clk_freq, lfps_clk_freq=lfps_clk_freq)
+        burst_generator = ResetInserter()(burst_generator)
         self.submodules += burst_generator
 
         # Burst Generation -------------------------------------------------------------------------
@@ -375,6 +376,9 @@ class LFPSGenerator(LiteXModule):
                 NextValue(burst_repeat_count,     repeat_cycles),
                 NextState("RUN")
             ).Else(
+                # Not requested: abort any ongoing burst (a new request starts a full burst).
+                burst_generator.reset.eq(1),
+                NextValue(burst_generator.start, 0),
                 NextValue(self.count, 0)
             )
         )
@@ -383,7 +387,12 @@ class LFPSGenerator(LiteXModule):
             self.tx_idle.eq(burst_generator.tx_idle),
             self.tx_pattern.eq(burst_generator.tx_pattern),
             NextValue(burst_repeat_count, burst_repeat_count - 1),
-            If(burst_repeat_count == 0,
+            If(~self.generate,
+                # Request released: abort the repetition (no runt burst on a quick re-request,
+                # tBurst min, Table 6-30).
+                NextValue(self.count, 0),
+                NextState("IDLE")
+            ).Elif(burst_repeat_count == 0,
                 NextState("IDLE"),
                 NextValue(self.count, self.count + 1)
             ),
