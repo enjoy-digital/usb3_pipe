@@ -205,20 +205,16 @@ class TestTSUnitTX(unittest.TestCase):
         self.assertEqual(words[0][4], 1)
         self.assertEqual([i for i, t in enumerate(words) if t[6]], [63])
 
-    @unittest.expectedFailure
     def test_tx_enable_reassert_restarts_ordered_set(self):
-        # BUG candidate: the TSGenerator is frozen (source.ready=0) when tx_enable drops mid-burst
-        # and resumes from where it stopped when re-enabled: the line restarts in the middle of a
-        # TS1 Ordered Set (no COM header, 6.4.1.1 / Table 6-5) and tx_done comes early.
+        # When tx_enable drops mid-burst, the generation is aborted: when re-enabled, the line
+        # restarts on an Ordered Set boundary (COM header, 6.4.1.1 / Table 6-5) with a full burst.
         self.check_restart_on_ordered_set_boundary(
             [(6, {"tx_enable": 1, "tx_ts1": 1}), (20, {"tx_enable": 0})],
             {"tx_enable": 1})
 
-    @unittest.expectedFailure
     def test_ts1_rerequest_restarts_ordered_set(self):
-        # BUG candidate (LTSSM path: Polling.Active TS1 interrupted by 8 TS1 received ->
-        # Polling.Configuration TS2 -> ... -> Recovery.Active TS1): the TS1 generator resumes the
-        # interrupted burst mid-Ordered Set.
+        # LTSSM path: Polling.Active TS1 interrupted -> Polling.Configuration TS2 -> ... ->
+        # Recovery.Active TS1: the TS1 generator restarts a full burst on an Ordered Set boundary.
         self.check_restart_on_ordered_set_boundary(
             [(6, {"tx_enable": 1, "tx_ts1": 1}), (100, {"tx_ts1": 0, "tx_ts2": 1}),
              (4, {"tx_ts2": 0})],
