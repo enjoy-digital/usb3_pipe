@@ -559,41 +559,33 @@ class TestLTSSMWarmReset(unittest.TestCase, WarmResetChecks):
                 scale = COMPLIANCE_SCALE if src == "Compliance" else TIMER_SCALE
                 run(new_dut(scale, with_timers=(src == "Compliance")), generator)
 
-# SPEC deviations: Warm Reset must be honored in every state (except eSS.Disabled). An upstream port
-# shall transition to Rx.Detect upon detection of Warm Reset, a downstream port when directed to
-# issue Warm Reset (USB 3.2 6.9 / 7.4.2 / exit conditions of 7.5.2.2 eSS.Inactive, 7.5.4.x Polling,
-# 7.5.7.2 U1, 7.5.8.2 U2, 7.5.10.x Recovery, 7.5.11.3 Loopback.Exit, 7.5.12.x Hot Reset). The
-# implementation only checks lfps_rx_reset in U0/U1/U2/U3/Compliance/Loopback and warm_reset_req in
-# Polling.Idle/U0/U3/Compliance/Loopback.
+# Warm Reset in every state (except eSS.Disabled): an upstream port shall transition to Rx.Detect upon
+# detection of Warm Reset, a downstream port when directed to issue Warm Reset (USB 3.2 6.9 / 7.4.2 /
+# exit conditions of 7.5.2.2 eSS.Inactive, 7.5.4.x Polling, 7.5.7.2 U1, 7.5.8.2 U2, 7.5.10.x
+# Recovery, 7.5.11.3 Loopback.Exit, 7.5.12.x Hot Reset).
 
-UFP_WARM_RESET_MISSING = [
+UFP_WARM_RESET_STATES = [
     "Polling.LFPS", "Polling.RxEQ", "Polling.Active", "Polling.Configuration", "Polling.Idle",
     "Recovery.Active", "Recovery.Configuration", "Recovery.Idle",
     "HotReset.Active", "HotReset.Exit", "Loopback.Exit", "eSS.Inactive",
 ]
-DS_WARM_RESET_MISSING = [
+DS_WARM_RESET_STATES = [
     "Polling.LFPS", "Polling.RxEQ", "Polling.Active", "Polling.Configuration",
     "U1", "U2",
     "Recovery.Active", "Recovery.Configuration", "Recovery.Idle",
     "HotReset.Active", "HotReset.Exit", "Loopback.Exit", "eSS.Inactive",
 ]
 
-class TestLTSSMWarmResetSpec(unittest.TestCase, WarmResetChecks):
-    pass
+class TestLTSSMWarmResetAllStates(unittest.TestCase, WarmResetChecks):
+    def test_ufp_warm_reset_detect_all_states(self):
+        for src in UFP_WARM_RESET_STATES:
+            with self.subTest(state=src):
+                self.check_rx_warm_reset(src)
 
-def _name(s):
-    return s.lower().replace(".", "_")
-
-def _ufp_test(src):
-    return unittest.expectedFailure(lambda self: self.check_rx_warm_reset(src))
-
-def _ds_test(src):
-    return unittest.expectedFailure(lambda self: self.check_ds_warm_reset(src))
-
-for _src in UFP_WARM_RESET_MISSING:
-    setattr(TestLTSSMWarmResetSpec, "test_ufp_warm_reset_detect_in_" + _name(_src), _ufp_test(_src))
-for _src in DS_WARM_RESET_MISSING:
-    setattr(TestLTSSMWarmResetSpec, "test_ds_directed_warm_reset_in_" + _name(_src), _ds_test(_src))
+    def test_ds_directed_warm_reset_all_states(self):
+        for src in DS_WARM_RESET_STATES:
+            with self.subTest(state=src):
+                self.check_ds_warm_reset(src)
 
 # Polling.Idle / Recovery.Idle exits (USB 3.2 7.5.4.10.2, 7.5.10.5.2) ------------------------------
 
