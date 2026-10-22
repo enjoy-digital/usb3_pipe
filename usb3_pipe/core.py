@@ -138,7 +138,16 @@ class USB3PIPE(LiteXModule):
         self.comb += scrambler.reset.eq(~self.tx_ready)
         self.scrambler = scrambler
         self.comb += [
-            sink.connect(scrambler.sink),
+            # Logical Idle (7.2.3): send Idle Symbols (00h, scrambled) when the Link Layer has no data,
+            # the transceiver would otherwise re-transmit stale symbols and desync the partner's
+            # descrambler.
+            If(sink.valid,
+                sink.connect(scrambler.sink),
+            ).Else(
+                scrambler.sink.valid.eq(1),
+                scrambler.sink.data.eq(0x00000000),
+                scrambler.sink.ctrl.eq(0b0000),
+            ),
             If(self.tx_ready,
                 scrambler.source.connect(serdes.sink)
             )
