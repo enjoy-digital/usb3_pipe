@@ -391,7 +391,7 @@ class USB3LTSSM(LiteXModule):
         # RxEQ State (7.5.4.4) ---------------------------------------------------------------------
         fsm.act("Polling.RxEQ", # 2.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             self.serdes_rx_align.eq(1),
             self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
@@ -404,7 +404,7 @@ class USB3LTSSM(LiteXModule):
         # Active State (7.5.4.5) -------------------------------------------------------------------
         fsm.act("Polling.Active", # 3.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             _12_ms_timer.wait.eq(with_timers),
             self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
@@ -434,7 +434,7 @@ class USB3LTSSM(LiteXModule):
         # Configuration State (7.5.4.6) ------------------------------------------------------------
         fsm.act("Polling.Configuration", # 4.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             _12_ms_timer.wait.eq(with_timers),
             self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
@@ -455,7 +455,7 @@ class USB3LTSSM(LiteXModule):
         # Polling.Idle State (7.5.4.10) --------------------------------------------------------------
         fsm.act("Polling.Idle", # 5.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             self.polling_idle.eq(1),
             t_polling_idle.wait.eq(with_timers),
             If(rx_lb_seen | self.rx_ts2_loopback,
@@ -491,7 +491,7 @@ class USB3LTSSM(LiteXModule):
         # U0 State -----------------------------------------------------------------------------------
         fsm.act("U0", # 6.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             self.u0.eq(1),
             self.rx_ready.eq(1),
             self.tx_ready.eq(1),
@@ -823,7 +823,7 @@ class USB3LTSSM(LiteXModule):
         # Loopback State (7.5.11) ---------------------------------------------------------------------
         fsm.act("Loopback", # 11.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             t_ux_exit.wait.eq(ux_armed),
             self.loopback.eq(1),
             If(self.lfps_rx_reset,
@@ -873,7 +873,7 @@ class USB3LTSSM(LiteXModule):
         # Hot Reset Active State (7.5.12.2) -----------------------------------------------------------
         fsm.act("HotReset.Active", # 13.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             NextValue(self.pm_sent_lgo, 0),
             NextValue(self.pm_acc_kind, 0),
             self.hot_reset.eq(1),
@@ -899,7 +899,7 @@ class USB3LTSSM(LiteXModule):
         # Hot Reset Exit State (7.5.12.3) -------------------------------------------------------------
         fsm.act("HotReset.Exit", # 14.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             self.hot_reset.eq(1),
             t_hotreset_exit.wait.eq(with_timers),
             If(self.rx_idle8,
@@ -927,7 +927,7 @@ class USB3LTSSM(LiteXModule):
         # Recovery Active State (7.5.10.1) --------------------------------------------------------------
         fsm.act("Recovery.Active", # 16.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             NextValue(self.pm_sent_lgo, 0),
             NextValue(self.pm_acc_kind, 0),
             t_ux_exit.wait.eq(ux_armed),
@@ -959,7 +959,7 @@ class USB3LTSSM(LiteXModule):
         # Recovery Configuration State (7.5.10.2) --------------------------------------------------------
         fsm.act("Recovery.Configuration", # 17.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             t_ux_exit.wait.eq(ux_armed),
             _6_ms_timer.wait.eq(with_timers),
             self.serdes_rx_align.eq(1), # Keep alignment re-acquisition during the TS2 exchange.
@@ -984,7 +984,7 @@ class USB3LTSSM(LiteXModule):
         # Recovery Idle State (7.5.10.3) -----------------------------------------------------------------
         fsm.act("Recovery.Idle", # 18.
             *timers_off,
-            self.lfps_tx_idle.eq(1),
+            self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             t_ux_exit.wait.eq(ux_armed),
             t_recov_idle.wait.eq(with_timers),
             If(t_ux_exit.done,
