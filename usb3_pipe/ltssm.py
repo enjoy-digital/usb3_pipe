@@ -1067,6 +1067,26 @@ class USB3LTSSM(LiteXModule):
             )
         )
 
+        # Warm Reset (6.9, 7.4.2) ------------------------------------------------------------------
+        # In every state (except the transient Rx.Detect substates and WarmReset itself), an upstream
+        # port shall transition to Rx.Detect upon detection of Warm Reset and a downstream port when
+        # directed to issue Warm Reset (exit conditions of 7.5.2 to 7.5.12). Appended last to each
+        # state: takes priority over the state's own transitions.
+        for state in fsm.actions.keys():
+            if state in ["Polling.Entry", "Polling.ExitToCompliance", "Polling.ExitToRxDetect", "WarmReset"]:
+                continue
+            fsm.act(state,
+                If(self.lfps_rx_reset,
+                    NextValue(wr_run,  1),
+                    NextValue(wr_orig, 0),
+                    NextState("WarmReset")
+                ).Elif(self.warm_reset_req & self.ds_port,
+                    NextValue(wr_run,  1),
+                    NextValue(wr_orig, 1),
+                    NextState("WarmReset")
+                )
+            )
+
         # # #
 
         # Global clocks/counters ----------------------------------------------------------------------
