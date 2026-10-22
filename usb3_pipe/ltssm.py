@@ -151,6 +151,7 @@ class USB3LTSSM(LiteXModule):
         self.lb_pending = lb_pending = Signal() # directed loopback via Recovery (TS2 Loopback bit)
         loopback_master = Signal() # Loopback role
         hr_seen         = Signal() # partner TS2 Reset bit seen in HotReset.Active
+        hr_tx_reset     = Signal() # TS2 Reset bit transmitted in HotReset.Active.
 
         # 360ms Timer (tPollingLFPSTimeout, Table 7-12) ----------------------------------------------
         self._360_ms_timer = _360_ms_timer = WaitTimer(scaled(360e-3))
@@ -531,10 +532,18 @@ class USB3LTSSM(LiteXModule):
                 NextValue(wr_run,  1),
                 NextValue(wr_orig, 0),
                 NextState("WarmReset")
-            # Hot Reset: US forced by TS2 Reset bit / DS directed (7.5.6.2).
-            ).Elif(self.rx_ts2_reset | (self.hot_reset_req & self.ds_port),
+            # Hot Reset: US forced by TS2 Reset bit.
+            ).Elif(self.rx_ts2_reset,
                 NextValue(hr_seen, 0),
                 NextState("HotReset.Active")
+            # Hot Reset: DS directed, through Recovery (7.5.6.2): the Reset bit is sent in the TS2 of
+            # Recovery.Configuration and Hot Reset entered from Recovery.Idle (7.4.2, 7.5.10).
+            ).Elif(self.hot_reset_req & self.ds_port,
+                NextValue(self.recovery, 1),
+                NextValue(rx_ts1_seen,     0),
+                NextValue(rx_ts1_inv_seen, 0),
+                NextValue(rx_ts2_seen,     0),
+                NextState("Recovery.Active")
             # Real Recovery triggers (7.5.6.2): TS1 detect (trigger 2), tU0RecoveryTimeout (4),
             # directed (3).
             ).Elif(self.ts_rx_ts1, # FIXME: trigger 2 of 7.5.6.2 (legacy bring-up trigger).
@@ -889,13 +898,13 @@ class USB3LTSSM(LiteXModule):
             self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
-            NextValue(self.tx_ts2_reset, 1),
+            NextValue(hr_tx_reset, 1),
             NextValue(hr_seen, hr_seen | self.rx_ts2_reset),
             If((hr_cnt + 1) >= hr_delay,
                 # Own reset done: send Reset=0 TS2 (sandbox: symmetric auto-clear).
-                NextValue(self.tx_ts2_reset, 0)
+                NextValue(hr_tx_reset, 0)
             ),
-            If(hr_seen & ~self.rx_ts2_reset & ~self.tx_ts2_reset,
+            If(hr_seen & ~self.rx_ts2_reset & ~hr_tx_reset,
                 # Both sides saw Reset=0 -> Exit (sandbox: single fall detection).
                 NextState("HotReset.Exit")
             ).Elif(_12_ms_timer.done,
@@ -920,7 +929,12 @@ class USB3LTSSM(LiteXModule):
             )
         )
 
-        # Warm Reset burst State (6.9, DS originator / UFP responder) ---------------------------------
+        # TS2 Reset bit (7.4.2): set in HotReset.Active (until own reset done), and in
+        # Recovery.Configuration when the DS is directed to Hot Reset (7.5.10.4).
+        self.comb += self.tx_ts2_reset.eq(hr_tx_reset |
+            (fsm.ongoing("Recovery.Configuration") & self.hot_reset_req & self.ds_port))
+
+                # Warm Reset burst State (6.9, DS originator / UFP responder) ---------------------------------
         fsm.act("WarmReset", # 15.
             *timers_off,
             self.lfps_tx_idle.eq(1),

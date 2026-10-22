@@ -764,18 +764,27 @@ class TestLTSSMHotReset(unittest.TestCase, LTSSMDriver):
             self.assertTrue((yield from stay_in(dut, "U0", 16)))
         run(new_dut(), generator)
 
-    @unittest.expectedFailure
     def test_ds_hot_reset_from_u0_goes_through_recovery(self):
-        # SPEC: Hot Reset is signaled with the Reset bit of TS2 ordered sets (7.4.2): a DS directed
-        # to Hot Reset in U0 transitions to Recovery (7.5.6.2), sends TS2 with Reset=1 in
-        # Recovery.Configuration and enters Hot Reset from Recovery.Idle (7.5.10.5.2); Hot Reset is
-        # only entered from Polling.Idle / Recovery.Idle (Figure 7-13). The implementation jumps
-        # from U0 directly to HotReset.Active (the U1/U2 paths already go through Recovery).
+        # Hot Reset is signaled with the Reset bit of TS2 ordered sets (7.4.2): a DS directed to Hot
+        # Reset in U0 transitions to Recovery (7.5.6.2), sends TS2 with Reset=1 in
+        # Recovery.Configuration and enters Hot Reset from Recovery.Idle (7.5.10.5.2).
         def generator(dut):
             yield dut.ds_port.eq(1)
             yield from self.goto(dut, "U0")
             yield dut.hot_reset_req.eq(1)
             yield from self.expect(dut, "Recovery.Active", 4)
+            self.assertEqual((yield dut.tx_ts2_reset), 0)
+            yield from pulse(dut.ts_rx_ts1)
+            yield from pulse(dut.ts_tx_done)
+            yield from self.expect(dut, "Recovery.Configuration")
+            self.assertEqual((yield dut.ts_tx_ts2), 1)
+            self.assertEqual((yield dut.tx_ts2_reset), 1)
+            yield from pulse(dut.ts_rx_ts2)
+            yield from pulse(dut.ts_tx_done)
+            yield from pulse(dut.ts_tx_done)
+            yield from self.expect(dut, "HotReset.Active", 8)
+            yield
+            self.assertEqual((yield dut.tx_ts2_reset), 1)
         run(new_dut(), generator)
 
     def test_ds_hot_reset_from_u1_u2_through_recovery(self):
