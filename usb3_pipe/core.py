@@ -89,6 +89,9 @@ class USB3PIPE(LiteXModule):
         self.tx_ready           = Signal()   # i
 
         self.idle_handshake     = Signal()   # i
+
+        self.disable_scrambling = Signal()   # i: Directed to disable scrambling (7.5.4.9.1).
+        self.ts2_decode         = Signal()   # i: Decode the received TS2 Disable Scrambling bit.
         self.idle_done          = Signal()   # o
 
         self.serdes_rx_align    = Signal()   # i
@@ -178,6 +181,7 @@ class USB3PIPE(LiteXModule):
             ts.tx_ts2.eq(   self.ts_tx_ts2),
             ts.tx_ts2_reset.eq(   self.ts_tx_ts2_reset),
             ts.tx_ts2_loopback.eq(self.ts_tx_ts2_loopback),
+            ts.tx_ts2_scrambling.eq(~self.disable_scrambling),
 
             # TS Status.
             self.ts_rx_ts1.eq(    ts.rx_ts1),
@@ -188,6 +192,19 @@ class USB3PIPE(LiteXModule):
             self.ts_tx_done.eq(   ts.tx_done),
         ]
 
+        # Scrambling enable (Gen 1, 7.5.4.10.1, 7.5.10.5.1) -----------------------------------------
+        # Scrambling is disabled if directed, or if the Disable Scrambling bit is asserted in the TS2
+        # received in Polling/Recovery.Configuration. The bit is only decoded in Polling.Idle and
+        # Recovery.Idle (ignored in Hot Reset, 7.5.12.3.1).
+        scrambling   = Signal()
+        scrambling_r = Signal(reset=1)
+        self.comb += If(self.ts2_decode,
+            scrambling.eq(ts.rx_ts2_scrambling & ~self.disable_scrambling)
+        ).Else(
+            scrambling.eq(scrambling_r)
+        )
+        self.sync += scrambling_r.eq(scrambling)
+
         # Scrambling -------------------------------------------------------------------------------
         # Scrambled transmission starts with the Idle Symbol handshake (Polling.Idle, Recovery.Idle,
         # Hot Reset.Exit) and continues in U0, the Link Layer data is only accepted with tx_ready.
@@ -197,6 +214,7 @@ class USB3PIPE(LiteXModule):
         scrambler = ResetInserter()(scrambler)
         self.comb += scrambler.reset.eq(~tx_enable)
         self.scrambler = scrambler
+        self.comb += scrambler.enable.eq(scrambling)
         tx_idle = Signal()
         self.comb += [
             # Logical Idle (7.2.3): send Idle Symbols (00h, scrambled) when the Link Layer has no data,
@@ -221,6 +239,7 @@ class USB3PIPE(LiteXModule):
         # symbol (6.3.1.3), so it is synchronized with the partner's scrambler when rx_ready is set.
         # Only the output to the Link Layer is gated by rx_ready.
         self.descrambler = descrambler = Descrambler()
+        self.comb += descrambler.enable.eq(scrambling)
         self.comb += [
             serdes.source.connect(descrambler.sink),
             descrambler.source.connect(source, omit={"valid", "ready"}),

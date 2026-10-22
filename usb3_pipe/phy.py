@@ -31,6 +31,7 @@ def connect_ltssm_pipe(ltssm, pipe):
         pipe.ts_tx_ts2.eq(ltssm.ts_tx_ts2),
         pipe.ts_tx_ts2_reset.eq(ltssm.tx_ts2_reset),
         pipe.ts_tx_ts2_loopback.eq(ltssm.tx_ts2_loopback),
+        pipe.ts2_decode.eq(ltssm.ts2_decode),
 
         pipe.serdes_rx_align.eq(ltssm.serdes_rx_align),
         pipe.serdes_rx_polarity.eq(ltssm.serdes_rx_polarity),

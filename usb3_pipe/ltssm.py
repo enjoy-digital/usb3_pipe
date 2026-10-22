@@ -127,6 +127,7 @@ class USB3LTSSM(LiteXModule):
         self.rx_ts2_loopback = Signal() # i: partner TS2 Loopback=1 seen (slave entry)
         self.tx_ts2_reset    = Signal() # o: TS unit should set Reset bit in TS2
         self.tx_ts2_loopback = Signal() # o: TS unit should set Loopback bit in TS2
+        self.ts2_decode      = Signal() # o: Decode the received TS2 Disable Scrambling bit
         self.idle_handshake  = Signal()        # o: Idle Symbol handshake (transmit Idle Symbols)
         self.rx_idle8        = Signal(reset=1) # i: Idle handshake done (8 received + 16 sent)
                                              #     reset=1: short path when not connected (standalone LTSSM)
@@ -463,6 +464,7 @@ class USB3LTSSM(LiteXModule):
             self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
             self.idle_handshake.eq(1), # Idle Symbols + handshake (7.5.4.10).
             self.polling_idle.eq(1),
+            self.ts2_decode.eq(1), # Disable Scrambling bit of the received TS2 (7.5.4.10.1).
             t_polling_idle.wait.eq(with_timers),
             If(rx_lb_seen | self.rx_ts2_loopback,
                 # Loopback bit in TS2: slave entry, forced (7.5.4.10.2). Checked before the idle
@@ -996,6 +998,7 @@ class USB3LTSSM(LiteXModule):
         fsm.act("Recovery.Idle", # 18.
             *timers_off,
             self.lfps_tx_idle.eq(0), # SuperSpeed transmission.
+            self.ts2_decode.eq(1), # Disable Scrambling bit of the received TS2 (7.5.10.5.1).
             self.idle_handshake.eq(1), # Idle Symbols + handshake (7.5.4.10).
             t_ux_exit.wait.eq(ux_armed),
             t_recov_idle.wait.eq(with_timers),
