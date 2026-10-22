@@ -59,6 +59,7 @@ class USB3SerDesModel(LiteXModule):
         self.rx_polarity = Signal() # i
         self.rx_idle     = Signal() # o
         self.rx_errors   = Signal() # o
+        self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align    = Signal() # i
 
         # # #
@@ -74,6 +75,7 @@ class USB3SerDesModel(LiteXModule):
         self.submodules += tx_datapath, rx_datapath
         self.comb += [
             self.sink.connect(tx_datapath.sink),
+            tx_datapath.skp_enable.eq(self.tx_skp_enable),
             rx_datapath.word_aligner.enable.eq(self.rx_align),
             rx_datapath.source.connect(self.source)
         ]

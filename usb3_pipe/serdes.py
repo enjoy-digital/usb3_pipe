@@ -255,10 +255,15 @@ class TXSKPInserter(LiteXModule):
     Note: To simplify implementation and keep alignment, 2 SKP Ordered Sets are inserted every 708
     symbols, which is a small deviation from the specification (good average, but 2x interval between
     SKPs). More tests need to be done to ensure this deviation is acceptable with all hardwares.
+
+    Up to 4 SKP Ordered Sets (2 SKP words) are buffered (6.4.3). When disabled (TSEQ: SKP are only
+    transmitted after TS1/TS2, packets and Logical Idle, 6.4.3.1), no SKP is scheduled and the count
+    of transmitted symbols (Y) is reset, so it restarts from 0 on Polling.Active entry.
     """
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.enable = Signal(reset=1) # i
 
         # # #
 
@@ -266,12 +271,14 @@ class TXSKPInserter(LiteXModule):
         skip_grant   = Signal(reset=1)
         skip_queue   = Signal()
         skip_dequeue = Signal()
-        skip_count   = Signal(16)
+        skip_count   = Signal(2)
 
         # Queue one 2 SKP Ordered Set every 176 Data/Ctrl words
         self.sync += [
             skip_queue.eq(0),
-            If(sink.valid & sink.ready,
+            If(~self.enable,
+                data_count.eq(0)
+            ).Elif(sink.valid & sink.ready,
                 data_count.eq(data_count + 1),
                 If(data_count == 175,
                     data_count.eq(0),
@@ -291,12 +298,13 @@ class TXSKPInserter(LiteXModule):
             )
         ]
 
-        # SKP counter
+        # SKP counter (saturated to 2 SKP words: 4 SKP Ordered Sets buffered max)
         self.sync += [
-            If(skip_queue & ~skip_dequeue,
+            If(~self.enable,
+                skip_count.eq(0)
+            ).Elif(skip_queue & ~skip_dequeue & (skip_count != 2),
                 skip_count.eq(skip_count + 1)
-            ),
-            If(~skip_queue &  skip_dequeue,
+            ).Elif(~skip_queue &  skip_dequeue,
                 skip_count.eq(skip_count - 1)
             )
         ]
@@ -331,6 +339,7 @@ class TXDatapath(LiteXModule):
 
         # Clock compensation
         self.skip_inserter = skip_inserter = TXSKPInserter()
+        self.skp_enable    = skip_inserter.enable
 
         # Clock domain crossing
         cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
@@ -423,6 +432,8 @@ class K7USB3SerDes(LiteXModule):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_errors   = Signal()   # o
+
+        self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align    = Signal()   # i
 
         # # #
@@ -464,6 +475,7 @@ class K7USB3SerDes(LiteXModule):
             self.ready.eq(gtx.tx_ready & gtx.rx_ready),
             gtx.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
+            tx_datapath.skp_enable.eq(self.tx_skp_enable),
             tx_datapath.source.connect(gtx.sink),
             gtx.source.connect(rx_substitution.sink),
             rx_substitution.source.connect(rx_datapath.sink),
@@ -538,6 +550,8 @@ class A7USB3SerDes(LiteXModule):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_errors   = Signal()   # o
+
+        self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align    = Signal()   # i
 
         # # #
@@ -579,6 +593,7 @@ class A7USB3SerDes(LiteXModule):
             self.ready.eq(gtp.tx_ready & gtp.rx_ready),
             gtp.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
+            tx_datapath.skp_enable.eq(self.tx_skp_enable),
             tx_datapath.source.connect(gtp.sink),
             gtp.source.connect(rx_substitution.sink),
             rx_substitution.source.connect(rx_datapath.sink),
