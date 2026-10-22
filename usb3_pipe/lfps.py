@@ -501,32 +501,38 @@ class LFPSUnit(LiteXModule):
         ]
 
         # TX mux (priority: Warm Reset > U3 Wakeup > U2/Loopback Exit > U1 Exit > Ping > Polling) ----
+        # LFPS is a square wave (6.9.1, Table 6-29): during a burst, the raw tx_pattern (all ones /
+        # all zeros 20-bit words) is transmitted instead of the 8b/10b encoded data (tx_lfps).
+        tx_lfps = Signal()
         self.comb += [
             If(self.tx_reset,
                 serdes.tx_idle.eq(0),
+                tx_lfps.eq(1),
                 serdes.tx_pattern.eq(lfps_pattern),
             ).Elif(self.tx_wakeup_u3,
                 serdes.tx_idle.eq(0),
+                tx_lfps.eq(1),
                 serdes.tx_pattern.eq(lfps_pattern),
             ).Elif(self.tx_exit_u2,
                 serdes.tx_idle.eq(0),
+                tx_lfps.eq(1),
                 serdes.tx_pattern.eq(lfps_pattern),
             ).Elif(self.tx_exit_u1,
                 serdes.tx_idle.eq(0),
+                tx_lfps.eq(1),
                 serdes.tx_pattern.eq(lfps_pattern),
             ).Elif(self.tx_ping,
-                # Ping.LFPS: burst structure (2-cycle bursts, tx_idle=1 between) comes from the
-                # ping generator tx_idle; during bursts keep a VALID 8b10b stream on the wire
-                # (tx_pattern=0 -> encoder data) instead of the raw toggle pattern, which would
-                # inject decoder-error symbols into the partner RX datapath (SUB/K-words wedge
-                # the decoder state until the next full retrain). Detection is duration-based
-                # on the rx_idle sideband, so this is equivalent for the partner checkers.
                 serdes.tx_idle.eq(ping_generator.tx_idle),
-                serdes.tx_pattern.eq(0),
+                tx_lfps.eq(~ping_generator.tx_idle),
+                serdes.tx_pattern.eq(ping_generator.tx_pattern),
             ).Elif(self.tx_polling,
                 serdes.tx_idle.eq(polling_generator.tx_idle),
+                tx_lfps.eq(~polling_generator.tx_idle),
                 serdes.tx_pattern.eq(polling_generator.tx_pattern),
             ).Else(
                 serdes.tx_idle.eq(self.tx_idle)
             )
         ]
+        # SerDes without tx_lfps: raw pattern only sent when non-zero (high half of the period).
+        if hasattr(serdes, "tx_lfps"):
+            self.comb += serdes.tx_lfps.eq(tx_lfps)

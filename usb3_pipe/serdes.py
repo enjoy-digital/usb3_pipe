@@ -428,6 +428,7 @@ class K7USB3SerDes(LiteXModule):
         self.tx_polarity = Signal()   # i
         self.tx_idle     = Signal()   # i
         self.tx_pattern  = Signal(20) # i
+        self.tx_lfps     = Signal()   # i: LFPS burst, transmit tx_pattern raw.
 
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
@@ -524,7 +525,7 @@ class K7USB3SerDes(LiteXModule):
         self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
 
         self.comb += [
-            gtx.tx_produce_pattern.eq(self.tx_pattern != 0),
+            gtx.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
             gtx.tx_pattern.eq(self.tx_pattern)
         ]
 
@@ -546,6 +547,7 @@ class A7USB3SerDes(LiteXModule):
         self.tx_polarity = Signal()   # i
         self.tx_idle     = Signal()   # i
         self.tx_pattern  = Signal(20) # i
+        self.tx_lfps     = Signal()   # i: LFPS burst, transmit tx_pattern raw.
 
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
@@ -641,7 +643,7 @@ class A7USB3SerDes(LiteXModule):
         self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
 
         self.comb += [
-            gtp.tx_produce_pattern.eq(self.tx_pattern != 0),
+            gtp.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
             gtp.tx_pattern.eq(self.tx_pattern)
         ]
 

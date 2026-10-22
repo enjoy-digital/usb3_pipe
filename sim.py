@@ -55,6 +55,7 @@ class USB3SerDesModel(LiteXModule):
         self.tx_polarity = Signal()       # i
         self.tx_idle     = Signal()       # i
         self.tx_pattern  = Signal(phy_dw) # i
+        self.tx_lfps     = Signal()       # i
 
         self.rx_polarity = Signal() # i
         self.rx_idle     = Signal() # o
@@ -99,7 +100,7 @@ class USB3SerDesModel(LiteXModule):
         rx_data    = Signal(phy_dw)
         rx_data_sr = Signal(2*phy_dw)
         self.comb += [
-            If(self.tx_pattern != 0,
+            If(self.tx_lfps | (self.tx_pattern != 0),
                 tx_data.eq(self.tx_pattern)
             ).Else(
                 tx_data.eq(Cat(*[encoder.output[i] for i in range(nwords)])),
