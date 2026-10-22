@@ -192,8 +192,8 @@ class USB3SoC(SoCMini):
                 usb3_pipe.ts.tx_done,
 
                 # LTSSM.
-                usb3_pipe.ltssm.fsm,
-                usb3_pipe.ready,
+                usb3_ltssm.fsm,
+                usb3_ltssm.u0,
 
                 # Endpoints.
                 usb3_serdes.rx_datapath.skip_remover.skip,
