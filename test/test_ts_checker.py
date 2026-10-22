@@ -85,5 +85,28 @@ class TestTSChecker(unittest.TestCase):
         run_simulation(dut, generator(dut))
         self.assertEqual(dut.config, (0, 0, 1))
 
+    def test_error_on_last_word_not_detected(self):
+        # 8 consecutive Ordered Sets must be received without error (6.4.1.1.2): a corrupted last
+        # word of the 8th Ordered Set must not report a detection.
+        for ordered_set in [TS1, TS2]:
+            with self.subTest(ordered_set=ordered_set.name):
+                words = ordered_set_words(ordered_set)*8
+                words[-1] = (words[-1][0] ^ 0x1, words[-1][1])
+
+                def generator(dut):
+                    dut.detections = 0
+                    for data, ctrl in words:
+                        yield dut.sink.valid.eq(1)
+                        yield dut.sink.data.eq(data)
+                        yield dut.sink.ctrl.eq(ctrl)
+                        yield
+                        dut.detections += (yield dut.detected)
+                    yield dut.sink.valid.eq(0)
+                    yield
+
+                dut = TSChecker(ordered_set=ordered_set, n_ordered_sets=8)
+                run_simulation(dut, generator(dut))
+                self.assertEqual(dut.detections, 0)
+
 if __name__ == "__main__":
     unittest.main()
