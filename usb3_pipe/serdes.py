@@ -172,6 +172,35 @@ class RXErrorSubstitution(LiteXModule):
                     )
                 ]
 
+# RX Idle Filter -----------------------------------------------------------------------------------
+
+class RXIdleFilter(LiteXModule):
+    """RX Electrical Idle Filter
+
+    Resynchronizes the transceiver's electrical idle detection and only reports electrical idle
+    after `idle_cycles` consecutive idle cycles: filters the idle detection toggling during LFPS.
+    A non-idle burst is seen stretched by `stretch_cycles` (filter latency on the idle edge only).
+    """
+    def __init__(self, rx_elecidle, idle_cycles=10):
+        self.idle           = Signal() # o
+        self.stretch_cycles = idle_cycles - 1
+
+        # # #
+
+        rx_elecidle_r = Signal(reset=1)
+        count         = Signal(max=idle_cycles + 1, reset=idle_cycles) # Idle at reset.
+        self.specials += MultiReg(rx_elecidle, rx_elecidle_r, reset=1)
+        self.sync += [
+            If(rx_elecidle_r,
+                If(count != idle_cycles,
+                    count.eq(count + 1)
+                )
+            ).Else(
+                count.eq(0)
+            )
+        ]
+        self.comb += self.idle.eq(count == idle_cycles)
+
 # TX SKP Inserter (6.4.3) --------------------------------------------------------------------------
 
 class TXSKPInserter(LiteXModule):
@@ -416,7 +445,6 @@ class K7USB3SerDes(LiteXModule):
 
         # Override GTX parameters/signals for USB3 LFPS --------------------------------------------
         rx_idle   = Signal()
-        rx_idle_r = Signal()
         gtx.gtx_params.update(
             p_PCS_RSVD_ATTR    = 0x000000000100,
             p_RXOOB_CFG        = 0b0000110,
@@ -427,10 +455,9 @@ class K7USB3SerDes(LiteXModule):
             i_TXELECIDLE       = self.tx_idle
         )
 
-        self.specials += MultiReg(rx_idle, rx_idle_r)
-        self.rx_idle_timer = rx_idle_timer = WaitTimer(10)
-        self.comb += rx_idle_timer.wait.eq(rx_idle_r)
-        self.comb += self.rx_idle.eq(rx_idle_timer.done)
+        self.rx_idle_filter = RXIdleFilter(rx_idle)
+        self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
+        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
 
         self.comb += [
             gtx.tx_produce_pattern.eq(self.tx_pattern != 0),
@@ -526,7 +553,6 @@ class A7USB3SerDes(LiteXModule):
 
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
         rx_idle   = Signal()
-        rx_idle_r = Signal()
         gtp.gtp_params.update(
             p_PCS_RSVD_ATTR    = 0x000000000100,
             p_RXOOB_CLK_CFG    = "FABRIC",
@@ -538,10 +564,9 @@ class A7USB3SerDes(LiteXModule):
             i_TXELECIDLE       = self.tx_idle
         )
 
-        self.specials += MultiReg(rx_idle, rx_idle_r)
-        self.rx_idle_timer = rx_idle_timer = WaitTimer(10)
-        self.comb += rx_idle_timer.wait.eq(rx_idle_r)
-        self.comb += self.rx_idle.eq(rx_idle_timer.done)
+        self.rx_idle_filter = RXIdleFilter(rx_idle)
+        self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
+        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
 
         self.comb += [
             gtp.tx_produce_pattern.eq(self.tx_pattern != 0),
