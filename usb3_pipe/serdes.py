@@ -704,18 +704,19 @@ class A7USB3SerDes(LiteXModule):
             rx_datapath.source.connect(self.source),
         ]
 
-        # Override GTP RX termination for USB3 (800 mV Term Voltage) -------------------------------
-        rxcdr_cfgs = { # UG482 Table 4-14: CDR Recommended Settings for Protocols with SSC.
-            1 : 0x00000_87FE_2060_2448_1010,
-            2 : 0x00000_47FE_2060_2450_1010,
-            4 : 0x00000_47FE_1060_2450_1010,
-        }
+        # Override GTP RX settings for USB3 ---------------------------------------------------------
+        # CDR settings of the Xilinx 7-Series PCIe Gen2 GTP wrapper for asynchronous/SSC operation
+        # (pcie_7x gt_wrapper: RXCDR_CFG_GTP with PCIE_ASYNC_EN, RXCDR_HOLD_DURING_EIDLE,
+        # RXCDR_LOCK_CFG): USB3 links have independent clocks and the host uses SSC (0/-5000ppm).
+        assert pll.config['d'] == 1 # 5Gbps.
         gtp.gtp_params.update(
-            p_RX_CM_SEL      = 0b11,
-            p_RX_CM_TRIM     = 0b1010,
-            p_RXCDR_CFG      = rxcdr_cfgs[pll.config['d']],
-            p_RXLPM_INCM_CFG = 0b1,
-            p_RXLPM_IPCM_CFG = 0b0
+            p_RX_CM_SEL               = 0b11,   # Programmable, 800mV.
+            p_RX_CM_TRIM              = 0b1010,
+            p_RXCDR_CFG               = 0x0_0001_07FE_4060_2104_1010,
+            p_RXCDR_HOLD_DURING_EIDLE = 0b1,
+            p_RXCDR_LOCK_CFG          = 0b010101,
+            p_RXLPM_INCM_CFG          = 0b0,
+            p_RXLPM_IPCM_CFG          = 0b1,
         )
 
         # Override GTP TX termination for USB3 (800 mV Term Voltage) -------------------------------
