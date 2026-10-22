@@ -226,24 +226,30 @@ class RX8b10bChecker(LiteXModule):
         rom   = Memory(4, 1024, init=[e[0] | (e[1] << 1) | (e[2] << 2) | (e[3] << 3) for e in table])
         self.specials += rom
 
-        rd = Signal()
-        rd_lane = rd
-        for i, decoder in enumerate(decoders):
+        # Code lookup, registered (as the decoders outputs).
+        lookups = []
+        for decoder in decoders:
             port = rom.get_port(async_read=True)
             self.specials += port
-            valid_m, valid_p, rd_m, rd_p = [port.dat_r[j] for j in range(4)]
+            lookup = Signal(4)
+            self.comb += port.adr.eq(decoder.input)
+            self.sync += lookup.eq(port.dat_r)
+            lookups.append(lookup)
+
+        # Errors and running disparity.
+        rd = Signal()
+        rd_lane = rd
+        for i, lookup in enumerate(lookups):
+            valid_m, valid_p, rd_m, rd_p = [lookup[j] for j in range(4)]
             rd_next = Signal()
             self.comb += [
-                port.adr.eq(decoder.input),
+                self.invalid[i].eq(~valid_m & ~valid_p),
+                self.disparity_error[i].eq(Mux(rd_lane, ~valid_p & valid_m, ~valid_m & valid_p)),
                 If(rd_lane,
                     If(valid_p,  rd_next.eq(rd_p)).Elif(valid_m, rd_next.eq(rd_m)).Else(rd_next.eq(rd_lane))
                 ).Else(
                     If(valid_m,  rd_next.eq(rd_m)).Elif(valid_p, rd_next.eq(rd_p)).Else(rd_next.eq(rd_lane))
                 )
-            ]
-            self.sync += [
-                self.invalid[i].eq(~valid_m & ~valid_p),
-                self.disparity_error[i].eq(Mux(rd_lane, ~valid_p & valid_m, ~valid_m & valid_p)),
             ]
             rd_lane = rd_next
         self.sync += rd.eq(rd_lane)
