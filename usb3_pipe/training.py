@@ -56,6 +56,12 @@ class TSChecker(LiteXModule):
         self.comb += ctrl_expected.eq(Array(ctrl_init)[port.adr])
 
         # Data check -------------------------------------------------------------------------------
+        # The Link Functionality Symbol (Symbol 5, Table 6-4/6-5) of TS1/TS2 is variable and excluded
+        # from the check.
+        has_link_config = ordered_set.name in ["TS1", "TS1_INV", "TS2"]
+        mask_init = [0xffff00ff if (has_link_config and i == 1) else 0xffffffff for i in range(mem_depth)]
+        mask      = Signal(32)
+        self.comb += mask.eq(Array(mask_init)[port.adr])
         error = Signal()
         self.comb += [
             If(self.sink.valid,
@@ -64,21 +70,31 @@ class TSChecker(LiteXModule):
                     error.eq(1)
                 ),
                 # Check Word
-                If(self.sink.data != port.dat_r,
+                If((self.sink.data & mask) != (port.dat_r & mask),
                     error.eq(1)
                 )
             ),
             self.error.eq(error)
         ]
 
-        # Link Config ------------------------------------------------------------------------------
-        self.sync += [
-            If(self.sink.valid & (port.adr == 1),
-                self.reset.eq(      self.sink.data[ 8]),
-                self.loopback.eq(   self.sink.data[10]),
-                self.scrambling.eq(~self.sink.data[11])
-            )
-        ]
+        # Link Config (Table 6-6) ------------------------------------------------------------------
+        # Bit 0 and bit 2 set simultaneously: all training control bits shall be ignored (6.4.1.1.2).
+        link_config = Signal(8)
+        self.comb += link_config.eq(self.sink.data[8:16])
+        if has_link_config:
+            self.sync += [
+                If(self.sink.valid & (port.adr == 1),
+                    If(link_config[0] & link_config[2],
+                        self.reset.eq(0),
+                        self.loopback.eq(0),
+                        self.scrambling.eq(1),
+                    ).Else(
+                        self.reset.eq(      link_config[0]),
+                        self.loopback.eq(   link_config[2]),
+                        self.scrambling.eq(~link_config[3]),
+                    )
+                )
+            ]
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [
