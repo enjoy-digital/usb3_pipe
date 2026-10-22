@@ -237,26 +237,20 @@ class USB3Top(LiteXModule):
 
         # Link <-> Protocol buffer interface (prot_buf_*).
         self.comb += [
-            # Protocol outputs driving link inputs.
-            prot_buf_in_addr.eq(usb3_protocol.buf_in_addr),
-            prot_buf_in_data.eq(usb3_protocol.buf_in_data),
-            prot_buf_in_wren.eq(usb3_protocol.buf_in_wren),
-            prot_buf_in_commit.eq(usb3_protocol.buf_in_commit),
-            prot_buf_in_commit_len.eq(usb3_protocol.buf_in_commit_len),
+            # Link outputs driving protocol inputs.
+            usb3_protocol.buf_in_addr.eq(prot_buf_in_addr),
+            usb3_protocol.buf_in_data.eq(prot_buf_in_data),
+            usb3_protocol.buf_in_wren.eq(prot_buf_in_wren),
+            usb3_protocol.buf_in_commit.eq(prot_buf_in_commit),
+            usb3_protocol.buf_in_commit_len.eq(prot_buf_in_commit_len),
 
-            # Link outputs driving protocol inputs: buf_out_addr/arm are
-            # link OUTPUTS in usb3_link.v. The original assignment
-            # directions were inverted, leaving prot_buf_out_q undriven
-            # (so the DPP payload read 0) and never forwarding the link's
-            # DPP read address to ep0's buffer ROM.
             usb3_protocol.buf_out_addr.eq(prot_buf_out_addr),
             usb3_protocol.buf_out_arm.eq(prot_buf_out_arm),
 
-            # Link outputs driving protocol inputs.
-            usb3_protocol.buf_in_ready.eq(prot_buf_in_ready),
-            usb3_protocol.buf_in_commit_ack.eq(prot_buf_in_commit_ack),
-
             # Protocol outputs driving link inputs.
+            prot_buf_in_ready.eq(usb3_protocol.buf_in_ready),
+            prot_buf_in_commit_ack.eq(usb3_protocol.buf_in_commit_ack),
+
             prot_buf_out_q.eq(usb3_protocol.buf_out_q),
             prot_buf_out_len.eq(usb3_protocol.buf_out_len),
             prot_buf_out_hasdata.eq(usb3_protocol.buf_out_hasdata),
@@ -323,8 +317,8 @@ class USB3Top(LiteXModule):
             o_outp_active          = self.out_active,
             i_out_stall            = self.out_stall,
 
-            o_endp_mode_rx         = prot_endp_mode_rx,
-            o_endp_mode_tx         = prot_endp_mode_tx,
+            i_endp_mode_rx         = prot_endp_mode_rx,
+            i_endp_mode_tx         = prot_endp_mode_tx,
 
             o_prot_rx_tp           = prot_rx_tp,
             o_prot_rx_tp_hosterr   = prot_rx_tp_hosterr,
@@ -355,7 +349,7 @@ class USB3Top(LiteXModule):
             i_prot_tx_tp_a_nump    = prot_tx_tp_a_nump,
             i_prot_tx_tp_a_seq     = prot_tx_tp_a_seq,
             i_prot_tx_tp_a_stream  = prot_tx_tp_a_stream,
-            i_prot_tx_tp_a_ack     = prot_tx_tp_a_ack,
+            o_prot_tx_tp_a_ack     = prot_tx_tp_a_ack,
 
             i_prot_tx_tp_b         = prot_tx_tp_b,
             i_prot_tx_tp_b_retry   = prot_tx_tp_b_retry,
@@ -365,7 +359,7 @@ class USB3Top(LiteXModule):
             i_prot_tx_tp_b_nump    = prot_tx_tp_b_nump,
             i_prot_tx_tp_b_seq     = prot_tx_tp_b_seq,
             i_prot_tx_tp_b_stream  = prot_tx_tp_b_stream,
-            i_prot_tx_tp_b_ack     = prot_tx_tp_b_ack,
+            o_prot_tx_tp_b_ack     = prot_tx_tp_b_ack,
 
             i_prot_tx_tp_c         = prot_tx_tp_c,
             i_prot_tx_tp_c_retry   = prot_tx_tp_c_retry,
@@ -375,7 +369,7 @@ class USB3Top(LiteXModule):
             i_prot_tx_tp_c_nump    = prot_tx_tp_c_nump,
             i_prot_tx_tp_c_seq     = prot_tx_tp_c_seq,
             i_prot_tx_tp_c_stream  = prot_tx_tp_c_stream,
-            i_prot_tx_tp_c_ack     = prot_tx_tp_c_ack,
+            o_prot_tx_tp_c_ack     = prot_tx_tp_c_ack,
 
             i_prot_tx_dph          = prot_tx_dph,
             i_prot_tx_dph_eob      = prot_tx_dph_eob,
@@ -383,23 +377,23 @@ class USB3Top(LiteXModule):
             i_prot_tx_dph_endp     = prot_tx_dph_endp,
             i_prot_tx_dph_seq      = prot_tx_dph_seq,
             i_prot_tx_dph_len      = prot_tx_dph_len,
-            i_prot_tx_dpp_ack      = prot_tx_dpp_ack,
-            i_prot_tx_dpp_done     = prot_tx_dpp_done,
+            o_prot_tx_dpp_ack      = prot_tx_dpp_ack,
+            o_prot_tx_dpp_done     = prot_tx_dpp_done,
 
-            i_buf_in_addr          = prot_buf_in_addr,
-            i_buf_in_data          = prot_buf_in_data,
-            i_buf_in_wren          = prot_buf_in_wren,
-            o_buf_in_ready         = prot_buf_in_ready,
-            i_buf_in_commit        = prot_buf_in_commit,
-            i_buf_in_commit_len    = prot_buf_in_commit_len,
-            o_buf_in_commit_ack    = prot_buf_in_commit_ack,
+            o_buf_in_addr          = prot_buf_in_addr,
+            o_buf_in_data          = prot_buf_in_data,
+            o_buf_in_wren          = prot_buf_in_wren,
+            i_buf_in_ready         = prot_buf_in_ready,
+            o_buf_in_commit        = prot_buf_in_commit,
+            o_buf_in_commit_len    = prot_buf_in_commit_len,
+            i_buf_in_commit_ack    = prot_buf_in_commit_ack,
 
-            i_buf_out_addr         = prot_buf_out_addr,
-            o_buf_out_q            = prot_buf_out_q,
-            o_buf_out_len          = prot_buf_out_len,
-            o_buf_out_hasdata      = prot_buf_out_hasdata,
-            i_buf_out_arm          = prot_buf_out_arm,
-            o_buf_out_arm_ack      = prot_buf_out_arm_ack,
+            o_buf_out_addr         = prot_buf_out_addr,
+            i_buf_out_q            = prot_buf_out_q,
+            i_buf_out_len          = prot_buf_out_len,
+            i_buf_out_hasdata      = prot_buf_out_hasdata,
+            o_buf_out_arm          = prot_buf_out_arm,
+            i_buf_out_arm_ack      = prot_buf_out_arm_ack,
 
             i_dev_addr             = prot_dev_addr,
         )
