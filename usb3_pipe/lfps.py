@@ -157,8 +157,11 @@ class LFPSChecker(LiteXModule):
     This module is able to detect a specific LFPS pattern by analyzing the RX electrical idle signal
     of the transceiver. Detection measures the burst and repeat (gap) durations of the RX bursts and
     reports a detection when they both match the pattern timings.
+
+    The bursts are measured through the SerDes electrical idle filter, which stretches them (and
+    shortens the gaps) by stretch_cycles: the windows are widened accordingly.
     """
-    def __init__(self, lfps_pattern, sys_clk_freq, timer_scale=1):
+    def __init__(self, lfps_pattern, sys_clk_freq, timer_scale=1, stretch_cycles=0):
         self.idle   = Signal() # i
         self.detect = Signal() # o
 
@@ -189,8 +192,8 @@ class LFPSChecker(LiteXModule):
         # Exit, Warm Reset) or continuous traffic never qualify (burst or gap out of window).
         ps   = timer_scale
         bmin = scaled_cycles(sys_clk_freq, lfps_pattern.burst.t_min, ps, floor=2)
-        bmax = scaled_cycles(sys_clk_freq, lfps_pattern.burst.t_max, ps)
-        gmin = scaled_cycles(sys_clk_freq, lfps_pattern.repeat.t_min - lfps_pattern.burst.t_max, ps, floor=2)
+        bmax = scaled_cycles(sys_clk_freq, lfps_pattern.burst.t_max, ps) + stretch_cycles
+        gmin = max(2, scaled_cycles(sys_clk_freq, lfps_pattern.repeat.t_min - lfps_pattern.burst.t_max, ps, floor=2) - stretch_cycles)
         gmax = scaled_cycles(sys_clk_freq, lfps_pattern.repeat.t_max - lfps_pattern.burst.t_min, ps)
 
         count    = Signal(32)
@@ -436,8 +439,11 @@ class LFPSUnit(LiteXModule):
         lfps_pattern = Replicate(lfps_clk, 20)
 
         # Polling (burst + repeat, softened scale to survive the idle deglitcher) --------------------
-        polling_scale = polling_scale_of(timer_scale)
-        self.polling_checker = polling_checker = LFPSChecker(PollingLFPS, sys_clk_freq, polling_scale)
+        # Bursts measured through the SerDes electrical idle filter (stretched by rx_idle_stretch).
+        rx_idle_stretch = getattr(serdes, "rx_idle_stretch", 0)
+        polling_scale   = polling_scale_of(timer_scale)
+        self.polling_checker = polling_checker = LFPSChecker(PollingLFPS, sys_clk_freq, polling_scale,
+            stretch_cycles = rx_idle_stretch)
         self.comb += polling_checker.idle.eq(serdes.rx_idle)
         self.comb += self.rx_polling.eq(polling_checker.detect)
 
@@ -448,7 +454,6 @@ class LFPSUnit(LiteXModule):
         # Bursts are measured through the SerDes electrical idle filter, which stretches them by
         # rx_idle_stretch cycles. A burst ending before the 300ns U1 exit detection is a Ping.LFPS
         # (min tBurst 40ns, shorter glitches are rejected); a burst reaching 300ns is a U1 exit.
-        rx_idle_stretch    = getattr(serdes, "rx_idle_stretch", 0)
         u1_exit_min_cycles = exit_u1_min_cycles(sys_clk_freq, timer_scale) + rx_idle_stretch
         ping_min_cycles    = max(1, scaled_cycles(sys_clk_freq, PingLFPSBurst.t_min, timer_scale) + rx_idle_stretch)
         ping_max_cycles    = u1_exit_min_cycles - 1
