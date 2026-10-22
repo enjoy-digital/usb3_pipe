@@ -304,12 +304,9 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
             self.assertLessEqual(n, cycles(12e-3) + 4)
         run(new_dut(), generator)
 
-    @unittest.expectedFailure
     def test_polling_configuration_timer_starts_on_entry(self):
-        # SPEC: tPollingConfigurationTimeout (12ms, Table 7-12) is started upon entry to
-        # Polling.Configuration (7.5.4.9.1). Polling.Active and Polling.Configuration share the same
-        # 12ms WaitTimer with wait held continuously across the transition, so the timer is not
-        # restarted: time spent in Polling.Active is deducted from Polling.Configuration.
+        # tPollingConfigurationTimeout (12ms, Table 7-12) is started upon entry to
+        # Polling.Configuration (7.5.4.9.1): time spent in Polling.Active is not deducted from it.
         def generator(dut):
             yield from self.goto(dut, "Polling.Active")
             for _ in range(cycles(12e-3)*3//4):
