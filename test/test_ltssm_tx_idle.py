@@ -41,9 +41,12 @@ class TestLTSSMTXElectricalIdle(unittest.TestCase):
                     yield
                     yield rx_signal.eq(0)
                     yield
-                yield dut.ts_tx_done.eq(1)
-                yield
-                yield dut.ts_tx_done.eq(0)
+                # TS2: 16 TS2 sent after receiving them (7.5.4.9.2), current burst then a full one.
+                for _ in range(2 if tx_signal is dut.ts_tx_ts2 else 1):
+                    yield dut.ts_tx_done.eq(1)
+                    yield
+                    yield dut.ts_tx_done.eq(0)
+                    yield
             self.assertTrue((yield from self.wait_for(dut, dut.u0)))
             yield dut.lfps_rx_polling.eq(0)
             yield

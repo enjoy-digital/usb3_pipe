@@ -106,7 +106,8 @@ class TestIdleHandshake(unittest.TestCase):
             yield dut.lfps_tx_count.eq(24)
             yield
             self.assertTrue((yield from t.wait_for(dut, dut.ts_tx_tseq)))
-            for pulse in [dut.ts_tx_done, dut.ts_rx_ts1, dut.ts_tx_done, dut.ts_rx_ts2, dut.ts_tx_done]:
+            for pulse in [dut.ts_tx_done, dut.ts_rx_ts1, dut.ts_tx_done, dut.ts_rx_ts2, dut.ts_tx_done,
+                dut.ts_tx_done]:
                 yield pulse.eq(1)
                 yield
                 yield pulse.eq(0)

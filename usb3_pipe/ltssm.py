@@ -145,6 +145,7 @@ class USB3LTSSM(LiteXModule):
         rx_ts1_seen     = Signal()
         rx_ts1_inv_seen = Signal()
         rx_ts2_seen     = Signal()
+        ts2_tx_after    = Signal() # current TS2 burst started after the 8 consecutive TS2 received
         rx_lb_seen      = Signal() # partner TS2 Loopback bit latched during training/recovery
         self.lb_pending = lb_pending = Signal() # directed loopback via Recovery (TS2 Loopback bit)
         loopback_master = Signal() # Loopback role
@@ -408,15 +409,18 @@ class USB3LTSSM(LiteXModule):
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts1.eq(1),
 
-            # Latch what we saw from the host (rx_ts1 / rx_ts1_inv are pulses).
+            # Latch what we saw from the host (rx_ts1 / rx_ts1_inv / rx_ts2 are pulses).
             NextValue(rx_ts1_seen,     rx_ts1_seen     | self.ts_rx_ts1),
             NextValue(rx_ts1_inv_seen, rx_ts1_inv_seen | self.ts_rx_ts1_inv),
+            NextValue(rx_ts2_seen,     rx_ts2_seen     | self.ts_rx_ts2),
 
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
 
-            If(self.ts_tx_done & (rx_ts1_seen | rx_ts1_inv_seen),
+            # 8 consecutive TS1 or TS2 received (7.5.4.8.2): the partner may already be in
+            # Polling.Configuration.
+            If(self.ts_tx_done & (rx_ts1_seen | rx_ts1_inv_seen | rx_ts2_seen),
                 # Polarity (7.5.4.5): TS1_INV evidence (latched during this training attempt)
                 # flips the polarity, normal TS1 evidence keeps the current one. On a re-train
                 # the previously negotiated polarity is exactly why TS1 decodes normally, so it
@@ -425,6 +429,7 @@ class USB3LTSSM(LiteXModule):
                 If(rx_ts1_inv_seen & ~self.recovery,
                     NextValue(self.serdes_rx_polarity, ~self.serdes_rx_polarity)
                 ),
+                NextValue(ts2_tx_after, rx_ts2_seen),
                 NextState("Polling.Configuration")
             ),
         )
@@ -442,9 +447,11 @@ class USB3LTSSM(LiteXModule):
             If(_12_ms_timer.done,
                 NextState("Polling.ExitToRxDetect")
             ),
+            # 8 consecutive TS2 received and 16 TS2 sent after receiving the first of them
+            # (7.5.4.9.2): exit at the end of a 16 TS2 burst started after the detection.
             If(self.ts_tx_done,
-                If(rx_ts2_seen,
-                    # 8 consecutive TS2 received + 16 sent -> Polling.Idle (7.5.4.9.2).
+                NextValue(ts2_tx_after, rx_ts2_seen | self.ts_rx_ts2),
+                If(ts2_tx_after,
                     NextState("Polling.Idle")
                 )
             )
@@ -952,6 +959,7 @@ class USB3LTSSM(LiteXModule):
                 NextState("eSS.Inactive")
             ),
             If(self.ts_tx_done & (rx_ts1_seen | rx_ts2_seen),
+                NextValue(ts2_tx_after, rx_ts2_seen),
                 NextState("Recovery.Configuration")
             ),
         )
@@ -974,8 +982,11 @@ class USB3LTSSM(LiteXModule):
                 # tRecoveryConfigurationTimeout (6ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
             ),
+            # 8 consecutive TS2 received and 16 TS2 sent after receiving the first of them
+            # (7.5.10.4.2): exit at the end of a 16 TS2 burst started after the detection.
             If(self.ts_tx_done,
-                If(rx_ts2_seen,
+                NextValue(ts2_tx_after, rx_ts2_seen | self.ts_rx_ts2),
+                If(ts2_tx_after,
                     NextState("Recovery.Idle")
                 )
             )

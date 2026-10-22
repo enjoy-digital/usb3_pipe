@@ -50,9 +50,12 @@ class TestLTSSM(unittest.TestCase):
         yield
         yield dut.ts_rx_ts2.eq(0)
         yield
-        yield dut.ts_tx_done.eq(1)
-        yield
-        yield dut.ts_tx_done.eq(0)
+        # 16 TS2 sent after receiving the TS2s (7.5.4.9.2): end of the current burst, then a full one.
+        for _ in range(2):
+            yield dut.ts_tx_done.eq(1)
+            yield
+            yield dut.ts_tx_done.eq(0)
+            yield
 
         self.assertEqual((yield from self.wait_for(dut, dut.u0)), True)
         yield
