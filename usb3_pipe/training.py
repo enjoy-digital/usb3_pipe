@@ -132,7 +132,8 @@ class TSChecker(LiteXModule):
         ]
 
         # Result -----------------------------------------------------------------------------------
-        self.comb += self.detected.eq(self.sink.valid & self.sink.ready & count_done)
+        # The last word of the last Ordered Set must also be received without error.
+        self.comb += self.detected.eq(self.sink.valid & self.sink.ready & ~error & count_done)
 
 # Training Sequence Generator ----------------------------------------------------------------------
 
