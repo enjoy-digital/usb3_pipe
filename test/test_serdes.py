@@ -12,6 +12,9 @@ from migen import *
 from usb3_pipe.serdes import RXWordAligner
 from usb3_pipe.serdes import RXSKPRemover, TXSKPInserter
 from usb3_pipe.serdes import RXDatapath, TXDatapath
+from usb3_pipe.common import K, TS1
+
+from test.common import ordered_set_words, words_to_symbols, symbols_to_words, stream_monitor
 
 
 class TestSerDes(unittest.TestCase):
@@ -82,6 +85,36 @@ class TestSerDes(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
+
+    def test_rx_word_aligner_keeps_alignment_on_k_after_data(self):
+        # Symbol alignment is acquired on COM (TS1/TS2, USB 3.2 6.4.1.1) and must be kept in U0,
+        # where Link Layer framing K-symbols (SHP/END/EPF...) follow data words but no COM is sent.
+        rng  = random.Random(0)
+        data = lambda n: [(rng.randrange(256), 0) for _ in range(n)]
+        SHP, END, EPF = (K(27, 7), 1), (K(29, 7), 1), (K(23, 7), 1)
+        aligned  = words_to_symbols(ordered_set_words(TS1))*4
+        aligned += data(16) + [SHP, SHP, SHP, EPF] + data(16) + [END, END, END, EPF]
+        aligned += data(16) + [SHP, SHP, SHP, EPF] + data(16)
+        for offset in range(4):
+            with self.subTest(offset=offset):
+                wire = symbols_to_words(data(offset) + aligned + data(4 - offset))
+                expected = symbols_to_words(aligned)
+
+                def generator(dut):
+                    for d, c in wire:
+                        yield dut.sink.valid.eq(1)
+                        yield dut.sink.data.eq(d)
+                        yield dut.sink.ctrl.eq(c)
+                        yield
+                    yield dut.sink.valid.eq(0)
+
+                def checker(dut):
+                    dut.words = yield from stream_monitor(dut.source, len(wire) - 1, timeout=4*len(wire))
+
+                dut = RXWordAligner()
+                run_simulation(dut, [generator(dut), checker(dut)])
+                start = dut.words.index(expected[0])
+                self.assertEqual(dut.words[start:start + len(expected)], expected)
 
     def test_rx_skip_remover(self):
         datas_input = [
