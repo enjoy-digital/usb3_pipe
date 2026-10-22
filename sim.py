@@ -21,9 +21,8 @@ from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
 from usb3_pipe.serdes import *
-from usb3_pipe        import USB3PIPE
+from usb3_pipe.phy    import USB3PHY
 from usb3_core.core   import USB3Core
-from usb3_ltssm       import USB3LTSSM
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -140,52 +139,43 @@ class USB3PIPESim(SoCMini):
         # SoC Mini.
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq)
 
-        # USB3 Host.
+        # USB3 Host (Host = Downstream Port).
         host_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
-        host_usb3_pipe   = USB3PIPE(
+        host_usb3_phy    = USB3PHY(
             serdes       = host_usb3_serdes,
             sys_clk_freq = sys_clk_freq,
+            role         = "host",
             timer_scale  = timer_scale)
-        self.submodules += host_usb3_serdes, host_usb3_pipe
-
-        # USB3 Host LTSSM.
-        host_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
-        self.submodules += host_usb3_ltssm
-        self.comb += host_usb3_ltssm.ds_port.eq(1) # Host = Downstream Port.
-        self.comb += self.wire_ltssm_pipe(host_usb3_ltssm, host_usb3_pipe)
+        self.submodules += host_usb3_serdes, host_usb3_phy
+        host_usb3_ltssm = host_usb3_phy.ltssm
         host_usb3_ltssm.finalize()
 
         host_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
         self.host_usb3_core = host_usb3_core
         self.comb += [
             host_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
-            host_usb3_pipe.source.connect(host_usb3_core.sink),
-            host_usb3_core.source.connect(host_usb3_pipe.sink),
+            host_usb3_phy.source.connect(host_usb3_core.sink),
+            host_usb3_core.source.connect(host_usb3_phy.sink),
             host_usb3_core.reset.eq(~host_usb3_ltssm.u0),
         ]
 
-        # USB3 Device.
+        # USB3 Device (Device = Upstream Port).
         dev_usb3_serdes = USB3SerDesModel(phy_dw=phy_dw)
-        dev_usb3_pipe   = USB3PIPE(
+        dev_usb3_phy    = USB3PHY(
             serdes       = dev_usb3_serdes,
             sys_clk_freq = sys_clk_freq,
+            role         = "device",
             timer_scale  = timer_scale)
-        self.submodules += dev_usb3_serdes, dev_usb3_pipe
-        dev_usb3_pipe.finalize()
-
-        # USB3 Device LTSSM.
-        dev_usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
-        self.submodules += dev_usb3_ltssm
-        self.comb += dev_usb3_ltssm.ds_port.eq(0) # Device = Upstream Port.
-        self.comb += self.wire_ltssm_pipe(dev_usb3_ltssm, dev_usb3_pipe)
+        self.submodules += dev_usb3_serdes, dev_usb3_phy
+        dev_usb3_ltssm = dev_usb3_phy.ltssm
         dev_usb3_ltssm.finalize()
 
         dev_usb3_core = USB3Core(platform, daisho_core="daisho_mod")
         self.dev_usb3_core = dev_usb3_core
         self.comb += [
             dev_usb3_serdes.tx_polarity.eq(1), # Inverse TX polarity to test RX auto-polarity
-            dev_usb3_pipe.source.connect(dev_usb3_core.sink),
-            dev_usb3_core.source.connect(dev_usb3_pipe.sink),
+            dev_usb3_phy.source.connect(dev_usb3_core.sink),
+            dev_usb3_core.source.connect(dev_usb3_phy.sink),
             dev_usb3_core.reset.eq(~dev_usb3_ltssm.u0),
         ]
 
@@ -221,45 +211,6 @@ class USB3PIPESim(SoCMini):
         self.submodules += end_timer
         self.comb += end_timer.wait.eq(host_usb3_ltssm.u0 & dev_usb3_ltssm.u0)
         self.sync += If(end_timer.done, Finish())
-
-    @staticmethod
-    def wire_ltssm_pipe(ltssm, pipe):
-        """LTSSM <-> PIPE wiring (LFPS/TS face)."""
-        return [
-            # LTSSM -> PIPE
-            pipe.lfps_tx_polling.eq(ltssm.lfps_tx_polling),
-            pipe.lfps_tx_idle.eq(ltssm.lfps_tx_idle),
-            pipe.lfps_tx_ping.eq(ltssm.lfps_tx_ping),
-            pipe.lfps_tx_exit_u1.eq(ltssm.lfps_tx_exit_u1),
-            pipe.lfps_tx_exit_u2.eq(ltssm.lfps_tx_exit_u2),
-            pipe.lfps_tx_wakeup_u3.eq(ltssm.lfps_tx_wakeup_u3),
-            pipe.lfps_tx_reset.eq(ltssm.lfps_tx_reset),
-            pipe.ts_rx_enable.eq(ltssm.ts_rx_enable),
-            pipe.ts_tx_enable.eq(ltssm.ts_tx_enable),
-            pipe.ts_tx_tseq.eq(ltssm.ts_tx_tseq),
-            pipe.ts_tx_ts1.eq(ltssm.ts_tx_ts1),
-            pipe.ts_tx_ts2.eq(ltssm.ts_tx_ts2),
-
-            pipe.serdes_rx_align.eq(ltssm.serdes_rx_align),
-            pipe.serdes_rx_polarity.eq(ltssm.serdes_rx_polarity),
-
-            pipe.rx_ready.eq(ltssm.rx_ready),
-            pipe.tx_ready.eq(ltssm.tx_ready),
-
-            # PIPE -> LTSSM
-            ltssm.lfps_rx_polling.eq(pipe.lfps_rx_polling),
-            ltssm.lfps_tx_count.eq(pipe.lfps_tx_count),
-            ltssm.lfps_rx_ping.eq(pipe.lfps_rx_ping),
-            ltssm.lfps_rx_exit_u1.eq(pipe.lfps_rx_exit_u1),
-            ltssm.lfps_rx_exit_u2.eq(pipe.lfps_rx_exit_u2),
-            ltssm.lfps_rx_wakeup_u3.eq(pipe.lfps_rx_wakeup_u3),
-            ltssm.lfps_rx_reset.eq(pipe.lfps_rx_reset),
-
-            ltssm.ts_rx_ts1.eq(pipe.ts_rx_ts1),
-            ltssm.ts_rx_ts1_inv.eq(pipe.ts_rx_ts1_inv),
-            ltssm.ts_rx_ts2.eq(pipe.ts_rx_ts2),
-            ltssm.ts_tx_done.eq(pipe.ts_tx_done),
-        ]
 
 # Build --------------------------------------------------------------------------------------------
 

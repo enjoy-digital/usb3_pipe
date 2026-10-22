@@ -24,7 +24,7 @@ from litex.soc.integration.builder import *
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe      import A7USB3SerDes, USB3PIPE
-from usb3_ltssm     import USB3LTSSM
+from usb3_pipe.ltssm     import USB3LTSSM
 from usb3_core.core import USB3Core
 
 # USB3 IOs -----------------------------------------------------------------------------------------

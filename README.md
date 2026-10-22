@@ -118,3 +118,29 @@ $ ./target.py --load
 Once the FPGA is loaded, the link will be automatically established with the computer and an Openmoko, Inc USB3.0 device should be enumerated.
 
 **Note:** Enumeration has only been done on a few hardware setups and there is still work in progress to improve reliability.
+
+[> Standalone core generator
+----------------------------
+The USB3.0 PHY (FPGA transceiver + USB3 PIPE + LTSSM) can also be generated as a standalone Verilog
+core, to be integrated in a design that is not built with LiteX. The core provides a link-trained
+32-bit symbol stream (with K-symbol flags) over AXI-Stream, along with the LTSSM status, and can be
+used with any USB3.0 Link Layer.
+
+The core is described by a YAML configuration file (see [examples](examples)):
+```sh
+$ usb3_pipe_gen examples/a7_device.yml --output-dir build/usb3_pipe_core
+```
+The main configuration parameters are:
+ - `phy`: Transceiver (`A7USB3SerDes`: Artix7 GTP, `K7USB3SerDes`: Kintex7 GTX).
+ - `sys_clk_freq`: Core/user clock frequency (>= 125MHz).
+ - `refclk`/`refclk_freq`: Transceiver reference clock (`pads`: dedicated `refclk_p/n` ports, `sys`: core clock).
+ - `role`: `device` (Upstream Port) or `host` (Downstream Port).
+ - `with_link_ctrl`: Expose the LTSSM Link-Layer control interface (PM handshake, directed transitions).
+
+The generator produces in the output directory:
+ - `gateware/usb3_pipe_core.v`: Verilog of the core.
+ - `gateware/usb3_pipe_core.xdc`: Timing constraints of the core (to be scoped to the core).
+ - `gateware/*.init`: Memories initialization files.
+ - `usb3_pipe_core_inst.v`: Instantiation template.
+ - `usb3_pipe_core.md`: Documentation of the core (ports, clocking, data format, link bring-up and
+   integration notes) for the selected configuration.
