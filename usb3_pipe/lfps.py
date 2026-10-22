@@ -236,10 +236,10 @@ class LFPSBurstChecker(LiteXModule):
     The checker measures the duration of the ongoing RX burst (electrical idle deasserted):
     - detect: level, asserted while a burst has reached min_cycles and is still ongoing
       (Warm Reset / U1-U2-Loopback Exit / U3 Wakeup detection).
-    - ping:   1 cycle pulse when a burst ends with a duration <= max_cycles (Ping.LFPS
-      classification: burst shorter than the U1 exit 300ns detection window).
+    - ping:   1 cycle pulse when a burst ends with a duration in [ping_min_cycles, max_cycles]
+      (Ping.LFPS classification: burst shorter than the U1 exit 300ns detection window).
     """
-    def __init__(self, sys_clk_freq, min_cycles=0, max_cycles=0):
+    def __init__(self, sys_clk_freq, min_cycles=0, max_cycles=0, ping_min_cycles=1):
         self.idle   = Signal() # i (1 = electrical idle, no burst)
         self.detect = Signal() # o (level)
         self.ping   = Signal() # o (pulse)
@@ -272,7 +272,7 @@ class LFPSBurstChecker(LiteXModule):
                     self.detect.eq(1)
                 )
             ).Else(
-                If((max_cycles > 0) & (count > 0) & (count <= max_cycles),
+                If((max_cycles > 0) & (count >= ping_min_cycles) & (count <= max_cycles),
                     self.ping.eq(1)
                 ),
                 count.eq(0),
@@ -450,9 +450,19 @@ class LFPSUnit(LiteXModule):
         self.polling_generator = polling_generator = LFPSGenerator(PollingLFPS, sys_clk_freq, lfps_clk_freq, polling_scale)
         self.comb += self.tx_count.eq(polling_generator.count)
 
+        # RX burst classification (Table 6-30, 6.9.2 implementation note) ---------------------------
+        # Bursts are measured through the SerDes electrical idle filter, which stretches them by
+        # rx_idle_stretch cycles. A burst ending before the 300ns U1 exit detection is a Ping.LFPS
+        # (min tBurst 40ns, shorter glitches are rejected); a burst reaching 300ns is a U1 exit.
+        rx_idle_stretch    = getattr(serdes, "rx_idle_stretch", 0)
+        u1_exit_min_cycles = exit_u1_min_cycles(sys_clk_freq, timer_scale) + rx_idle_stretch
+        ping_min_cycles    = max(1, scaled_cycles(sys_clk_freq, PingLFPSBurst.t_min, timer_scale) + rx_idle_stretch)
+        ping_max_cycles    = u1_exit_min_cycles - 1
+
         # Ping (burst + repeat generator, burst-length classified checker) ---------------------------
-        ping_max_cycles = ping_burst_cycles(sys_clk_freq, timer_scale)
-        self.ping_checker = ping_checker = LFPSBurstChecker(sys_clk_freq, max_cycles=ping_max_cycles)
+        self.ping_checker = ping_checker = LFPSBurstChecker(sys_clk_freq,
+            max_cycles      = ping_max_cycles,
+            ping_min_cycles = ping_min_cycles)
         self.comb += [
             ping_checker.idle.eq(serdes.rx_idle),
             self.rx_ping.eq(ping_checker.ping),
@@ -460,7 +470,6 @@ class LFPSUnit(LiteXModule):
         self.ping_generator = ping_generator = LFPSGenerator(PingLFPS, sys_clk_freq, lfps_clk_freq, timer_scale)
 
         # U1 Exit (detection window: above Ping max, 300ns min per Table 6-30 note 7) ----------------
-        u1_exit_min_cycles = exit_u1_min_cycles(sys_clk_freq, timer_scale)
         self.exit_u1_checker = exit_u1_checker = LFPSBurstChecker(sys_clk_freq, min_cycles=u1_exit_min_cycles)
         self.comb += [
             exit_u1_checker.idle.eq(serdes.rx_idle),
