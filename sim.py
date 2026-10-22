@@ -58,6 +58,7 @@ class USB3SerDesModel(LiteXModule):
 
         self.rx_polarity = Signal() # i
         self.rx_idle     = Signal() # o
+        self.rx_errors   = Signal() # o
         self.rx_align    = Signal() # i
 
         # # #
@@ -117,6 +118,10 @@ class USB3SerDesModel(LiteXModule):
         self.sync += rx_data_sr.eq(Cat(rx_data, rx_data_sr))
         for i in range(nwords):
             self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
+
+        # RX decode errors.
+        self.rx_error_monitor = RXErrorMonitor(decoders)
+        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
 
     def connect(self, serdes):
         self.comb += [
