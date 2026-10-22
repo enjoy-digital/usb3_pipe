@@ -23,9 +23,10 @@ from litex.soc.integration.builder import *
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe      import A7USB3SerDes, USB3PIPE
-from usb3_pipe.ltssm     import USB3LTSSM
-from usb3_core.core import USB3Core
+from usb3_pipe       import A7USB3SerDes
+from usb3_pipe.phy   import USB3PHY
+from usb3_pipe.debug import USB3PHYDebug, USB3SerDesDebug
+from usb3_core.core  import USB3Core
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -74,7 +75,9 @@ class _CRG(LiteXModule):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, with_analyzer=False):
+    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
+        with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
+        rxcdr_cfg=None, gtp_params={}):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -83,104 +86,99 @@ class USB3SoC(SoCMini):
         # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
 
-        # UARTBone ---------------------------------------------------------------------------------
-        self.add_uartbone(baudrate=115200)
+        # UARTBone / JTAGBone ----------------------------------------------------------------------
+        if with_uartbone:
+            self.add_uartbone(baudrate=115200)
+        if with_jtagbone:
+            self.add_jtagbone()
 
         # USB3 SerDes ------------------------------------------------------------------------------
-        usb3_serdes = A7USB3SerDes(platform,
+        self.usb3_serdes = usb3_serdes = A7USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
             refclk_pads  = ClockSignal("clk125"),
             refclk_freq  = 125e6,
             tx_pads      = platform.request("sfp_tx"),
-            rx_pads      = platform.request("sfp_rx"))
-        self.submodules += usb3_serdes
+            rx_pads      = platform.request("sfp_rx"),
+            rxcdr_cfg    = rxcdr_cfg)
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
+        usb3_serdes.gtp.gtp_params.update(gtp_params) # Debug overrides (--gtp-param).
 
-        # USB3 PIPE --------------------------------------------------------------------------------
-        self.usb3_pipe = usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
+        # USB3 PHY (PIPE + LTSSM) ------------------------------------------------------------------
+        self.usb3_phy = usb3_phy = USB3PHY(
+            serdes       = usb3_serdes,
+            sys_clk_freq = sys_clk_freq,
+            role         = "device")
 
-        # USB3 LTSSM -------------------------------------------------------------------------------
-        self.usb3_ltssm = usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
-        self.comb += [
-            # LTSSM -> PIPE
-            usb3_pipe.lfps_tx_polling.eq(usb3_ltssm.lfps_tx_polling),
-            usb3_pipe.lfps_tx_idle.eq(usb3_ltssm.lfps_tx_idle),
-            usb3_pipe.ts_rx_enable.eq(usb3_ltssm.ts_rx_enable),
-            usb3_pipe.ts_tx_enable.eq(usb3_ltssm.ts_tx_enable),
-            usb3_pipe.ts_tx_tseq.eq(usb3_ltssm.ts_tx_tseq),
-            usb3_pipe.ts_tx_ts1.eq(usb3_ltssm.ts_tx_ts1),
-            usb3_pipe.ts_tx_ts2.eq(usb3_ltssm.ts_tx_ts2),
-
-            usb3_pipe.serdes_rx_align.eq(usb3_ltssm.serdes_rx_align),
-            usb3_pipe.serdes_rx_polarity.eq(usb3_ltssm.serdes_rx_polarity),
-
-            usb3_pipe.rx_ready.eq(usb3_ltssm.rx_ready),
-            usb3_pipe.tx_ready.eq(usb3_ltssm.tx_ready),
-
-            # PIPE -> usb3_ltssm
-            usb3_ltssm.lfps_rx_polling.eq(usb3_pipe.lfps_rx_polling),
-            usb3_ltssm.lfps_tx_count.eq(usb3_pipe.lfps_tx_count),
-
-            usb3_ltssm.ts_rx_ts1.eq(usb3_pipe.ts_rx_ts1),
-            usb3_ltssm.ts_rx_ts1_inv.eq(usb3_pipe.ts_rx_ts1_inv),
-            usb3_ltssm.ts_rx_ts2.eq(usb3_pipe.ts_rx_ts2),
-            usb3_ltssm.ts_tx_done.eq(usb3_pipe.ts_tx_done),
-        ]
+        # USB3 PHY/SerDes Debug --------------------------------------------------------------------
+        self.usb3_debug = USB3PHYDebug(usb3_phy, usb3_serdes, sys_clk_freq)
+        if with_serdes_debug:
+            self.usb3_serdes_debug = USB3SerDesDebug(usb3_serdes, sys_clk_freq)
 
         # USB3 Core --------------------------------------------------------------------------------
-        self.usb3_core = usb3_core = USB3Core(platform, daisho_core="daisho_mod")
-        self.comb += [
-            usb3_pipe.source.connect(usb3_core.sink),
-            usb3_core.source.connect(usb3_pipe.sink),
-            usb3_core.reset.eq(~usb3_ltssm.u0),
-        ]
+        if with_core:
+            self.usb3_core = usb3_core = USB3Core(platform, daisho_core="daisho_mod")
+            self.comb += [
+                usb3_phy.source.connect(usb3_core.sink),
+                usb3_core.source.connect(usb3_phy.sink),
+                usb3_core.reset.eq(~usb3_phy.u0),
+            ]
+        else:
+            self.comb += usb3_phy.source.ready.eq(1)
 
         # Leds -------------------------------------------------------------------------------------
         self.comb += [
             platform.request("user_led", 0).eq(~usb3_serdes.ready),
-            platform.request("user_led", 1).eq(~usb3_ltssm.u0),
-            platform.request("user_led", 2).eq(1), # Not Used.
+            platform.request("user_led", 1).eq(~usb3_phy.u0),
+            platform.request("user_led", 2).eq(~usb3_phy.recovery),
             platform.request("user_led", 3).eq(1), # Not Used.
         ]
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
-            analyzer_signals = [
-                # LFPS.
-                usb3_serdes.tx_idle,
-                usb3_serdes.rx_idle,
-                usb3_serdes.tx_pattern,
-                usb3_serdes.rx_polarity,
-                usb3_pipe.lfps.rx_polling,
-                usb3_pipe.lfps.tx_polling,
-
-                # Training Sequence.
-                usb3_pipe.ts.tx_enable,
-                usb3_pipe.ts.rx_ts1,
-                usb3_pipe.ts.rx_ts2,
-                usb3_pipe.ts.tx_enable,
-                usb3_pipe.ts.tx_tseq,
-                usb3_pipe.ts.tx_ts1,
-                usb3_pipe.ts.tx_ts2,
-                usb3_pipe.ts.tx_done,
-
-                # LTSSM.
-                usb3_ltssm.fsm,
-                usb3_ltssm.u0,
-
-                # Endpoints.
-                usb3_serdes.rx_datapath.skip_remover.skip,
-                usb3_serdes.source,
-                usb3_serdes.sink,
-                usb3_pipe.source,
-                usb3_pipe.sink,
+            pipe  = usb3_phy.pipe
+            ltssm = usb3_phy.ltssm
+            link_signals = [
+                usb3_phy.ltssm_state,
+                ltssm.u0,
+                ltssm.recovery,
+                ltssm.rx_ready,
+                ltssm.tx_ready,
+                ltssm.idle_handshake,
+                ltssm.rx_idle8,
+                ltssm.ts2_decode,
             ]
-            self.analyzer = LiteScopeAnalyzer(analyzer_signals,
+            groups = {
+                "link" : link_signals + [
+                    pipe.ts_rx_ts1, pipe.ts_rx_ts1_inv, pipe.ts_rx_ts2, pipe.ts_tx_done,
+                    pipe.ts_tx_tseq, pipe.ts_tx_ts1, pipe.ts_tx_ts2,
+                    pipe.lfps_rx_polling, pipe.lfps_tx_polling, pipe.lfps_tx_count,
+                    usb3_serdes.rx_idle, usb3_serdes.rx_errors, usb3_serdes.rx_polarity,
+                ],
+                "lfps" : link_signals + [
+                    usb3_serdes.tx_idle, usb3_serdes.tx_lfps, usb3_serdes.tx_pattern,
+                    usb3_serdes.rx_idle, usb3_serdes.rx_errors,
+                    pipe.lfps_rx_polling, pipe.lfps_rx_ping, pipe.lfps_rx_exit_u1,
+                    pipe.lfps_rx_exit_u2, pipe.lfps_rx_wakeup_u3, pipe.lfps_rx_reset,
+                    pipe.lfps_tx_polling, pipe.lfps_tx_count,
+                ],
+                "ts" : link_signals + [
+                    pipe.ts_rx_ts1, pipe.ts_rx_ts1_inv, pipe.ts_rx_ts2, pipe.ts_tx_done,
+                    pipe.ts_tx_tseq, pipe.ts_tx_ts1, pipe.ts_tx_ts2,
+                    usb3_serdes.source, usb3_serdes.sink,
+                ],
+                "datapath" : link_signals + [
+                    usb3_serdes.rx_errors,
+                    usb3_serdes.rx_datapath.skip_remover.skip,
+                    usb3_serdes.source, usb3_serdes.sink,
+                    usb3_phy.source, usb3_phy.sink,
+                ],
+            }
+            self.analyzer = LiteScopeAnalyzer(groups[analyzer_group],
                 depth        = 4096,
                 clock_domain = "sys",
                 register     = True,
-                csr_csv      = "analyzer.csv"
+                csr_csv      = analyzer_csv
             )
 
 # Build --------------------------------------------------------------------------------------------
@@ -194,23 +192,42 @@ def main():
     parser.add_argument("--variant",       default="mini",      help="Select LiteX Acorn Baseboard variant (default: mini).",  choices=["mini", "standard"])
     parser.add_argument("--build",         action="store_true", help="Build bitstream.")
     parser.add_argument("--load",          action="store_true", help="Load bitstream.")
-    parser.add_argument("--with-analyzer", action="store_true", help="Enable LiteScope Analyzer.")
+    parser.add_argument("--with-jtagbone",     action="store_true", help="Enable JTAGBone.")
+    parser.add_argument("--no-uartbone",       action="store_true", help="Disable UARTBone.")
+    parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
+    parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
+    parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
+    parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath"])
+    parser.add_argument("--gtp-param",         action="append", default=[], help="GTP parameter override NAME=VALUE (debug, ex: p_RXCDR_HOLD_DURING_EIDLE=1).")
+    parser.add_argument("--rxcdr-cfg",         default=None,        help="GTP RXCDR_CFG override (hex, debug).")
+    parser.add_argument("--output-dir",        default=None,        help="Build directory (default: build/sqrl_acorn).")
     args = parser.parse_args()
 
     if not args.build and not args.load:
         parser.print_help()
 
-    os.makedirs("build/sqrl_acorn/gateware", exist_ok=True)
-    os.system("cd usb3_core/daisho_mod && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho_mod/usb3/*.init build/sqrl_acorn/gateware/")
+    output_dir = args.output_dir or "build/sqrl_acorn"
+    if not args.no_core:
+        os.makedirs(os.path.join(output_dir, "gateware"), exist_ok=True)
+        os.system("cd usb3_core/daisho_mod && make && ./usb_descrip_gen")
+        os.system(f"cp usb3_core/daisho_mod/usb3/*.init {output_dir}/gateware/")
     platform = sqrl_acorn.Platform(with_multiboot=False)
     if args.variant == "standard":
         platform.add_extension(_usb3_io_standard)
     if args.variant == "mini":
         platform.add_extension(_usb3_io_mini)
         platform.add_extension(sqrl_acorn._litex_acorn_baseboard_mini_io, prepend=True)
-    soc     = USB3SoC(platform, with_analyzer=args.with_analyzer)
-    builder = Builder(soc, csr_csv="csr.csv")
+    soc     = USB3SoC(platform,
+        with_uartbone     = not args.no_uartbone,
+        with_jtagbone     = args.with_jtagbone,
+        with_core         = not args.no_core,
+        with_serdes_debug = args.with_serdes_debug,
+        with_analyzer     = args.with_analyzer,
+        analyzer_group    = args.analyzer_group,
+        analyzer_csv      = os.path.join(output_dir, "analyzer.csv"),
+        rxcdr_cfg         = None if args.rxcdr_cfg is None else int(args.rxcdr_cfg, 0),
+        gtp_params        = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)})
+    builder = Builder(soc, output_dir=output_dir, csr_csv=os.path.join(output_dir, "csr.csv"))
     builder.build(run=args.build)
 
     if args.load:
