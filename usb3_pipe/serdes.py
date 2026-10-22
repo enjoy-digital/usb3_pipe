@@ -268,11 +268,11 @@ class RXErrorSubstitution(LiteXModule):
         # # #
 
         self.comb += self.sink.connect(self.source)
+        checker = RX8b10bChecker(serdes.decoders)
+        if clock_domain != "sys":
+            checker = ClockDomainsRenamer(clock_domain)(checker)
+        self.checker = checker
         if enable:
-            checker = RX8b10bChecker(serdes.decoders)
-            if clock_domain != "sys":
-                checker = ClockDomainsRenamer(clock_domain)(checker)
-            self.checker = checker
             for i in range(2):
                 self.comb += [
                     If(serdes.decoders[i].invalid | checker.invalid[i] | checker.disparity_error[i],
@@ -639,7 +639,8 @@ class K7USB3SerDes(LiteXModule):
 # Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
 class A7USB3SerDes(LiteXModule):
-    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
+        rxcdr_cfg=None):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -713,7 +714,7 @@ class A7USB3SerDes(LiteXModule):
         gtp.gtp_params.update(
             p_RX_CM_SEL      = 0b11,
             p_RX_CM_TRIM     = 0b1010,
-            p_RXCDR_CFG      = rxcdr_cfgs[pll.config['d']],
+            p_RXCDR_CFG      = rxcdr_cfgs[pll.config['d']] if rxcdr_cfg is None else rxcdr_cfg,
             p_RXLPM_INCM_CFG = 0b1,
             p_RXLPM_IPCM_CFG = 0b0
         )
