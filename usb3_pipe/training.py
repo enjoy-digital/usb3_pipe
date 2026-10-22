@@ -79,19 +79,26 @@ class TSChecker(LiteXModule):
 
         # Link Config (Table 6-6) ------------------------------------------------------------------
         # Bit 0 and bit 2 set simultaneously: all training control bits shall be ignored (6.4.1.1.2).
-        link_config = Signal(8)
+        # Captured on the Link Functionality word and only reported once the whole Ordered Set has
+        # been received without error: TS1/TS2 share the same first symbols, so a TS1 (or corrupted
+        # TS) must not change the reported TS2 config.
+        link_config   = Signal(8)
+        link_config_r = Signal(8)
         self.comb += link_config.eq(self.sink.data[8:16])
         if has_link_config:
             self.sync += [
                 If(self.sink.valid & (port.adr == 1),
-                    If(link_config[0] & link_config[2],
+                    link_config_r.eq(link_config)
+                ),
+                If(self.sink.valid & ~error & (port.adr == (mem_depth - 1)),
+                    If(link_config_r[0] & link_config_r[2],
                         self.reset.eq(0),
                         self.loopback.eq(0),
                         self.scrambling.eq(1),
                     ).Else(
-                        self.reset.eq(      link_config[0]),
-                        self.loopback.eq(   link_config[2]),
-                        self.scrambling.eq(~link_config[3]),
+                        self.reset.eq(      link_config_r[0]),
+                        self.loopback.eq(   link_config_r[2]),
+                        self.scrambling.eq(~link_config_r[3]),
                     )
                 )
             ]
@@ -238,16 +245,20 @@ class TSUnit(LiteXModule):
     control/status signals.
     """
     def __init__(self, serdes):
-        self.rx_enable    = Signal() # i (Level)
-        self.rx_ts1       = Signal() # o (Pulse)
-        self.rx_ts1_inv   = Signal() # o (Pulse)
-        self.rx_ts2       = Signal() # o (Pulse)
+        self.rx_enable       = Signal() # i (Level)
+        self.rx_ts1          = Signal() # o (Pulse)
+        self.rx_ts1_inv      = Signal() # o (Pulse)
+        self.rx_ts2          = Signal() # o (Pulse)
+        self.rx_ts2_reset    = Signal() # o (Level)
+        self.rx_ts2_loopback = Signal() # o (Level)
 
-        self.tx_enable    = Signal() # i (Level)
-        self.tx_tseq      = Signal() # i (Level)
-        self.tx_ts1       = Signal() # i (Level)
-        self.tx_ts2       = Signal() # i (Level)
-        self.tx_done      = Signal() # o (Pulse)
+        self.tx_enable       = Signal() # i (Level)
+        self.tx_tseq         = Signal() # i (Level)
+        self.tx_ts1          = Signal() # i (Level)
+        self.tx_ts2          = Signal() # i (Level)
+        self.tx_ts2_reset    = Signal() # i (Level)
+        self.tx_ts2_loopback = Signal() # i (Level)
+        self.tx_done         = Signal() # o (Pulse)
 
         # # #
 
@@ -262,6 +273,9 @@ class TSUnit(LiteXModule):
             self.rx_ts1.eq(ts1_checker.detected),
             self.rx_ts1_inv.eq(ts1_inv_checker.detected),
             self.rx_ts2.eq(ts2_checker.detected),
+            # Link Functionality of the last received TS2 (6.4.1.1.2, Table 6-6).
+            self.rx_ts2_reset.eq(ts2_checker.reset),
+            self.rx_ts2_loopback.eq(ts2_checker.loopback),
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
@@ -286,4 +300,7 @@ class TSUnit(LiteXModule):
                 ),
             ),
             self.tx_done.eq(tseq_generator.done | ts1_generator.done | ts2_generator.done),
+            # Link Functionality of the transmitted TS2 (Hot Reset/Loopback, 7.5.4.9.1).
+            ts2_generator.reset.eq(self.tx_ts2_reset),
+            ts2_generator.loopback.eq(self.tx_ts2_loopback),
         ]

@@ -65,5 +65,25 @@ class TestTSChecker(unittest.TestCase):
         self.assertEqual(detections, 2)
         self.assertEqual(config, (0, 0, 1))
 
+    def test_link_functionality_only_from_complete_ordered_sets(self):
+        # TS1 and TS2 share the same 4 COM symbols: a TS1 (or a corrupted TS2) must not change the
+        # Link Functionality reported by the TS2 checker.
+        words  = ordered_set_words(TS2, link_config=LinkConfig())*8
+        words += ordered_set_words(TS1, link_config=LinkConfig(reset=1, loopback=0, scrambling=0))*8
+
+        def generator(dut):
+            for data, ctrl in words:
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(data)
+                yield dut.sink.ctrl.eq(ctrl)
+                yield
+            yield dut.sink.valid.eq(0)
+            yield
+            dut.config = ((yield dut.reset), (yield dut.loopback), (yield dut.scrambling))
+
+        dut = TSChecker(ordered_set=TS2, n_ordered_sets=8)
+        run_simulation(dut, generator(dut))
+        self.assertEqual(dut.config, (0, 0, 1))
+
 if __name__ == "__main__":
     unittest.main()

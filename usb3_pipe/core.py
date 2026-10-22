@@ -67,11 +67,15 @@ class USB3PIPE(LiteXModule):
         self.ts_rx_ts1          = Signal()   # o
         self.ts_rx_ts1_inv      = Signal()   # o
         self.ts_rx_ts2          = Signal()   # o
+        self.ts_rx_ts2_reset    = Signal()   # o
+        self.ts_rx_ts2_loopback = Signal()   # o
 
         self.ts_tx_enable       = Signal()   # i
         self.ts_tx_tseq         = Signal()   # i
         self.ts_tx_ts1          = Signal()   # i
         self.ts_tx_ts2          = Signal()   # i
+        self.ts_tx_ts2_reset    = Signal()   # i
+        self.ts_tx_ts2_loopback = Signal()   # i
         self.ts_tx_done         = Signal()   # o
 
         # # #
@@ -124,11 +128,15 @@ class USB3PIPE(LiteXModule):
             ts.tx_tseq.eq(  self.ts_tx_tseq),
             ts.tx_ts1.eq(   self.ts_tx_ts1),
             ts.tx_ts2.eq(   self.ts_tx_ts2),
+            ts.tx_ts2_reset.eq(   self.ts_tx_ts2_reset),
+            ts.tx_ts2_loopback.eq(self.ts_tx_ts2_loopback),
 
             # TS Status.
             self.ts_rx_ts1.eq(    ts.rx_ts1),
             self.ts_rx_ts1_inv.eq(ts.rx_ts1_inv),
             self.ts_rx_ts2.eq(    ts.rx_ts2),
+            self.ts_rx_ts2_reset.eq(   ts.rx_ts2_reset),
+            self.ts_rx_ts2_loopback.eq(ts.rx_ts2_loopback),
             self.ts_tx_done.eq(   ts.tx_done),
         ]
 
