@@ -10,7 +10,7 @@ from migen.genlib.misc import WaitTimer
 from litex.gen import *
 
 from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
-    exit_burst_cycles, exit_rx_quiet_cycles,
+    exit_burst_cycles,
     exit_u1_min_cycles, exit_u2_min_cycles, exit_u3_min_cycles)
 
 # Link Training and Status State Machine -----------------------------------------------------------
@@ -199,8 +199,9 @@ class USB3LTSSM(LiteXModule):
 
         # LFPS Exit Handshake (6.9.2, shared by U1/U2/Loopback exit and U3 wakeup) -------------------
         # Modes: 0=none, 1=U1 exit, 2=U2/Loopback exit, 3=U3 wakeup.
-        # Each partner sends a full burst (concurrent-safe): success = own burst completed and
-        # partner burst seen; failure = tNoLFPSResponseTimeout (2ms, 2ms, 10ms) without success.
+        # Each partner sends at least its minimum burst and keeps transmitting until the partner burst
+        # is seen (concurrent-safe): success = own minimum burst completed and partner burst seen;
+        # failure = tNoLFPSResponseTimeout (2ms, 2ms, 10ms) without success.
         # Burst lengths share the same source as the partner burst-checker detection windows
         # (usb3_pipe.lfps helpers): burst = max(scaled typ, detect_min + RX_DETECT_LATENCY), so
         # the responder still sees the initiator burst in flight at any timer_scale (Table 6-31
@@ -233,7 +234,9 @@ class USB3LTSSM(LiteXModule):
                 hs_gcnt.eq(hs_gcnt + 1),
                 If(hs_send,
                     hs_cnt.eq(hs_cnt + 1),
-                    If((hs_cnt + 1) >= hs_burst_len[hs_mode],
+                    # Minimum burst transmitted and partner LFPS seen: LFPS transmission continues
+                    # until the handshake is declared successful (6.9.2).
+                    If(((hs_cnt + 1) >= hs_burst_len[hs_mode]) & (hs_rx | hs_rx_pulse[hs_mode]),
                         hs_send.eq(0)
                     )
                 ),
@@ -331,21 +334,15 @@ class USB3LTSSM(LiteXModule):
         # FSM ----------------------------------------------------------------------------------------
         self.fsm = fsm = FSM(reset_state="Polling.Entry")
 
-        # Single-burst qualification of partner exit/wakeup bursts (Table 6-30/6-31) -----------------
-        # A detected burst only counts as a handshake REQUEST once it ended and the line stayed
-        # quiet for one (softened) Polling repeat period: a Polling.LFPS train bursts again within
-        # that window and re-arms the qualifier, so a partner restarting training while we are in
-        # U1/U2/U3 goes through the lfps_rx_polling escape instead of a bogus exit handshake. The
-        # commit delay is far inside the initiator's tNoLFPSResponseTimeout at every timer_scale.
-        # The handshake originators (exit_u*_req / wakeup_u3_req) are not qualified: they know.
-        # The qualified level is only raised while in a handshake-capable state (U1/U2/U3/Loopback:
-        # a qualification reached in any other state is dropped) and is consumed by the handshake
-        # start. Wired in finalize() (needs the frozen FSM encoding).
-        self.rxq_state      = Signal(2)        # 0=idle, 1=burst, 2=quiet
-        self.rxq_cnt        = Signal(16)
-        self.rx_burst_ok    = Signal()         # level: one qualified burst, waits for use
-        self._rx_detect_any = self.lfps_rx_exit_u1 | self.lfps_rx_exit_u2 | self.lfps_rx_wakeup_u3
-        self._rx_quiet_lim  = exit_rx_quiet_cycles(sys_clk_freq, timer_scale)
+        # Partner exit/wakeup LFPS detection (6.9.2, Table 6-31) -------------------------------------
+        # The handshake initiator transmits LFPS until the handshake is declared successful or failed:
+        # the responder shall respond while the initiator LFPS is still received (t11-t10: 2us max
+        # for U1 exit). A detected exit/wakeup burst (U1 >= 300ns, U2/Loopback/U3 >= 80us) is a
+        # handshake request as soon as it is detected (except Ping.LFPS, an upstream port proceeds
+        # with the handshake even if the LFPS later turns out to be a Warm Reset). The request is only
+        # raised while in a handshake-capable state (U1/U2/U3/Loopback) and is consumed by the
+        # handshake start. Wired in finalize() (needs the frozen FSM encoding).
+        self.rx_burst_ok = Signal() # level: partner exit/wakeup burst detected, waits for use
 
         # Timer/outputs preambles --------------------------------------------------------------------
         timers_off = [t.wait.eq(0) for t in timers]
@@ -1081,9 +1078,8 @@ class USB3LTSSM(LiteXModule):
         LiteXModule.finalize(self)
         fsm = self.fsm
 
-        # Single-burst qualifier (see __init__): mode-aware (each state listens to its own burst
-        # class only), single-shot (a commit returns to idle; the handshake start or leaving the
-        # handshake-capable states clears the request -- a latched request must never survive).
+        # Partner exit/wakeup request (see __init__): mode-aware (each state listens to its own burst
+        # class only), cleared by the handshake start or when leaving the handshake-capable states.
         hs_capable = ((fsm.state == fsm.encoding["U1"]) | (fsm.state == fsm.encoding["U2"]) |
                       (fsm.state == fsm.encoding["U3"]) | (fsm.state == fsm.encoding["Loopback"]))
         rx_detect = Signal()
@@ -1099,31 +1095,9 @@ class USB3LTSSM(LiteXModule):
         ]
         self.sync += [
             If(self.hs_run | ~hs_capable,
-                # Consumed by the handshake start, or the FSM left the handshake-capable states:
-                # drop the request and re-arm the qualifier from scratch.
-                self.rx_burst_ok.eq(0),
-                self.rxq_state.eq(0),
-                self.rxq_cnt.eq(0)
-            ).Elif(self.rxq_state == 0,
-                If(rx_detect,
-                    self.rxq_state.eq(1)
-                )
-            ).Elif(self.rxq_state == 1,
-                If(~rx_detect,
-                    self.rxq_state.eq(2),
-                    self.rxq_cnt.eq(0)
-                )
-            ).Else(
-                If(rx_detect,
-                    # Polling train: the line did not stay quiet, re-arm on the new burst.
-                    self.rxq_state.eq(1),
-                    self.rx_burst_ok.eq(0)
-                ).Elif((self.rxq_cnt + 1) >= self._rx_quiet_lim,
-                    # Single-shot commit; consumed by the handshake start (hs_run) next cycle.
-                    self.rx_burst_ok.eq(1)
-                ).Else(
-                    self.rxq_cnt.eq(self.rxq_cnt + 1)
-                )
+                self.rx_burst_ok.eq(0)
+            ).Elif(rx_detect,
+                self.rx_burst_ok.eq(1)
             )
         ]
 

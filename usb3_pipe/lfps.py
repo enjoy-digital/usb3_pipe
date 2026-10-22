@@ -102,16 +102,6 @@ def polling_scale_of(timer_scale):
     softer scale so they stay above the idle deglitcher floor at high timer_scale."""
     return max(1, timer_scale//10)
 
-def exit_rx_quiet_cycles(clk_freq, timer_scale=1):
-    """Single-burst qualification window (Table 6-30/6-31): an exit/wakeup burst is only
-    trusted as a handshake request after the line stayed quiet for one Polling repeat period
-    (at the softened Polling scale) after the burst ended. A Polling.LFPS train bursts again
-    within that window (silence = repeat - burst < repeat) and re-arms the qualifier, so a
-    partner restarting training in U1/U2/U3 is handled by the polling escape, not by a bogus
-    exit handshake. The responder's extra commit delay stays far inside the initiator's
-    tNoLFPSResponseTimeout (2ms/2ms/10ms) at every timer_scale."""
-    return scaled_cycles(clk_freq, PollingLFPSRepeat.t_typ, polling_scale_of(timer_scale))
-
 # LFPS Patterns ------------------------------------------------------------------------------------
 # All timings from USB 3.2 Rev 1.1, Table 6-30 (LFPS Transmitter Timing for SuperSpeed Designs)
 # and Table 6-31 (LFPS Handshake Timing), section 6.9 (PDF pages 130-134).
