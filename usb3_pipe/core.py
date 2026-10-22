@@ -133,6 +133,11 @@ class USB3PIPE(LiteXModule):
             serdes.rx_align.eq(   self.serdes_rx_align),
             serdes.rx_polarity.eq(self.serdes_rx_polarity),
         ]
+        # No SKP scheduled during TSEQ (only after TS1/TS2, packets and Logical Idle) and count of
+        # transmitted symbols (Y) restarting on Polling.Active entry (6.4.3.1). SerDes without SKP
+        # control: no-op.
+        if hasattr(serdes, "tx_skp_enable"):
+            self.comb += serdes.tx_skp_enable.eq(~self.ts_tx_tseq)
 
         # Endianness Swap --------------------------------------------------------------------------
         if with_endianness_swap:
