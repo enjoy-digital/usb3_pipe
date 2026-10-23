@@ -16,8 +16,8 @@ from litex.gen import *
 from usb3_core.host_model import *
 from usb3_core.uvc        import *
 
-# Small modes (simulation): 32x8 and 64x8, 256 bytes payloads.
-MODES        = [(32, 8, 100_000), (64, 8, 100_000)]
+# Small modes (simulation): 32x8 and 64x8 (2 frame rates), 256 bytes payloads.
+MODES        = [(32, 8, 100_000), (64, 8, 100_000), (64, 8, 50_000)]
 PAYLOAD_SIZE = 256
 CLK_FREQ     = 125_000_000
 
@@ -49,9 +49,11 @@ class TestCoreUVC(unittest.TestCase):
         # VS Input Header wTotalLength: Input Header + Format + Frames + Color Matching.
         # (VC_HEADER/VS_INPUT_HEADER: same subtype, VC first.)
         vs_hdr = [x for x in descs if x[1] == DESC_CS_INTERFACE and x[2] == VS_INPUT_HEADER][1]
-        self.assertEqual(vs_hdr[4] | (vs_hdr[5] << 8), 14 + 27 + 30*len(UVC_MODES) + 6)
+        self.assertEqual(vs_hdr[4] | (vs_hdr[5] << 8), 14 + 27 + 30 + 30 + 34 + 6)
+        # One frame descriptor per resolution, with its frame intervals.
         frames = [x for x in descs if x[1] == DESC_CS_INTERFACE and x[2] == VS_FRAME_UNCOMPRESSED]
-        self.assertEqual([(f[5] | f[6] << 8, f[7] | f[8] << 8) for f in frames], [(w, h) for w, h, _ in UVC_MODES])
+        self.assertEqual([(f[5] | f[6] << 8, f[7] | f[8] << 8, f[25]) for f in frames],
+            [(640, 480, 1), (1280, 720, 1), (1920, 1080, 2)])
         # Device class: IAD.
         self.assertEqual(d.device()[4:7], [0xef, 0x02, 0x01])
 
@@ -67,7 +69,7 @@ class TestCoreUVC(unittest.TestCase):
             self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
             # GET_CUR PROBE: mode 1, GET_MAX: mode 2.
             probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
-            self.assertEqual(probe, uvc_probe(MODES, 1, PAYLOAD_SIZE, CLK_FREQ))
+            self.assertEqual(probe, uvc_probe(MODES, 0, PAYLOAD_SIZE, CLK_FREQ))
             probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_MAX, VS_PROBE_CONTROL << 8, 1, 34))
             self.assertEqual(probe, uvc_probe(MODES, 2, PAYLOAD_SIZE, CLK_FREQ))
             # GET_LEN, GET_INFO.
@@ -75,8 +77,13 @@ class TestCoreUVC(unittest.TestCase):
             self.assertEqual((yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_INF, VS_PROBE_CONTROL << 8, 1, 1))), [3])
             # Unsupported request (VideoControl interface): stalled.
             self.assertIsNone((yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, 0x0200, 0, 1))))
-            # SET_CUR PROBE (mode 2), GET_CUR PROBE, SET_CUR COMMIT.
-            probe2 = uvc_probe(MODES, 2, PAYLOAD_SIZE, CLK_FREQ)
+            # SET_CUR PROBE: mode selected by bFrameIndex + dwFrameInterval (64x8@50000: mode 2).
+            probe3 = uvc_probe(MODES, 2, PAYLOAD_SIZE, CLK_FREQ)
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe3)))
+            probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+            self.assertEqual(probe, probe3)
+            # SET_CUR PROBE (mode 1), GET_CUR PROBE, SET_CUR COMMIT.
+            probe2 = uvc_probe(MODES, 1, PAYLOAD_SIZE, CLK_FREQ)
             self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
             probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
             self.assertEqual(probe, probe2)

@@ -89,10 +89,22 @@ def check_modes(modes, payload_size):
 
 # Descriptors --------------------------------------------------------------------------------------
 
-def uvc_probe(modes, index, payload_size, clk_freq):
-    """Video Probe and Commit Controls (UVC 1.1, 34 bytes) of a mode (index: 1-N)."""
-    width, height, fps = modes[index - 1]
-    return (le16(0) + [1, index] + le32(frame_interval(fps)) + le16(0)*4 + le16(0) +
+def uvc_frames(modes):
+    """Frame descriptors: resolutions (in order of first appearance) with their frame rates."""
+    frames = {}
+    for width, height, fps in modes:
+        frames.setdefault((width, height), []).append(fps)
+    return list(frames.items())
+
+def uvc_frame_index(modes, mode):
+    """Frame descriptor index (1-N) of a mode (0-N)."""
+    width, height, _ = modes[mode]
+    return [size for size, _ in uvc_frames(modes)].index((width, height)) + 1
+
+def uvc_probe(modes, mode, payload_size, clk_freq):
+    """Video Probe and Commit Controls (UVC 1.1, 34 bytes) of a mode (0-N)."""
+    width, height, fps = modes[mode]
+    return (le16(0) + [1, uvc_frame_index(modes, mode)] + le32(frame_interval(fps)) + le16(0)*4 + le16(0) +
         le32(frame_size(width, height)) + le32(payload_size) + le32(clk_freq) + [0x03, 0, 0, 0])
 
 def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_000):
@@ -109,13 +121,15 @@ def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_
         extra=vc_hdr + vc_it + vc_ot)
 
     # VideoStreaming: Input Header, Uncompressed YUY2 Format, Frames, Color Matching.
-    vs_fmt    = [27, DESC_CS_INTERFACE, VS_FORMAT_UNCOMPRESSED, 1, len(modes)] + YUY2_GUID + [16, 1, 0, 0, 0, 0]
+    vs_fmt    = [27, DESC_CS_INTERFACE, VS_FORMAT_UNCOMPRESSED, 1, len(uvc_frames(modes))] + YUY2_GUID + \
+        [16, 1, 0, 0, 0, 0]
+    # One frame descriptor per resolution, with its discrete frame intervals.
     vs_frames = []
-    for i, (width, height, fps) in enumerate(modes, start=1):
+    for i, ((width, height), rates) in enumerate(uvc_frames(modes), start=1):
         size = frame_size(width, height)
-        vs_frames += [30, DESC_CS_INTERFACE, VS_FRAME_UNCOMPRESSED, i, 0] + le16(width) + le16(height) + \
-            le32(size*fps*8) + le32(size*fps*8) + le32(size) + le32(frame_interval(fps)) + [1] + \
-            le32(frame_interval(fps))
+        vs_frames += [26 + 4*len(rates), DESC_CS_INTERFACE, VS_FRAME_UNCOMPRESSED, i, 0] + le16(width) + \
+            le16(height) + le32(size*min(rates)*8) + le32(size*max(rates)*8) + le32(size) + \
+            le32(frame_interval(rates[0])) + [len(rates)] + sum([le32(frame_interval(f)) for f in rates], [])
     vs_color  = [6, DESC_CS_INTERFACE, VS_COLORFORMAT, 1, 1, 4]
     vs_hdr    = [14, DESC_CS_INTERFACE, VS_INPUT_HEADER, 1] + \
         le16(14 + len(vs_fmt) + len(vs_frames) + len(vs_color)) + [0x80 | ept, 0, 2, 0, 0, 0, 1, 0]
@@ -135,10 +149,12 @@ def uvc_descriptors(modes=UVC_MODES, ept=1, max_burst=16, clk_freq=125_000_000, 
 class USB3UVCControl(LiteXModule):
     """VideoStreaming PROBE/COMMIT controls on the EP0 request handler (other requests stalled).
 
+    The mode (resolution and frame rate) is selected by bFrameIndex/dwFrameInterval of SET_CUR (frame
+    index only if the interval does not match, first mode otherwise).
     commit (pulse)/mode: committed mode (0 to N-1), stream start.
     """
     def __init__(self, ep0, modes, payload_size, clk_freq, vs_interface=1):
-        self.commit = Signal()                    # o
+        self.commit = Signal()                       # o
         self.mode   = Signal(max=max(len(modes), 2)) # o
 
         # # #
@@ -147,14 +163,13 @@ class USB3UVCControl(LiteXModule):
 
         # Responses: N probes (9 words each), GET_LEN (34), GET_INFO (GET/SET supported).
         words = []
-        for i in range(1, n + 1):
-            probe  = uvc_probe(modes, i, payload_size, clk_freq) + [0, 0]
+        for m in range(n):
+            probe  = uvc_probe(modes, m, payload_size, clk_freq) + [0, 0]
             words += [int.from_bytes(bytes(probe[4*j:4*j+4]), "little") for j in range(9)]
         probes = Array(Constant(w, 32) for w in words)
 
-        probe_index  = Signal(max=n + 1, reset=1)
-        commit_index = Signal(max=n + 1, reset=1)
-        set_index    = Signal(max=n + 1)
+        probe_mode  = Signal(max=max(n, 2))
+        commit_mode = Signal(max=max(n, 2))
 
         # Request decoding.
         vs       = Signal()
@@ -172,14 +187,14 @@ class USB3UVCControl(LiteXModule):
         ]
 
         # IN responses.
-        index  = Signal(max=n + 1) # Probe returned.
+        mode   = Signal(max=max(n, 2)) # Probe returned.
         count  = Signal(4)
         active = Signal()
-        kind   = Signal(2)         # 0: probe, 1: GET_LEN, 2: GET_INFO.
+        kind   = Signal(2)             # 0: probe, 1: GET_LEN, 2: GET_INFO.
         self.comb += Case(ep0.req_request, {
-            UVC_GET_CUR : index.eq(Mux(selector == VS_COMMIT_CONTROL, commit_index, probe_index)),
-            UVC_GET_MAX : index.eq(n),
-            "default"   : index.eq(1),
+            UVC_GET_CUR : mode.eq(Mux(selector == VS_COMMIT_CONTROL, commit_mode, probe_mode)),
+            UVC_GET_MAX : mode.eq(n - 1),
+            "default"   : mode.eq(0),
         })
         self.sync += [
             If(ep0.req_setup,
@@ -195,7 +210,7 @@ class USB3UVCControl(LiteXModule):
             ep0.req_in.valid.eq(active),
             Case(kind, {
                 0: [
-                    ep0.req_in.data.eq(probes[(index - 1)*9 + count]),
+                    ep0.req_in.data.eq(probes[mode*9 + count]),
                     ep0.req_in.last.eq(count == 8),
                     ep0.req_in.last_be.eq(0b0010), # 34 bytes.
                 ],
@@ -212,32 +227,42 @@ class USB3UVCControl(LiteXModule):
             }),
         ]
 
-        # SET_CUR: bFrameIndex (byte 3) of the OUT data, applied at the Status stage.
-        first = Signal()
+        # SET_CUR: bFrameIndex (byte 3)/dwFrameInterval (bytes 4-7) of the OUT data, applied at the
+        # Status stage.
+        word         = Signal(4)
+        set_frame    = Signal(8)
+        set_interval = Signal(32)
         self.comb += ep0.req_out.ready.eq(1)
         self.sync += [
-            If(ep0.req_setup, first.eq(1)),
+            If(ep0.req_setup, word.eq(0)),
             If(ep0.req_out.valid,
-                first.eq(0),
-                If(first,
-                    set_index.eq(ep0.req_out.data[24:32])
-                )
+                word.eq(word + 1),
+                If(word == 0, set_frame.eq(ep0.req_out.data[24:32])),
+                If(word == 1, set_interval.eq(ep0.req_out.data)),
             ),
         ]
+        set_mode = Signal(max=max(n, 2))
+        cases    = None
+        for m in reversed(range(n)):
+            # Frame index match first (lower priority), then frame index + interval match.
+            match  = (set_frame == uvc_frame_index(modes, m))
+            cases  = If(match, set_mode.eq(m)) if cases is None else If(match, set_mode.eq(m)).Else(cases)
+        for m in reversed(range(n)):
+            match  = (set_frame == uvc_frame_index(modes, m)) & (set_interval == frame_interval(modes[m][2]))
+            cases  = If(match, set_mode.eq(m)).Else(cases)
+        self.comb += [set_mode.eq(0), cases]
         apply = Signal()
         self.comb += apply.eq(ep0.req_done & vs & (ep0.req_request == UVC_SET_CUR) & ~ep0.req_type[7])
-        clamped = Signal(max=n + 1)
-        self.comb += If((set_index == 0) | (set_index > n), clamped.eq(1)).Else(clamped.eq(set_index))
         self.sync += [
             If(apply & (selector == VS_PROBE_CONTROL),
-                probe_index.eq(clamped)
+                probe_mode.eq(set_mode)
             ),
             If(apply & (selector == VS_COMMIT_CONTROL),
-                commit_index.eq(clamped)
+                commit_mode.eq(set_mode)
             ),
         ]
         self.sync += self.commit.eq(apply & (selector == VS_COMMIT_CONTROL))
-        self.comb += self.mode.eq(commit_index - 1)
+        self.comb += self.mode.eq(commit_mode)
 
 # UVC Stream (pattern + payloads) ------------------------------------------------------------------
 
