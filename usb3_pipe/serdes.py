@@ -42,9 +42,7 @@ class RXSKPRemover(LiteXModule):
         self.comb += self.skip.eq(self.sink.valid & self.sink.ready & (skp != 0))
 
         # Select valid Data/Ctrl fragments ---------------------------------------------------------
-        frag_data  = Signal(32)
-        frag_ctrl  = Signal(4)
-        frag_bytes = Signal(3)
+        frag = stream.Endpoint([("data", 32), ("ctrl", 4), ("bytes", 3)])
         cases = {}
         for i in range(2**4):
             datas = []
@@ -54,11 +52,23 @@ class RXSKPRemover(LiteXModule):
                     datas.append(sink.data[8*j:8*(j+1)])
                     ctrls.append(sink.ctrl[1*j:1*(j+1)])
             cases[i] = [
-                frag_data.eq(Cat(*datas) if len(datas) else 0),
-                frag_ctrl.eq(Cat(*ctrls) if len(ctrls) else 0),
-                frag_bytes.eq(len(ctrls)),
+                frag.data.eq(Cat(*datas) if len(datas) else 0),
+                frag.ctrl.eq(Cat(*ctrls) if len(ctrls) else 0),
+                frag.bytes.eq(len(ctrls)),
             ]
         self.comb += Case(skp, cases)
+
+        # Register the fragments (timing: SKP detection/fragment selection and Shift Register update
+        # in separate cycles, the RX clock domain runs at 250MHz with 2-symbols transceivers).
+        self.pipe = pipe = stream.PipeValid([("data", 32), ("ctrl", 4), ("bytes", 3)])
+        self.comb += [
+            frag.valid.eq(sink.valid),
+            sink.ready.eq(frag.ready),
+            frag.connect(pipe.sink),
+        ]
+        frag_data  = pipe.source.data
+        frag_ctrl  = pipe.source.ctrl
+        frag_bytes = pipe.source.bytes
 
         # Store Data/Ctrl in a 64/8-bit Shift Register ---------------------------------------------
         sr_data  = Signal(64)
@@ -76,9 +86,9 @@ class RXSKPRemover(LiteXModule):
             ]
         # Accept a fragment (up to 4 bytes) only if it fits in the Shift Register, taking into account
         # the word output on the same cycle.
-        self.comb += sink.ready.eq((sr_bytes <= 4) | (source.ready & (sr_bytes <= 8)))
+        self.comb += pipe.source.ready.eq((sr_bytes <= 4) | (source.ready & (sr_bytes <= 8)))
         self.sync += [
-            If(sink.valid & sink.ready,
+            If(pipe.source.valid & pipe.source.ready,
                 If(source.valid & source.ready,
                     sr_bytes.eq(sr_bytes + frag_bytes - 4)
                 ).Else(
