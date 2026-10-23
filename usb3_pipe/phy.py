@@ -86,8 +86,13 @@ class USB3PHY(LiteXModule):
     32-bit data/4-bit ctrl (K-char) symbol stream in the sys clock domain, ready for a USB3.0 Link
     Layer. The SerDes is not a submodule and must be added by the caller.
 
-    Status signals are mirrored from the LTSSM (see USB3PHY_STATUS); the Link-Layer control
-    interface (see USB3PHY_LINK_CTRL) is directly available on `ltssm`.
+    Link interface (what a USB3.0 Link Layer needs from the PHY, the Link Layer does not have to know
+    the PHY internals):
+    - `sink`/`source`: data/ctrl symbol streams (Logical Idle sent when `sink` has no data).
+    - Status (see USB3PHY_STATUS): mirrored from the LTSSM.
+    - Link-Layer control (see USB3PHY_LINK_CTRL): PM handshake (LGO_Ux/LAU/LXU/LPMA decoded or to
+      send by the Link Layer), directed Recovery/Hot Reset/Warm Reset and Ux exit requests. The
+      signals are the LTSSM ones (same Signal objects); undriven inputs keep their reset values.
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True, timer_scale=1):
         assert role in ["device", "host"]
@@ -121,6 +126,10 @@ class USB3PHY(LiteXModule):
         for name in USB3PHY_STATUS:
             setattr(self, name, Signal(name=name))
             self.comb += getattr(self, name).eq(getattr(ltssm, name))
+
+        # Link-Layer Control -----------------------------------------------------------------------
+        for name, direction in USB3PHY_LINK_CTRL:
+            setattr(self, name, getattr(ltssm, name))
 
         # LTSSM State ------------------------------------------------------------------------------
         ltssm.finalize() # Elaborate the FSM to expose its state/encoding.
