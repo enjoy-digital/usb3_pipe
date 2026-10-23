@@ -4,12 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 byte streams helpers and CDC-ACM Wishbone bridge (UARTBone protocol over USB3).
-
-The bridge appears on the host as a CDC-ACM serial port (/dev/ttyACMx, no driver/software needed):
-    litex_server --uart --uart-port /dev/ttyACM0
-    litex_cli --regs
-"""
+"""USB3 byte streams helpers: 32-bit endpoint words (last/last_be) to/from bytes (CDC-ACM...)."""
 
 from migen import *
 from migen.genlib.misc import WaitTimer
@@ -17,7 +12,6 @@ from migen.genlib.misc import WaitTimer
 from litex.gen import *
 
 from litex.soc.interconnect import stream
-from litex.soc.cores.uart   import Stream2Wishbone
 
 from usb3_core.common import last_be_to_bytes
 
@@ -101,20 +95,4 @@ class USB3BytePacker(LiteXModule):
                     pending.eq(1),
                 )
             ),
-        ]
-
-# USB3 UARTBone ------------------------------------------------------------------------------------
-
-class USB3UARTBone(LiteXModule):
-    """Wishbone master (UARTBone protocol) over a CDC-ACM data interface (Bulk OUT/IN endpoints)."""
-    def __init__(self, bulk_in, bulk_out, clk_freq):
-        self.unpacker = unpacker = USB3ByteUnpacker()
-        self.packer   = packer   = USB3BytePacker()
-        self.bridge   = bridge   = Stream2Wishbone(clk_freq=clk_freq)
-        self.wishbone = bridge.wishbone
-        self.comb += [
-            bulk_out.source.connect(unpacker.sink),
-            unpacker.source.connect(bridge.sink),
-            bridge.source.connect(packer.sink),
-            packer.source.connect(bulk_in.sink),
         ]
