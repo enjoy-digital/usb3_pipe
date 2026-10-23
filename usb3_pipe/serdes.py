@@ -4,6 +4,9 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+from functools import reduce
+from operator import or_
+
 from migen import *
 from migen.genlib.cdc import MultiReg
 from migen.genlib.misc import WaitTimer
@@ -103,9 +106,10 @@ class RXSKPRemover(LiteXModule):
 class RXWordAligner(LiteXModule):
     """RX Word Aligner
 
-    Align RX Words by analyzing the location of the COM/K-codes (configurable) in the RX stream.
+    Align RX Words by analyzing the location of the alignment markers (COM by default, configurable
+    K-codes, or any K-code with check_ctrl_only) in the RX stream.
     """
-    def __init__(self, check_ctrl_only=False):
+    def __init__(self, check_ctrl_only=False, markers=[COM]):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -122,12 +126,16 @@ class RXWordAligner(LiteXModule):
             buf.source.ready.eq(sink.valid & source.ready),
         ]
 
-        # Alignment markers (COM, or any K-code with check_ctrl_only).
+        # Alignment markers (markers K-codes, or any K-code with check_ctrl_only).
+        def is_marker(data, ctrl):
+            if check_ctrl_only:
+                return ctrl
+            return ctrl & reduce(or_, [data == m.value for m in markers])
         marker   = Signal(4)
         marker_d = Signal(4)
         for i in range(4):
-            self.comb += marker[i].eq(sink.ctrl[i] & (check_ctrl_only | (sink.data[8*i:8*(i+1)] == COM.value)))
-            self.comb += marker_d[i].eq(buf.source.ctrl[i] & (check_ctrl_only | (buf.source.data[8*i:8*(i+1)] == COM.value)))
+            self.comb += marker[i].eq(is_marker(sink.data[8*i:8*(i+1)], sink.ctrl[i]))
+            self.comb += marker_d[i].eq(is_marker(buf.source.data[8*i:8*(i+1)], buf.source.ctrl[i]))
 
         # Alignment detection: first marker of the word.
         for i in reversed(range(4)):
@@ -135,16 +143,17 @@ class RXWordAligner(LiteXModule):
 
         # Alignment update: only at the start of a marker run (markers in the word and no marker on the
         # last symbol of the previous word), so that alignment is kept on non-marker K-codes (ex: Link
-        # Layer framing in U0) and on marker runs spanning 2 words.
-        self.sync += [
-            If(sink.valid & sink.ready,
-                If(self.enable,
-                    If((marker != 0) & ~marker_d[3],
-                        alignment_d.eq(alignment),
-                    )
-                )
-            ),
+        # Layer framing in U0) and on marker runs spanning 2 words. The new alignment is applied on
+        # the word with the marker run, so the symbols before the run are output in the same word
+        # (without a word mixing symbols before the run and the start of the run).
+        alignment_sel = Signal(2)
+        self.comb += [
+            alignment_sel.eq(alignment_d),
+            If(self.enable & (marker != 0) & ~marker_d[3],
+                alignment_sel.eq(alignment)
+            )
         ]
+        self.sync += If(sink.valid & sink.ready, alignment_d.eq(alignment_sel))
 
         # Data selection
         data = Cat(buf.source.data, sink.data)
@@ -155,7 +164,7 @@ class RXWordAligner(LiteXModule):
                 source.data.eq(data[8*i:]),
                 source.ctrl.eq(ctrl[i:]),
             ]
-        self.comb += Case(alignment_d, cases)
+        self.comb += Case(alignment_sel, cases)
 
 # 8b/10b Code Tables (6.3.1, Appendix A) -----------------------------------------------------------
 

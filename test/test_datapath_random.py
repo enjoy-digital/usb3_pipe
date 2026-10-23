@@ -395,19 +395,23 @@ class SerDesLoopModel(Module):
 
 class TestUSB3PIPELoopRandom(unittest.TestCase):
     def test_usb3pipe_loop_random_packets(self):
-        # 2 TS2 (descrambler LFSR sync on COM) then U0: 640 symbols of random Link Layer packets
+        # 2 TS2 (descrambler LFSR sync on COM) then U0: ~640 symbols of random Link Layer packets
         # (first/last, random gaps -> Logical Idle) on the TX sink with tx_ready, looped through the
         # SerDes model (SKP insertion/removal, CDCs, word alignment), received on the RX source with
         # rx_ready (random ready).
         # Checks: RX data == TX data (Idle Symbols removed), and the wire endianness: descrambled
         # wire == EndiannessSwap(TX data) (first transmitted symbol = data[31:24]/ctrl[3]).
+        # Packets start with a framing Ordered Set (SHP/SDP/SLC x3 + EPF, 7.2.1/7.2.2), the RX words
+        # are re-aligned on them in U0: the start K-codes only appear there.
         rng     = random.Random(0xe2e)
         packets = []
         nwords  = 0
         while nwords < 160*SCALE:
             n = rng.randint(1, 32)
-            packets.append([random_word(rng, k_rate=0.05) for _ in range(n)])
-            nwords += n
+            start = rng.choice([SHP.value, SDP.value, SLC.value])
+            packets.append([((start << 24) | (start << 16) | (start << 8) | EPF.value, 0b1111)] +
+                [random_word(rng, k_rate=0.05, k_values=[END.value, EPF.value]) for _ in range(n)])
+            nwords += n + 1
         words = []
         for p in packets:
             for i, (d, c) in enumerate(p):
@@ -439,7 +443,7 @@ class TestUSB3PIPELoopRandom(unittest.TestCase):
             yield dut.ts_tx_ts2.eq(0)
             yield dut.ts_tx_enable.eq(0)
             yield dut.tx_ready.eq(1) # Logical Idle.
-            for _ in range(24):
+            for _ in range(32): # rx_ready set while receiving Idle (U0 entry after 8 Idle Symbols).
                 yield
             yield dut.rx_ready.eq(1)
             for _ in range(8):
