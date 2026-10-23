@@ -45,7 +45,8 @@ class TestUSB3PIPERX(unittest.TestCase):
         ts2     = partner.process(words_to_symbols(ordered_set_words(TS2)*16), enable=False)
         idle    = partner.process([(0x00, 0)]*4*32)
         data    = partner.process(words_to_symbols(words))
-        wire    = symbols_to_words(ts2 + idle + data)
+        idle_end = partner.process([(0x00, 0)]*4*4) # Logical Idle after the data (RX alignment latency).
+        wire    = symbols_to_words(ts2 + idle + data + idle_end)
         rx_ready_delay = len(ordered_set_words(TS2))*16 + 16 # rx_ready set while receiving Idle.
 
         gt  = GTRXModel()

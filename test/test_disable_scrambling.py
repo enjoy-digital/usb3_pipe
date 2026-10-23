@@ -72,6 +72,7 @@ class TestDisableScrambling(unittest.TestCase):
         # TS2 received in Polling.Configuration (7.5.4.10.1): the partner then sends unscrambled
         # Idle Symbols and data, and so do we.
         data, received, wire = self.run_pipe(DISABLE_SCRAMBLING)
+        received = [w for w in received if w != (0, 0)] # Remove Idle Symbols.
         self.assertEqual(received[:len(data) - 2], data[:len(data) - 2])
         self.assertEqual(set(wire), {(0, 0)}) # Unscrambled Idle Symbols.
 

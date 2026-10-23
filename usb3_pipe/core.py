@@ -14,6 +14,7 @@ from usb3_pipe.common import *
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler
+from usb3_pipe.serdes import RXWordAligner
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -245,11 +246,23 @@ class USB3PIPE(LiteXModule):
         # Only the output to the Link Layer is gated by rx_ready.
         self.descrambler = descrambler = Descrambler()
         self.comb += descrambler.enable.eq(scrambling)
+        self.comb += serdes.source.connect(descrambler.sink)
+
+        # Framing Alignment ------------------------------------------------------------------------
+        # The SerDes word alignment is acquired on COM (TS1/TS2) and no COM is received in U0. The
+        # partner's Link Layer framing is aligned on its own symbol count, which includes the
+        # SKP Ordered Sets (2 symbols, 6.4.3.1) removed by the SerDes: the framing can then be shifted
+        # by 2 symbols in the received words. Re-align the words on the framing Ordered Sets (SHP, SDP,
+        # SLC, 7.2.1/7.2.2), after the descrambler so its LFSR still advances on every symbol: the
+        # symbols dropped/repeated on a re-alignment are the Logical Idle symbols before the framing.
+        # The aligner always processes the received words (one word of latency), only its output to
+        # the Link Layer is gated by rx_ready.
+        self.framing_aligner = framing_aligner = RXWordAligner(markers=[SHP, SDP, SLC])
         self.comb += [
-            serdes.source.connect(descrambler.sink),
-            descrambler.source.connect(source, omit={"valid", "ready"}),
-            source.valid.eq(descrambler.source.valid & self.rx_ready),
-            descrambler.source.ready.eq(source.ready | ~self.rx_ready),
+            descrambler.source.connect(framing_aligner.sink),
+            framing_aligner.source.connect(source, omit={"valid", "ready"}),
+            source.valid.eq(framing_aligner.source.valid & self.rx_ready),
+            framing_aligner.source.ready.eq(source.ready | ~self.rx_ready),
         ]
 
         # Idle Handshake ---------------------------------------------------------------------------
