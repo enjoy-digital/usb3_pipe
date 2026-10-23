@@ -149,10 +149,23 @@ The Acorn has no transceiver reference clock without a PCIe host (MGTREFCLK0 is 
 connector clock, measured at 0Hz on the LiteX Acorn Baseboard Mini): the GTP reference clock is the
 200MHz oscillator routed through the fabric to GTREFCLK0 (UG482: GTREFCLK should be driven by an
 IBUFDS_GTE2, GTGREFCLK is reserved for internal testing, the REQP-49 DRC is lowered to a warning).
-Its jitter depends on the placement: builds with identical transceiver attributes (`drp-dump`) can
-have a very different RX quality (the CDR frequency tracking runs away, `rx_tx_ppm` outside
-0/-5000ppm). Qualify each bitstream with `usb3_debug.py rx-check` (and try another placement with
-`acorn.py --vivado-place-directive` if needed), a dedicated transceiver reference clock is the fix.
+This works, but it is outside the
+recommended GTP clocking.
+
+**RX stuck in 16-bit mode (liteiclink < enjoy-digital/liteiclink#54):** the GTP RX init clears
+RX_DATA_WIDTH bit 11 (DRP 0x011) during the RX PMA reset, then restores it. Before the fix, an RX
+re-init (on a link training failure, or with `rx-reset`) that restarted the init between these two
+steps "restored" the modified value. The RX then stays in 16-bit mode:
+- RXOUTCLK is at 312.5MHz instead of 250MHz;
+- DRP 0x011 reads `0x1130` instead of `0x1930`;
+- link training fails.
+
+These symptoms looked like a marginal receiver that depended on the build and on time. To check for it:
+- `usb3_debug.py drp-dump`: 0x011 is `0x1930`;
+- the `rx`/`tx` frequency meters agree.
+
+Qualify each bitstream with `usb3_debug.py rx-check`. A "no_partner" result is normal while the host
+is backing off between enumeration retries.
 
 ## Useful Experiments
 
