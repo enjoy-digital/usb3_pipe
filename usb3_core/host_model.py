@@ -140,25 +140,29 @@ def dph(seq, length, addr=0, ept=0, dp_seq=0, setup=0):
 
 # Received Packets Decoding ------------------------------------------------------------------------
 
-def decode_packets(words):
+def decode_packets(words, positions=None):
     """Decode received Link Layer words into packets: ("LC", info), ("HP", dw0, dw1, dw2, seq, crc_ok),
-    ("DPP", payload, crc_ok)."""
+    ("DPP", payload, crc_ok). The index of the first word of each packet is appended to positions."""
     symbols = [s for s in symbols_from_words(words)]
     packets = []
+    def append(packet, i):
+        packets.append(packet)
+        if positions is not None:
+            positions.append(i//4)
     i = 0
     while i < len(symbols):
         frame = [b for b, k in symbols[i:i+4] if k]
         if symbols[i:i+4] == framing(SLC):
             lc   = symbols[i+4][0] | (symbols[i+5][0] << 8)
             info = lc & 0x7ff
-            packets.append(("LC", info, (lc >> 11) == crc5(info)))
+            append(("LC", info, (lc >> 11) == crc5(info)), i)
             i += 8
         elif symbols[i:i+4] == framing(SHP):
             data = [b for b, k in symbols[i+4:i+20]]
             dws  = [int.from_bytes(bytes(data[4*j:4*j+4]), "little") for j in range(3)]
             crc  = int.from_bytes(bytes(data[12:14]), "little")
             lcw  = int.from_bytes(bytes(data[14:16]), "little")
-            packets.append(("HP", *dws, lcw & 0x7, crc == crc16(data[:12])))
+            append(("HP", *dws, lcw & 0x7, crc == crc16(data[:12])), i)
             i += 20
         elif symbols[i:i+4] == framing(SDP):
             j = i + 4
@@ -166,7 +170,7 @@ def decode_packets(words):
                 j += 1
             data = [b for b, k in symbols[i+4:j]]
             payload, crc = data[:-4], int.from_bytes(bytes(data[-4:]), "little")
-            packets.append(("DPP", payload, crc == crc32(payload)))
+            append(("DPP", payload, crc == crc32(payload)), i)
             i = j + 4
         else:
             i += 1
@@ -390,19 +394,21 @@ def enumeration_script(skp=True, latency=256):
 # Simulation Output Parsing ------------------------------------------------------------------------
 
 def parse_sim_output(output, script):
-    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output)."""
-    sections = {}
-    name     = None
-    words    = []
-    def flush():
-        if name is not None:
-            sections[name] = decode_packets(words)
+    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output), a packet
+    belongs to the section in which it starts (the script can move to the next section while the
+    end of a packet is received)."""
+    words, sections_at = [], []
+    section = None
     for line in output.splitlines():
         p = line.split()
         if len(p) == 2 and p[0] == "HOST_MARK":
-            flush()
-            name, words = script.marks[int(p[1])], []
-        elif len(p) == 3 and p[0] == "HOST_RX":
+            section = script.marks[int(p[1])]
+        elif len(p) == 3 and p[0] == "HOST_RX" and section is not None:
             words.append((int(p[1], 16), int(p[2], 16)))
-    flush()
+            sections_at.append(section)
+    positions = []
+    packets   = decode_packets(words, positions)
+    sections  = {name: [] for name in script.marks}
+    for packet, position in zip(packets, positions):
+        sections[sections_at[position]].append(packet)
     return sections
