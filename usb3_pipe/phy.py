@@ -101,6 +101,16 @@ class USB3PHY(LiteXModule):
         self.comb += connect_ltssm_pipe(ltssm, pipe)
         self.comb += ltssm.ds_port.eq(role == "host")
 
+        # SerDes RX Re-initialization --------------------------------------------------------------
+        # The transceiver RX initialization (PMA/CDR/offset calibration) does not always end in a
+        # good state: on hardware (Artix7 GTP, xHCI host with SSC) ~1/12 RX resets ended with a
+        # receiver unable to train or with a high error rate, recovered by another RX reset. Re-run
+        # it on each training failure (and Warm Reset), when the LTSSM exits to Rx.Detect, or when
+        # requested (serdes_rx_reset, ex: debug). SerDes without RX reset control: no-op.
+        self.serdes_rx_reset = Signal() # i
+        if hasattr(serdes, "rx_reset"):
+            self.comb += serdes.rx_reset.eq(ltssm.exit_to_rx_detect | self.serdes_rx_reset)
+
         # Endpoints --------------------------------------------------------------------------------
         self.sink   = pipe.sink
         self.source = pipe.source
