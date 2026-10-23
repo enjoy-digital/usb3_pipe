@@ -672,3 +672,53 @@ def pyhost_link_init(host):
     host.send_hp(lmp_port_capability)
     host.send_hp(lmp_port_configuration)
     yield from host.wait(lambda: len(host.hps) >= 2)
+
+# Control transfers (reactive host).
+
+def pyhost_wait_tp(host, n0, subtypes=(TP_SUB_ACK, TP_SUB_STALL)):
+    """Wait a Transaction Packet received after host.hps[n0], returns its fields."""
+    def find():
+        for hp in host.hps[n0:]:
+            f = tp_fields(hp)
+            if f["type"] == 0x04 and f["subtype"] in subtypes:
+                return f
+    yield from host.wait(lambda: find() is not None)
+    return find()
+
+def pyhost_control_in(host, setup):
+    """Control read (one Data stage packet): returns the data or None if stalled."""
+    n0 = len(host.hps)
+    d0 = len(host.dpps)
+    host.send_hp(dph, length=8, setup=1)
+    host.send(data_packet_payload(setup))
+    yield from pyhost_wait_tp(host, n0)
+    n1 = len(host.hps)
+    host.send_hp(tp, TP_SUB_ACK, nump=1, tp_seq=0, pp=1)
+    yield from host.wait(lambda: (len(host.dpps) > d0) or
+        any(tp_fields(hp)["subtype"] == TP_SUB_STALL for hp in host.hps[n1:] if (hp[0] & 0x1f) == 0x04))
+    if len(host.dpps) == d0:
+        return None
+    host.send_hp(tp, TP_SUB_ACK, nump=0, tp_seq=1)
+    n2 = len(host.hps)
+    host.send_hp(tp, TP_SUB_STATUS)
+    yield from pyhost_wait_tp(host, n2)
+    return host.dpps[d0][0]
+
+def pyhost_control_out(host, setup, data=None):
+    """Control write (optional one packet Data stage): returns False if stalled."""
+    n0 = len(host.hps)
+    host.send_hp(dph, length=8, setup=1)
+    host.send(data_packet_payload(setup))
+    yield from pyhost_wait_tp(host, n0)
+    if data:
+        n1 = len(host.hps)
+        host.send_hp(dph, length=len(data), dp_seq=0)
+        host.send(data_packet_payload(data))
+        f = yield from pyhost_wait_tp(host, n1)
+        if f["subtype"] == TP_SUB_STALL:
+            return False
+    n2 = len(host.hps)
+    host.send_hp(tp, TP_SUB_STATUS)
+    f = yield from pyhost_wait_tp(host, n2)
+    return f["subtype"] == TP_SUB_ACK
+

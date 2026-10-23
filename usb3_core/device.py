@@ -31,7 +31,7 @@ from usb3_core.control   import USB3EndpointControl
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
-    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1):
+    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1, with_ep0_handler=False):
         self.endpoints = endpoints
 
         # # #
@@ -40,7 +40,7 @@ class USB3DeviceCore(LiteXModule):
         self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
 
         # Control Endpoint.
-        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors))
+        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors, with_handler=with_ep0_handler))
         self.comb += ep0.reset.eq(link.reset)
 
         # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
