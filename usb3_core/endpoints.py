@@ -220,9 +220,9 @@ class USB3BulkIN(USB3Endpoint):
             acked_ptr.eq(ack_ptr + acked),
         ]
 
-        # Flow control (8.10.1): after an EOB DP or a NRDY, the window is closed until the host
-        # requests again after our ERDY. ACK TPs received for packets sent before the EOB (with a
-        # NumP still open) do not reopen it.
+        # Flow control (8.10.1/8.10.2): after an EOB DP, a NRDY or a window closed by the host (NumP
+        # of 0), an ERDY is sent when data is available and the host requests again. ACK TPs
+        # received for packets sent before an EOB (with a NumP still open) do not reopen the window.
         fc_eob  = Signal() # EOB sent: waiting for the acknowledgement of the sent packets.
         fc_data = Signal() # Waiting for data: ERDY when a packet is available.
         fc_req  = Signal() # ERDY sent: waiting for the host request.
@@ -314,12 +314,17 @@ class USB3BulkIN(USB3Endpoint):
                     fc_eob.eq(0),
                     fc_data.eq(0),
                     fc_req.eq(0),
-                ).Elif(~fc | (fc_req & (h.nump != 0)),
+                ).Elif(~fc_eob,
                     win_seq.eq(h.tp_seq),
                     win_nump.eq(h.nump),
+                    fc_data.eq(0),
                     fc_req.eq(0),
-                    # Request without available packet: NRDY, ERDY when data available.
-                    If((h.nump != 0) & (acked_ptr == wr_ptr),
+                    If(h.nump == 0,
+                        # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when data
+                        # is available (the host may also request again on its own).
+                        fc_data.eq(1),
+                    ).Elif(acked_ptr == wr_ptr,
+                        # Request without available packet: NRDY, ERDY when data available.
                         nrdy_pending.eq(1),
                         fc_data.eq(1),
                         win_nump.eq(0),

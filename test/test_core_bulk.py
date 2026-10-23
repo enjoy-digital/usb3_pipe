@@ -201,6 +201,30 @@ class TestCoreBulk(unittest.TestCase):
             self.assertEqual(addrs, [0, 0, 2])
         run_pyhost(dut, host, scenario())
 
+    def test_bulk_in_short_packet_nump0(self):
+        # Short packet acknowledged with NumP=0 (host closing the window, as xHCI after a short
+        # packet), then new data: ERDY, new host request, data sent.
+        dut  = DUT(max_burst=8)
+        host = PyHost(dut.phy)
+        def scenario():
+            yield from pyhost_link_init(host)
+            host.send_hp(dph, length=64, ept=2, dp_seq=0)
+            host.send(data_packet_payload(payload(0, 64)))
+            for _ in range(512):
+                yield
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=1, tp_seq=0, pp=1)
+            yield from host.wait(lambda: len(host.dpps) >= 1)
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=1)
+            n0 = len(host.hps)
+            host.send_hp(dph, length=64, ept=2, dp_seq=1)
+            host.send(data_packet_payload(payload(1, 64)))
+            yield from host.wait(lambda: any(tp_fields(hp)["subtype"] == TP_SUB_ERDY
+                for hp in host.hps[n0:] if (hp[0] & 0x1f) == 0x04))
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=1, tp_seq=1, pp=1)
+            yield from host.wait(lambda: len(host.dpps) >= 2)
+            self.assertEqual([d[0] for d in host.dpps[:2]], [payload(0, 64), payload(1, 64)])
+        run_pyhost(dut, host, scenario())
+
     def test_tx_backpressure(self):
         # PHY TX ready deasserted randomly (SKP insertion): packets integrity.
         dut  = DUT(max_burst=8)
