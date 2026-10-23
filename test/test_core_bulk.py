@@ -225,6 +225,36 @@ class TestCoreBulk(unittest.TestCase):
             self.assertEqual([d[0] for d in host.dpps[:2]], [payload(0, 64), payload(1, 64)])
         run_pyhost(dut, host, scenario())
 
+    def test_bulk_in_short_packets(self):
+        # Two short packets available: only the first one is sent (a short packet ends the transfer),
+        # the second one after the host ACK TP (NumP=0, ERDY, new request), with the next Sequence
+        # Number (found on hardware with a CDC-ACM console: the host dropped the second packet).
+        dut  = DUT(max_burst=8)
+        host = PyHost(dut.phy)
+        def scenario():
+            yield from pyhost_link_init(host)
+            for i in range(2):
+                host.send_hp(dph, length=64, ept=2, dp_seq=i)
+                host.send(data_packet_payload(payload(i, 64)))
+            for _ in range(1024):
+                yield
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=2, tp_seq=0, pp=1)
+            yield from host.wait(lambda: len(host.dpps) >= 1)
+            for _ in range(256):
+                yield
+            dphs = [dph_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x08]
+            self.assertEqual([d["seq"] for d in dphs], [0])
+            n0 = len(host.hps)
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=1)
+            yield from host.wait(lambda: any(tp_fields(hp)["subtype"] == TP_SUB_ERDY
+                for hp in host.hps[n0:] if (hp[0] & 0x1f) == 0x04))
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=2, tp_seq=1, pp=1)
+            yield from host.wait(lambda: len(host.dpps) >= 2)
+            dphs = [dph_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x08]
+            self.assertEqual([d["seq"] for d in dphs], [0, 1])
+            self.assertEqual([d[0] for d in host.dpps[:2]], [payload(0, 64), payload(1, 64)])
+        run_pyhost(dut, host, scenario())
+
     def test_tx_backpressure(self):
         # PHY TX ready deasserted randomly (SKP insertion): packets integrity.
         dut  = DUT(max_burst=8)

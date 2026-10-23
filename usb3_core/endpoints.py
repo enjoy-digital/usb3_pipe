@@ -284,6 +284,11 @@ class USB3BulkIN(USB3Endpoint):
                     fc_eob.eq(1),
                     win_nump.eq(0),
                 ),
+                # A short packet ends the transfer/burst (8.10.2): the host discards the next ones,
+                # wait for its ACK TP (new request or NumP=0 and ERDY).
+                If(snd_len != MAX_PACKET_SIZE,
+                    win_nump.eq(0),
+                ),
             ),
             If(self.tx_hp.valid & self.tx_hp.ready & nrdy_pending, nrdy_pending.eq(0)),
             If(self.tx_hp.valid & self.tx_hp.ready & ~nrdy_pending & erdy_pending,
