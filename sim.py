@@ -25,6 +25,7 @@ from litex.soc.integration.builder import *
 from usb3_pipe.serdes import *
 from usb3_pipe.phy    import USB3PHY
 from usb3_core.core   import USB3Core
+from usb3_core.host_model import USB3HostModel, enumeration_script
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -70,6 +71,7 @@ class USB3SerDesModel(LiteXModule):
         self.rx_errors   = Signal() # o
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align    = Signal() # i
+        self.tx_skp      = Signal() # i: Insert a SKP Ordered Set (2 symbols) in the TX symbols stream.
 
         # # #
 
@@ -94,7 +96,6 @@ class USB3SerDesModel(LiteXModule):
         encoder  = Encoder(nwords, True)
         decoders = [ClockDomainsRenamer(rx_clock_domain)(Decoder(True)) for _ in range(nwords)]
         self.submodules += encoder, decoders
-        self.comb += tx_datapath.source.ready.eq(1)
         self.comb += rx_datapath.sink.valid.eq(1)
         for i in range(nwords):
             self.comb += [
@@ -103,6 +104,18 @@ class USB3SerDesModel(LiteXModule):
                 rx_datapath.sink.ctrl[i].eq(decoders[i].k),
                 rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
+
+        # SKP Ordered Set insertion (as transmitted by a host: a single SKP Ordered Set shifts the
+        # partner's received words by 2 symbols): the TX datapath is held for one word.
+        skp_insert = Signal()
+        self.sync += If(self.tx_skp, skp_insert.eq(1)).Elif(skp_insert, skp_insert.eq(0))
+        self.comb += tx_datapath.source.ready.eq(~skp_insert)
+        if nwords == 2:
+            for i in range(nwords):
+                self.comb += If(skp_insert,
+                    encoder.k[i].eq(1),
+                    encoder.d[i].eq(SKP.value),
+                )
 
         # Pattern/Polarity/Shift emulation.
         tx_data    = Signal(phy_dw)
@@ -301,15 +314,19 @@ class NCOClockGenerator(LiteXModule):
 class USB3PIPESim(SoCMini):
     """Host <-> Device USB3 PHY simulation.
 
-    - with_core:     Daisho USB3 Core on both sides, else PRBS Link-Layer stand-ins with the payload
-                     checked on both sides in U0.
+    - with_core:     Daisho USB3 Core on the Device and scripted Host Link/Protocol Layer model
+                     (link initialization, enumeration control transfers, received packets displayed
+                     as "HOST_RX"), else PRBS Link-Layer stand-ins with the payload checked on both
+                     sides in U0.
+    - host_skp:      SKP Ordered Sets inserted by the Host between packets (with_core).
+    - host_latency:  Host latency (cycles) between the SETUP ACK and the Data stage request.
     - rx_word_shift: RX shift (in 10-bit symbols) of the SerDes models.
     - ppm/ssc:       Host/Device in separate clock domains, the Device clock offset by ppm and/or with
                      SSC. Each SerDes model receives in the partner's (recovered) clock domain.
     - prbs_words:    Words to check on both sides before ending the simulation (without core).
     """
     def __init__(self, phy_dw=20, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
-        prbs_words=2**16, max_cycles=2**24):
+        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256):
         sys_clk_freq = int(133e6)
 
         # Platform.
@@ -350,7 +367,17 @@ class USB3PIPESim(SoCMini):
             ltssm = phy.ltssm
             self.comb += serdes.tx_polarity.eq(1) # Inverse TX polarity to test RX auto-polarity
 
-            if with_core:
+            if with_core and (name == "host"):
+                # Scripted host Link/Protocol Layer (link initialization, enumeration).
+                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency).steps))
+                self.add_module(name="host_model", module=host_model)
+                self.comb += [
+                    phy.source.connect(host_model.sink),
+                    host_model.source.connect(phy.sink),
+                    host_model.enable.eq(ltssm.u0),
+                    serdes.tx_skp.eq(host_model.skp),
+                ]
+            elif with_core:
                 core = renamer(USB3Core(platform, daisho_core="daisho_mod"))
                 self.add_module(name=f"{name}_usb3_core", module=core)
                 self.comb += [
@@ -403,13 +430,20 @@ class USB3PIPESim(SoCMini):
         done   = Signal()
         report = Signal()
         if with_core:
-            # Dual U0 for 2^16 cycles.
-            end_timer = WaitTimer(2**16)
+            # Host script done (or error), then 2^10 cycles.
+            end_timer = WaitTimer(2**10)
             self.submodules += end_timer
             self.comb += [
-                end_timer.wait.eq(ltssms["host"].u0 & ltssms["dev"].u0),
+                end_timer.wait.eq(host_model.done | host_model.error),
                 done.eq(end_timer.done),
             ]
+            self.sync += If(done & ~report,
+                If(host_model.error,
+                    Display("HOST script error")
+                ).Else(
+                    Display("HOST script done")
+                )
+            )
         else:
             # prbs_words checked on both sides.
             self.comb += done.eq(
@@ -442,6 +476,8 @@ def main():
     parser.add_argument("--ppm",           default=0,           help="Device clock offset vs Host clock (ppm).")
     parser.add_argument("--ssc",           action="store_true", help="Enable SSC (0/-5000ppm down-spread) on the Device clock.")
     parser.add_argument("--max-cycles",    default=2**24,       help="Simulation timeout (sys clock cycles).")
+    parser.add_argument("--no-host-skp",   action="store_true", help="No SKP Ordered Sets inserted by the Host model.")
+    parser.add_argument("--host-latency",  default=256,         help="Host model latency before the Data stage requests (cycles).")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -449,9 +485,9 @@ def main():
 
     with_core = not args.no_core
     if with_core:
-        os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
+        os.system("cd usb3_core/daisho_mod && mkdir -p usb2 && make && ./usb_descrip_gen")
         os.makedirs(os.path.join(args.output_dir, "gateware"), exist_ok=True)
-        os.system(f"cp usb3_core/daisho/usb3/*.init {args.output_dir}/gateware/")
+        os.system(f"cp usb3_core/daisho_mod/usb3/*.init {args.output_dir}/gateware/")
 
     soc = USB3PIPESim(
         timer_scale   = int(args.timer_scale),
@@ -460,7 +496,9 @@ def main():
         ppm           = float(args.ppm),
         ssc           = args.ssc,
         prbs_words    = int(args.prbs_words),
-        max_cycles    = int(args.max_cycles))
+        max_cycles    = int(args.max_cycles),
+        host_skp      = not args.no_host_skp,
+        host_latency  = int(args.host_latency))
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

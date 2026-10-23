@@ -87,10 +87,26 @@ You should see the USB3.0 initialization between a Host and Device:
 
 At this point, all the steps of the USB3.0 PIPE initialization have succeeded and the USB3.0 Core can start transmitting packets.
 
-To have a .vcd waveform of the simulation, run it with --trace:
+The Device runs the Daisho USB3.0 Core, the Host a scripted Host Link/Protocol Layer model
+(`usb3_core/host_model.py`, packets formats/CRCs checked against an xHCI host) that behaves like a
+real host: Header Sequence Number/Credits Advertisements right after U0, Port Capability/Configuration
+LMPs, SKP Ordered Sets between packets, then enumeration control transfers (GET_DESCRIPTOR Device/
+Configuration/String, SET_CONFIGURATION). The received packets are displayed (`HOST_RX`) and checked
+by `test/test_sim_host.py`:
+```
+HOST_MARK          0   (link_init)
+HOST_MARK          1   (get_device_descriptor)
+...
+HOST script done
+```
+Options: `--no-host-skp` (no SKP Ordered Sets from the Host), `--host-latency` (Host latency before the
+Data stage requests), `--no-core` (PRBS Link-Layer stand-ins on both sides, with `--ppm`/`--ssc`).
+
+To have a .vcd waveform of the simulation, run it with --trace (`--trace-start`/`--trace-end` in ps,
+1 cycle = 1us):
 ```sh
 $ ./sim.py --trace
-$ gtkwave build/gateware/dut.vcd
+$ gtkwave build/sim/gateware/sim.vcd
 ```
 
 [> Running on hardware
