@@ -90,6 +90,10 @@ def LCRD(x):  return 0x080 | (x & 0x3)
 def LRTY():   return 0x100
 def LUP():    return 0x400
 def LDN():    return 0x580
+def LGO_U(n): return 0x200 | (n & 0x3)
+def LAU():    return 0x280
+def LXU():    return 0x300
+def LPMA():   return 0x380
 
 def link_command(info):
     lc = info | (crc5(info) << 11)
@@ -392,6 +396,12 @@ class HostScript:
         self.idle(latency)                                            # DPP (END framing not aligned).
         self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=0, tp_seq=(dp_seq + 1) % 32)
 
+    # Link Power Management (7.2.4.2): LGO_Ux request, LAU/LXU response.
+    def lgo(self, n, response, name):
+        self.mark(name)
+        self.send(link_command(LGO_U(n)))
+        self.wait(*link_command(response)[1])
+
     def end(self):
         self.mark("end")
         self.steps.append((OP_END, 0, 0, 0, 0, 0))
@@ -399,7 +409,7 @@ class HostScript:
 def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
-def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True):
+def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
     s = HostScript()
     s.link_init()
@@ -420,6 +430,11 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True):
         s.idle(1024)
         for i in range(len(bulk_payloads())):
             s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256)
+    if pm:
+        # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
+        s.lgo(1, LXU(), "lgo_u1")
+        s.lgo(2, LXU(), "lgo_u2")
+        s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor_after_pm", latency)
     s.end()
     return s
 

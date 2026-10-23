@@ -361,13 +361,14 @@ class USB3PIPESim(SoCMini):
     - host_skp:      SKP Ordered Sets inserted by the Host between packets (with_core).
     - host_latency:  Host latency (cycles) between the SETUP ACK and the Data stage request.
     - host_status_gap: Host gap (cycles) between the Data stage ACK TP and the STATUS TP.
+    - host_pm:       Host LGO_U1/LGO_U2 requests after the enumeration (with_core).
     - rx_word_shift: RX shift (in 10-bit symbols) of the SerDes models.
     - ppm/ssc:       Host/Device in separate clock domains, the Device clock offset by ppm and/or with
                      SSC. Each SerDes model receives in the partner's (recovered) clock domain.
     - prbs_words:    Words to check on both sides before ending the simulation (without core).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
-        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64):
+        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False):
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate: Daisho can't be
         # back-pressured), 2 with the PRBS stand-ins.
@@ -414,7 +415,7 @@ class USB3PIPESim(SoCMini):
 
             if with_core and (name == "host"):
                 # Scripted host Link/Protocol Layer (link initialization, enumeration).
-                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency, status_gap=host_status_gap).steps))
+                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency, status_gap=host_status_gap, pm=host_pm).steps))
                 self.add_module(name="host_model", module=host_model)
                 self.comb += [
                     phy.source.connect(host_model.sink),
@@ -531,6 +532,7 @@ def main():
     parser.add_argument("--no-host-skp",   action="store_true", help="No SKP Ordered Sets inserted by the Host model.")
     parser.add_argument("--host-latency",  default=256,         help="Host model latency before the Data stage requests (cycles).")
     parser.add_argument("--host-status-gap", default=64,        help="Host model gap between the Data stage ACK TP and the STATUS TP (cycles).")
+    parser.add_argument("--host-pm",       action="store_true", help="Host model U1/U2 requests (LGO_U1/LGO_U2) after the enumeration.")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -552,7 +554,8 @@ def main():
         max_cycles    = int(args.max_cycles),
         host_skp      = not args.no_host_skp,
         host_latency  = int(args.host_latency),
-        host_status_gap = int(args.host_status_gap))
+        host_status_gap = int(args.host_status_gap),
+        host_pm       = args.host_pm)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

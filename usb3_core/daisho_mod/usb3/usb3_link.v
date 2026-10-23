@@ -1123,8 +1123,10 @@ always @(posedge local_clk) begin
 		if(rx_lcmd[10:2] == LCMD_LGO_U1[10:2]) begin
 			// LGO_x, latch U1,U2,U3
 			ltssm_go_u[1:0] <= rx_lcmd[1:0];
-			if(local_rx_cred_count < 4 && !force_linkpm_accept) begin // rx_lcmd[1:0] == 2'b11 || 
-				// reject if not enough credits
+			if(rx_lcmd[1:0] != 2'b11 && !force_linkpm_accept) begin
+				// reject U1/U2 (7.2.4.2.3: a port may reject LGO_U1/LGO_U2 with LXU, unless
+				// Force_LinkPM_Accept is set, 8.4.2): U1/U2 are not supported by the PHY
+				// integration (the LTSSM stays in U0). U3 shall not be rejected (7.2.4.2.4).
 				tx_lcmd <= LCMD_LXU;
 			end else begin
 				tx_lcmd <= LCMD_LAU;	// TODO stall until packet's done if necessary
