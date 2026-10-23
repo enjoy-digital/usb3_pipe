@@ -29,34 +29,22 @@ from usb3_core.bridge      import USB3ByteUnpacker, USB3BytePacker
 
 CDC_SET_CONTROL_LINE_STATE = 0x22
 
-# USB3 CDC-ACM -------------------------------------------------------------------------------------
+# USB3 CDC-ACM Function -----------------------------------------------------------------------------
 
-class USB3CDCACM(LiteXModule):
-    """USB3 CDC-ACM serial port.
+class USB3CDCACMFunction(LiteXModule):
+    """CDC-ACM function of a USB3 device (EP0 with request handler, Bulk IN/OUT data endpoints).
 
     sink  : bytes to the host (dropped while no terminal is connected: no back-pressure on the SoC
             console before the host opens the port).
     source: bytes from the host.
     connect: host terminal connected (device configured and DTR set by SET_CONTROL_LINE_STATE).
     """
-    def __init__(self, phy, sys_clk_freq, product="USB3-PIPE Serial", max_burst=2, **kwargs):
+    def __init__(self, ep0, bulk_in, bulk_out):
         self.sink    = sink    = stream.Endpoint([("data", 8)]) # i
         self.source  = source  = stream.Endpoint([("data", 8)]) # o
         self.connect = connect = Signal()                       # o
 
         # # #
-
-        # USB3 Device: CDC-ACM Data Bulk IN/OUT (EP1/EP2), Notification Interrupt IN (EP3, unused).
-        descriptors = cdc_acm_descriptors(max_burst=max_burst, product=product, **kwargs)
-        self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
-            endpoints = [
-                USB3BulkIN(ept=1,  max_burst=max_burst),
-                USB3BulkOUT(ept=2, max_burst=max_burst),
-                USB3BulkIN(ept=3,  max_burst=max_burst),
-            ],
-            with_ep0_handler = True)
-        bulk_in, bulk_out, _ = core.endpoints
-        ep0 = core.ep0
 
         # Connection (DTR from SET_CONTROL_LINE_STATE).
         dtr = Signal()
@@ -64,9 +52,9 @@ class USB3CDCACM(LiteXModule):
             If(ep0.req_done & (ep0.req_type == 0x21) & (ep0.req_request == CDC_SET_CONTROL_LINE_STATE),
                 dtr.eq(ep0.req_value[0])
             ),
-            If(~core.configured, dtr.eq(0)),
+            If(~ep0.configured, dtr.eq(0)),
         ]
-        self.comb += connect.eq(core.configured & dtr)
+        self.comb += connect.eq(ep0.configured & dtr)
 
         # Host -> Device.
         self.unpacker = unpacker = USB3ByteUnpacker()
@@ -85,3 +73,22 @@ class USB3CDCACM(LiteXModule):
             ),
             packer.source.connect(bulk_in.sink),
         ]
+
+# USB3 CDC-ACM -------------------------------------------------------------------------------------
+
+class USB3CDCACM(LiteXModule):
+    """USB3 CDC-ACM serial port device (see USB3CDCACMFunction)."""
+    def __init__(self, phy, sys_clk_freq, product="USB3-PIPE Serial", max_burst=2, **kwargs):
+        # USB3 Device: CDC-ACM Data Bulk IN/OUT (EP1/EP2), Notification Interrupt IN (EP3, unused).
+        descriptors = cdc_acm_descriptors(max_burst=max_burst, product=product, **kwargs)
+        self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
+            endpoints = [
+                USB3BulkIN(ept=1,  max_burst=max_burst),
+                USB3BulkOUT(ept=2, max_burst=max_burst),
+                USB3BulkIN(ept=3,  max_burst=max_burst),
+            ],
+            with_ep0_handler = True)
+        self.function = function = USB3CDCACMFunction(core.ep0, core.endpoints[0], core.endpoints[1])
+        self.sink    = function.sink
+        self.source  = function.source
+        self.connect = function.connect

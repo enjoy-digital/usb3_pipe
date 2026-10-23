@@ -429,34 +429,41 @@ class USB3UVCStream(LiteXModule):
             )
         )
 
-# USB3 UVC -----------------------------------------------------------------------------------------
+# USB3 UVC Function -------------------------------------------------------------------------------
 
-class USB3UVC(LiteXModule):
-    """USB3 UVC camera device (test pattern)."""
-    def __init__(self, phy, sys_clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE, max_burst=16,
-        **kwargs):
-        clk_freq = int(sys_clk_freq)
+class USB3UVCFunction(LiteXModule):
+    """UVC camera function of a USB3 device (EP0 with request handler, Bulk IN video endpoint).
+
+    The stream is started on COMMIT, stopped by CLEAR_FEATURE(ENDPOINT_HALT) on the video endpoint
+    (uvcvideo bulk stream off) or a link reset, the buffered packets are then flushed.
+    """
+    def __init__(self, ep0, bulk_in, link_reset, clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE,
+        vs_interface=1):
+        self.control = control = USB3UVCControl(ep0, modes, payload_size, clk_freq, vs_interface)
+        self.stream  = stream  = USB3UVCStream(modes, clk_freq, payload_size)
 
         # # #
 
-        descriptors = uvc_descriptors(modes, ept=1, max_burst=max_burst, clk_freq=clk_freq, **kwargs)
-        self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
-            endpoints        = [USB3BulkIN(ept=1, max_burst=max_burst)],
-            with_ep0_handler = True)
-        bulk_in = core.endpoints[0]
-        ep0     = core.ep0
-
-        self.control = control = USB3UVCControl(ep0, modes, payload_size, clk_freq)
-        self.stream  = stream  = USB3UVCStream(modes, clk_freq, payload_size)
-
-        # Stream started on COMMIT, stopped by CLEAR_FEATURE(ENDPOINT_HALT) on the video endpoint
-        # (uvcvideo bulk stream off) or a link reset: buffered packets flushed.
         stop = Signal()
         self.comb += [
-            stop.eq((ep0.clear_halt & (ep0.clear_ept == 1)) | core.link.reset),
+            stop.eq((ep0.clear_halt & (ep0.clear_ept == bulk_in.ept)) | link_reset),
             stream.start.eq(control.commit),
             stream.stop.eq(stop),
             stream.mode.eq(control.mode),
             bulk_in.flush.eq(control.commit | stop),
             stream.source.connect(bulk_in.sink),
         ]
+
+# USB3 UVC -----------------------------------------------------------------------------------------
+
+class USB3UVC(LiteXModule):
+    """USB3 UVC camera device (test pattern, see USB3UVCFunction)."""
+    def __init__(self, phy, sys_clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE, max_burst=16,
+        **kwargs):
+        clk_freq = int(sys_clk_freq)
+        descriptors = uvc_descriptors(modes, ept=1, max_burst=max_burst, clk_freq=clk_freq, **kwargs)
+        self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
+            endpoints        = [USB3BulkIN(ept=1, max_burst=max_burst)],
+            with_ep0_handler = True)
+        self.function = USB3UVCFunction(core.ep0, core.endpoints[0], core.link.reset, clk_freq,
+            modes, payload_size)
