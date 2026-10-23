@@ -80,17 +80,18 @@ class USB3LinkLayer(LiteXModule):
         self.sync += u0_d.eq(u0)
 
         recovery = Signal() # Recovery request (pulse).
-        self.comb += phy.directed_recovery.eq(recovery)
+        self.sync += phy.directed_recovery.eq(recovery)
         self.sync += If(recovery & u0 & (self.recovery_req != (2**16 - 1)),
             self.recovery_req.eq(self.recovery_req + 1)
         )
 
         # RX Words ---------------------------------------------------------------------------------
+        # Registered (timings: the PHY RX datapath output is combinatorial).
         rx_valid = Signal()
         rx_data  = Signal(32)
         rx_ctrl  = Signal(4)
-        self.comb += [
-            phy.source.ready.eq(1),
+        self.comb += phy.source.ready.eq(1)
+        self.sync += [
             rx_valid.eq(phy.source.valid & u0),
             rx_data.eq(swap_data(phy.source.data)),
             rx_ctrl.eq(swap_ctrl(phy.source.ctrl)),
@@ -258,7 +259,7 @@ class USB3LinkLayer(LiteXModule):
         self.sync += If(dpp_end | dpp_missing, dpp_expect.eq(0))
 
         # Link activity (U0 Recovery timeout of the LTSSM): any received packet/Link Command.
-        self.comb += phy.link_activity.eq(hp_check | lc_check | dpp_end)
+        self.sync += phy.link_activity.eq(hp_check | lc_check | dpp_end)
 
         # RX Header Buffers ------------------------------------------------------------------------
         self.rx_buffer = rx_buffer = ResetInserter()(stream.SyncFIFO(header_layout(), LINK_HP_BUFFERS))
@@ -334,8 +335,8 @@ class USB3LinkLayer(LiteXModule):
 
         # LGO_Ux forwarded to the LTSSM (it requests LAU/LXU).
         lgo_fwd = Signal()
-        self.comb += [
-            lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | self.u1_u2_enable | force_pm_accept)),
+        self.comb += lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | self.u1_u2_enable | force_pm_accept))
+        self.sync += [
             phy.lgo_u1.eq(lgo_fwd & (lc_info[0:2] == 1)),
             phy.lgo_u2.eq(lgo_fwd & (lc_info[0:2] == 2)),
             phy.lgo_u3.eq(lgo_fwd & (lc_info[0:2] == 3)),
@@ -382,12 +383,14 @@ class USB3LinkLayer(LiteXModule):
         tx_word  = Signal(32)
         tx_ctrl  = Signal(4)
         tx_valid = Signal()
+        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout()) # Registered (timings).
         self.comb += [
-            phy.sink.valid.eq(tx_valid),
-            phy.sink.data.eq(swap_data(tx_word)),
-            phy.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
+            tx_pipe.sink.valid.eq(tx_valid),
+            tx_pipe.sink.data.eq(swap_data(tx_word)),
+            tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
+            tx_pipe.source.connect(phy.sink),
         ]
-        tx_ready = phy.sink.ready
+        tx_ready = tx_pipe.sink.ready
 
         # Selected Link Command/Header Packet.
         lc_word   = Signal(32)

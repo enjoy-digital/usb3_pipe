@@ -92,6 +92,14 @@ class USB3ProtocolLayer(LiteXModule):
                 ep.dpp_landed.eq(status.source.landed),
             ]
 
+        # TX Header Packets/DPPs to the Link Layer (registered: timings).
+        self.tx_hp  = tx_hp  = stream.Buffer(header_layout() + [("dpp", 1)], pipe_valid=True, pipe_ready=True)
+        self.tx_dpp = tx_dpp = stream.PipeValid(dpp_layout())
+        self.comb += [
+            tx_hp.source.connect(link.tx_hp),
+            tx_dpp.source.connect(link.tx_dpp),
+        ]
+
         # TX Header Packets arbitration ------------------------------------------------------------
         self.jobs = jobs = stream.SyncFIFO([("ep", bits_for(len(endpoints)))], 8)
         sources = [(None, resp.source)] + [(i, ep.tx_hp) for i, ep in enumerate(endpoints)]
@@ -99,19 +107,19 @@ class USB3ProtocolLayer(LiteXModule):
         for i, source in reversed(sources):
             if i is None:
                 grant = [
-                    link.tx_hp.valid.eq(1),
-                    link.tx_hp.dw0.eq(Cat(C(TYPE_TP, 25), dev_addr)),
-                    link.tx_hp.dw1.eq(source.dw1),
-                    source.ready.eq(link.tx_hp.ready),
+                    tx_hp.sink.valid.eq(1),
+                    tx_hp.sink.dw0.eq(Cat(C(TYPE_TP, 25), dev_addr)),
+                    tx_hp.sink.dw1.eq(source.dw1),
+                    source.ready.eq(tx_hp.sink.ready),
                 ]
             else:
                 grant = [
-                    link.tx_hp.valid.eq(source.valid & (~source.dpp | jobs.sink.ready)),
-                    link.tx_hp.dw0.eq(Cat(source.dw0[0:25], dev_addr)),
-                    link.tx_hp.dw1.eq(source.dw1),
-                    link.tx_hp.dw2.eq(source.dw2),
-                    link.tx_hp.dpp.eq(source.dpp),
-                    source.ready.eq(link.tx_hp.ready & (~source.dpp | jobs.sink.ready)),
+                    tx_hp.sink.valid.eq(source.valid & (~source.dpp | jobs.sink.ready)),
+                    tx_hp.sink.dw0.eq(Cat(source.dw0[0:25], dev_addr)),
+                    tx_hp.sink.dw1.eq(source.dw1),
+                    tx_hp.sink.dw2.eq(source.dw2),
+                    tx_hp.sink.dpp.eq(source.dpp),
+                    source.ready.eq(tx_hp.sink.ready & (~source.dpp | jobs.sink.ready)),
                     jobs.sink.valid.eq(source.valid & source.ready & source.dpp),
                     jobs.sink.ep.eq(i),
                 ]
@@ -121,11 +129,11 @@ class USB3ProtocolLayer(LiteXModule):
         dpp_cases = {}
         for i, ep in enumerate(endpoints):
             dpp_cases[i] = [
-                ep.tx_dpp.connect(link.tx_dpp),
+                ep.tx_dpp.connect(tx_dpp.sink),
             ]
         self.comb += [
             If(jobs.source.valid,
                 Case(jobs.source.ep, dpp_cases)
             ),
-            jobs.source.ready.eq(link.tx_dpp.valid & link.tx_dpp.ready & link.tx_dpp.last),
+            jobs.source.ready.eq(tx_dpp.sink.valid & tx_dpp.sink.ready & tx_dpp.sink.last),
         ]

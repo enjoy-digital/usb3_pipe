@@ -208,7 +208,11 @@ class USB3BulkIN(USB3Endpoint):
         self.sync += [
             If(send,
                 snd_ptr.eq(snd_ptr + 1),
-                If(snd_eob, wait_erdy.eq(1)),
+                # EOB: flow control, the host requests again after our ERDY.
+                If(snd_eob,
+                    wait_erdy.eq(1),
+                    win_nump.eq(0),
+                ),
             ),
             If(self.tx_hp.valid & self.tx_hp.ready & nrdy_pending, nrdy_pending.eq(0)),
             If(self.tx_hp.valid & self.tx_hp.ready & ~nrdy_pending & erdy_pending, erdy_pending.eq(0)),
@@ -232,6 +236,7 @@ class USB3BulkIN(USB3Endpoint):
                 If((h.nump != 0) & ~h.retry & ((ack_ptr + acked[0:pbits]) == wr_ptr),
                     nrdy_pending.eq(1),
                     wait_erdy.eq(1),
+                    win_nump.eq(0),
                 ),
             ),
             If(self.reset_seq,
