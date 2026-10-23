@@ -274,6 +274,25 @@ class TestNativeBursts(unittest.TestCase):
             self.assertEqual(host.dpps[2][0], payload(2))
         run(dut, host, scenario())
 
+    def test_set_address(self):
+        # SET_ADDRESS: Status stage ACK TP from the default address (0), then from the new address.
+        dut  = DUT(max_burst=8)
+        host = PyHost(dut.phy)
+        def scenario():
+            yield from link_init(host)
+            n0 = len(host.hps)
+            host.send_hp(dph, length=8, setup=1)
+            host.send(data_packet_payload(setup_packet(0x00, 0x05, 0x0002, 0, 0)))
+            yield from host.wait(lambda: len(host.hps) >= n0 + 1)
+            host.send_hp(tp, TP_SUB_STATUS)
+            yield from host.wait(lambda: len(host.hps) >= n0 + 2)
+            host.send_hp(dph, length=8, setup=1, addr=2)
+            host.send(data_packet_payload(setup_packet(0x80, 0x06, 0x0100, 0, 18)))
+            yield from host.wait(lambda: len(host.hps) >= n0 + 3)
+            addrs = [hp[0] >> 25 for hp in host.hps[n0:n0 + 3]]
+            self.assertEqual(addrs, [0, 0, 2])
+        run(dut, host, scenario())
+
     def test_tx_backpressure(self):
         # PHY TX ready deasserted randomly (SKP insertion): packets integrity.
         dut  = DUT(max_burst=8)

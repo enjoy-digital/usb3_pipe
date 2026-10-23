@@ -61,7 +61,8 @@ class USB3ProtocolLayer(LiteXModule):
         self.comb += link.rx_dpp.ready.eq(1)
 
         # RX Header Packets dispatch ---------------------------------------------------------------
-        self.resp = resp = stream.SyncFIFO([("dw1", 32)], 4)
+        # TP responses, with the Device Address when generated (STATUS ACK of a SET_ADDRESS: old one).
+        self.resp = resp = stream.SyncFIFO([("dw1", 32), ("addr", 7)], 4)
         is_dp    = Signal()
         is_ping  = Signal()
         resp_any = Signal()
@@ -81,6 +82,7 @@ class USB3ProtocolLayer(LiteXModule):
             status.source.ready.eq(strobe & is_dp),
             resp.sink.valid.eq(strobe & resp_any),
             resp.sink.dw1.eq(resp_dw1),
+            resp.sink.addr.eq(dev_addr),
         ]
         for ep in endpoints:
             self.comb += [
@@ -108,7 +110,7 @@ class USB3ProtocolLayer(LiteXModule):
             if i is None:
                 grant = [
                     tx_hp.sink.valid.eq(1),
-                    tx_hp.sink.dw0.eq(Cat(C(TYPE_TP, 25), dev_addr)),
+                    tx_hp.sink.dw0.eq(Cat(C(TYPE_TP, 25), source.addr)),
                     tx_hp.sink.dw1.eq(source.dw1),
                     source.ready.eq(tx_hp.sink.ready),
                 ]
