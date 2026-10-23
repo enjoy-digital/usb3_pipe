@@ -187,6 +187,9 @@ The main configuration parameters are:
  - `refclk`/`refclk_freq`: Transceiver reference clock (`pads`: dedicated `refclk_p/n` ports, `sys`: core clock).
  - `role`: `device` (Upstream Port) or `host` (Downstream Port).
  - `with_link_ctrl`: Expose the LTSSM Link-Layer control interface (PM handshake, directed transitions).
+ - `usb_core`: Include the USB3 Device Core: a complete USB3.0 device with Bulk IN/OUT AXI-Stream
+   endpoints (`bulk_in_*`/`bulk_out_*`, `usb_vid`/`usb_pid`/`usb_product`/`usb_max_burst` parameters),
+   see `examples/a7_usb_device.yml`.
 
 The generator produces in the output directory:
  - `gateware/usb3_pipe_core.v`: Verilog of the core.

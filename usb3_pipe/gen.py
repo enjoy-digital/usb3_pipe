@@ -41,6 +41,10 @@ from usb3_pipe.serdes import A7USB3SerDes, K7USB3SerDes
 from usb3_pipe.ltssm  import USB3LTSSM
 from usb3_pipe.phy    import USB3PHY, USB3PHY_STATUS, USB3PHY_LINK_CTRL
 
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors
+
 # Configuration ------------------------------------------------------------------------------------
 
 # Supported PHYs: SerDes class, default device (family).
@@ -61,6 +65,14 @@ CONFIG_DEFAULTS = {
     "with_endianness_swap" : True,     # First symbol on the wire in tdata[31:24] (else tdata[7:0]).
     "with_link_ctrl"       : False,    # Expose the LTSSM Link-Layer control interface.
     "timer_scale"          : 1,        # LTSSM/LFPS timers scaling (simulation only, 1 for hardware).
+    # USB3 Device Core (usb3_core): Link/Protocol Layers with Bulk IN/OUT AXI-Stream endpoints.
+    "usb_core"             : False,    # Include the USB3 Device Core (device role).
+    "usb_vid"              : 0x1d50,   # USB Vendor ID.
+    "usb_pid"              : 0x605a,   # USB Product ID.
+    "usb_manufacturer"     : "Enjoy-Digital",
+    "usb_product"          : "USB3-PIPE",
+    "usb_serial"           : "0001",
+    "usb_max_burst"        : 8,        # Bulk endpoints MaxBurst (2/4/8/16 packets of 1024 bytes).
 }
 
 class ConfigError(ValueError):
@@ -80,7 +92,7 @@ def get_config(core_config):
             config[k] = replaces[v]
     for k in ["sys_clk_freq", "refclk_freq"]:
         config[k] = int(float(config[k]))
-    for k in ["speedgrade", "timer_scale"]:
+    for k in ["speedgrade", "timer_scale", "usb_vid", "usb_pid", "usb_max_burst"]:
         config[k] = int(config[k])
 
     # Checks.
@@ -98,6 +110,15 @@ def get_config(core_config):
         raise ConfigError(f"Unsupported role: {config['role']} (supported: device, host).")
     if config["timer_scale"] < 1:
         raise ConfigError("timer_scale must be >= 1.")
+    if config["usb_core"]:
+        if config["role"] != "device":
+            raise ConfigError("usb_core requires role: device.")
+        if config["with_link_ctrl"]:
+            raise ConfigError("usb_core and with_link_ctrl are exclusive (the core drives the Link-Layer control).")
+        if not config["with_endianness_swap"]:
+            raise ConfigError("usb_core requires with_endianness_swap: True.")
+        if config["usb_max_burst"] not in [2, 4, 8, 16]:
+            raise ConfigError(f"Unsupported usb_max_burst: {config['usb_max_burst']} (supported: 2, 4, 8, 16).")
     return config
 
 # LTSSM States -------------------------------------------------------------------------------------
@@ -176,19 +197,34 @@ def get_ports(config):
     add("rx_p", "i", 1, "-", "SuperSpeed RX serial +.", "rx")
     add("rx_n", "i", 1, "-", "SuperSpeed RX serial -.", "rx")
 
-    # AXI-Stream Sink (TX symbols).
-    add("sink_tvalid", "i",  1, "sys", "TX symbols valid.")
-    add("sink_tready", "o",  1, "sys", "TX symbols accepted.")
-    add("sink_tlast",  "i",  1, "sys", "Unused (ignored).")
-    add("sink_tdata",  "i", 32, "sys", "TX symbols (4 x 8-bit).")
-    add("sink_tuser",  "i",  4, "sys", "TX K-symbol flags (1 bit per symbol).")
+    if config["usb_core"]:
+        # AXI-Stream Bulk IN/OUT endpoints (USB3 Device Core).
+        add("bulk_in_tvalid",  "i",  1, "sys", "Bulk IN (EP1, device -> host) data valid.")
+        add("bulk_in_tready",  "o",  1, "sys", "Bulk IN data accepted.")
+        add("bulk_in_tlast",   "i",  1, "sys", "Bulk IN end of packet (packets are also split at 1024 bytes).")
+        add("bulk_in_tdata",   "i", 32, "sys", "Bulk IN data (first byte on tdata[7:0]).")
+        add("bulk_in_tkeep",   "i",  4, "sys", "Bulk IN valid bytes (contiguous from tdata[7:0], partial with tlast only).")
+        add("bulk_out_tvalid", "o",  1, "sys", "Bulk OUT (EP2, host -> device) data valid.")
+        add("bulk_out_tready", "i",  1, "sys", "Bulk OUT data accepted.")
+        add("bulk_out_tlast",  "o",  1, "sys", "Bulk OUT end of packet.")
+        add("bulk_out_tdata",  "o", 32, "sys", "Bulk OUT data (first byte on tdata[7:0]).")
+        add("bulk_out_tkeep",  "o",  4, "sys", "Bulk OUT valid bytes (contiguous from tdata[7:0], partial with tlast only).")
+        add("usb_ready",       "o",  1, "sys", "USB3 link initialized (U0).")
+        add("usb_configured",  "o",  1, "sys", "Device configured by the host (SET_CONFIGURATION).")
+    else:
+        # AXI-Stream Sink (TX symbols).
+        add("sink_tvalid", "i",  1, "sys", "TX symbols valid.")
+        add("sink_tready", "o",  1, "sys", "TX symbols accepted.")
+        add("sink_tlast",  "i",  1, "sys", "Unused (ignored).")
+        add("sink_tdata",  "i", 32, "sys", "TX symbols (4 x 8-bit).")
+        add("sink_tuser",  "i",  4, "sys", "TX K-symbol flags (1 bit per symbol).")
 
-    # AXI-Stream Source (RX symbols).
-    add("source_tvalid", "o",  1, "sys", "RX symbols valid.")
-    add("source_tready", "i",  1, "sys", "RX symbols accepted (must be kept high).")
-    add("source_tlast",  "o",  1, "sys", "Unused (always 0).")
-    add("source_tdata",  "o", 32, "sys", "RX symbols (4 x 8-bit).")
-    add("source_tuser",  "o",  4, "sys", "RX K-symbol flags (1 bit per symbol).")
+        # AXI-Stream Source (RX symbols).
+        add("source_tvalid", "o",  1, "sys", "RX symbols valid.")
+        add("source_tready", "i",  1, "sys", "RX symbols accepted (must be kept high).")
+        add("source_tlast",  "o",  1, "sys", "Unused (always 0).")
+        add("source_tdata",  "o", 32, "sys", "RX symbols (4 x 8-bit).")
+        add("source_tuser",  "o",  4, "sys", "RX K-symbol flags (1 bit per symbol).")
 
     # Status.
     add("ready", "o", 1, "sys", "Transceiver ready (PLL locked, reset done).")
@@ -284,23 +320,26 @@ class USB3PIPECore(SoCMini):
             timer_scale          = config["timer_scale"],
         )
 
-        # AXI-Stream Sink (TX) ---------------------------------------------------------------------
-        self.comb += [
-            phy.sink.valid.eq(platform.request("sink_tvalid")),
-            platform.request("sink_tready").eq(phy.sink.ready),
-            phy.sink.last.eq(platform.request("sink_tlast")),
-            phy.sink.data.eq(platform.request("sink_tdata")),
-            phy.sink.ctrl.eq(platform.request("sink_tuser")),
-        ]
+        if config["usb_core"]:
+            self.add_usb_core(platform, config, phy, sys_clk_freq)
+        else:
+            # AXI-Stream Sink (TX) -----------------------------------------------------------------
+            self.comb += [
+                phy.sink.valid.eq(platform.request("sink_tvalid")),
+                platform.request("sink_tready").eq(phy.sink.ready),
+                phy.sink.last.eq(platform.request("sink_tlast")),
+                phy.sink.data.eq(platform.request("sink_tdata")),
+                phy.sink.ctrl.eq(platform.request("sink_tuser")),
+            ]
 
-        # AXI-Stream Source (RX) -------------------------------------------------------------------
-        self.comb += [
-            platform.request("source_tvalid").eq(phy.source.valid),
-            phy.source.ready.eq(platform.request("source_tready")),
-            platform.request("source_tlast").eq(0),
-            platform.request("source_tdata").eq(phy.source.data),
-            platform.request("source_tuser").eq(phy.source.ctrl),
-        ]
+            # AXI-Stream Source (RX) ---------------------------------------------------------------
+            self.comb += [
+                platform.request("source_tvalid").eq(phy.source.valid),
+                phy.source.ready.eq(platform.request("source_tready")),
+                platform.request("source_tlast").eq(0),
+                platform.request("source_tdata").eq(phy.source.data),
+                platform.request("source_tuser").eq(phy.source.ctrl),
+            ]
 
         # Status -----------------------------------------------------------------------------------
         self.comb += platform.request("ready").eq(phy.ready)
@@ -316,6 +355,46 @@ class USB3PIPECore(SoCMini):
                     self.comb += getattr(phy, name).eq(platform.request(name))
                 else:
                     self.comb += platform.request(name).eq(getattr(phy, name))
+
+    def add_usb_core(self, platform, config, phy, sys_clk_freq):
+        # USB3 Device Core -------------------------------------------------------------------------
+        max_burst   = config["usb_max_burst"]
+        descriptors = bulk_descriptors(
+            vid          = config["usb_vid"],
+            pid          = config["usb_pid"],
+            manufacturer = config["usb_manufacturer"],
+            product      = config["usb_product"],
+            serial       = config["usb_serial"],
+            max_burst    = max_burst)
+        self.usb_core = usb_core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[
+            USB3BulkIN(ept=1,  max_burst=max_burst),
+            USB3BulkOUT(ept=2, max_burst=max_burst),
+        ])
+        bulk_in, bulk_out = usb_core.endpoints
+
+        # Bulk IN (tkeep: contiguous valid bytes -> last_be: last valid byte).
+        in_tkeep = platform.request("bulk_in_tkeep")
+        self.comb += [
+            bulk_in.sink.valid.eq(platform.request("bulk_in_tvalid")),
+            platform.request("bulk_in_tready").eq(bulk_in.sink.ready),
+            bulk_in.sink.last.eq(platform.request("bulk_in_tlast")),
+            bulk_in.sink.data.eq(platform.request("bulk_in_tdata")),
+            bulk_in.sink.last_be.eq(in_tkeep & ~(in_tkeep >> 1)),
+        ]
+
+        # Bulk OUT (last_be -> tkeep).
+        out_tkeep = platform.request("bulk_out_tkeep")
+        self.comb += [
+            platform.request("bulk_out_tvalid").eq(bulk_out.source.valid),
+            bulk_out.source.ready.eq(platform.request("bulk_out_tready")),
+            platform.request("bulk_out_tlast").eq(bulk_out.source.last),
+            platform.request("bulk_out_tdata").eq(bulk_out.source.data),
+            out_tkeep.eq(Mux(bulk_out.source.last_be[0], 0b0001,
+                         Mux(bulk_out.source.last_be[1], 0b0011,
+                         Mux(bulk_out.source.last_be[2], 0b0111, 0b1111)))),
+            platform.request("usb_ready").eq(usb_core.ready),
+            platform.request("usb_configured").eq(usb_core.configured),
+        ]
 
 # Documentation ------------------------------------------------------------------------------------
 
@@ -356,6 +435,10 @@ def generate_documentation(name, config, ports):
     d.append("USB3.0 SuperSpeed (5Gbps) PHY generated by `usb3_pipe_gen`: FPGA transceiver, USB3 PIPE")
     d.append("(LFPS, Training Sequences, scrambling, clock compensation) and LTSSM. It provides a")
     d.append("link-trained 32-bit symbol stream for a USB3.0 Link Layer.")
+    if config["usb_core"]:
+        d.append("")
+        d.append("With `usb_core`, the core also includes the USB3 Device Core: a complete USB3.0 device")
+        d.append("with Bulk IN/OUT AXI-Stream endpoints (see USB3 Device Core).")
     d.append("")
     d.append("## Configuration")
     d.append("")
@@ -388,30 +471,45 @@ def generate_documentation(name, config, ports):
     d.append("- `rst` is asynchronous and active high. The core stays in reset while `rst` is")
     d.append("  asserted or the internal PLL is not locked.")
     d.append("")
-    d.append("## Data format")
-    d.append("")
-    d.append("- `tdata` carries 4 USB3 symbols (bytes) per `clk` cycle, `tuser` the matching K-symbol")
-    d.append("  flags (`tuser[i]` = 1: `tdata[8*i+7:8*i]` is a K-symbol).")
-    d.append(f"- First symbol on the wire: `{first_symbol}`.")
-    d.append("- Symbols are unscrambled: scrambling/descrambling, 8b/10b, SKP ordered sets")
-    d.append("  insertion/removal, LFPS and Training Sequences are handled by the core.")
-    d.append("")
-    d.append("## Link bring-up and flow control")
-    d.append("")
-    d.append("- `ready` goes high when the transceiver is ready. The LTSSM then trains the link")
-    d.append(f"  (role: {config['role']}) and `u0` goes high when the link is in U0.")
-    d.append("- Only send/consume Link-Layer traffic when `u0` is high.")
-    d.append("- TX: `sink_tready` provides back-pressure (low when `tx_ready` is low or during SKP")
-    d.append("  insertion).")
-    d.append("- RX: `source_tvalid` is only active when `rx_ready` is high. `source_tready` must be kept")
-    d.append("  high: RX symbols arrive at the line rate and back-pressure is not supported.")
-    if config["with_link_ctrl"]:
-        d.append("- The Link-Layer control ports implement the PM handshake (LGO_Ux/LAU/LXU/LPMA, decoded")
-        d.append("  or sent by the user Link Layer) and directed LTSSM transitions.")
+    if config["usb_core"]:
+        d.append("## USB3 Device Core")
+        d.append("")
+        d.append(f"The core includes the USB3 Device Core (`usb3_core`): Link and Protocol Layers, Control")
+        d.append(f"Endpoint (descriptors: VID/PID {config['usb_vid']:04x}:{config['usb_pid']:04x}, vendor class")
+        d.append(f"interface) and two Bulk endpoints (MaxBurst {config['usb_max_burst']}) exposed as AXI-Stream:")
+        d.append("")
+        d.append("- `bulk_in_*` (EP1 IN, device -> host): packets of up to 1024 bytes, ended by `tlast`")
+        d.append("  (short packet) or split at 1024 bytes. `tkeep` gives the valid bytes of the last word.")
+        d.append("- `bulk_out_*` (EP2 OUT, host -> device): received packets, `tlast` on the last word.")
+        d.append("- First byte of the data on `tdata[7:0]`.")
+        d.append("- `usb_ready`: link initialized, `usb_configured`: device configured by the host.")
+        d.append("- Host side: any libusb application (bulk transfers on endpoints 0x81/0x02).")
+        d.append("")
     else:
-        d.append("- Link-Layer control (PM handshake, directed recovery/resets) is not exposed")
-        d.append("  (`with_link_ctrl: False`): the core never requests or accepts U1/U2/U3 entry.")
-    d.append("")
+        d.append("## Data format")
+        d.append("")
+        d.append("- `tdata` carries 4 USB3 symbols (bytes) per `clk` cycle, `tuser` the matching K-symbol")
+        d.append("  flags (`tuser[i]` = 1: `tdata[8*i+7:8*i]` is a K-symbol).")
+        d.append(f"- First symbol on the wire: `{first_symbol}`.")
+        d.append("- Symbols are unscrambled: scrambling/descrambling, 8b/10b, SKP ordered sets")
+        d.append("  insertion/removal, LFPS and Training Sequences are handled by the core.")
+        d.append("")
+        d.append("## Link bring-up and flow control")
+        d.append("")
+        d.append("- `ready` goes high when the transceiver is ready. The LTSSM then trains the link")
+        d.append(f"  (role: {config['role']}) and `u0` goes high when the link is in U0.")
+        d.append("- Only send/consume Link-Layer traffic when `u0` is high.")
+        d.append("- TX: `sink_tready` provides back-pressure (low when `tx_ready` is low or during SKP")
+        d.append("  insertion).")
+        d.append("- RX: `source_tvalid` is only active when `rx_ready` is high. `source_tready` must be kept")
+        d.append("  high: RX symbols arrive at the line rate and back-pressure is not supported.")
+        if config["with_link_ctrl"]:
+            d.append("- The Link-Layer control ports implement the PM handshake (LGO_Ux/LAU/LXU/LPMA, decoded")
+            d.append("  or sent by the user Link Layer) and directed LTSSM transitions.")
+        else:
+            d.append("- Link-Layer control (PM handshake, directed recovery/resets) is not exposed")
+            d.append("  (`with_link_ctrl: False`): the core never requests or accepts U1/U2/U3 entry.")
+        d.append("")
     d.append("## LTSSM states")
     d.append("")
     d.append(f"`ltssm_state` encoding (also available as `localparam`s in `{name}_ltssm.vh`):")

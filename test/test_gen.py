@@ -102,6 +102,16 @@ class TestGen(unittest.TestCase):
             "with_link_ctrl" : True,
         }, name="usb3_host")
 
+    def test_a7_usb_core(self):
+        # PHY + USB3 Device Core with Bulk IN/OUT AXI-Stream endpoints.
+        self.check_core({
+            "phy"           : "A7USB3SerDes",
+            "refclk"        : "pads",
+            "usb_core"      : True,
+            "usb_pid"       : 0x1234,
+            "usb_max_burst" : 4,
+        }, name="usb3_device")
+
     def test_invalid_configs(self):
         for config in [
             {},                                                      # Missing phy.
@@ -111,6 +121,9 @@ class TestGen(unittest.TestCase):
             {"phy": "A7USB3SerDes", "refclk": "sys", "refclk_freq": 100e6}, # refclk != sys_clk.
             {"phy": "A7USB3SerDes", "role": "hub"},                  # Unsupported role.
             {"phy": "A7USB3SerDes", "with_lmp": True},               # Unknown key.
+            {"phy": "A7USB3SerDes", "usb_core": True, "role": "host"},           # usb_core: device only.
+            {"phy": "A7USB3SerDes", "usb_core": True, "with_link_ctrl": True},   # usb_core drives it.
+            {"phy": "A7USB3SerDes", "usb_core": True, "usb_max_burst": 3},       # Unsupported MaxBurst.
             ]:
             with self.subTest(config=config):
                 with self.assertRaises(ConfigError):
