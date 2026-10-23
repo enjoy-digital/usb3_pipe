@@ -126,13 +126,22 @@ class USB3BulkIN(USB3Endpoint):
         snd_ptr = Signal(pbits) # Next slot to send.
         ack_seq = Signal(5)     # Sequence Number of ack_ptr's packet.
         snd_seq = Signal(5)
-        self.comb += snd_seq.eq(ack_seq + (snd_ptr - ack_ptr))
+        # Pointers differences/increments (modulo 2*n: explicit widths, Migen differences are signed).
+        inflight = Signal(pbits) # Sent, not acknowledged.
+        used     = Signal(pbits) # Written, not acknowledged.
+        snd_next = Signal(pbits)
+        self.comb += [
+            inflight.eq(snd_ptr - ack_ptr),
+            used.eq(wr_ptr - ack_ptr),
+            snd_next.eq(snd_ptr + 1),
+            snd_seq.eq(ack_seq + inflight),
+        ]
 
         # Writer (user) ----------------------------------------------------------------------------
         wr_count = Signal(9)
         wr_full  = Signal()
         self.comb += [
-            wr_full.eq((wr_ptr - ack_ptr) == n),
+            wr_full.eq(used == n),
             sink.ready.eq(~wr_full),
             wr_port.adr.eq(Cat(wr_count[0:8], wr_ptr[0:pbits-1])),
             wr_port.dat_w.eq(sink.data),
@@ -160,8 +169,12 @@ class USB3BulkIN(USB3Endpoint):
         h = self.hdr
         ack = Signal()
         self.comb += ack.eq(self.hdr_strobe & self.tp_addressed(TP_SUB_ACK))
-        acked = Signal(5)
-        self.comb += acked.eq(h.tp_seq - ack_seq)
+        acked     = Signal(5)
+        acked_ptr = Signal(pbits)
+        self.comb += [
+            acked.eq(h.tp_seq - ack_seq),
+            acked_ptr.eq(ack_ptr + acked),
+        ]
 
         # Sending ----------------------------------------------------------------------------------
         avail    = Signal() # Packet available to send.
@@ -174,7 +187,7 @@ class USB3BulkIN(USB3Endpoint):
             in_win.eq(((snd_seq - win_seq) & 0x1f) < win_nump),
             snd_len.eq(lengths[snd_ptr[0:pbits-1]]),
             # EOB: last available packet, window not exhausted and not a short packet (8.6.3).
-            snd_eob.eq(((snd_ptr + 1) == wr_ptr) & ((((snd_seq + 1) - win_seq) & 0x1f) < win_nump) &
+            snd_eob.eq((snd_next == wr_ptr) & ((((snd_seq + 1) - win_seq) & 0x1f) < win_nump) &
                 (snd_len == MAX_PACKET_SIZE)),
         ]
 
@@ -222,18 +235,18 @@ class USB3BulkIN(USB3Endpoint):
             ),
             If(ack,
                 # Acknowledged packets: free slots.
-                If(acked <= (snd_ptr - ack_ptr),
-                    ack_ptr.eq(ack_ptr + acked[0:pbits]),
+                If(acked <= inflight,
+                    ack_ptr.eq(acked_ptr),
                     ack_seq.eq(h.tp_seq),
                 ),
                 win_seq.eq(h.tp_seq),
                 win_nump.eq(h.nump),
                 # Retry: resend from the requested packet.
                 If(h.retry,
-                    snd_ptr.eq(ack_ptr + acked[0:pbits]),
+                    snd_ptr.eq(acked_ptr),
                 ),
                 # Request without available packet: NRDY, ERDY when data available.
-                If((h.nump != 0) & ~h.retry & ((ack_ptr + acked[0:pbits]) == wr_ptr),
+                If((h.nump != 0) & ~h.retry & (acked_ptr == wr_ptr),
                     nrdy_pending.eq(1),
                     wait_erdy.eq(1),
                     win_nump.eq(0),
@@ -328,8 +341,14 @@ class USB3BulkOUT(USB3Endpoint):
         decide_ptr = Signal(pbits) # Next landed slot to accept/discard (Protocol Layer, in order).
         rd_ptr     = Signal(pbits) # Next slot read by the user.
         exp_seq    = Signal(5)     # Next expected Sequence Number.
-        free       = Signal(pbits)
-        self.comb += free.eq(n - (land_ptr - rd_ptr))
+        free       = Signal(pbits)     # Slots available to land DPPs.
+        occupied   = Signal(pbits)
+        decided    = Signal(pbits)     # Slots of decided (accepted/discarded) packets not read yet.
+        self.comb += [
+            occupied.eq(land_ptr - rd_ptr),
+            decided.eq(decide_ptr - rd_ptr),
+            free.eq(n - occupied),
+        ]
 
         # Landing (DPPs written as received) -------------------------------------------------------
         land_count = Signal(9)
@@ -380,8 +399,11 @@ class USB3BulkOUT(USB3Endpoint):
             dph.eq(self.dp_addressed()),
             accept.eq(self.dpp_ok & self.dpp_landed & (h.dp_seq == exp_seq)),
         ]
+        # NumP: packets the host can send after this one: the slots not holding older packets (the
+        # packets already landed after this one are counted by the host, NumP decrements by one at
+        # most per ACK TP, 8.10.2).
         nump = Signal(5)
-        self.comb += nump.eq(Mux(accept, free, free + self.dpp_landed)) # Discarded slot is freed.
+        self.comb += nump.eq(n - decided - accept)
         self.comb += [
             self.resp_valid.eq(dph),
             self.resp_dw1.eq(tp_dw1(TP_SUB_ACK, ept=ept, direction=0,
@@ -404,10 +426,10 @@ class USB3BulkOUT(USB3Endpoint):
 
         # ERDY when slots are freed after a NumP of 0.
         self.comb += [
-            If(need_erdy & (free != 0),
+            If(need_erdy & (decided != n) & (free != 0),
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_TP),
-                self.tx_hp.dw1.eq(tp_dw1(TP_SUB_ERDY, ept=ept, direction=0, nump=free)),
+                self.tx_hp.dw1.eq(tp_dw1(TP_SUB_ERDY, ept=ept, direction=0, nump=n - decided)),
             )
         ]
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, need_erdy.eq(0))

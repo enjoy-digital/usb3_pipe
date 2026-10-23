@@ -274,6 +274,28 @@ class TestNativeBursts(unittest.TestCase):
             self.assertEqual(host.dpps[2][0], payload(2))
         run(dut, host, scenario())
 
+    def test_bulk_pointers_wrap(self):
+        # max_burst=2 (pointers modulo 4): 10 packets looped back, bursts of 2, pointers wrapping.
+        dut  = DUT(max_burst=2)
+        host = PyHost(dut.phy)
+        def scenario():
+            yield from link_init(host)
+            for k in range(0, 10, 2):
+                n0 = len(host.hps)
+                self.out_burst(host, k, 2, seq0=k)
+                yield from host.wait(lambda: len(self.acks(host, n0)) >= 2)
+                acks = self.acks(host, n0)
+                self.assertEqual([(a["seq"], a["retry"]) for a in acks], [((k + 1) % 32, 0), ((k + 2) % 32, 0)])
+                for _ in range(1024):
+                    yield
+                host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=2, tp_seq=k, pp=1)
+                yield from host.wait(lambda: len(host.dpps) >= k + 2)
+                host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=k + 2)
+            self.assertEqual([d[0] for d in host.dpps], [payload(i) for i in range(10)])
+            dphs = [dph_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x08]
+            self.assertEqual([d["seq"] for d in dphs], list(range(10)))
+        run(dut, host, scenario())
+
     def test_set_address(self):
         # SET_ADDRESS: Status stage ACK TP from the default address (0), then from the new address.
         dut  = DUT(max_burst=8)
