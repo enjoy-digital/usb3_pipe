@@ -1,0 +1,690 @@
+#
+# This file is part of USB3-PIPE project.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# SPDX-License-Identifier: BSD-2-Clause
+
+"""USB3 Link Layer (USB 3.2 chapter 7, SuperSpeed Gen1, Upstream Port).
+
+- RX: framing parser (Header Packets, Link Commands, Data Packet Payloads), CRCs checks.
+- Header Packets flow control (7.2.4.1): Header Sequence Numbers, Rx/Tx Header Buffers and credits
+  (LGOOD_n/LCRD_x), LBAD/LRTY retries, Header Sequence Number/Rx Header Buffer Credit
+  Advertisements on each U0 entry (link state kept across Recovery).
+- Timers: PENDING_HP_TIMER, CREDIT_HP_TIMER (Recovery on timeout), U0 LUP keep-alive.
+- LMPs (8.4): Port Capability/Configuration (Response), Set Link Function (Force_LinkPM_Accept).
+- Link Power Management (7.2.4.2): partner LGO_Ux forwarded to the LTSSM (U3 always, U1/U2 when
+  enabled or forced), rejected with LXU otherwise. LAU/LXU sent when requested by the LTSSM.
+- TX: framer (Link Commands, Header Packets, Data Packet Payloads with CRC-32/END framing).
+
+The PHY is only accessed through its Link interface (see usb3_pipe.phy.USB3PHY): sink/source data/
+ctrl words, u0/polling_idle/hot_reset status, lgo_u1/lgo_u2/lgo_u3/tx_lau/tx_lxu PM handshake,
+directed_recovery and link_activity.
+"""
+
+from migen import *
+from migen.genlib.misc import WaitTimer
+
+from litex.gen import *
+
+from litex.soc.interconnect import stream
+
+from usb3_core.common import *
+from usb3_core.crc    import CRC5, CRC16, CRC32
+
+# Constants ----------------------------------------------------------------------------------------
+
+LINK_HP_BUFFERS = 4 # Rx/Tx Header Buffers (SuperSpeed).
+
+# Port Capability LMP (8.4.5): 5Gbps, 4 Rx Header Buffers, Upstream Port.
+PORT_CAP_DW0      = TYPE_LMP | (LMP_SUB_PORT_CAP      << 5) | (1 << 9)
+PORT_CAP_DW1      = LINK_HP_BUFFERS | (0b10 << 16)
+# Port Configuration Response LMP (8.4.7): 5Gbps accepted.
+PORT_CFG_RESP_DW0 = TYPE_LMP | (LMP_SUB_PORT_CFG_RESP << 5) | (1 << 9)
+
+# USB3 Link Layer ----------------------------------------------------------------------------------
+
+class USB3LinkLayer(LiteXModule):
+    def __init__(self, phy, sys_clk_freq, timer_scale=1):
+        # Protocol Layer interface.
+        self.rx_hp       = stream.Endpoint(header_layout())                                # o
+        self.rx_dpp      = stream.Endpoint(dpp_layout() + [("ept", 4), ("setup", 1)])      # o
+        self.rx_dpp_done = Signal() # o: DPP received (pulse), one per accepted DPH, in order.
+        self.rx_dpp_ok   = Signal() # o: DPP received without error (with rx_dpp_done).
+        self.tx_hp       = stream.Endpoint(header_layout() + [("dpp", 1)])                 # i
+        self.tx_dpp      = stream.Endpoint(dpp_layout())                                   # i
+
+        # Control/Status.
+        self.u1_u2_enable = Signal() # i: Accept the partner's LGO_U1/LGO_U2 (else LXU).
+        self.ready        = Signal() # o: U0 and link initialized (Advertisement received).
+        self.reset        = Signal() # o: Link reset (Polling/Hot Reset): Protocol Layer reset.
+
+        # Statistics.
+        self.rx_lbad      = Signal(16) # o: LBAD sent (received Header Packets errors).
+        self.tx_retry     = Signal(16) # o: LBAD received (Header Packets retransmissions).
+        self.recovery_req = Signal(16) # o: Recovery requests (timeouts, sequence/credit errors).
+
+        # # #
+
+        def scaled(t):
+            return max(int(t*sys_clk_freq/timer_scale), 2)
+
+        # Link State -------------------------------------------------------------------------------
+        u0      = Signal()
+        u0_d    = Signal()
+        u0_rise = Signal()
+        self.comb += [
+            u0.eq(phy.u0),
+            u0_rise.eq(u0 & ~u0_d),
+            self.reset.eq(phy.polling_idle | phy.hot_reset),
+        ]
+        self.sync += u0_d.eq(u0)
+
+        recovery = Signal() # Recovery request (pulse).
+        self.sync += phy.directed_recovery.eq(recovery)
+        self.sync += If(recovery & u0 & (self.recovery_req != (2**16 - 1)),
+            self.recovery_req.eq(self.recovery_req + 1)
+        )
+
+        # RX Words ---------------------------------------------------------------------------------
+        # Registered (timings: the PHY RX datapath output is combinatorial).
+        rx_valid = Signal()
+        rx_data  = Signal(32)
+        rx_ctrl  = Signal(4)
+        self.comb += phy.source.ready.eq(1)
+        self.sync += [
+            rx_valid.eq(phy.source.valid & u0),
+            rx_data.eq(swap_data(phy.source.data)),
+            rx_ctrl.eq(swap_ctrl(phy.source.ctrl)),
+        ]
+        rx_shp = Signal()
+        rx_slc = Signal()
+        rx_sdp = Signal()
+        self.comb += [
+            rx_shp.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SHP)),
+            rx_slc.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SLC)),
+            rx_sdp.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SDP)),
+        ]
+
+        # RX Header Packets checks -----------------------------------------------------------------
+        hp_w      = [Signal(32) for _ in range(4)] # DW0, DW1, DW2, CRC-16/Link Control Word.
+        hp_last   = Signal() # Last Header Packet word received.
+        hp_check  = Signal() # Header Packet received, checked (pulse).
+        hp_ok     = Signal()
+        hp_seq    = Signal(3)
+        hp_dl     = Signal()
+        hp_is_dp  = Signal()
+        hp_is_lmp = Signal()
+        self.crc16_rx = crc16_rx = CRC16()
+        self.crc5_rx  = crc5_rx  = CRC5()
+        self.comb += [
+            crc16_rx.data.eq(Cat(hp_w[0], hp_w[1], hp_w[2])),
+            crc5_rx.data.eq(hp_w[3][16:27]),
+            hp_ok.eq((crc16_rx.value == hp_w[3][0:16]) & (crc5_rx.value == hp_w[3][27:32])),
+            hp_seq.eq(hp_w[3][16:19]),
+            hp_dl.eq(hp_w[3][16 + 9]),
+            hp_is_dp.eq(hp_w[0][0:5]  == TYPE_DP),
+            hp_is_lmp.eq(hp_w[0][0:5] == TYPE_LMP),
+        ]
+        self.sync += hp_check.eq(hp_last)
+
+        # RX Link Commands checks ------------------------------------------------------------------
+        lc_check = Signal()   # Link Command received (pulse).
+        lc_info  = Signal(11)
+        self.crc5_lc0 = crc5_lc0 = CRC5()
+        self.crc5_lc1 = crc5_lc1 = CRC5()
+        lc_ok0 = Signal()
+        lc_ok1 = Signal()
+        self.comb += [
+            crc5_lc0.data.eq(rx_data[0:11]),
+            crc5_lc1.data.eq(rx_data[16:27]),
+            lc_ok0.eq(crc5_lc0.value == rx_data[11:16]),
+            lc_ok1.eq(crc5_lc1.value == rx_data[27:32]),
+            lc_info.eq(Mux(lc_ok0, rx_data[0:11], rx_data[16:27])),
+        ]
+
+        # RX DPP expectation (from the last accepted DPH) ------------------------------------------
+        hp_accept    = Signal() # Header Packet accepted (with hp_check).
+        dpp_expect   = Signal()
+        dpp_length   = Signal(16)
+        dpp_ept      = Signal(4)
+        dpp_setup    = Signal()
+        dpp_new      = Signal() # Accepted DPH (with DPP) this cycle.
+        expect_now   = Signal()
+        length_now   = Signal(16)
+        dpp_missing  = Signal()
+        self.comb += [
+            dpp_new.eq(hp_check & hp_accept & hp_is_dp & ~hp_dl),
+            expect_now.eq(dpp_expect | dpp_new),
+            length_now.eq(Mux(dpp_new, hp_w[1][16:32], dpp_length)),
+        ]
+        self.sync += [
+            If(dpp_new,
+                dpp_expect.eq(1),
+                dpp_length.eq(hp_w[1][16:32]),
+                dpp_ept.eq(hp_w[1][8:12]),
+                dpp_setup.eq(hp_w[1][15]),
+            ),
+            If(~u0, dpp_expect.eq(0)),
+        ]
+
+        # RX Parser --------------------------------------------------------------------------------
+        hp_count  = Signal(2)
+        dpp_rem   = Signal(17)
+        dpp_off   = Signal(2)
+        dpp_first = Signal()
+        dpp_prev  = Signal(32)
+        dpp_pb    = Signal(3)
+        dpp_crc   = Signal(32)
+        dpp_end   = Signal() # DPP CRC word received (pulse).
+        self.crc32_rx = crc32_rx = CRC32()
+        self.comb += [
+            dpp_pb.eq(Mux(dpp_rem >= 4, 4, dpp_rem)),
+            Case(dpp_off, {
+                0: dpp_crc.eq(rx_data),
+                1: dpp_crc.eq(Cat(dpp_prev[ 8:32], rx_data[0: 8])),
+                2: dpp_crc.eq(Cat(dpp_prev[16:32], rx_data[0:16])),
+                3: dpp_crc.eq(Cat(dpp_prev[24:32], rx_data[0:24])),
+            }),
+            crc32_rx.data.eq(rx_data),
+            crc32_rx.bytes.eq(dpp_pb),
+            self.rx_dpp.data.eq(rx_data),
+            self.rx_dpp.bytes.eq(dpp_pb),
+            # DPH with DL bit (no DPP): routed with the DPH fields (rx_dpp_done on hp_check).
+            If(hp_check,
+                self.rx_dpp.ept.eq(hp_w[1][8:12]),
+                self.rx_dpp.setup.eq(hp_w[1][15]),
+            ).Else(
+                self.rx_dpp.ept.eq(dpp_ept),
+                self.rx_dpp.setup.eq(dpp_setup),
+            ),
+        ]
+
+        self.rx_fsm = rx_fsm = FSM(reset_state="IDLE")
+        rx_fsm.act("IDLE",
+            If(rx_valid,
+                If(rx_shp,
+                    dpp_missing.eq(expect_now),
+                    NextValue(hp_count, 0),
+                    NextState("HP")
+                ).Elif(rx_slc,
+                    dpp_missing.eq(expect_now),
+                    NextState("LC")
+                ).Elif(rx_sdp & expect_now,
+                    crc32_rx.clear.eq(1),
+                    NextValue(dpp_rem,   length_now),
+                    NextValue(dpp_off,   length_now[0:2]),
+                    NextValue(dpp_first, 1),
+                    NextState("DPP")
+                )
+            )
+        )
+        rx_fsm.act("HP",
+            If(rx_valid,
+                Case(hp_count, {i: NextValue(hp_w[i], rx_data) for i in range(4)}),
+                NextValue(hp_count, hp_count + 1),
+                If(hp_count == 3,
+                    hp_last.eq(1),
+                    NextState("IDLE")
+                )
+            )
+        )
+        rx_fsm.act("LC",
+            If(rx_valid,
+                lc_check.eq(lc_ok0 | lc_ok1),
+                NextState("IDLE")
+            )
+        )
+        rx_fsm.act("DPP",
+            If(~u0,
+                NextState("IDLE")
+            ).Elif(rx_valid,
+                If(dpp_rem != 0,
+                    self.rx_dpp.valid.eq(1),
+                    self.rx_dpp.first.eq(dpp_first),
+                    self.rx_dpp.last.eq(dpp_rem <= 4),
+                    crc32_rx.ce.eq(1),
+                    NextValue(dpp_first, 0),
+                    NextValue(dpp_rem,  dpp_rem - dpp_pb),
+                    NextValue(dpp_prev, rx_data),
+                ).Else(
+                    dpp_end.eq(1),
+                    NextState("IDLE")
+                )
+            )
+        )
+        self.comb += [
+            self.rx_dpp_done.eq(dpp_end | dpp_missing | (hp_check & hp_accept & hp_is_dp & hp_dl)),
+            self.rx_dpp_ok.eq(dpp_end & (dpp_crc == crc32_rx.value)),
+        ]
+        self.sync += If(dpp_end | dpp_missing, dpp_expect.eq(0))
+
+        # Link activity (U0 Recovery timeout of the LTSSM): any received packet/Link Command.
+        self.sync += phy.link_activity.eq(hp_check | lc_check | dpp_end)
+
+        # RX Header Buffers ------------------------------------------------------------------------
+        self.rx_buffer = rx_buffer = ResetInserter()(stream.SyncFIFO(header_layout(), LINK_HP_BUFFERS))
+        self.comb += [
+            rx_buffer.reset.eq(self.reset),
+            rx_buffer.sink.dw0.eq(hp_w[0]),
+            rx_buffer.sink.dw1.eq(hp_w[1]),
+            rx_buffer.sink.dw2.eq(hp_w[2]),
+        ]
+
+        # Header Packets flow control state.
+        rx_seq          = Signal(3) # Rx Header Sequence Number (next expected).
+        lbad_wait       = Signal()  # LBAD sent, waiting for LRTY.
+        lgood_seq       = Signal(3) # Next LGOOD_n to send (pending while != rx_seq).
+        lcrd_pending    = Signal(3) # LCRD_x to send.
+        lcrd_idx        = Signal(2) # Next LCRD_x index.
+        lbad_pending    = Signal()
+        lrty_pending    = Signal()
+        tx_seq          = Signal(3) # Tx Header Sequence Number (next new Header Packet).
+        ack_seq         = Signal(3) # ACK Tx Header Sequence Number (next expected LGOOD_n).
+        send_seq        = Signal(3) # Next Header Packet to (re)send.
+        remote_credits  = Signal(3) # Remote Rx Header Buffer Credit Count.
+        remote_lcrd_idx = Signal(2) # Next expected LCRD_x.
+        adv_received    = Signal()  # Header Sequence Number Advertisement received.
+        lau_pending     = Signal()
+        lxu_pending     = Signal()
+        lup_pending     = Signal()
+        pm_block        = Signal()  # LAU sent: no more transmission until the next U0 entry.
+        portcap_pending = Signal(reset=1)
+        portcfg_pending = Signal()
+        force_pm_accept = Signal()
+
+        self.comb += self.ready.eq(u0 & adv_received & ~pm_block)
+
+        # RX Header Packets accept (7.2.4.1.6/7.2.4.1.8).
+        rx_hp_bad   = Signal()
+        rx_hp_seqer = Signal()
+        self.comb += [
+            rx_hp_bad.eq(hp_check & ~hp_ok & ~lbad_wait),
+            rx_hp_seqer.eq(hp_check & hp_ok & ~lbad_wait & ((hp_seq != rx_seq) | ~rx_buffer.sink.ready)),
+            hp_accept.eq(hp_check & hp_ok & ~lbad_wait & (hp_seq == rx_seq) & rx_buffer.sink.ready),
+            rx_buffer.sink.valid.eq(hp_accept),
+        ]
+
+        # RX Header Buffers: LMPs consumed by the Link Layer, others to the Protocol Layer.
+        lmp_pop   = Signal()
+        lmp_sub   = Signal(4)
+        rx_pop    = Signal()
+        self.comb += [
+            lmp_sub.eq(rx_buffer.source.dw0[5:9]),
+            If(rx_buffer.source.dw0[0:5] == TYPE_LMP,
+                rx_buffer.source.ready.eq(1),
+                lmp_pop.eq(rx_buffer.source.valid),
+            ).Else(
+                rx_buffer.source.connect(self.rx_hp),
+            ),
+            rx_pop.eq(rx_buffer.source.valid & rx_buffer.source.ready),
+        ]
+
+        # RX Link Commands decoding.
+        lc_lgood = Signal()
+        lc_lcrd  = Signal()
+        lc_lrty  = Signal()
+        lc_lbad  = Signal()
+        lc_lgo   = Signal()
+        self.comb += [
+            lc_lgood.eq(lc_check & ((lc_info & 0x7f8) == LCMD_LGOOD)),
+            lc_lcrd.eq( lc_check & ((lc_info & 0x7fc) == LCMD_LCRD)),
+            lc_lrty.eq( lc_check & ( lc_info          == LCMD_LRTY)),
+            lc_lbad.eq( lc_check & ( lc_info          == LCMD_LBAD)),
+            lc_lgo.eq(  lc_check & ((lc_info & 0x7fc) == LCMD_LGO_U) & (lc_info[0:2] != 0)),
+        ]
+
+        # LGO_Ux forwarded to the LTSSM (it requests LAU/LXU).
+        lgo_fwd = Signal()
+        self.comb += lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | self.u1_u2_enable | force_pm_accept))
+        self.sync += [
+            phy.lgo_u1.eq(lgo_fwd & (lc_info[0:2] == 1)),
+            phy.lgo_u2.eq(lgo_fwd & (lc_info[0:2] == 2)),
+            phy.lgo_u3.eq(lgo_fwd & (lc_info[0:2] == 3)),
+        ]
+
+        # TX Header Buffers ------------------------------------------------------------------------
+        tx_dws  = Array(Signal(96) for _ in range(LINK_HP_BUFFERS))
+        tx_dpps = Array(Signal()   for _ in range(LINK_HP_BUFFERS))
+        tx_sent = Array(Signal()   for _ in range(LINK_HP_BUFFERS))
+        tx_count = Signal(4)
+        tx_full  = Signal()
+        self.comb += [
+            tx_count.eq((tx_seq - ack_seq) & 0x7),
+            tx_full.eq(tx_count >= LINK_HP_BUFFERS),
+        ]
+
+        # Header Packets from the Link Layer (LMPs) or the Protocol Layer.
+        lmp_push     = Signal()
+        lmp_push_dw0 = Signal(32)
+        lmp_push_dw1 = Signal(32)
+        tx_push      = Signal()
+        tx_push_dws  = Signal(96)
+        tx_push_dpp  = Signal()
+        self.comb += [
+            lmp_push.eq(adv_received & ~tx_full & (portcap_pending | portcfg_pending)),
+            If(portcap_pending,
+                lmp_push_dw0.eq(PORT_CAP_DW0),
+                lmp_push_dw1.eq(PORT_CAP_DW1),
+            ).Else(
+                lmp_push_dw0.eq(PORT_CFG_RESP_DW0),
+            ),
+            self.tx_hp.ready.eq(self.ready & ~tx_full & ~lmp_push),
+            If(lmp_push,
+                tx_push.eq(1),
+                tx_push_dws.eq(Cat(lmp_push_dw0, lmp_push_dw1, C(0, 32))),
+            ).Else(
+                tx_push.eq(self.tx_hp.valid & self.tx_hp.ready),
+                tx_push_dws.eq(Cat(self.tx_hp.dw0, self.tx_hp.dw1, self.tx_hp.dw2)),
+                tx_push_dpp.eq(self.tx_hp.dpp),
+            ),
+        ]
+
+        # TX Framer --------------------------------------------------------------------------------
+        tx_word  = Signal(32)
+        tx_ctrl  = Signal(4)
+        tx_valid = Signal()
+        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout()) # Registered (timings).
+        self.comb += [
+            tx_pipe.sink.valid.eq(tx_valid),
+            tx_pipe.sink.data.eq(swap_data(tx_word)),
+            tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
+            tx_pipe.source.connect(phy.sink),
+        ]
+        tx_ready = tx_pipe.sink.ready
+
+        # Selected Link Command/Header Packet.
+        lc_word   = Signal(32)
+        hp_dws    = Signal(96)
+        hp_dpp    = Signal()
+        hp_lcw    = Signal(16)
+        hp_info   = Signal(11)
+        self.crc16_tx  = crc16_tx  = CRC16()
+        self.crc5_tx   = crc5_tx   = CRC5()
+        self.crc5_lctx = crc5_lctx = CRC5()
+        self.comb += [
+            crc16_tx.data.eq(hp_dws),
+            crc5_tx.data.eq(hp_info),
+            hp_lcw.eq(Cat(hp_info, crc5_tx.value)),
+        ]
+        lc_sel = Signal(11)
+        self.comb += crc5_lctx.data.eq(lc_sel)
+
+        # Transmission requests (by priority).
+        can_send_hp = Signal()
+        self.comb += can_send_hp.eq(adv_received & (send_seq != tx_seq) & (remote_credits != 0) &
+            ~lrty_pending)
+        start_lc = Signal()
+        start_hp = Signal()
+        sel_lrty = Signal()
+        sel_lbad = Signal()
+        sel_lgood = Signal()
+        sel_lcrd = Signal()
+        sel_lau  = Signal()
+        sel_lxu  = Signal()
+        sel_lup  = Signal()
+        self.comb += [
+            If(~pm_block,
+                If(lrty_pending,
+                    sel_lrty.eq(1), lc_sel.eq(LCMD_LRTY)
+                ).Elif(lbad_pending,
+                    sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
+                ).Elif(lgood_seq != rx_seq,
+                    sel_lgood.eq(1), lc_sel.eq(LCMD_LGOOD | lgood_seq)
+                ).Elif(lcrd_pending != 0,
+                    sel_lcrd.eq(1), lc_sel.eq(LCMD_LCRD | lcrd_idx)
+                ).Elif(lau_pending,
+                    sel_lau.eq(1), lc_sel.eq(LCMD_LAU)
+                ).Elif(lxu_pending,
+                    sel_lxu.eq(1), lc_sel.eq(LCMD_LXU)
+                ).Elif(can_send_hp,
+                    start_hp.eq(1)
+                ).Elif(lup_pending,
+                    sel_lup.eq(1), lc_sel.eq(LCMD_LUP)
+                )
+            ),
+        ]
+
+        dpp_b     = Signal(3)
+        dpp_tail1 = Signal(32)
+        dpp_tail2 = Signal(32)
+        dpp_ctrl1 = Signal(4)
+        dpp_ctrl2 = Signal(4)
+        self.crc32_tx = crc32_tx = CRC32()
+        self.comb += [
+            crc32_tx.data.eq(self.tx_dpp.data),
+            crc32_tx.bytes.eq(self.tx_dpp.bytes),
+        ]
+        crc_next = crc32_tx.next_value
+        end_bytes = [(FRAMING_END >> 8*i) & 0xff for i in range(4)]
+        def end_slice(i, j):
+            return Cat(*[C(end_bytes[k], 8) for k in range(i, j)])
+        tail_cases = {
+            0: [
+                NextValue(dpp_tail1, FRAMING_END), NextValue(dpp_ctrl1, 0b1111),
+            ],
+            4: [
+                NextValue(dpp_tail1, crc_next),    NextValue(dpp_ctrl1, 0b0000),
+                NextValue(dpp_tail2, FRAMING_END), NextValue(dpp_ctrl2, 0b1111),
+            ],
+        }
+        for b in range(1, 4):
+            tail_cases[b] = [
+                NextValue(dpp_tail1, Cat(crc_next[32-8*b:32], end_slice(0, 4-b))),
+                NextValue(dpp_ctrl1, ((1 << (4-b)) - 1) << b),
+                NextValue(dpp_tail2, Cat(end_slice(4-b, 4), C(0, 8*(4-b)))),
+                NextValue(dpp_ctrl2, (1 << b) - 1),
+            ]
+        dpp_word = Signal(32)
+        self.comb += If(self.tx_dpp.last,
+            Case(self.tx_dpp.bytes, {b: dpp_word.eq(
+                Cat(self.tx_dpp.data[0:8*b], crc_next[0:32-8*b]) if b not in [0, 4] else
+                (crc_next if b == 0 else self.tx_dpp.data)) for b in range(5)})
+        ).Else(
+            dpp_word.eq(self.tx_dpp.data)
+        )
+
+        tx_sent_lc  = Signal() # Link Command/Header Packet transmission started (pulse).
+        tx_sent_hp  = Signal()
+        self.tx_fsm = tx_fsm = FSM(reset_state="IDLE")
+        tx_fsm.act("IDLE",
+            If(u0,
+                If(start_hp,
+                    tx_sent_hp.eq(1),
+                    NextValue(hp_dws,  tx_dws[send_seq[0:2]]),
+                    NextValue(hp_dpp,  tx_dpps[send_seq[0:2]] & ~tx_sent[send_seq[0:2]]),
+                    NextValue(hp_info, Cat(send_seq, C(0, 6), tx_sent[send_seq[0:2]], C(0, 1))),
+                    NextState("HP0")
+                ).Elif(sel_lrty | sel_lbad | sel_lgood | sel_lcrd | sel_lau | sel_lxu | sel_lup,
+                    tx_sent_lc.eq(1),
+                    NextValue(lc_word, Cat(lc_sel, crc5_lctx.value, lc_sel, crc5_lctx.value)),
+                    NextState("LC0")
+                )
+            )
+        )
+        tx_fsm.act("LC0",
+            tx_valid.eq(1),
+            tx_word.eq(FRAMING_SLC),
+            tx_ctrl.eq(0b1111),
+            If(tx_ready, NextState("LC1"))
+        )
+        tx_fsm.act("LC1",
+            tx_valid.eq(1),
+            tx_word.eq(lc_word),
+            If(tx_ready, NextState("IDLE"))
+        )
+        for i in range(5):
+            tx_fsm.act(f"HP{i}",
+                tx_valid.eq(1),
+                tx_word.eq([FRAMING_SHP, hp_dws[0:32], hp_dws[32:64], hp_dws[64:96],
+                    Cat(crc16_tx.value, hp_lcw)][i]),
+                tx_ctrl.eq(0b1111 if i == 0 else 0b0000),
+                If(tx_ready,
+                    NextState(f"HP{i+1}") if i < 4 else
+                    If(hp_dpp, NextState("DPP-SOF")).Else(NextState("IDLE"))
+                )
+            )
+        tx_fsm.act("DPP-SOF",
+            tx_valid.eq(1),
+            tx_word.eq(FRAMING_SDP),
+            tx_ctrl.eq(0b1111),
+            crc32_tx.clear.eq(1),
+            If(tx_ready, NextState("DPP-DATA"))
+        )
+        tx_fsm.act("DPP-DATA",
+            tx_valid.eq(self.tx_dpp.valid),
+            tx_word.eq(dpp_word),
+            self.tx_dpp.ready.eq(tx_ready),
+            If(self.tx_dpp.valid & tx_ready,
+                crc32_tx.ce.eq(1),
+                If(self.tx_dpp.last,
+                    NextValue(dpp_b, self.tx_dpp.bytes),
+                    Case(self.tx_dpp.bytes, tail_cases),
+                    NextState("DPP-TAIL1")
+                )
+            )
+        )
+        tx_fsm.act("DPP-TAIL1",
+            tx_valid.eq(1),
+            tx_word.eq(dpp_tail1),
+            tx_ctrl.eq(dpp_ctrl1),
+            If(tx_ready,
+                If(dpp_b == 0, NextState("IDLE")).Else(NextState("DPP-TAIL2"))
+            )
+        )
+        tx_fsm.act("DPP-TAIL2",
+            tx_valid.eq(1),
+            tx_word.eq(dpp_tail2),
+            tx_ctrl.eq(dpp_ctrl2),
+            If(tx_ready, NextState("IDLE"))
+        )
+
+        # Timers -----------------------------------------------------------------------------------
+        # U0 keep-alive: LUP when nothing sent for 10us (7.5.6.1).
+        self.t_lup = t_lup = WaitTimer(scaled(10e-6))
+        self.comb += t_lup.wait.eq(u0 & ~pm_block & ~tx_sent_lc & ~tx_sent_hp & ~lup_pending)
+        # PENDING_HP_TIMER (3us): Header Packets sent and not acknowledged, Advertisement expected.
+        self.t_pending_hp = t_pending_hp = WaitTimer(scaled(3e-6))
+        self.comb += t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood &
+            (~adv_received | (ack_seq != send_seq)))
+        # CREDIT_HP_TIMER (5ms): Remote Rx Header Buffer Credits missing.
+        self.t_credit_hp = t_credit_hp = WaitTimer(scaled(5e-3))
+        self.comb += t_credit_hp.wait.eq(u0 & ~pm_block & ~lc_lcrd & (remote_credits != LINK_HP_BUFFERS))
+
+        # Flow Control -----------------------------------------------------------------------------
+        lgood_ok  = Signal()
+        lcrd_ok   = Signal()
+        self.comb += [
+            lgood_ok.eq(lc_info[0:3] == ack_seq),
+            lcrd_ok.eq(lc_info[0:2] == remote_lcrd_idx),
+            recovery.eq(u0 & ~pm_block & (
+                rx_hp_seqer |
+                (lc_lgood & adv_received & ~lgood_ok) |
+                (lc_lcrd & ~lcrd_ok) |
+                t_pending_hp.done |
+                t_credit_hp.done)),
+        ]
+        self.sync += [
+            # Header Packets received.
+            If(hp_accept, rx_seq.eq(rx_seq + 1)),
+            If(rx_hp_bad,
+                lbad_wait.eq(1),
+                lbad_pending.eq(1),
+                If(self.rx_lbad != (2**16 - 1), self.rx_lbad.eq(self.rx_lbad + 1)),
+            ),
+            If(lc_lrty, lbad_wait.eq(0)),
+
+            # Link Commands sent.
+            If(tx_sent_lc,
+                If(sel_lrty,  lrty_pending.eq(0)),
+                If(sel_lbad,  lbad_pending.eq(0)),
+                If(sel_lgood, lgood_seq.eq(lgood_seq + 1)),
+                If(sel_lcrd,  lcrd_idx.eq(lcrd_idx + 1)),
+                If(sel_lau,   lau_pending.eq(0), pm_block.eq(1)),
+                If(sel_lxu,   lxu_pending.eq(0)),
+                If(sel_lup,   lup_pending.eq(0)),
+            ),
+            If(t_lup.done, lup_pending.eq(1)),
+
+            # Local Rx Header Buffer credits (LCRD_x on each freed Rx Header Buffer).
+            lcrd_pending.eq(lcrd_pending + rx_pop - (tx_sent_lc & sel_lcrd)),
+
+            # LMPs received.
+            If(lmp_pop,
+                If(lmp_sub == LMP_SUB_PORT_CFG,      portcfg_pending.eq(1)),
+                If(lmp_sub == LMP_SUB_SET_LINK_FUNC, force_pm_accept.eq(rx_buffer.source.dw0[10])),
+            ),
+
+            # Link Power Management.
+            If(phy.tx_lau, lau_pending.eq(1)),
+            If(phy.tx_lxu | (lc_lgo & ~lgo_fwd), lxu_pending.eq(1)),
+
+            # Header Packets to send.
+            If(tx_push,
+                tx_dws[tx_seq[0:2]].eq(tx_push_dws),
+                tx_dpps[tx_seq[0:2]].eq(tx_push_dpp),
+                tx_sent[tx_seq[0:2]].eq(0),
+                tx_seq.eq(tx_seq + 1),
+                If(lmp_push,
+                    If(portcap_pending,
+                        portcap_pending.eq(0)
+                    ).Else(
+                        portcfg_pending.eq(0)
+                    )
+                )
+            ),
+            If(tx_sent_hp,
+                tx_sent[send_seq[0:2]].eq(1),
+                send_seq.eq(send_seq + 1),
+            ),
+
+            # Remote Rx Header Buffer credits.
+            remote_credits.eq(remote_credits + (lc_lcrd & lcrd_ok & (remote_credits != LINK_HP_BUFFERS))
+                - tx_sent_hp),
+            If(lc_lcrd & lcrd_ok, remote_lcrd_idx.eq(remote_lcrd_idx + 1)),
+
+            # LGOOD_n received: Advertisement or acknowledge.
+            If(lc_lgood,
+                If(~adv_received,
+                    adv_received.eq(1),
+                    ack_seq.eq(lc_info[0:3] + 1),
+                    send_seq.eq(lc_info[0:3] + 1),
+                ).Elif(lgood_ok,
+                    ack_seq.eq(ack_seq + 1),
+                )
+            ),
+            # LBAD received: LRTY then retransmission of the unacknowledged Header Packets.
+            If(lc_lbad,
+                lrty_pending.eq(1),
+                send_seq.eq(ack_seq),
+                remote_credits.eq(remote_credits + ((send_seq - ack_seq) & 0x7) - tx_sent_hp),
+                If(self.tx_retry != (2**16 - 1), self.tx_retry.eq(self.tx_retry + 1)),
+            ),
+
+            # U0 entry: Header Sequence Number/Rx Header Buffer Credit Advertisements (7.2.4.1.1).
+            If(u0_rise,
+                lgood_seq.eq(rx_seq - 1),
+                lcrd_pending.eq(LINK_HP_BUFFERS - rx_buffer.level),
+                lcrd_idx.eq(0),
+                remote_credits.eq(0),
+                remote_lcrd_idx.eq(0),
+                adv_received.eq(0),
+                lbad_wait.eq(0),
+                lbad_pending.eq(0),
+                lrty_pending.eq(0),
+                lau_pending.eq(0),
+                lxu_pending.eq(0),
+                lup_pending.eq(0),
+                pm_block.eq(0),
+            ),
+
+            # Link reset (Polling/Hot Reset): Header Sequence Numbers to zero, Tx Header Buffers flushed.
+            If(self.reset,
+                rx_seq.eq(0),
+                tx_seq.eq(0),
+                ack_seq.eq(0),
+                send_seq.eq(0),
+                portcap_pending.eq(1),
+                portcfg_pending.eq(0),
+                force_pm_accept.eq(0),
+            ),
+        ]

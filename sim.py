@@ -27,6 +27,9 @@ from usb3_pipe.serdes import *
 from usb3_pipe.phy    import USB3PHY
 from usb3_core.core   import USB3Core
 from usb3_core.host_model import USB3HostModel, enumeration_script
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -362,13 +365,14 @@ class USB3PIPESim(SoCMini):
     - host_latency:  Host latency (cycles) between the SETUP ACK and the Data stage request.
     - host_status_gap: Host gap (cycles) between the Data stage ACK TP and the STATUS TP.
     - host_pm:       Host LGO_U1/LGO_U2 requests after the enumeration (with_core).
+    - core_name:     Device USB3 Core: "daisho" or "native" (usb3_core.device.USB3DeviceCore).
     - rx_word_shift: RX shift (in 10-bit symbols) of the SerDes models.
     - ppm/ssc:       Host/Device in separate clock domains, the Device clock offset by ppm and/or with
                      SSC. Each SerDes model receives in the partner's (recovered) clock domain.
     - prbs_words:    Words to check on both sides before ending the simulation (without core).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
-        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False):
+        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False, core_name="daisho"):
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate: Daisho can't be
         # back-pressured), 2 with the PRBS stand-ins.
@@ -423,6 +427,18 @@ class USB3PIPESim(SoCMini):
                     host_model.enable.eq(ltssm.u0),
                     serdes.tx_skp.eq(host_model.skp),
                 ]
+            elif with_core and (core_name == "native"):
+                # Native USB3 Device Core, Bulk loopback: EP2 OUT -> EP1 IN.
+                core = renamer(USB3DeviceCore(phy, sys_clk_freq,
+                    descriptors = bulk_descriptors(max_burst=8),
+                    endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]))
+                self.add_module(name=f"{name}_usb3_core", module=core)
+                loopback = renamer(stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True))
+                self.add_module(name=f"{name}_loopback", module=loopback)
+                self.comb += [
+                    core.endpoints[1].source.connect(loopback.sink),
+                    loopback.source.connect(core.endpoints[0].sink),
+                ]
             elif with_core:
                 core = renamer(USB3Core(platform, daisho_core="daisho_mod"))
                 self.add_module(name=f"{name}_usb3_core", module=core)
@@ -452,8 +468,9 @@ class USB3PIPESim(SoCMini):
                 ]
                 checkers[name] = checker
 
-            # LTSSM lower-layer inputs: no PM activity.
-            self.comb += ltssm.link_activity.eq(1)
+            # LTSSM lower-layer inputs: no PM activity (link activity from the native core).
+            if not (with_core and (core_name == "native") and (name == "dev")):
+                self.comb += ltssm.link_activity.eq(1)
 
             ltssms[name]   = ltssm
             serdeses[name] = serdes
@@ -524,6 +541,7 @@ def main():
     parser.add_argument("--trace-end",     default=-1,          help="Cycle to end VCD tracing.")
     parser.add_argument("--timer-scale",   default=1,           help="LTSSM/LFPS timers scale factor (1 = spec exact).")
     parser.add_argument("--no-core",       action="store_true", help="Replace the USB3 Core with PRBS Link-Layer stand-ins.")
+    parser.add_argument("--core",          default="daisho",    help="Device USB3 Core: daisho or native.", choices=["daisho", "native"])
     parser.add_argument("--prbs-words",    default=2**16,       help="Words to check on both sides (with --no-core).")
     parser.add_argument("--rx-word-shift", default=0,           help="SerDes models RX shift (0-3 symbols).")
     parser.add_argument("--ppm",           default=0,           help="Device clock offset vs Host clock (ppm).")
@@ -555,7 +573,8 @@ def main():
         host_skp      = not args.no_host_skp,
         host_latency  = int(args.host_latency),
         host_status_gap = int(args.host_status_gap),
-        host_pm       = args.host_pm)
+        host_pm       = args.host_pm,
+        core_name     = args.core)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

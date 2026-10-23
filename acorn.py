@@ -29,6 +29,11 @@ from usb3_pipe       import A7USB3SerDes
 from usb3_pipe.phy   import USB3PHY
 from usb3_pipe.debug import USB3PHYDebug, USB3SerDesDebug
 from usb3_core.core  import USB3Core
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors, cdc_acm_descriptors
+from usb3_core.bridge      import USB3UARTBone
+from usb3_core.bench       import USB3Bench
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -85,7 +90,8 @@ class _CRG(LiteXModule):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCMini):
-    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
+    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True, core="native",
+        example="loopback",
         with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
         rxcdr_cfg=None, gtp_params={}, lpm_hold="none"):
         sys_clk_freq = int(125e6)
@@ -142,7 +148,37 @@ class USB3SoC(SoCMini):
             )
 
         # USB3 Core --------------------------------------------------------------------------------
-        if with_core:
+        if with_core and (core == "native"):
+            if example == "cdc_uartbone":
+                # CDC-ACM: Data Bulk IN/OUT (EP1/EP2), Notification Interrupt IN (EP3, unused).
+                descriptors = cdc_acm_descriptors(max_burst=2)
+                endpoints   = [USB3BulkIN(ept=1, max_burst=2), USB3BulkOUT(ept=2, max_burst=2),
+                    USB3BulkIN(ept=3, max_burst=2)]
+            else:
+                descriptors = bulk_descriptors(max_burst=8)
+                endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]
+            self.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints)
+            usb3_core.add_csr()
+
+            if example == "loopback":
+                # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (scripts/usb3_bulk.py).
+                self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True)
+                self.comb += [
+                    usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
+                    usb3_loopback.source.connect(usb3_core.endpoints[0].sink),
+                ]
+            if example == "cdc_uartbone":
+                # Wishbone bridge over CDC-ACM (litex_server --uart --uart-port /dev/ttyACMx).
+                self.usb3_uartbone = usb3_uartbone = USB3UARTBone(endpoints[0], endpoints[1], sys_clk_freq)
+                self.bus.add_master(name="usb3_uartbone", master=usb3_uartbone.wishbone)
+            if example == "bench":
+                # Bandwidth benchmark: EP1 IN counter source, EP2 OUT counter checker (scripts/usb3_bench.py).
+                self.usb3_bench = usb3_bench = USB3Bench()
+                self.comb += [
+                    usb3_bench.source.connect(usb3_core.endpoints[0].sink),
+                    usb3_core.endpoints[1].source.connect(usb3_bench.sink),
+                ]
+        elif with_core:
             self.usb3_core = usb3_core = USB3Core(platform, daisho_core="daisho_mod")
             self.comb += [
                 usb3_phy.source.connect(usb3_core.sink),
@@ -234,6 +270,8 @@ def main():
     parser.add_argument("--with-jtagbone",     action="store_true", help="Enable JTAGBone.")
     parser.add_argument("--no-uartbone",       action="store_true", help="Disable UARTBone.")
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
+    parser.add_argument("--core",              default="native",    help="USB3 Device Core.", choices=["native", "daisho"])
+    parser.add_argument("--example",           default="loopback",  help="Native core example design.", choices=["loopback", "bench", "cdc_uartbone"])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath", "phase"])
@@ -248,7 +286,7 @@ def main():
         parser.print_help()
 
     output_dir = args.output_dir or "build/sqrl_acorn"
-    if not args.no_core:
+    if (not args.no_core) and (args.core == "daisho"):
         os.makedirs(os.path.join(output_dir, "gateware"), exist_ok=True)
         os.system("cd usb3_core/daisho_mod && mkdir -p usb2 && make && ./usb_descrip_gen")
         os.system(f"cp usb3_core/daisho_mod/usb3/*.init {output_dir}/gateware/")
@@ -262,6 +300,8 @@ def main():
         with_uartbone     = not args.no_uartbone,
         with_jtagbone     = args.with_jtagbone,
         with_core         = not args.no_core,
+        core              = args.core,
+        example           = args.example,
         with_serdes_debug = args.with_serdes_debug,
         with_analyzer     = args.with_analyzer,
         analyzer_group    = args.analyzer_group,

@@ -135,6 +135,41 @@ Once the FPGA is loaded, the link will be automatically established with the com
 
 **Note:** Enumeration has only been done on a few hardware setups and there is still work in progress to improve reliability.
 
+[> USB3 Device Core
+--------------------
+`usb3_core/` is a native Migen/LiteX USB3.0 SuperSpeed device core (Link Layer, Protocol Layer,
+Control Endpoint, Bulk Endpoints with bursts). It connects to the PHY only through the `USB3PHY` Link
+interface (data/ctrl symbol streams, LTSSM status and Link-Layer control: see `usb3_pipe/phy.py`), so
+it can be used with any PHY providing the same interface.
+
+```python
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors
+
+self.usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq,
+    descriptors = bulk_descriptors(vid=0x1d50, pid=0x605a, max_burst=8),
+    endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)])
+# endpoints[0].sink: Device -> Host packets, endpoints[1].source: Host -> Device packets (32-bit
+# words, first byte on data[7:0], last/last_be: end of packet).
+```
+
+- `link.py`: framing, Header Packets flow control (sequence numbers, credits, LBAD/LRTY retries,
+  Advertisements), timers (Recovery on timeouts), LUP keep-alive, LMPs, U3 entry (U1/U2 rejected).
+- `protocol.py`: Transaction/Data Packets dispatch, responses, TX arbitration.
+- `endpoints.py`: Bulk IN/OUT endpoints with bursts (MaxBurst up to 16), retries, NRDY/ERDY flow control.
+- `control.py`/`descriptors.py`: Control Endpoint (standard and class requests), descriptors builder
+  (vendor Bulk interface, CDC-ACM).
+
+Example designs (`./acorn.py --build --example ...`):
+- `loopback`: Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1), `scripts/usb3_bulk.py loopback`.
+- `bench`: Bulk IN counter source/Bulk OUT counter checker, `scripts/usb3_bench.py in|out|both`.
+- `cdc_uartbone`: CDC-ACM serial port (no driver needed) carrying the UARTBone protocol: the SoC bus
+  is accessible over USB3 with `litex_server --uart --uart-port /dev/ttyACM0`.
+
+Simulation: `./sim.py --core native` (Host model <-> PHYs <-> native core), unit/system tests in
+`test/test_native_*.py` and `test/test_sim_host.py`.
+
 [> Standalone core generator
 ----------------------------
 The USB3.0 PHY (FPGA transceiver + USB3 PIPE + LTSSM) can also be generated as a standalone Verilog
