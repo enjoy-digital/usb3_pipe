@@ -39,6 +39,13 @@ Without root access, the host view comes from:
   point of view, the host then retries with a Warm Reset every ~4s).
 - `lsusb -t` and `/sys/bus/usb/devices/*/usb*-port*/state`.
 
+`./scripts/usb3_debug.py host` lists the SuperSpeed devices (VID/PID, strings, speed, configuration)
+and the last USB kernel messages. Enumeration messages arrive seconds after a link training, wait
+before reading them. Useful messages:
+- `can't read configurations, error -61`: wrong descriptor type returned (descriptors ROM/offsets).
+- `can't set config #1, error -71`: transaction error on the control transfer (check the Status stage
+  ACK TP SeqNum with a `datapath` capture).
+
 ## PHY Debug CSRs (always built, `usb3_pipe/debug.py: USB3PHYDebug`)
 
 ```bash
@@ -55,6 +62,9 @@ Without root access, the host view comes from:
   edges, RX error cycles, K28.4 substituted words, U0/Recovery entries.
 - `phy_reset` holds the PHY in reset (TX electrical idle), useful to observe what the partner sends
   alone.
+- `serdes_rx_reset` re-initializes the transceiver RX (PMA/CDR/offset calibration). The PHY also does
+  it on each training failure (exit to Rx.Detect): the RX initialization does not always end in a
+  good state (~1/12 on Artix7 GTP with an SSC host).
 
 ## SerDes Debug CSRs (`--with-serdes-debug`, `USB3SerDesDebug`)
 
@@ -63,12 +73,52 @@ Without root access, the host view comes from:
   the CDR frequency tracking: a host with SSC averages ~-2500ppm, exactly 0ppm means the RX is not
   tracking the host (ex: decoding our own TX crosstalk).
 - RX 8b/10b statistics in the RX clock domain: symbols, decoder/code invalid, disparity errors, error
-  bursts and longest error-free run (random BER vs periodic slips).
+  bursts and longest error-free run (random BER vs periodic slips). The longest error-free run over a
+  training is a good RX quality figure: millions of symbols on a healthy link, ~1000 with CDR slips.
+- `tx_inhibit_state`: TX inhibited only in an LTSSM state (ex: Polling.Active, to receive the
+  partner's TSEQ/TS1 without our TX, crosstalk tests).
+- `rx_tx_phase` (LiteScope `phase` group): RX (recovered) vs TX clocks phase, its slope is the
+  instantaneous offset of the recovered clock: an SSC host shows a 33kHz triangle within 0/-5000ppm, a
+  flat offset means the CDR frequency tracking is saturated (bit slips).
+- DRP access to the transceiver attributes, to try settings without rebuilding (apply with an RX
+  re-initialization):
+
+```bash
+./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rxcdr-cfg            # Read.
+./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rxcdr-cfg 0x87fe206024481010
+./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv drp-read 0x2a         # Any attribute.
+./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv drp-dump drp.json     # Compare builds.
+./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rx-check --count 12   # RX init quality.
+./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv tx-inhibit-state Polling.Active
+```
+
+DRP addresses: UG482 Table D-2 (ex: RXCDR_CFG 0xa8-0xad, RXLPM_HF/LF_CFG 0x2a/0x2b, RX_CM_TRIM 0x7e).
+Build-time overrides: `acorn.py --rxcdr-cfg`, `--gtp-param NAME=VALUE`, `--lpm-hold {rxeq,always}`.
 
 ## LiteScope
 
 Keep captures narrow (well below 128 bits), in the sys clock domain (captures in the 250MHz RX clock
-domain do not meet timing). Groups: `link` (LTSSM/TS/LFPS/RX status), `lfps`, `ts`, `datapath`.
+domain do not meet timing). Groups: `link` (LTSSM/TS/LFPS/RX status), `lfps`, `ts`, `datapath`
+(SerDes RX/TX words + Link Layer RX/TX words), `phase` (RX vs TX clocks phase, `--with-serdes-debug`).
+
+`scripts/usb3_analyzer.py` captures (retraining the PHY until the trigger fires) and analyzes:
+LTSSM states, RX errors per state and longest error-free runs, the partner's TSEQ reception (known
+pattern: errors per symbol position), Link Layer packets/link commands (LGOOD/LCRD/LUP/LDN, SHP/SDP
+headers), RX vs TX clock offset profile (`phase`).
+
+```bash
+# Link initialization after U0 entry (datapath group).
+./scripts/usb3_analyzer.py --port 1240 --csr-csv build/acorn_dbg/csr.csv \
+    --analyzer-csv build/acorn_dbg/analyzer.csv capture --state U0 --offset 256
+# The partner's TSEQ (it is still in Polling.RxEQ while we are in Polling.Active).
+./scripts/usb3_analyzer.py ... capture --state Polling.RxEQ:Polling.Active
+# A control request (ex: SET_CONFIGURATION SETUP data word), without retraining.
+./scripts/usb3_analyzer.py ... capture --data 0x00090100 --no-retrain --offset 1024
+# Recovered clock offset profile over ~2ms (phase group).
+./scripts/usb3_analyzer.py ... capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
+# Re-analyze a capture.
+./scripts/usb3_analyzer.py analyze analyzer.vcd
+```
 
 ```bash
 litescope_cli --port 1240 --csv build/acorn_dbg/analyzer.csv --csr-csv build/acorn_dbg/csr.csv \
@@ -86,6 +136,10 @@ LTSSM state encodings: `usb3_pipe.gen.get_ltssm_states()`.
 - **TX polarity inversion**: if what is received is our own TX (crosstalk), TS1 become TS1_INV.
 - **TX inhibit in U0**: if the RX goes electrically idle / the recovered clock drifts, the partner was
   not transmitting.
+- **Scrambled Logical Idle looks like our TX**: both scramblers restart from the same seed after the
+  TS2, the partner's Idle Symbols match ours delayed (not an echo).
+- **Host disconnect/re-enumeration**: break the link for >10s (ex: a bad RXCDR_CFG over DRP), restore
+  and re-initialize the RX: the host enumerates again (a retrain alone only triggers a Warm Reset).
 
 ## Investigation Loop
 

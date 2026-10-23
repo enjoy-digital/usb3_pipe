@@ -4,16 +4,28 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+from functools import reduce
+from operator import xor
+
 from migen import *
 
 from litex.gen import *
 
-from migen.genlib.cdc import BusSynchronizer
+from migen.genlib.cdc import BusSynchronizer, GrayCounter, MultiReg
 
 from litex.soc.interconnect.csr import *
 from litex.soc.cores.freqmeter import FreqMeter
 
+from liteiclink.serdes.common import DRPControl
+
 from usb3_pipe.common import K
+
+# Helpers ------------------------------------------------------------------------------------------
+
+def gray_decode(gray):
+    """Gray to binary decoding (combinatorial)."""
+    n = len(gray)
+    return Cat(*[reduce(xor, [gray[j] for j in range(i, n)]) for i in range(n)])
 
 # USB3 PHY Debug -----------------------------------------------------------------------------------
 
@@ -27,18 +39,23 @@ class USB3PHYDebug(LiteXModule):
     - LTSSM state history (last `USB3PHY_DEBUG_HISTORY_DEPTH` transitions, state + us timestamp).
     - Event counters (TS/LFPS detections, RX errors/idle, K28.4 substitutions, U0/Recovery entries).
     - PHY reset (re-runs link training from Polling) and counters/history clear.
+    - SerDes RX re-initialization (transceiver RX reset sequence).
     """
     def __init__(self, phy, serdes, sys_clk_freq):
         ltssm = phy.ltssm
         pipe  = phy.pipe
 
-        self._phy_reset = CSRStorage(description="PHY (PIPE + LTSSM) reset (level).")
-        self._clear     = CSR() # Clear counters and history (write).
+        self._phy_reset       = CSRStorage(description="PHY (PIPE + LTSSM) reset (level).")
+        self._serdes_rx_reset = CSRStorage(description="SerDes RX re-initialization (level).")
+        self._clear           = CSR() # Clear counters and history (write).
         self._status    = CSRStatus(11, description="Status: LTSSM state [7:0], SerDes ready [8], "
                                                     "RX idle [9], RX polarity [10].")
         self._timestamp = CSRStatus(32, description="Timestamp (us).")
 
         # # #
+
+        if hasattr(phy, "serdes_rx_reset"):
+            self.comb += phy.serdes_rx_reset.eq(self._serdes_rx_reset.storage)
 
         clear = Signal()
         self.comb += [
@@ -216,25 +233,59 @@ class USB3RXErrorsDebug(LiteXModule):
 class USB3SerDesDebug(LiteXModule):
     """USB3 SerDes Debug (CSRs, hardware bring-up of A7USB3SerDes/K7USB3SerDes).
 
-    - TX polarity / TX inhibit controls.
+    - TX polarity / TX inhibit controls (TX inhibit can be restricted to an LTSSM state, ex to
+      isolate the partner's signal from crosstalk during training).
     - Transceiver loopback control (0b010: Near-End PMA).
     - TX/RX clocks frequency meters (100ms period): the RX clock is the recovered clock, its offset
       vs the TX clock shows the CDR frequency tracking of the partner (SSC: 0/-5000ppm).
+    - RX vs TX clocks phase (rx_tx_phase, sys clock domain, for LiteScope): its slope is the
+      instantaneous frequency offset of the recovered clock (SSC profile, CDR tracking limits).
+    - Transceiver DRP access (attributes changes without rebuild, ex: RXCDR_CFG/LPM sweeps; to be
+      followed by a SerDes RX re-initialization).
     - RX 8b/10b errors statistics (USB3RXErrorsDebug).
     """
-    def __init__(self, serdes, sys_clk_freq):
-        self._tx_polarity = CSRStorage(description="TX polarity.")
-        self._tx_inhibit  = CSRStorage(description="TX inhibit.")
-        self._loopback    = CSRStorage(3, description="Transceiver loopback (0b010: Near-End PMA).")
+    def __init__(self, serdes, sys_clk_freq, ltssm_state=None):
+        self._tx_polarity      = CSRStorage(description="TX polarity.")
+        self._tx_inhibit       = CSRStorage(description="TX inhibit.")
+        self._tx_inhibit_state = CSRStorage(9, description="TX inhibit while in LTSSM state [7:0] "
+                                                            "when enabled [8].")
+        self._loopback         = CSRStorage(3, description="Transceiver loopback (0b010: Near-End PMA).")
+        self.rx_tx_phase       = Signal(16) # o
 
         # # #
 
         gt = getattr(serdes, "gtp", None) or getattr(serdes, "gtx")
+
+        # TX/Loopback controls.
+        tx_inhibit_state = Signal()
+        if ltssm_state is not None:
+            self.comb += tx_inhibit_state.eq(self._tx_inhibit_state.storage[8] &
+                (ltssm_state == self._tx_inhibit_state.storage[:8]))
         self.comb += [
             serdes.tx_polarity.eq(self._tx_polarity.storage),
-            gt.tx_inhibit.eq(self._tx_inhibit.storage),
+            gt.tx_inhibit.eq(self._tx_inhibit.storage | tx_inhibit_state),
             gt.loopback.eq(self._loopback.storage),
         ]
+
+        # DRP access (selected on the transceiver DRP mux during the accesses, the mux default is
+        # the transceiver RX initialization).
+        if hasattr(gt, "drp_mux"):
+            self._drp_sel = CSRStorage(description="Select DRP access on the transceiver DRP mux.")
+            self.drp      = DRPControl(gt.drp)
+            self.comb += gt.drp_mux.sel.eq(self._drp_sel.storage)
+
+        # RX vs TX clocks phase (gray counters).
+        rx_count = ClockDomainsRenamer("rx")(GrayCounter(16))
+        tx_count = ClockDomainsRenamer("tx")(GrayCounter(16))
+        self.submodules += rx_count, tx_count
+        self.comb += rx_count.ce.eq(1), tx_count.ce.eq(1)
+        rx_gray = Signal(16)
+        tx_gray = Signal(16)
+        self.specials += [
+            MultiReg(rx_count.q, rx_gray),
+            MultiReg(tx_count.q, tx_gray),
+        ]
+        self.sync += self.rx_tx_phase.eq(gray_decode(rx_gray) - gray_decode(tx_gray))
 
         # Clocks frequency meters.
         self.tx_freq = FreqMeter(period=int(sys_clk_freq/10), clk=ClockSignal("tx"))

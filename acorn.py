@@ -77,7 +77,7 @@ class _CRG(LiteXModule):
 class USB3SoC(SoCMini):
     def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
         with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
-        rxcdr_cfg=None, gtp_params={}):
+        rxcdr_cfg=None, gtp_params={}, lpm_hold="none"):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -113,7 +113,21 @@ class USB3SoC(SoCMini):
         # USB3 PHY/SerDes Debug --------------------------------------------------------------------
         self.usb3_debug = USB3PHYDebug(usb3_phy, usb3_serdes, sys_clk_freq)
         if with_serdes_debug:
-            self.usb3_serdes_debug = USB3SerDesDebug(usb3_serdes, sys_clk_freq)
+            self.usb3_serdes_debug = USB3SerDesDebug(usb3_serdes, sys_clk_freq,
+                ltssm_state = usb3_phy.ltssm_state)
+
+        # GTP LPM adaptation hold (debug, --lpm-hold): adapt only in Polling.RxEQ, or never.
+        if lpm_hold != "none":
+            lpm_hold_signal = Signal()
+            if lpm_hold == "rxeq":
+                self.comb += lpm_hold_signal.eq(usb3_phy.ltssm_state != usb3_phy.ltssm_states["Polling.RxEQ"])
+            else:
+                self.comb += lpm_hold_signal.eq(1)
+            usb3_serdes.gtp.gtp_params.update(
+                i_RXLPMHFHOLD = lpm_hold_signal,
+                i_RXLPMLFHOLD = lpm_hold_signal,
+                i_RXOSHOLD    = lpm_hold_signal,
+            )
 
         # USB3 Core --------------------------------------------------------------------------------
         if with_core:
@@ -174,6 +188,11 @@ class USB3SoC(SoCMini):
                     usb3_phy.source, usb3_phy.sink,
                 ],
             }
+            if with_serdes_debug:
+                groups["phase"] = link_signals + [
+                    self.usb3_serdes_debug.rx_tx_phase,
+                    usb3_serdes.rx_idle, usb3_serdes.rx_errors,
+                ]
             self.analyzer = LiteScopeAnalyzer(groups[analyzer_group],
                 depth        = 4096,
                 clock_domain = "sys",
@@ -197,9 +216,10 @@ def main():
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
-    parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath"])
-    parser.add_argument("--gtp-param",         action="append", default=[], help="GTP parameter override NAME=VALUE (debug, ex: p_RXCDR_HOLD_DURING_EIDLE=1).")
+    parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath", "phase"])
     parser.add_argument("--rxcdr-cfg",         default=None,        help="GTP RXCDR_CFG override (hex, debug).")
+    parser.add_argument("--gtp-param",         action="append", default=[], help="GTP parameter override NAME=VALUE (debug, ex: p_RXCDR_HOLD_DURING_EIDLE=1).")
+    parser.add_argument("--lpm-hold",          default="none",      help="GTP LPM adaptation hold (debug).", choices=["none", "rxeq", "always"])
     parser.add_argument("--output-dir",        default=None,        help="Build directory (default: build/sqrl_acorn).")
     args = parser.parse_args()
 
@@ -226,7 +246,8 @@ def main():
         analyzer_group    = args.analyzer_group,
         analyzer_csv      = os.path.join(output_dir, "analyzer.csv"),
         rxcdr_cfg         = None if args.rxcdr_cfg is None else int(args.rxcdr_cfg, 0),
-        gtp_params        = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)})
+        gtp_params        = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)},
+        lpm_hold          = args.lpm_hold)
     builder = Builder(soc, output_dir=output_dir, csr_csv=os.path.join(output_dir, "csr.csv"))
     builder.build(run=args.build)
 
