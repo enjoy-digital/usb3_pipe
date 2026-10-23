@@ -722,3 +722,22 @@ def pyhost_control_out(host, setup, data=None):
     f = yield from pyhost_wait_tp(host, n2)
     return f["subtype"] == TP_SUB_ACK
 
+def pyhost_bulk_in(host, ept, count, seq=0, nump=8):
+    """Bulk IN: read count packets (DPPs) from the endpoint, acknowledging them and requesting again
+    after ERDY (flow control). Returns (packets, next sequence number)."""
+    d0     = len(host.dpps)
+    erdys  = lambda: sum(1 for hp in host.hps if (hp[0] & 0x1f) == 0x04 and
+        tp_fields(hp)["subtype"] == TP_SUB_ERDY and tp_fields(hp)["ept"] == ept)
+    e0     = erdys()
+    host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=nump, tp_seq=seq, pp=1)
+    while len(host.dpps) - d0 < count:
+        n = len(host.dpps)
+        e = erdys()
+        yield from host.wait(lambda: (len(host.dpps) > n) or (erdys() > e))
+        if len(host.dpps) > n:
+            seq = (seq + len(host.dpps) - n) % 32
+            host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1,
+                nump=(nump if len(host.dpps) - d0 < count else 0), tp_seq=seq, pp=1)
+        else:
+            host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=nump, tp_seq=seq, pp=1)
+    return [d[0] for d in host.dpps[d0:d0 + count]], seq
