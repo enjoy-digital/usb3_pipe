@@ -35,6 +35,8 @@ class TestDaishoDescriptors(unittest.TestCase):
             os.makedirs(os.path.join(tmp, "usb3"))
             subprocess.run(["gcc", "usb_descrip_gen.c", "-lm", "-o", "usb_descrip_gen"], cwd=tmp, check=True)
             subprocess.run(["./usb_descrip_gen"], cwd=tmp, check=True, stdout=subprocess.DEVNULL)
+            with open(os.path.join(tmp, "usb3", "usb3_descrip.bin"), "rb") as f:
+                self.rom = f.read()
             return read_offsets(os.path.join(tmp, "usb_descrip.vh"))
 
     def check_offsets(self, offsets):
@@ -46,9 +48,22 @@ class TestDaishoDescriptors(unittest.TestCase):
         self.assertEqual(offsets["DESCR_USB3_BOS"], offsets["DESCR_USB3_CONFIG"] + (offsets["DESCR_USB3_CONFIG_LEN"] + 3)//4)
         self.assertGreater(offsets["DESCR_USB3_STRING0"], offsets["DESCR_USB3_BOS"])
 
+    def check_strings(self, offsets):
+        # String Descriptors are UTF-16LE (USB 3.2 9.6.9).
+        rom    = self.rom
+        offset = 4*offsets["DESCR_USB3_STRING1"]
+        length = rom[offset]
+        self.assertEqual(rom[offset + 1], 0x03)
+        string = rom[offset + 2:offset + length].decode("utf-16-le")
+        self.assertEqual(string, "Great Scott Gadgets")
+
     def test_daisho_mod_generator_offsets(self):
         offsets = self.generate("daisho_mod")
         self.check_offsets(offsets)
+        self.check_strings(offsets)
+        # Generated ROM matches the one used for synthesis.
+        with open(os.path.join(CORE_PATH, "daisho_mod", "usb3", "usb3_descrip.bin"), "rb") as f:
+            self.assertEqual(f.read(), self.rom)
         # Generated offsets match the ones used for synthesis.
         for vh in ["usb_descrip.vh", "usb3/usb_descrip.vh"]:
             self.assertEqual(read_offsets(os.path.join(CORE_PATH, "daisho_mod", vh)), offsets)
@@ -56,6 +71,7 @@ class TestDaishoDescriptors(unittest.TestCase):
     def test_daisho_generator_offsets(self):
         offsets = self.generate("daisho")
         self.check_offsets(offsets)
+        self.check_strings(offsets)
         self.assertEqual(read_offsets(os.path.join(CORE_PATH, "daisho", "usb3", "usb_descrip.vh")), offsets)
 
 if __name__ == "__main__":
