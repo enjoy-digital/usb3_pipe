@@ -24,6 +24,9 @@ DESC_SS_EP_COMP    = 0x30
 DESC_IAD           = 0x0b
 DESC_CS_INTERFACE  = 0x24
 
+# Device class of devices with Interface Association Descriptors (Miscellaneous, Common Class, IAD).
+DEVICE_CLASS_IAD = (0xef, 0x02, 0x01)
+
 EP_BULK      = 0x02
 EP_INTERRUPT = 0x03
 
@@ -81,17 +84,19 @@ class USB3Descriptors:
         product      = "USB3-PIPE",
         serial       = "0001",
         interfaces   = [],
-        max_power_ma = 0):
+        max_power_ma = 0,
+        device_class = (0x00, 0x00, 0x00)):
         self.vid          = vid
         self.pid          = pid
         self.bcd_device   = bcd_device
         self.strings      = [manufacturer, product, serial]
         self.interfaces   = interfaces
         self.max_power_ma = max_power_ma
+        self.device_class = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
         self.class_requests = [] # (bmRequestType, bRequest, IN response bytes or None).
 
     def device(self):
-        return [18, DESC_DEVICE] + le16(0x0320) + [0x00, 0x00, 0x00, 9] + \
+        return [18, DESC_DEVICE] + le16(0x0320) + list(self.device_class) + [9] + \
             le16(self.vid) + le16(self.pid) + le16(self.bcd_device) + [1, 2, 3, 1]
 
     def configuration(self):
@@ -184,6 +189,7 @@ def cdc_acm_descriptors(notif_ept=3, in_ept=1, out_ept=2, max_burst=8, **kwargs)
         USB3EndpointDescriptor(in_ept,  direction=1, max_burst=max_burst),
         USB3EndpointDescriptor(out_ept, direction=0, max_burst=max_burst),
     ])
+    kwargs.setdefault("device_class", DEVICE_CLASS_IAD)
     descriptors = USB3Descriptors(interfaces=[iad, comm, data], **kwargs)
     # SET_LINE_CODING/GET_LINE_CODING (115200 8N1)/SET_CONTROL_LINE_STATE.
     descriptors.add_class_request(0x21, 0x20)
