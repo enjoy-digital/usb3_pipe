@@ -42,7 +42,7 @@ class TestSimHost(unittest.TestCase):
         out = p.stdout or ""
         self.assertEqual(p.returncode, 0, out[-4000:])
         self.assertIn("HOST script done", out, out[-4000:])
-        return parse_sim_output(out, enumeration_script(skp="--no-host-skp" not in args))
+        return parse_sim_output(out, enumeration_script(skp="--no-host-skp" not in args, pm="--host-pm" in args))
 
     def check_enumeration(self, sections):
         # Packets integrity (CRCs).
@@ -84,6 +84,17 @@ class TestSimHost(unittest.TestCase):
     def test_enumeration_fast_host(self):
         # Data stage requested right after the SETUP ACK (no host latency).
         self.check_enumeration(self.run_sim("--host-latency", "0"))
+
+    def test_lgo_u1_u2_rejected(self):
+        # LGO_U1/LGO_U2 rejected with LXU (7.2.4.2.3), the link stays in U0 and is still functional.
+        sections = self.run_sim("--host-pm")
+        self.check_enumeration(sections)
+        for name in ["lgo_u1", "lgo_u2"]:
+            lcs = [p[1] for p in sections[name] if p[0] == "LC"]
+            self.assertIn(LXU(), lcs, name)
+            self.assertNotIn(LAU(), lcs, name)
+        packets = sections["get_device_descriptor_after_pm"]
+        self.assertEqual(dpps(packets), [device_descriptors()])
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,6 +90,10 @@ def LCRD(x):  return 0x080 | (x & 0x3)
 def LRTY():   return 0x100
 def LUP():    return 0x400
 def LDN():    return 0x580
+def LGO_U(n): return 0x200 | (n & 0x3)
+def LAU():    return 0x280
+def LXU():    return 0x300
+def LPMA():   return 0x380
 
 def link_command(info):
     lc = info | (crc5(info) << 11)
@@ -363,6 +367,12 @@ class HostScript:
         self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
         self.wait_hp()                                                # ACK TP (Status).
 
+    # Link Power Management (7.2.4.2): LGO_Ux request, LAU/LXU response.
+    def lgo(self, n, response, name):
+        self.mark(name)
+        self.send(link_command(LGO_U(n)))
+        self.wait(*link_command(response)[1])
+
     def end(self):
         self.mark("end")
         self.steps.append((OP_END, 0, 0, 0, 0, 0))
@@ -370,7 +380,7 @@ class HostScript:
 def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
-def enumeration_script(skp=True, latency=256):
+def enumeration_script(skp=True, latency=256, pm=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
     s = HostScript()
     s.link_init()
@@ -384,6 +394,11 @@ def enumeration_script(skp=True, latency=256):
     s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor", latency)
     s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor", latency)
     s.control_write(setup_packet(0x00, 0x09, 0x0001, 0, 0), "set_configuration")
+    if pm:
+        # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
+        s.lgo(1, LXU(), "lgo_u1")
+        s.lgo(2, LXU(), "lgo_u2")
+        s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor_after_pm", latency)
     s.end()
     return s
 
