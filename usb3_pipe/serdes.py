@@ -706,14 +706,17 @@ class A7USB3SerDes(LiteXModule):
         ]
 
         # Override GTP RX settings for USB3 ---------------------------------------------------------
-        # CDR settings of the Xilinx 7-Series PCIe Gen2 GTP wrapper for asynchronous/SSC operation
-        # (pcie_7x gt_wrapper: RXCDR_CFG_GTP with PCIE_ASYNC_EN, RXCDR_HOLD_DURING_EIDLE,
-        # RXCDR_LOCK_CFG): USB3 links have independent clocks and the host uses SSC (0/-5000ppm).
+        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):
+        # - RXCDR_CFG: UG482 Table 4-14 (CDR Recommended Settings for Protocols with SSC, RXOUT_DIV=1).
+        #   The 8B/10B (no SSC) settings (Table 4-15, +-1250ppm) saturate the CDR frequency tracking
+        #   (recovered clock pinned at ~-1465ppm) and slip a bit every few hundred bits on hardware.
+        # - RXCDR_HOLD_DURING_EIDLE/RXCDR_LOCK_CFG: Xilinx 7-Series PCIe Gen2 GTP wrapper settings
+        #   (pcie_7x gt_wrapper): the CDR keeps its frequency during Electrical Idle/LFPS.
         assert pll.config['d'] == 1 # 5Gbps.
         gtp.gtp_params.update(
             p_RX_CM_SEL               = 0b11,   # Programmable, 800mV.
             p_RX_CM_TRIM              = 0b1010,
-            p_RXCDR_CFG               = 0x0_0001_07FE_4060_2104_1010 if rxcdr_cfg is None else rxcdr_cfg,
+            p_RXCDR_CFG               = 0x0_0000_87FE_2060_2448_1010 if rxcdr_cfg is None else rxcdr_cfg,
             p_RXCDR_HOLD_DURING_EIDLE = 0b1,
             p_RXCDR_LOCK_CFG          = 0b010101,
             p_RXLPM_INCM_CFG          = 0b0,
