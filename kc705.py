@@ -25,9 +25,13 @@ from liteeth.phy import LiteEthPHY
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe      import K7USB3SerDes, USB3PIPE
-from usb3_pipe.ltssm     import USB3LTSSM
-from usb3_core.core import USB3Core
+from litex.soc.interconnect import stream
+
+from usb3_pipe             import K7USB3SerDes
+from usb3_pipe.phy         import USB3PHY
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -113,45 +117,21 @@ class USB3SoC(SoCMini):
         self.submodules += usb3_serdes
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-52]")
 
-        # USB3 PIPE --------------------------------------------------------------------------------
-        self.usb3_pipe = usb3_pipe = USB3PIPE(serdes=usb3_serdes, sys_clk_freq=sys_clk_freq)
-        self.comb += usb3_pipe.reset.eq(platform.request("cpu_reset"))
+        # USB3 PHY (PIPE + LTSSM) ------------------------------------------------------------------
+        self.usb3_phy = usb3_phy = USB3PHY(
+            serdes       = usb3_serdes,
+            sys_clk_freq = sys_clk_freq,
+            role         = "device")
 
-        # USB3 LTSSM -------------------------------------------------------------------------------
-        self.usb3_ltssm = usb3_ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq)
+        # USB3 Device Core (Bulk loopback: EP2 OUT -> FIFO -> EP1 IN) ------------------------------
+        self.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq,
+            descriptors = bulk_descriptors(max_burst=8),
+            endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)])
+        usb3_core.add_csr()
+        self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True)
         self.comb += [
-            # LTSSM -> PIPE
-            usb3_pipe.lfps_tx_polling.eq(usb3_ltssm.lfps_tx_polling),
-            usb3_pipe.lfps_tx_idle.eq(usb3_ltssm.lfps_tx_idle),
-            usb3_pipe.ts_rx_enable.eq(usb3_ltssm.ts_rx_enable),
-            usb3_pipe.ts_tx_enable.eq(usb3_ltssm.ts_tx_enable),
-            usb3_pipe.ts_tx_tseq.eq(usb3_ltssm.ts_tx_tseq),
-            usb3_pipe.ts_tx_ts1.eq(usb3_ltssm.ts_tx_ts1),
-            usb3_pipe.ts_tx_ts2.eq(usb3_ltssm.ts_tx_ts2),
-
-            usb3_pipe.serdes_rx_align.eq(usb3_ltssm.serdes_rx_align),
-            usb3_pipe.serdes_rx_polarity.eq(usb3_ltssm.serdes_rx_polarity),
-
-            usb3_pipe.rx_ready.eq(usb3_ltssm.rx_ready),
-            usb3_pipe.tx_ready.eq(usb3_ltssm.tx_ready),
-
-            # PIPE -> usb3_ltssm
-            usb3_ltssm.lfps_rx_polling.eq(usb3_pipe.lfps_rx_polling),
-            usb3_ltssm.lfps_tx_count.eq(usb3_pipe.lfps_tx_count),
-
-            usb3_ltssm.ts_rx_ts1.eq(usb3_pipe.ts_rx_ts1),
-            usb3_ltssm.ts_rx_ts1_inv.eq(usb3_pipe.ts_rx_ts1_inv),
-            usb3_ltssm.ts_rx_ts2.eq(usb3_pipe.ts_rx_ts2),
-            usb3_ltssm.ts_tx_done.eq(usb3_pipe.ts_tx_done),
-        ]
-
-        # USB3 Core --------------------------------------------------------------------------------
-        self.usb3_core = usb3_core = USB3Core(platform)
-        self.comb += [
-            usb3_pipe.source.connect(usb3_core.sink),
-            usb3_core.source.connect(usb3_pipe.sink),
-            usb3_core.reset.eq(~(usb3_ltssm.idle_handshake | usb3_ltssm.u0)),
-            usb3_core.u0.eq(usb3_ltssm.u0),
+            usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
+            usb3_loopback.source.connect(usb3_core.endpoints[0].sink),
         ]
 
         # Debug IOs (Through CYUSB3ACC-005) --------------------------------------------------------
@@ -168,7 +148,7 @@ class USB3SoC(SoCMini):
         # Leds -------------------------------------------------------------------------------------
         self.comb += [
             platform.request("user_led", 0).eq(usb3_serdes.ready),
-            platform.request("user_led", 1).eq(usb3_ltssm.u0),
+            platform.request("user_led", 1).eq(usb3_phy.u0),
         ]
 
         # Analyzer ---------------------------------------------------------------------------------
@@ -179,29 +159,28 @@ class USB3SoC(SoCMini):
                 usb3_serdes.rx_idle,
                 usb3_serdes.tx_pattern,
                 usb3_serdes.rx_polarity,
-                usb3_pipe.lfps.rx_polling,
-                usb3_pipe.lfps.tx_polling,
+                usb3_phy.pipe.lfps.rx_polling,
+                usb3_phy.pipe.lfps.tx_polling,
 
                 # Training Sequence.
-                usb3_pipe.ts.tx_enable,
-                usb3_pipe.ts.rx_ts1,
-                usb3_pipe.ts.rx_ts2,
-                usb3_pipe.ts.tx_enable,
-                usb3_pipe.ts.tx_tseq,
-                usb3_pipe.ts.tx_ts1,
-                usb3_pipe.ts.tx_ts2,
-                usb3_pipe.ts.tx_done,
+                usb3_phy.pipe.ts.tx_enable,
+                usb3_phy.pipe.ts.rx_ts1,
+                usb3_phy.pipe.ts.rx_ts2,
+                usb3_phy.pipe.ts.tx_tseq,
+                usb3_phy.pipe.ts.tx_ts1,
+                usb3_phy.pipe.ts.tx_ts2,
+                usb3_phy.pipe.ts.tx_done,
 
                 # LTSSM.
-                usb3_ltssm.fsm,
-                usb3_ltssm.u0,
+                usb3_phy.ltssm_state,
+                usb3_phy.u0,
 
                 # Endpoints.
                 usb3_serdes.rx_datapath.skip_remover.skip,
                 usb3_serdes.source,
                 usb3_serdes.sink,
-                usb3_pipe.source,
-                usb3_pipe.sink,
+                usb3_phy.source,
+                usb3_phy.sink,
             ]
             self.analyzer = LiteScopeAnalyzer(analyzer_signals, 4096, csr_csv="analyzer.csv")
 
@@ -221,9 +200,6 @@ def main():
     if not args.build and not args.load:
         parser.print_help()
 
-    os.makedirs("build/xilinx_kc705/gateware", exist_ok=True)
-    os.system("cd usb3_core/daisho && make && ./usb_descrip_gen")
-    os.system("cp usb3_core/daisho/usb3/*.init build/xilinx_kc705/gateware/")
     platform = xilinx_kc705.Platform()
     platform.add_extension(_usb3_io)
     soc     = USB3SoC(platform, with_analyzer=args.with_analyzer)

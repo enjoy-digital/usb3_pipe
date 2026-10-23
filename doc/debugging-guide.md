@@ -130,7 +130,7 @@ LTSSM state encodings: `usb3_pipe.gen.get_ltssm_states()`.
 
 ## Bulk Data And Stability
 
-`acorn.py` loops EP2 OUT back to EP1 IN (USB3Core streams). With the device accessible to the user
+`acorn.py` loops EP2 OUT back to EP1 IN (USB3DeviceCore Bulk endpoints). With the device accessible to the user
 (`scripts/99-usb3-pipe.rules`):
 
 ```bash
