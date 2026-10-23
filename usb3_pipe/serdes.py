@@ -538,6 +538,7 @@ class K7USB3SerDes(LiteXModule):
 
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align    = Signal()   # i
+        self.rx_reset    = Signal()   # i: RX re-initialization (PMA/CDR/PCS reset sequence).
 
         # # #
 
@@ -574,7 +575,7 @@ class K7USB3SerDes(LiteXModule):
         self.rx_datapath     = rx_datapath     = RXDatapath("rx")
         self.comb += [
             gtx.tx_enable.eq(self.enable),
-            gtx.rx_enable.eq(self.enable),
+            gtx.rx_enable.eq(self.enable & ~self.rx_reset),
             self.ready.eq(gtx.tx_ready & gtx.rx_ready),
             gtx.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
@@ -658,6 +659,7 @@ class A7USB3SerDes(LiteXModule):
 
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align    = Signal()   # i
+        self.rx_reset    = Signal()   # i: RX re-initialization (PMA/CDR/PCS reset sequence).
 
         # # #
 
@@ -694,7 +696,7 @@ class A7USB3SerDes(LiteXModule):
         self.rx_datapath     = rx_datapath     = RXDatapath("rx")
         self.comb += [
             gtp.tx_enable.eq(self.enable),
-            gtp.rx_enable.eq(self.enable),
+            gtp.rx_enable.eq(self.enable & ~self.rx_reset),
             self.ready.eq(gtp.tx_ready & gtp.rx_ready),
             gtp.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
