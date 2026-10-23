@@ -248,7 +248,8 @@ class TestNativeBursts(unittest.TestCase):
         run(dut, host, scenario())
 
     def test_bulk_in_eob(self):
-        # Fewer packets available than requested: EOB on the last one, then ERDY and new request.
+        # Fewer packets available than requested: EOB on the last one, flow control (the ACK TPs of
+        # the packets sent before the EOB do not reopen the window), ERDY and new request.
         dut  = DUT(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
@@ -262,6 +263,8 @@ class TestNativeBursts(unittest.TestCase):
                 yield
             dphs = [dph_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x08]
             self.assertEqual([(d["seq"], d["eob"]) for d in dphs], [(0, 0), (1, 1)])
+            # ACK TP of DP0 (window still open, sent before the EOB DP was received), then of the EOB DP.
+            host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=8, tp_seq=1)
             host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=2)
             n0 = len(host.hps)
             self.out_burst(host, 2, 1, seq0=2)

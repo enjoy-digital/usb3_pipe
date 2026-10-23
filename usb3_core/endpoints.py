@@ -164,8 +164,6 @@ class USB3BulkIN(USB3Endpoint):
         # Host requests (ACK TP) -------------------------------------------------------------------
         win_seq   = Signal(5) # Host window: Sequence Number of the next packet requested...
         win_nump  = Signal(5) # ...and number of packets requested from win_seq.
-        wait_erdy = Signal()  # Flow control: NRDY/EOB sent, ERDY to send when data available.
-        req       = Signal()  # Host ACK TP request with NumP != 0 (strobe).
         h = self.hdr
         ack = Signal()
         self.comb += ack.eq(self.hdr_strobe & self.tp_addressed(TP_SUB_ACK))
@@ -175,6 +173,15 @@ class USB3BulkIN(USB3Endpoint):
             acked.eq(h.tp_seq - ack_seq),
             acked_ptr.eq(ack_ptr + acked),
         ]
+
+        # Flow control (8.10.1): after an EOB DP or a NRDY, the window is closed until the host
+        # requests again after our ERDY. ACK TPs received for packets sent before the EOB (with a
+        # NumP still open) do not reopen it.
+        fc_eob  = Signal() # EOB sent: waiting for the acknowledgement of the sent packets.
+        fc_data = Signal() # Waiting for data: ERDY when a packet is available.
+        fc_req  = Signal() # ERDY sent: waiting for the host request.
+        fc      = Signal()
+        self.comb += fc.eq(fc_eob | fc_data | fc_req)
 
         # Sending ----------------------------------------------------------------------------------
         avail    = Signal() # Packet available to send.
@@ -194,10 +201,8 @@ class USB3BulkIN(USB3Endpoint):
         # DPP jobs (slots of the DPHs pushed, in order).
         self.jobs = jobs = stream.SyncFIFO([("slot", pbits - 1)], 2*n)
 
-        # NRDY on a request without available packet.
         nrdy_pending = Signal()
         erdy_pending = Signal()
-
         self.comb += [
             If(nrdy_pending,
                 self.tx_hp.valid.eq(1),
@@ -207,7 +212,7 @@ class USB3BulkIN(USB3Endpoint):
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_TP),
                 self.tx_hp.dw1.eq(tp_dw1(TP_SUB_ERDY, ept=ept, direction=1, nump=n)),
-            ).Elif(avail & in_win & ~wait_erdy & jobs.sink.ready,
+            ).Elif(avail & in_win & ~fc & jobs.sink.ready,
                 send.eq(self.tx_hp.ready),
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_DP),
@@ -221,17 +226,25 @@ class USB3BulkIN(USB3Endpoint):
         self.sync += [
             If(send,
                 snd_ptr.eq(snd_ptr + 1),
-                # EOB: flow control, the host requests again after our ERDY.
                 If(snd_eob,
-                    wait_erdy.eq(1),
+                    fc_eob.eq(1),
                     win_nump.eq(0),
                 ),
             ),
             If(self.tx_hp.valid & self.tx_hp.ready & nrdy_pending, nrdy_pending.eq(0)),
-            If(self.tx_hp.valid & self.tx_hp.ready & ~nrdy_pending & erdy_pending, erdy_pending.eq(0)),
-            If(wait_erdy & ~erdy_pending & ~nrdy_pending & (wr_ptr != snd_ptr),
+            If(self.tx_hp.valid & self.tx_hp.ready & ~nrdy_pending & erdy_pending,
+                erdy_pending.eq(0),
+                fc_req.eq(1),
+            ),
+            # EOB packet (and the previous ones) acknowledged: wait for data.
+            If(fc_eob & (inflight == 0),
+                fc_eob.eq(0),
+                fc_data.eq(1),
+            ),
+            # Data available: ERDY.
+            If(fc_data & ~nrdy_pending & ~erdy_pending & (wr_ptr != snd_ptr),
+                fc_data.eq(0),
                 erdy_pending.eq(1),
-                wait_erdy.eq(0),
             ),
             If(ack,
                 # Acknowledged packets: free slots.
@@ -239,24 +252,33 @@ class USB3BulkIN(USB3Endpoint):
                     ack_ptr.eq(acked_ptr),
                     ack_seq.eq(h.tp_seq),
                 ),
-                win_seq.eq(h.tp_seq),
-                win_nump.eq(h.nump),
-                # Retry: resend from the requested packet.
                 If(h.retry,
+                    # Retry: resend from the requested packet (re-requested: flow control exited).
                     snd_ptr.eq(acked_ptr),
-                ),
-                # Request without available packet: NRDY, ERDY when data available.
-                If((h.nump != 0) & ~h.retry & (acked_ptr == wr_ptr),
-                    nrdy_pending.eq(1),
-                    wait_erdy.eq(1),
-                    win_nump.eq(0),
+                    win_seq.eq(h.tp_seq),
+                    win_nump.eq(h.nump),
+                    fc_eob.eq(0),
+                    fc_data.eq(0),
+                    fc_req.eq(0),
+                ).Elif(~fc | (fc_req & (h.nump != 0)),
+                    win_seq.eq(h.tp_seq),
+                    win_nump.eq(h.nump),
+                    fc_req.eq(0),
+                    # Request without available packet: NRDY, ERDY when data available.
+                    If((h.nump != 0) & (acked_ptr == wr_ptr),
+                        nrdy_pending.eq(1),
+                        fc_data.eq(1),
+                        win_nump.eq(0),
+                    ),
                 ),
             ),
             If(self.reset_seq,
                 ack_seq.eq(0),
                 snd_ptr.eq(ack_ptr),
                 win_nump.eq(0),
-                wait_erdy.eq(0),
+                fc_eob.eq(0),
+                fc_data.eq(0),
+                fc_req.eq(0),
                 nrdy_pending.eq(0),
                 erdy_pending.eq(0),
             ),
