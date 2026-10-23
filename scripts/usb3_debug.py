@@ -49,7 +49,7 @@ from usb3_pipe.gen   import get_ltssm_states
 COUNTERS = [
     "ts1", "ts1_inv", "ts2",
     "lfps_polling", "lfps_ping", "lfps_exit_u1", "lfps_exit_u2", "lfps_wakeup_u3", "lfps_reset",
-    "rx_idle", "rx_errors_cycles", "k28_4", "u0", "recovery",
+    "rx_idle", "rx_errors_cycles", "k28_4", "u0", "recovery", "u1", "u2", "u3",
 ]
 
 RX_COUNTERS = ["symbols", "decoder_invalid", "code_invalid", "disparity", "bursts"]
@@ -72,7 +72,8 @@ class USB3DebugClient:
         return self.states.get(value, f"?{value}")
 
     def status(self):
-        counters = {name: self.reg(f"{name}_count").read() for name in COUNTERS}
+        counters = {name: self.reg(f"{name}_count").read() for name in COUNTERS
+            if hasattr(self.bus.regs, f"{self.name}_{name}_count")} # (Counters of the bitstream.)
         status   = self.reg("status").read()
         r = {
             "time_us"      : self.reg("timestamp").read(),

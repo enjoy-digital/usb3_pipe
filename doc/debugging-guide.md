@@ -128,6 +128,32 @@ litescope_cli --port 1240 --csv build/acorn_dbg/analyzer.csv --csr-csv build/aco
 Use `--subsampling` to cover ms-scale sequences (4096 x 512 x 8ns = 16.8ms) on level signals.
 LTSSM state encodings: `usb3_pipe.gen.get_ltssm_states()`.
 
+## Bulk Data And Stability
+
+`acorn.py` loops EP2 OUT back to EP1 IN (USB3Core streams). With the device accessible to the user
+(`scripts/99-usb3-pipe.rules`):
+
+```bash
+./scripts/usb3_bulk.py info                                   # Endpoints, speed.
+./scripts/usb3_bulk.py loopback --size 1024 --count 1000      # Data check.
+./scripts/usb3_bulk.py loopback --count 1000 --random-sizes
+# Soak: PHY counters (U0/Recovery/U1/U2/U3 entries), enumeration and USB kernel messages every period,
+# Bulk loopback batches, periodic host reconnects (JSON lines log + summary).
+./scripts/usb3_soak.py --port 1240 --csr-csv build/acorn/csr.csv --duration 28800 --period 10 \
+    --bulk 64 --reconnect-every 1800 --log soak.jsonl
+```
+
+## Transceiver Reference Clock (Acorn)
+
+The Acorn has no transceiver reference clock without a PCIe host (MGTREFCLK0 is the PCIe edge
+connector clock, measured at 0Hz on the LiteX Acorn Baseboard Mini): the GTP reference clock is the
+200MHz oscillator routed through the fabric to GTREFCLK0 (UG482: GTREFCLK should be driven by an
+IBUFDS_GTE2, GTGREFCLK is reserved for internal testing, the REQP-49 DRC is lowered to a warning).
+Its jitter depends on the placement: builds with identical transceiver attributes (`drp-dump`) can
+have a very different RX quality (the CDR frequency tracking runs away, `rx_tx_ppm` outside
+0/-5000ppm). Qualify each bitstream with `usb3_debug.py rx-check` (and try another placement with
+`acorn.py --vivado-place-directive` if needed), a dedicated transceiver reference clock is the fix.
+
 ## Useful Experiments
 
 - **Near-End PMA loopback**: the LTSSM trains against itself up to U0, this validates the GT at 5Gbps,

@@ -37,7 +37,8 @@ class USB3PHYDebug(LiteXModule):
     Lightweight always-on observability of a USB3PHY, to be polled from the host (UARTBone/JTAGBone):
     - LTSSM state, SerDes ready.
     - LTSSM state history (last `USB3PHY_DEBUG_HISTORY_DEPTH` transitions, state + us timestamp).
-    - Event counters (TS/LFPS detections, RX errors/idle, K28.4 substitutions, U0/Recovery entries).
+    - Event counters (TS/LFPS detections, RX errors/idle, K28.4 substitutions, U0/Recovery/U1/U2/U3
+      entries).
     - PHY reset (re-runs link training from Polling) and counters/history clear.
     - SerDes RX re-initialization (transceiver RX reset sequence).
     """
@@ -130,6 +131,9 @@ class USB3PHYDebug(LiteXModule):
             ("k28_4",             k28_4,                      0),
             ("u0",                ltssm.u0,                   1),
             ("recovery",          ltssm.recovery,             1),
+            ("u1",                ltssm.u1,                   1),
+            ("u2",                ltssm.u2,                   1),
+            ("u3",                ltssm.u3,                   1),
         ]
         for name, signal, edge in events:
             csr = CSRStatus(32, name=f"{name}_count")
