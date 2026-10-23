@@ -318,11 +318,11 @@ class USB3Protocol(LiteXModule):
             recv_count.eq(recv_count + 1),
         ]
 
-        # Convenience: reset datapacket seq counters if EP0 asks.
+        # Reset datapacket seq counters. Note: reset_dp_seq (EP0 SET_CONFIGURATION/SET_INTERFACE/
+        # CLEAR_FEATURE) is not used, as in the original Daisho usb3_protocol.v: the counters are
+        # shared with EP0, whose Status stage ACK TP (sent after the request is decoded) carries
+        # in_dpp_seq. The host checks it and fails the control transfer when it is reset (8.12.2).
         self.sync += If(~self.reset_n,
-            in_dpp_seq.eq(0),
-            out_dpp_seq.eq(0),
-        ).Elif(reset_dp_seq,
             in_dpp_seq.eq(0),
             out_dpp_seq.eq(0),
         )
