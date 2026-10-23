@@ -25,6 +25,7 @@ class USB3Bench(LiteXModule):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("last_be", 4)]) # From Bulk OUT.
 
         self.source_enable = Signal(reset=1) # i
+        self.clear         = Signal()        # i: Counters clear (the next received word is not checked).
         self.source_words  = Signal(64)      # o
         self.sink_words    = Signal(64)      # o
         self.sink_errors   = Signal(32)      # o
@@ -45,13 +46,20 @@ class USB3Bench(LiteXModule):
         # Sink.
         expected = Signal(32)
         self.comb += sink.ready.eq(1)
-        self.sync += If(sink.valid,
-            expected.eq(sink.data + 1),
-            self.sink_words.eq(self.sink_words + 1),
-            If((sink.data != expected) & (self.sink_words != 0),
-                self.sink_errors.eq(self.sink_errors + 1)
+        self.sync += [
+            If(sink.valid,
+                expected.eq(sink.data + 1),
+                self.sink_words.eq(self.sink_words + 1),
+                If((sink.data != expected) & (self.sink_words != 0),
+                    self.sink_errors.eq(self.sink_errors + 1)
+                )
+            ),
+            If(self.clear,
+                self.source_words.eq(0),
+                self.sink_words.eq(0),
+                self.sink_errors.eq(0),
             )
-        )
+        ]
 
         if with_csr:
             self.add_csr()
@@ -59,12 +67,14 @@ class USB3Bench(LiteXModule):
     def add_csr(self):
         self._control      = CSRStorage(fields=[
             CSRField("source_enable", size=1, reset=1, description="Bulk IN source enable."),
+            CSRField("clear",         size=1, offset=1, pulse=True, description="Counters clear."),
         ])
         self._source_words = CSRStatus(64, description="Bulk IN words sent.")
         self._sink_words   = CSRStatus(64, description="Bulk OUT words received.")
         self._sink_errors  = CSRStatus(32, description="Bulk OUT words errors (counter discontinuities).")
         self.comb += [
             self.source_enable.eq(self._control.fields.source_enable),
+            self.clear.eq(self._control.fields.clear),
             self._source_words.status.eq(self.source_words),
             self._sink_words.status.eq(self.sink_words),
             self._sink_errors.status.eq(self.sink_errors),

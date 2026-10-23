@@ -16,6 +16,7 @@ Examples:
   ./scripts/usb3_bench.py in --transfer-size 4194304 --queue 16 --no-check
 """
 
+import os
 import sys
 import time
 import argparse
@@ -89,15 +90,18 @@ class Bench:
                 t.submit()
                 self.transfers.append(t)
 
-    def stop(self, context):
+    def stop(self, context, timeout=3.0):
+        """Cancel the transfers, returns True when all are completed/cancelled."""
         self.running = False
         for t in self.transfers:
             try:
                 t.cancel()
             except usb1.USBError:
                 pass
-        while any(t.isSubmitted() for t in self.transfers):
+        t0 = time.time()
+        while any(t.isSubmitted() for t in self.transfers) and (time.time() - t0 < timeout):
             context.handleEventsTimeout(0.1)
+        return not any(t.isSubmitted() for t in self.transfers)
 
 # Main ---------------------------------------------------------------------------------------------
 
@@ -106,50 +110,64 @@ def main():
     parser.add_argument("direction",       choices=["in", "out", "both"])
     parser.add_argument("--duration",      default=5.0,     type=float, help="Duration (s).")
     parser.add_argument("--transfer-size", default=1 << 20, type=int,   help="Transfer size (bytes, multiple of 1024).")
-    parser.add_argument("--queue",         default=8,       type=int,   help="Queued transfers per direction.")
+    parser.add_argument("--queue",         default=None,    type=int,   help="Queued transfers per direction (default: 8, 4 with both: Linux usbfs_memory_mb limit, 16MB by default).")
     parser.add_argument("--no-check",      action="store_true",         help="Disable the IN data check.")
     parser.add_argument("--csr-csv",       default=None,                help="CSR file: read the device OUT checker (litex_server).")
     parser.add_argument("--port",          default=1234,    type=int,   help="litex_server port (with --csr-csv).")
     args = parser.parse_args()
+    if args.queue is None:
+        args.queue = 4 if args.direction == "both" else 8
 
-    with usb1.USBContext() as context:
-        handle = context.openByVendorIDAndProductID(USB3_VID, USB3_PID)
-        if handle is None:
-            raise SystemExit(f"Device {USB3_VID:04x}:{USB3_PID:04x} not found.")
-        handle.claimInterface(0)
-        speed = handle.getDevice().getDeviceSpeed()
-        print(f"Device {USB3_VID:04x}:{USB3_PID:04x}, speed {speed} (4: SuperSpeed).")
+    context = usb1.USBContext()
+    handle  = context.openByVendorIDAndProductID(USB3_VID, USB3_PID)
+    if handle is None:
+        raise SystemExit(f"Device {USB3_VID:04x}:{USB3_PID:04x} not found.")
+    handle.claimInterface(0)
+    speed = handle.getDevice().getDeviceSpeed()
+    print(f"Device {USB3_VID:04x}:{USB3_PID:04x}, speed {speed} (4: SuperSpeed).")
 
-        bench = Bench(handle, args.direction, args.transfer_size, args.queue, check=not args.no_check)
-        bench.start()
-        t0   = time.time()
-        last = {"in": 0, "out": 0}
-        tl   = t0
-        while time.time() - t0 < args.duration:
-            context.handleEventsTimeout(0.1)
-            if time.time() - tl >= 1.0:
-                now = time.time()
-                rates = {d: (bench.bytes[d] - last[d])/(now - tl)/1e6 for d in ["in", "out"]}
-                print(f"  IN {rates['in']:7.1f} MB/s  OUT {rates['out']:7.1f} MB/s  errors {bench.errors}  failures {bench.failures}")
-                last = dict(bench.bytes)
-                tl   = now
-        bench.stop(context)
-        dt = time.time() - t0
-        for d in ["in", "out"]:
-            if bench.bytes[d]:
-                print(f"{d.upper():3s}: {bench.bytes[d]/1e6:9.1f} MB in {dt:.1f}s: {bench.bytes[d]/dt/1e6:7.1f} MB/s")
-        print(f"IN data errors: {bench.errors}, transfer failures: {bench.failures}")
-        handle.releaseInterface(0)
-
+    bus = None
     if args.csr_csv:
         from litex import RemoteClient
         bus = RemoteClient(csr_csv=args.csr_csv, port=args.port)
         bus.open()
+        bus.regs.usb3_bench_control.write(0b11) # Source enabled, counters cleared.
+
+    bench = Bench(handle, args.direction, args.transfer_size, args.queue, check=not args.no_check)
+    bench.start()
+    t0   = time.time()
+    last = {"in": 0, "out": 0}
+    tl   = t0
+    while time.time() - t0 < args.duration:
+        context.handleEventsTimeout(0.1)
+        if time.time() - tl >= 1.0:
+            now = time.time()
+            rates = {d: (bench.bytes[d] - last[d])/(now - tl)/1e6 for d in ["in", "out"]}
+            print(f"  IN {rates['in']:7.1f} MB/s  OUT {rates['out']:7.1f} MB/s  errors {bench.errors}  failures {bench.failures}")
+            last = dict(bench.bytes)
+            tl   = now
+    dt = time.time() - t0
+    for d in ["in", "out"]:
+        if bench.bytes[d]:
+            print(f"{d.upper():3s}: {bench.bytes[d]/1e6:9.1f} MB in {dt:.1f}s: {bench.bytes[d]/dt/1e6:7.1f} MB/s")
+    print(f"IN data errors: {bench.errors}, transfer failures: {bench.failures}")
+
+    sink_errors = 0
+    if bus is not None:
+        sink_errors = bus.regs.usb3_bench_sink_errors.read()
         print(f"Device OUT checker: {bus.regs.usb3_bench_sink_words.read()*4/1e6:.1f} MB received, "
-              f"{bus.regs.usb3_bench_sink_errors.read()} errors.")
+              f"{sink_errors} errors.")
         bus.close()
 
-    sys.exit(1 if (bench.errors or bench.failures) else 0)
+    code = 1 if (bench.errors or bench.failures or sink_errors) else 0
+    if bench.stop(context):
+        handle.releaseInterface(0)
+        handle.close()
+        context.close()
+        sys.exit(code)
+    # Transfers still being cancelled (libusb would wait on close): exit without closing.
+    sys.stdout.flush()
+    os._exit(code)
 
 if __name__ == "__main__":
     main()
