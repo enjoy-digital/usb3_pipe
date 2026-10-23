@@ -210,7 +210,7 @@ def main():
     output_dir = args.output_dir or "build/sqrl_acorn"
     if not args.no_core:
         os.makedirs(os.path.join(output_dir, "gateware"), exist_ok=True)
-        os.system("cd usb3_core/daisho_mod && make && ./usb_descrip_gen")
+        os.system("cd usb3_core/daisho_mod && mkdir -p usb2 && make && ./usb_descrip_gen")
         os.system(f"cp usb3_core/daisho_mod/usb3/*.init {output_dir}/gateware/")
     platform = sqrl_acorn.Platform(with_multiboot=False)
     if args.variant == "standard":

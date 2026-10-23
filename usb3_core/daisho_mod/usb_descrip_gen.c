@@ -63,6 +63,7 @@ void write_buf8(u8 *buf, u32 size)
 		fwrite(buf-1, 1, 1, bin_2);
 		bytes_written_2 ++;
 	}
+	i_2 = bytes_written_2;
 }
 
 void write_buf32(u32 *buf, u32 size)
@@ -76,6 +77,7 @@ void write_buf32(u32 *buf, u32 size)
 		*buf++;
 		bytes_written_3 += 4;
 	}
+	i_3 = bytes_written_3/4;
 }
 
 void write_buf(void *buf, u32 size)
@@ -305,7 +307,6 @@ void add_bos()
 void add_string(u8 idx, char* str)
 {
 	char temp[32];
-	wchar_t w_str[128];
 	u32 len;
 	if(idx == 0)
 		len = 4;		// string0 is fixed at 4 bytes for language code
@@ -318,14 +319,17 @@ void add_string(u8 idx, char* str)
 	sprintf(temp, "STRING%d", idx);
 	print_offsets(temp, 1, 1);
 
-	if(idx > 0)
-		mbstowcs(w_str, str, 128);
-	else
-		memcpy(&w_str[0], str, 2);
-
 	*a++ = len;
 	*a++ = 0x03;
-	memcpy(a, w_str, len-2);
+	if(idx > 0) {
+		// UTF-16LE (wchar_t/mbstowcs is not 16-bit on all platforms).
+		u32 i;
+		for(i = 0; i < strlen(str); i++) {
+			*a++ = str[i];
+			*a++ = 0x00;
+		}
+	} else
+		memcpy(a, str, 2);
 	write_buf(buf_2, len);
 }
 
