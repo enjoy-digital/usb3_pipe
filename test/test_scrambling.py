@@ -288,7 +288,9 @@ class TestScrambling(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
 
     def test_descrambler_com_resync_multi_lane(self):
-        com_patterns = [0b0011, 0b0111, 0b1111]  # 2, 3, 4 COM symbols
+        # 1, 2, 3, 4 COM symbols ending the word: the LFSR is initialized after the last COM and
+        # advances on the D symbols before it (6.3.1.3).
+        com_patterns = [0b1000, 0b1100, 0b1110, 0b1111]
         for ctrl in com_patterns:
             with self.subTest(ctrl=bin(ctrl)):
                 def generator(dut):
