@@ -44,6 +44,7 @@ from usb3_pipe.phy    import USB3PHY, USB3PHY_STATUS, USB3PHY_LINK_CTRL
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors
+from usb3_core.common      import last_be_to_keep
 
 # Configuration ------------------------------------------------------------------------------------
 
@@ -389,9 +390,7 @@ class USB3PIPECore(SoCMini):
             bulk_out.source.ready.eq(platform.request("bulk_out_tready")),
             platform.request("bulk_out_tlast").eq(bulk_out.source.last),
             platform.request("bulk_out_tdata").eq(bulk_out.source.data),
-            out_tkeep.eq(Mux(bulk_out.source.last_be[0], 0b0001,
-                         Mux(bulk_out.source.last_be[1], 0b0011,
-                         Mux(bulk_out.source.last_be[2], 0b0111, 0b1111)))),
+            out_tkeep.eq(last_be_to_keep(bulk_out.source.last_be)),
             platform.request("usb_ready").eq(usb_core.ready),
             platform.request("usb_configured").eq(usb_core.configured),
         ]
@@ -474,7 +473,7 @@ def generate_documentation(name, config, ports):
     if config["usb_core"]:
         d.append("## USB3 Device Core")
         d.append("")
-        d.append(f"The core includes the USB3 Device Core (`usb3_core`): Link and Protocol Layers, Control")
+        d.append("The core includes the USB3 Device Core (`usb3_core`): Link and Protocol Layers, Control")
         d.append(f"Endpoint (descriptors: VID/PID {config['usb_vid']:04x}:{config['usb_pid']:04x}, vendor class")
         d.append(f"interface) and two Bulk endpoints (MaxBurst {config['usb_max_burst']}) exposed as AXI-Stream:")
         d.append("")

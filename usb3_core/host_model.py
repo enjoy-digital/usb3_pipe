@@ -18,6 +18,9 @@ checked against packets captured on hardware (xHCI host, see test/test_host_mode
 """
 
 import zlib
+import random
+
+from collections import deque
 
 from migen import *
 from migen.genlib.misc import WaitTimer
@@ -155,7 +158,6 @@ def decode_packets(words, positions=None):
             positions.append(i//4)
     i = 0
     while i < len(symbols):
-        frame = [b for b, k in symbols[i:i+4] if k]
         if symbols[i:i+4] == framing(SLC):
             lc   = symbols[i+4][0] | (symbols[i+5][0] << 8)
             info = lc & 0x7ff
@@ -463,3 +465,208 @@ def parse_sim_output(output, script):
     for packet, position in zip(packets, positions):
         sections[sections_at[position]].append(packet)
     return sections
+
+# Python Host (Migen simulation) -------------------------------------------------------------------
+# Python models of the Host Link Layer to test a USB3 Device Core directly connected (no PHY) in a
+# Migen simulation: a script player (HostScript steps) and a reactive host (acknowledges the device
+# Header Packets like an xHCI host, test scenarios as generators).
+
+class PHYStandIn:
+    """USB3PHY Link interface stand-in."""
+    def __init__(self):
+        self.source = stream.Endpoint(phy_layout())
+        self.sink   = stream.Endpoint(phy_layout())
+        for name in ["u0", "polling_idle", "hot_reset", "recovery", "lgo_u1", "lgo_u2", "lgo_u3",
+            "tx_lau", "tx_lxu", "directed_recovery", "link_activity"]:
+            setattr(self, name, Signal(name=name))
+
+def play_script(dut, script, max_cycles=200000, tx_ready_rate=1.0, seed=0):
+    """Play a HostScript against the DUT, returns the simulation output (HOST_MARK/HOST_RX lines)."""
+    phy    = dut.phy
+    log    = []
+    rx     = []
+    state  = {"done": False}
+    rng    = random.Random(seed)
+
+    def host(dut):
+        yield phy.polling_idle.eq(1)
+        yield
+        yield phy.polling_idle.eq(0)
+        yield phy.u0.eq(1)
+        yield phy.source.valid.eq(1)
+        for op, data, ctrl, mask, first, last in script.steps:
+            if op == OP_SEND:
+                yield phy.source.data.eq(data)
+                yield phy.source.ctrl.eq(ctrl)
+                yield
+            elif op == OP_IDLE:
+                yield phy.source.data.eq(0)
+                yield phy.source.ctrl.eq(0)
+                for _ in range(data):
+                    yield
+            elif op == OP_WAIT:
+                yield phy.source.data.eq(0)
+                yield phy.source.ctrl.eq(0)
+                start = len(rx)
+                while True:
+                    if any(((d & mask) == (data & mask)) and (c == ctrl) for d, c in rx[start:]):
+                        break
+                    yield
+            elif op == OP_MARK:
+                log.append(f"HOST_MARK {data}")
+            elif op == OP_END:
+                break
+        yield phy.source.data.eq(0)
+        yield phy.source.ctrl.eq(0)
+        for _ in range(256):
+            yield
+        state["done"] = True
+
+    @passive
+    def monitor(dut):
+        while True:
+            ready = rng.random() < tx_ready_rate
+            yield phy.sink.ready.eq(int(ready))
+            yield
+            if ready and (yield phy.sink.valid):
+                d = (yield phy.sink.data)
+                c = (yield phy.sink.ctrl)
+                rx.append((d, c))
+                log.append(f"HOST_RX {d:08x} {c:x}")
+
+    @passive
+    def timeout(dut):
+        for _ in range(max_cycles):
+            yield
+        raise TimeoutError("host script timeout")
+
+    run_simulation(dut, [host(dut), monitor(dut), timeout(dut)])
+    return "\n".join(log)
+
+FRAMING = {0xfbfbfbf7: "HP", 0xfefefef7: "LC", 0x5c5c5cf7: "DPP"}
+
+class PyHost:
+    """Host Link Layer: sends packets (atomic), acknowledges the device Header Packets (LGOOD_n +
+    LCRD_x), records the received packets."""
+    def __init__(self, phy, corrupt_lgood=False):
+        self.phy     = phy
+        self.queue   = deque() # Packets (lists of words) to send.
+        self.urgent  = deque() # Link Commands (sent first, between packets).
+        self.tx_seq  = 0
+        self.lcrd    = 0
+        self.hps     = []      # (dw0, dw1, dw2, seq, crc_ok).
+        self.dpps    = []      # (payload, crc_ok).
+        self.lcs     = []
+        self.cycles  = 0
+
+    def send_hp(self, builder, *args, **kwargs):
+        self.queue.append(builder(*args, seq=self.tx_seq, **kwargs))
+        self.tx_seq = (self.tx_seq + 1) % 8
+
+    def send(self, words):
+        self.queue.append(words)
+
+    def driver(self):
+        yield "passive"
+        phy = self.phy
+        yield phy.polling_idle.eq(1)
+        yield
+        yield phy.polling_idle.eq(0)
+        yield phy.u0.eq(1)
+        yield phy.source.valid.eq(1)
+        current = deque()
+        while True:
+            if not current:
+                if self.urgent:
+                    current = deque(self.urgent.popleft())
+                elif self.queue:
+                    current = deque(self.queue.popleft())
+            if current:
+                data, ctrl = current.popleft()
+            else:
+                data, ctrl = 0, 0
+            yield phy.source.data.eq(data)
+            yield phy.source.ctrl.eq(ctrl)
+            yield
+            self.cycles += 1
+
+    def monitor(self, tx_ready_rate=1.0, seed=0):
+        yield "passive"
+        phy   = self.phy
+        rng   = random.Random(seed)
+        state = None
+        words = []
+        while True:
+            ready = rng.random() < tx_ready_rate
+            yield phy.sink.ready.eq(int(ready))
+            yield
+            if not (ready and (yield phy.sink.valid)):
+                continue
+            w = ((yield phy.sink.data), (yield phy.sink.ctrl))
+            if state is None:
+                if w[1] == 0b1111 and w[0] in FRAMING:
+                    state = FRAMING[w[0]]
+                    words = [w]
+                continue
+            words.append(w)
+            if state == "LC" and len(words) == 2:
+                self.lcs.append(decode_packets(words)[0][1])
+                state = None
+            elif state == "HP" and len(words) == 5:
+                packet = decode_packets(words)[0]
+                self.hps.append(packet[1:])
+                if packet[-1]:
+                    self.urgent.append(link_command(LGOOD(packet[4])))
+                    self.urgent.append(link_command(LCRD(self.lcrd)))
+                    self.lcrd = (self.lcrd + 1) % 4
+                state = None
+            elif state == "DPP" and any(c & (1 << (3 - i)) and ((d >> 8*(3 - i)) & 0xff) == 0xf7
+                for d, c in [w] for i in range(4)) and len(words) > 1:
+                packets = decode_packets(words + [(0, 0)])
+                if packets:
+                    self.dpps.append(tuple(packets[0][1:]))
+                state = None
+
+    def wait(self, cond, timeout=200000):
+        for _ in range(timeout):
+            if cond():
+                return
+            yield
+        raise TimeoutError("PyHost wait timeout")
+
+# Received Packets Helpers ------------------------------------------------------------------------
+
+def tps(packets):
+    """Transaction Packets: (subtype, nump, seq)."""
+    return [(dw1 & 0xf, (dw1 >> 16) & 0x1f, (dw1 >> 21) & 0x1f)
+        for kind, *p in packets if kind == "HP" for dw0, dw1, dw2, seq, crc in [p] if (dw0 & 0x1f) == 0x04]
+
+def lmps(packets):
+    return [(dw0 >> 5) & 0xf for kind, *p in packets if kind == "HP" for dw0, dw1, dw2, seq, crc in [p]
+        if (dw0 & 0x1f) == 0x00]
+
+def dpps(packets):
+    return [p[0] for kind, *p in packets if kind == "DPP"]
+
+# Tests --------------------------------------------------------------------------------------------
+
+def tp_fields(hp):
+    dw0, dw1, dw2, seq, crc = hp
+    return {"type": dw0 & 0x1f, "subtype": dw1 & 0xf, "nump": (dw1 >> 16) & 0x1f,
+        "seq": (dw1 >> 21) & 0x1f, "retry": (dw1 >> 6) & 1, "ept": (dw1 >> 8) & 0xf}
+
+def dph_fields(hp):
+    dw0, dw1, dw2, seq, crc = hp
+    return {"type": dw0 & 0x1f, "seq": dw1 & 0x1f, "eob": (dw1 >> 6) & 1, "ept": (dw1 >> 8) & 0xf,
+        "length": dw1 >> 16}
+
+def run_pyhost(dut, host, scenario, tx_ready_rate=1.0):
+    run_simulation(dut, [host.driver(), host.monitor(tx_ready_rate), scenario], vcd_name=None)
+
+def pyhost_link_init(host):
+    host.send(link_command(LGOOD(7)))
+    for x in range(4):
+        host.send(link_command(LCRD(x)))
+    host.send_hp(lmp_port_capability)
+    host.send_hp(lmp_port_configuration)
+    yield from host.wait(lambda: len(host.hps) >= 2)

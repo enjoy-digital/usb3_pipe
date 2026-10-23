@@ -9,13 +9,11 @@ from operator import or_
 
 from migen import *
 from migen.genlib.cdc import MultiReg
-from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
 
 from litex.soc.interconnect import stream
 from litex.soc.cores import code_8b10b
-from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import K, COM, SKP
 

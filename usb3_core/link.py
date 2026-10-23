@@ -113,7 +113,6 @@ class USB3LinkLayer(LiteXModule):
         hp_seq    = Signal(3)
         hp_dl     = Signal()
         hp_is_dp  = Signal()
-        hp_is_lmp = Signal()
         self.crc16_rx = crc16_rx = CRC16()
         self.crc5_rx  = crc5_rx  = CRC5()
         self.comb += [
@@ -123,7 +122,6 @@ class USB3LinkLayer(LiteXModule):
             hp_seq.eq(hp_w[3][16:19]),
             hp_dl.eq(hp_w[3][16 + 9]),
             hp_is_dp.eq(hp_w[0][0:5]  == TYPE_DP),
-            hp_is_lmp.eq(hp_w[0][0:5] == TYPE_LMP),
         ]
         self.sync += hp_check.eq(hp_last)
 
@@ -413,7 +411,6 @@ class USB3LinkLayer(LiteXModule):
         can_send_hp = Signal()
         self.comb += can_send_hp.eq(adv_received & (send_seq != tx_seq) & (remote_credits != 0) &
             ~lrty_pending)
-        start_lc = Signal()
         start_hp = Signal()
         sel_lrty = Signal()
         sel_lbad = Signal()

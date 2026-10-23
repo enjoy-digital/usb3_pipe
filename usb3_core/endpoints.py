@@ -54,9 +54,55 @@ class HeaderFields:
         self.setup     = dw1[15]
         self.length    = dw1[16:32]
 
-def last_be_to_bytes(last_be):
-    """LiteX last_be (one-hot last valid byte, 0: full word) to valid bytes (1-4)."""
-    return Mux(last_be[0], 1, Mux(last_be[1], 2, Mux(last_be[2], 3, 4)))
+# DPP Reader ---------------------------------------------------------------------------------------
+
+class DPPReader(LiteXModule):
+    """Data Packet Payloads reader: reads the jobs (memory word address, length in bytes, 0 for a
+    zero-length DPP) from a memory read port (re, 1 cycle latency) to a continuous DPP stream (the
+    Link Layer can't stall in a DPP: the words are prefetched)."""
+    def __init__(self, rd_port, depth=16):
+        self.sink   = sink   = stream.Endpoint([("adr", len(rd_port.adr)), ("length", 11)])
+        self.source = source = stream.Endpoint(dpp_layout())
+
+        # # #
+
+        self.prefetch = prefetch = stream.SyncFIFO(dpp_layout(), depth)
+        adr    = Signal(len(rd_port.adr))
+        rem    = Signal(11)
+        active = Signal()
+        issue  = Signal()
+        valid  = Signal()
+        last   = Signal()
+        nbytes = Signal(3)
+        zlp    = Signal()
+        self.comb += [
+            sink.ready.eq(~active),
+            issue.eq(active & (prefetch.level < (depth - 4))),
+            rd_port.adr.eq(adr),
+            rd_port.re.eq(issue),
+        ]
+        self.sync += [
+            valid.eq(issue),
+            last.eq(issue & (rem <= 4)),
+            nbytes.eq(Mux(rem <= 4, rem, 4)),
+            zlp.eq(sink.valid & sink.ready & (sink.length == 0)),
+            If(sink.valid & sink.ready,
+                active.eq(sink.length != 0),
+                adr.eq(sink.adr),
+                rem.eq(sink.length),
+            ).Elif(issue,
+                adr.eq(adr + 1),
+                rem.eq(rem - 4),
+                If(rem <= 4, active.eq(0)),
+            ),
+        ]
+        self.comb += [
+            prefetch.sink.valid.eq(valid | zlp),
+            prefetch.sink.data.eq(rd_port.dat_r),
+            prefetch.sink.bytes.eq(Mux(zlp, 0, nbytes)),
+            prefetch.sink.last.eq(last | zlp),
+            prefetch.source.connect(source),
+        ]
 
 # USB3 Endpoint Base -------------------------------------------------------------------------------
 
@@ -293,52 +339,13 @@ class USB3BulkIN(USB3Endpoint):
         ]
 
         # DPP Reader -------------------------------------------------------------------------------
-        self.prefetch = prefetch = stream.SyncFIFO(dpp_layout(), 16)
-        rd_count  = Signal(9)
-        rd_len    = Signal(11)
-        rd_words  = Signal(9)
-        rd_active = Signal()
-        rd_valid  = Signal()
-        rd_last   = Signal()
-        rd_bytes  = Signal(3)
-        rd_slot   = Signal(pbits - 1)
+        self.reader = reader = DPPReader(rd_port, depth=16)
         self.comb += [
-            rd_words.eq((rd_len + 3)[2:]),
-            rd_port.adr.eq(Cat(rd_count[0:8], rd_slot)),
+            jobs.source.connect(reader.sink, omit={"slot"}),
+            reader.sink.adr.eq(Cat(C(0, 8), jobs.source.slot)),
+            reader.sink.length.eq(lengths[jobs.source.slot]),
+            reader.source.connect(self.tx_dpp),
         ]
-        rd_issue = Signal()
-        self.comb += [
-            jobs.source.ready.eq(~rd_active),
-            rd_issue.eq(rd_active & (prefetch.level < 12)),
-            rd_port.re.eq(rd_issue),
-        ]
-        self.sync += [
-            rd_valid.eq(rd_issue),
-            rd_last.eq(rd_issue & ((rd_count + 1 >= rd_words))),
-            rd_bytes.eq(Mux((rd_count + 1 >= rd_words) & (rd_len[0:2] != 0), rd_len[0:2], 4)),
-            If(jobs.source.valid & jobs.source.ready,
-                rd_active.eq(1),
-                rd_slot.eq(jobs.source.slot),
-                rd_len.eq(lengths[jobs.source.slot]),
-                rd_count.eq(0),
-            ).Elif(rd_issue,
-                rd_count.eq(rd_count + 1),
-                If(rd_count + 1 >= rd_words, rd_active.eq(0)),
-            ),
-        ]
-        # Zero-length packets: a single word with 0 valid bytes.
-        zlp = Signal()
-        self.sync += zlp.eq(jobs.source.valid & jobs.source.ready & (lengths[jobs.source.slot] == 0))
-        self.comb += [
-            prefetch.sink.valid.eq(rd_valid | zlp),
-            prefetch.sink.data.eq(rd_port.dat_r),
-            prefetch.sink.bytes.eq(Mux(zlp, 0, rd_bytes)),
-            prefetch.sink.last.eq(rd_last | zlp),
-            prefetch.source.connect(self.tx_dpp),
-        ]
-        # A zero-length packet does not issue reads.
-        self.comb += If(rd_len == 0, rd_issue.eq(0))
-        self.sync += If(rd_active & (rd_len == 0), rd_active.eq(0))
 
 # USB3 Bulk OUT Endpoint ---------------------------------------------------------------------------
 
@@ -486,9 +493,7 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += [
             rd_valid.eq(rd_issue),
             rd_last.eq(rd_issue & (rd_count + 1 >= rd_words)),
-            rd_be.eq(Mux(rd_count + 1 >= rd_words,
-                Mux(rd_len[0:2] == 1, 0b0001, Mux(rd_len[0:2] == 2, 0b0010, Mux(rd_len[0:2] == 3, 0b0100, 0b1000))),
-                0)),
+            rd_be.eq(Mux(rd_count + 1 >= rd_words, bytes_to_last_be(rd_len), 0)),
             If(~rd_active,
                 # Next decided slot: read it (valid, not empty) or skip it.
                 If(rd_ptr != decide_ptr,

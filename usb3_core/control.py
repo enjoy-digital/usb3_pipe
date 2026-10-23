@@ -19,7 +19,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common    import *
-from usb3_core.endpoints import USB3Endpoint
+from usb3_core.endpoints import USB3Endpoint, DPPReader
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -203,42 +203,10 @@ class USB3EndpointControl(USB3Endpoint):
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, send_pending.eq(0))
 
         # ROM Reader.
-        self.prefetch = prefetch = stream.SyncFIFO(dpp_layout(), 8)
-        rd_adr    = Signal(len(offset))
-        rd_rem    = Signal(11)
-        rd_active = Signal()
-        rd_issue  = Signal()
-        rd_valid  = Signal()
-        rd_last   = Signal()
-        rd_bytes  = Signal(3)
-        zlp       = Signal()
+        self.reader = reader = DPPReader(rd_port, depth=8)
         self.comb += [
-            jobs.source.ready.eq(~rd_active),
-            rd_issue.eq(rd_active & (prefetch.level < 4)),
-            rd_port.adr.eq(rd_adr),
-            rd_port.re.eq(rd_issue),
-        ]
-        self.sync += [
-            rd_valid.eq(rd_issue),
-            rd_last.eq(rd_issue & (rd_rem <= 4)),
-            rd_bytes.eq(Mux(rd_rem <= 4, rd_rem, 4)),
-            zlp.eq(jobs.source.valid & jobs.source.ready & (jobs.source.length == 0)),
-            If(jobs.source.valid & jobs.source.ready,
-                rd_active.eq(jobs.source.length != 0),
-                rd_adr.eq(jobs.source.adr),
-                rd_rem.eq(jobs.source.length),
-            ).Elif(rd_issue,
-                rd_adr.eq(rd_adr + 1),
-                rd_rem.eq(rd_rem - 4),
-                If(rd_rem <= 4, rd_active.eq(0)),
-            ),
-        ]
-        self.comb += [
-            prefetch.sink.valid.eq(rd_valid | zlp),
-            prefetch.sink.data.eq(rd_port.dat_r),
-            prefetch.sink.bytes.eq(Mux(zlp, 0, rd_bytes)),
-            prefetch.sink.last.eq(rd_last | zlp),
-            prefetch.source.connect(self.tx_dpp),
+            jobs.source.connect(reader.sink),
+            reader.source.connect(self.tx_dpp),
         ]
 
         # Data stage OUT: DPPs landed (and ignored).

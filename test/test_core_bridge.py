@@ -21,7 +21,7 @@ def to_words(data):
         words.append((int.from_bytes(bytes(chunk + [0]*(4 - len(chunk))), "little"), last, be))
     return words
 
-class TestNativeBridge(unittest.TestCase):
+class TestCoreBridge(unittest.TestCase):
     def test_unpacker(self):
         rng     = random.Random(1)
         packets = [[rng.randrange(256) for _ in range(n)] for n in [1, 2, 3, 4, 5, 7, 8, 13]]

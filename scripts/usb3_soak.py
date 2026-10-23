@@ -7,12 +7,16 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 link stability (soak) test: PHY state/counters, host enumeration state and USB kernel
-messages logged periodically (JSON lines), optional Bulk loopback batches and reconnects.
+messages logged periodically (JSON lines), optional Bulk loopback batches (--example loopback),
+bandwidth benchmark runs (--example bench) and reconnects. Ctrl-C ends the test with the summary.
 
 Examples:
-  # 8 hours, 10s period, Bulk loopback (64 x 1024 bytes) each period, reconnect every 30 min.
-  ./scripts/usb3_soak.py --port 1240 --csr-csv build/acorn/csr.csv --duration 28800 \\
-      --bulk 64 --reconnect-every 1800 --log soak.jsonl
+  # 5 minutes, Bulk loopback (64 x 1024 bytes) each period, one reconnect.
+  ./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 \\
+      --bulk 64 --reconnect-every 150 --log soak.jsonl
+  # 5 minutes, full duplex benchmark (data checked on both sides) 20s per period.
+  ./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 \\
+      --period 30 --bench 20
 """
 
 import os
@@ -21,6 +25,7 @@ import sys
 import json
 import time
 import argparse
+import subprocess
 
 from pathlib import Path
 
@@ -71,6 +76,27 @@ def bulk_batch(count):
         import usb.util
         usb.util.dispose_resources(dev)
 
+def bench_run(duration, csr_csv, port):
+    # Full duplex benchmark (usb3_bench.py both), returns MB/s and errors or the error.
+    cmd = [sys.executable, str(Path(__file__).resolve().parent / "usb3_bench.py"), "both",
+        "--duration", str(duration), "--csr-csv", csr_csv, "--port", str(port)]
+    try:
+        out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            timeout=duration + 60).stdout
+    except subprocess.TimeoutExpired:
+        return {"error": "timeout"}
+    r = {}
+    for direction in ["IN", "OUT"]:
+        m = re.search(rf"^{direction}\s*:.*:\s+([\d.]+) MB/s", out, re.M)
+        if m:
+            r[direction.lower() + "_mbps"] = float(m.group(1))
+    m = re.search(r"IN data errors: (\d+), transfer failures: (\d+)", out)
+    m2 = re.search(r"Device OUT checker: .* (\d+) errors", out)
+    if not m:
+        return {"error": out.strip().splitlines()[-1][:80] if out.strip() else "no output"}
+    r["errors"] = int(m.group(1)) + int(m.group(2)) + (int(m2.group(1)) if m2 else 0)
+    return r
+
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
@@ -80,7 +106,8 @@ def main():
     parser.add_argument("--port",            default=1234, type=int,             help="litex_server port.")
     parser.add_argument("--duration",        default=3600, type=float,           help="Test duration (s).")
     parser.add_argument("--period",          default=10,   type=float,           help="Logging period (s).")
-    parser.add_argument("--bulk",            default=0,    type=int,             help="Bulk loopback packets per period (0: disabled).")
+    parser.add_argument("--bulk",            default=0,    type=int,             help="Bulk loopback packets per period (0: disabled, --example loopback).")
+    parser.add_argument("--bench",           default=0,    type=float,           help="Full duplex benchmark duration per period (s, 0: disabled, --example bench).")
     parser.add_argument("--reconnect-every", default=0,    type=float,           help="Reconnect period (s, 0: never).")
     parser.add_argument("--log",             default="soak.jsonl",               help="JSON lines log file.")
     args = parser.parse_args()
@@ -90,9 +117,25 @@ def main():
     dbg    = USB3DebugClient(bus)
     klog   = KernelLog()
     totals = {k: 0 for k in KERNEL_EVENTS}
-    totals.update({"periods": 0, "enumerated": 0, "bulk_packets": 0, "bulk_errors": 0, "reconnects": 0})
+    totals.update({"periods": 0, "enumerated": 0, "bulk_packets": 0, "bulk_errors": 0, "bench_runs": 0,
+        "bench_errors": 0, "reconnects": 0})
     dbg.clear()
     t0 = last_reconnect = time.time()
+    try:
+        soak(args, bus, dbg, klog, totals, t0, last_reconnect)
+    except KeyboardInterrupt:
+        print("Interrupted.")
+    totals["phy"] = {k: v for k, v in dbg.status().items() if k in ["u0", "recovery", "u1", "u2", "u3", "lfps_reset"]}
+    totals["core"] = core_counters(bus)
+    print(json.dumps({"summary": totals}))
+    bus.close()
+
+def core_counters(bus):
+    # USB3 Device Core statistics (when present).
+    return {k: getattr(bus.regs, "usb3_core_" + k).read() for k in ["rx_lbad", "tx_retry", "recovery_req"]
+        if hasattr(bus.regs, "usb3_core_" + k)}
+
+def soak(args, bus, dbg, klog, totals, t0, last_reconnect):
     with open(args.log, "a") as log:
         while (time.time() - t0) < args.duration:
             time.sleep(args.period)
@@ -127,16 +170,19 @@ def main():
                 entry["bulk"] = bulk_batch(args.bulk)
                 totals["bulk_packets"] += entry["bulk"].get("packets", 0)
                 totals["bulk_errors"]  += entry["bulk"].get("errors", 0)
+            if args.bench and devices:
+                entry["bench"] = bench_run(args.bench, args.csr_csv, args.port)
+                totals["bench_runs"]   += 1
+                totals["bench_errors"] += entry["bench"].get("errors", 1)
+            entry["core"] = core_counters(bus)
             totals["periods"]    += 1
             totals["enumerated"] += bool(devices and devices[0].get("bConfigurationValue") == "1")
             for k in KERNEL_EVENTS:
                 totals[k] += entry["kernel"][k]
             log.write(json.dumps(entry) + "\n")
             log.flush()
-            print(json.dumps({k: entry[k] for k in ["t", "phy", "temperature"] if k in entry} | {"enumerated": bool(devices)}), flush=True)
-    totals["phy"] = {k: v for k, v in dbg.status().items() if k in ["u0", "recovery", "u1", "u2", "u3", "lfps_reset"]}
-    print(json.dumps({"summary": totals}))
-    bus.close()
+            print(json.dumps({k: entry[k] for k in ["t", "phy", "core", "bench", "temperature"] if k in entry} |
+                {"enumerated": bool(devices)}), flush=True)
 
 if __name__ == "__main__":
     main()

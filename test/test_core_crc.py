@@ -12,7 +12,7 @@ from migen import *
 from usb3_core.crc        import CRC5, CRC16, CRC32
 from usb3_core.host_model import crc5, crc16, crc32
 
-class TestNativeCRC(unittest.TestCase):
+class TestCoreCRC(unittest.TestCase):
     def test_crc5(self):
         dut = CRC5()
         def generator(dut):

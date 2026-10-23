@@ -19,6 +19,8 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 from litex.soc.cores.uart   import Stream2Wishbone
 
+from usb3_core.common import last_be_to_bytes
+
 # Byte Unpacker ------------------------------------------------------------------------------------
 
 class USB3ByteUnpacker(LiteXModule):
@@ -33,7 +35,7 @@ class USB3ByteUnpacker(LiteXModule):
         nbytes = Signal(3)
         self.comb += [
             If(sink.last & (sink.last_be != 0),
-                nbytes.eq(Mux(sink.last_be[0], 1, Mux(sink.last_be[1], 2, Mux(sink.last_be[2], 3, 4))))
+                nbytes.eq(last_be_to_bytes(sink.last_be))
             ).Else(
                 nbytes.eq(4)
             ),
