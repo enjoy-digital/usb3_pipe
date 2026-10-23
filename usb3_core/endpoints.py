@@ -189,12 +189,20 @@ class USB3BulkIN(USB3Endpoint):
         send     = Signal()
         snd_len  = Signal(11)
         snd_eob  = Signal()
+        snd_last = Signal() # Last written packet.
+        # Writer activity: while the user is writing, the last written max size packet is held until
+        # the next one is written (burst continued instead of an EOB and a flow control round trip).
+        wr_idle  = Signal(max=65)
+        wr_busy  = Signal()
+        self.sync += If(sink.valid, wr_idle.eq(0)).Elif(wr_idle != 64, wr_idle.eq(wr_idle + 1))
         self.comb += [
-            avail.eq(snd_ptr != wr_ptr),
+            wr_busy.eq(sink.valid | (wr_idle != 64)),
+            snd_last.eq(snd_next == wr_ptr),
+            avail.eq((snd_ptr != wr_ptr) & ~(snd_last & wr_busy & (snd_len == MAX_PACKET_SIZE))),
             in_win.eq(((snd_seq - win_seq) & 0x1f) < win_nump),
             snd_len.eq(lengths[snd_ptr[0:pbits-1]]),
             # EOB: last available packet, window not exhausted and not a short packet (8.6.3).
-            snd_eob.eq((snd_next == wr_ptr) & ((((snd_seq + 1) - win_seq) & 0x1f) < win_nump) &
+            snd_eob.eq(snd_last & ((((snd_seq + 1) - win_seq) & 0x1f) < win_nump) &
                 (snd_len == MAX_PACKET_SIZE)),
         ]
 
