@@ -18,6 +18,8 @@ from litex.build.generic_platform import *
 from litex.build.xilinx import VivadoProgrammer
 
 from litex.soc.cores.clock import *
+from litex.soc.cores.xadc import S7SystemMonitor
+from litex.soc.interconnect import stream
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
@@ -123,6 +125,8 @@ class USB3SoC(SoCMini):
         if with_serdes_debug:
             self.usb3_serdes_debug = USB3SerDesDebug(usb3_serdes, sys_clk_freq,
                 ltssm_state = usb3_phy.ltssm_state)
+            # FPGA temperature/voltages (RX quality vs temperature, scripts/usb3_soak.py).
+            self.xadc = S7SystemMonitor()
 
         # GTP LPM adaptation hold (debug, --lpm-hold): adapt only in Polling.RxEQ, or never.
         if lpm_hold != "none":
@@ -145,6 +149,13 @@ class USB3SoC(SoCMini):
                 usb3_core.source.connect(usb3_phy.sink),
                 usb3_core.reset.eq(~(usb3_phy.ltssm.idle_handshake | usb3_phy.u0)),
                 usb3_core.u0.eq(usb3_phy.u0),
+            ]
+
+            # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (scripts/usb3_bulk.py).
+            self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32)], 2*256, buffered=True)
+            self.comb += [
+                usb3_core.ep2_source.connect(usb3_loopback.sink),
+                usb3_loopback.source.connect(usb3_core.ep1_sink),
             ]
         else:
             self.comb += usb3_phy.source.ready.eq(1)
@@ -229,6 +240,7 @@ def main():
     parser.add_argument("--rxcdr-cfg",         default=None,        help="GTP RXCDR_CFG override (hex, debug).")
     parser.add_argument("--gtp-param",         action="append", default=[], help="GTP parameter override NAME=VALUE (debug, ex: p_RXCDR_HOLD_DURING_EIDLE=1).")
     parser.add_argument("--lpm-hold",          default="none",      help="GTP LPM adaptation hold (debug).", choices=["none", "rxeq", "always"])
+    parser.add_argument("--vivado-place-directive", default="default", help="Vivado place_design directive (the GTP reference clock is fabric-routed on this board: RX quality depends on the placement, see doc/debugging-guide.md).")
     parser.add_argument("--output-dir",        default=None,        help="Build directory (default: build/sqrl_acorn).")
     args = parser.parse_args()
 
@@ -258,7 +270,7 @@ def main():
         gtp_params        = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)},
         lpm_hold          = args.lpm_hold)
     builder = Builder(soc, output_dir=output_dir, csr_csv=os.path.join(output_dir, "csr.csv"))
-    builder.build(run=args.build)
+    builder.build(run=args.build, vivado_place_directive=args.vivado_place_directive)
 
     if args.load:
         prog = soc.platform.create_programmer()

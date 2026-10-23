@@ -27,7 +27,7 @@ def fake_phy():
     phy = SimpleNamespace(
         reset       = Signal(),
         ltssm_state = Signal(5),
-        ltssm       = SimpleNamespace(u0=Signal(), recovery=Signal()),
+        ltssm       = SimpleNamespace(u0=Signal(), recovery=Signal(), u1=Signal(), u2=Signal(), u3=Signal()),
         pipe        = SimpleNamespace(**{name: Signal(name=name) for name in PIPE_EVENTS}),
     )
     serdes = SimpleNamespace(
