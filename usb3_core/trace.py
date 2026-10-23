@@ -45,8 +45,9 @@ class USB3CoreTrace(LiteXModule):
 
         rx = Signal()
         tx = Signal()
+        # ITPs (sent every 125us by the host) are not recorded.
         self.comb += [
-            rx.eq(link.rx_hp.valid & link.rx_hp.ready),
+            rx.eq(link.rx_hp.valid & link.rx_hp.ready & (link.rx_hp.dw0[0:5] != 0x0c)),
             tx.eq(link.tx_hp.valid & link.tx_hp.ready),
         ]
         # RX and TX on the same cycle: TX recorded on the next one.
