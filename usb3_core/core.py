@@ -7,7 +7,6 @@
 import os
 
 from migen import *
-from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
 
@@ -67,28 +66,27 @@ class USB3Core(LiteXModule):
     - Additional TX FIFO to handle back-pressure from the SerDes. (not handled by Daisho)
     """
     def __init__(self, platform, with_endpoint=False, daisho_core="daisho"):
-        self.reset  = Signal()
+        self.reset  = Signal() # i: Core reset (LTSSM not in Polling.Idle/Recovery.Idle/U0).
+        self.u0     = Signal() # i: LTSSM in U0.
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
-        # Artificial Reset Delay from LT_POLLING_IDLE to LT_POLLING_U0 -----------------------------
-
-        u0_timer = WaitTimer(32)
-        u0_timer = ResetInserter()(u0_timer)
-        self.submodules += u0_timer
-        self.comb += u0_timer.wait.eq(1)
-        self.comb += u0_timer.reset.eq(self.reset)
-
+        # Daisho LTSSM state -----------------------------------------------------------------------
+        # Daisho's Link Layer initializes on the LT_POLLING_IDLE -> LT_POLLING_U0 transition (Header
+        # Sequence Number/Rx Header Buffer Credit Advertisements, Port Capability LMP, 7.2.4.1.1,
+        # 8.4.5) and only receives in LT_POLLING_U0: the core is released from reset during the Idle
+        # Symbol handshake (LT_POLLING_IDLE) and enters LT_POLLING_U0 with the LTSSM, so the partner's
+        # Advertisements, sent right after its U0 entry, are not lost.
         LT_POLLING_IDLE = 15
         LT_POLLING_U0   = 16
         ltssm_state     = Signal(5)
         self.comb += [
-            If(~u0_timer.done,
-                ltssm_state.eq(LT_POLLING_IDLE)
-            ).Else(
+            If(self.u0,
                 ltssm_state.eq(LT_POLLING_U0)
+            ).Else(
+                ltssm_state.eq(LT_POLLING_IDLE)
             )
         ]
 

@@ -150,7 +150,8 @@ class USB3SoC(SoCMini):
         self.comb += [
             usb3_pipe.source.connect(usb3_core.sink),
             usb3_core.source.connect(usb3_pipe.sink),
-            usb3_core.reset.eq(~usb3_ltssm.u0),
+            usb3_core.reset.eq(~(usb3_ltssm.idle_handshake | usb3_ltssm.u0)),
+            usb3_core.u0.eq(usb3_ltssm.u0),
         ]
 
         # Debug IOs (Through CYUSB3ACC-005) --------------------------------------------------------

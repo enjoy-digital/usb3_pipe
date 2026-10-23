@@ -356,7 +356,8 @@ class USB3PIPESim(SoCMini):
                 self.comb += [
                     phy.source.connect(core.sink),
                     core.source.connect(phy.sink),
-                    core.reset.eq(~ltssm.u0),
+                    core.reset.eq(~(ltssm.idle_handshake | ltssm.u0)),
+                    core.u0.eq(ltssm.u0),
                 ]
             else:
                 generator = renamer(PRBSPacketGenerator())
