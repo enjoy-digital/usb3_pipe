@@ -163,7 +163,7 @@ class USB3SoC(SoCCore):
         elif with_core and example in ["console", "cdc_uartbone"]:
             # USB3 CDC-ACM serial port.
             self.usb3_acm = usb3_acm = USB3CDCACM(usb3_phy, sys_clk_freq)
-            usb3_acm.core.add_csr()
+            usb3_acm.core.add_csr(with_trace=True)
             if example == "console":
                 # SoC console (BIOS) on the USB3 CDC-ACM: litex_term /dev/ttyACMx.
                 assert cpu_type is not None, "console example requires a CPU (--cpu-type)."
