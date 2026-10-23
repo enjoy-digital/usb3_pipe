@@ -140,25 +140,29 @@ def dph(seq, length, addr=0, ept=0, dp_seq=0, setup=0):
 
 # Received Packets Decoding ------------------------------------------------------------------------
 
-def decode_packets(words):
+def decode_packets(words, positions=None):
     """Decode received Link Layer words into packets: ("LC", info), ("HP", dw0, dw1, dw2, seq, crc_ok),
-    ("DPP", payload, crc_ok)."""
+    ("DPP", payload, crc_ok). The index of the first word of each packet is appended to positions."""
     symbols = [s for s in symbols_from_words(words)]
     packets = []
+    def append(packet, i):
+        packets.append(packet)
+        if positions is not None:
+            positions.append(i//4)
     i = 0
     while i < len(symbols):
         frame = [b for b, k in symbols[i:i+4] if k]
         if symbols[i:i+4] == framing(SLC):
             lc   = symbols[i+4][0] | (symbols[i+5][0] << 8)
             info = lc & 0x7ff
-            packets.append(("LC", info, (lc >> 11) == crc5(info)))
+            append(("LC", info, (lc >> 11) == crc5(info)), i)
             i += 8
         elif symbols[i:i+4] == framing(SHP):
             data = [b for b, k in symbols[i+4:i+20]]
             dws  = [int.from_bytes(bytes(data[4*j:4*j+4]), "little") for j in range(3)]
             crc  = int.from_bytes(bytes(data[12:14]), "little")
             lcw  = int.from_bytes(bytes(data[14:16]), "little")
-            packets.append(("HP", *dws, lcw & 0x7, crc == crc16(data[:12])))
+            append(("HP", *dws, lcw & 0x7, crc == crc16(data[:12])), i)
             i += 20
         elif symbols[i:i+4] == framing(SDP):
             j = i + 4
@@ -166,7 +170,7 @@ def decode_packets(words):
                 j += 1
             data = [b for b, k in symbols[i+4:j]]
             payload, crc = data[:-4], int.from_bytes(bytes(data[-4:]), "little")
-            packets.append(("DPP", payload, crc == crc32(payload)))
+            append(("DPP", payload, crc == crc32(payload)), i)
             i = j + 4
         else:
             i += 1
@@ -294,11 +298,15 @@ class HostScript:
     Header Buffer Credits returned to the device."""
     def __init__(self):
         self.steps     = []
+        self.offset    = 0 # Packets offset in the words (symbols, SKP Ordered Sets accounting).
         self.tx_seq    = 0 # Host Header Sequence Number.
         self.rx_seq    = 0 # Device Header Sequence Number (expected).
         self.marks     = []
 
     def send(self, words):
+        # Packets offset by the SKP Ordered Sets accounting (Logical Idle symbols before the packet).
+        if self.offset:
+            words = words_from_symbols([(0x00, 0)]*self.offset + symbols_from_words(words))
         for i, (data, ctrl) in enumerate(words):
             self.steps.append((OP_SEND, data, ctrl, 0, int(i == 0), int(i == len(words) - 1)))
 
@@ -321,9 +329,13 @@ class HostScript:
 
     def skp(self):
         # SKP Ordered Set between packets: Logical Idle around the request (SerDes model latency).
+        # A host aligns its packets on its symbols count, which includes the SKP Ordered Sets: after
+        # a single SKP Ordered Set (2 symbols), its packets are offset by 2 symbols in the words
+        # received by the device (after the SKP removal).
         self.idle(32)
         self.steps.append((OP_SKP, 0, 0, 0, 0, 0))
         self.idle(32)
+        self.offset = (self.offset + 2) % 4
 
     def mark(self, name):
         self.marks.append(name)
@@ -342,7 +354,7 @@ class HostScript:
         self.wait_hp() # Device Port Configuration Response LMP.
 
     # Control transfers (8.12.2).
-    def control_read(self, setup, name, latency=256):
+    def control_read(self, setup, name, latency=256, status_gap=64):
         self.mark(name)
         self.send_hp(dph, length=8, setup=1)
         self.send(data_packet_payload(setup))
@@ -352,6 +364,7 @@ class HostScript:
         self.wait_hp()                                                # DPH (+DPP).
         self.idle(128)                                                # DPP (END framing not aligned).
         self.send_hp(tp, TP_SUB_ACK, nump=0, tp_seq=1)                # Data acknowledgement.
+        self.idle(status_gap)
         self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
         self.wait_hp()                                                # ACK TP (Status).
 
@@ -363,6 +376,22 @@ class HostScript:
         self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
         self.wait_hp()                                                # ACK TP (Status).
 
+    # Bulk transfers (8.10, 8.11).
+    def bulk_out(self, payload, ept, dp_seq, name):
+        # DPH + DPP, the device acknowledges with an ACK TP (next sequence number).
+        self.mark(name)
+        self.send_hp(dph, length=len(payload), ept=ept, dp_seq=dp_seq)
+        self.send(data_packet_payload(payload))
+        self.wait_hp()                                                # ACK TP.
+
+    def bulk_in(self, ept, dp_seq, name, latency=256):
+        # ACK TP (NumP=1) requesting a data packet, DPH + DPP from the device, ACK TP acknowledging it.
+        self.mark(name)
+        self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=1, tp_seq=dp_seq, pp=1)
+        self.wait_hp()                                                # DPH (+DPP).
+        self.idle(latency)                                            # DPP (END framing not aligned).
+        self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=0, tp_seq=(dp_seq + 1) % 32)
+
     def end(self):
         self.mark("end")
         self.steps.append((OP_END, 0, 0, 0, 0, 0))
@@ -370,7 +399,7 @@ class HostScript:
 def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
-def enumeration_script(skp=True, latency=256):
+def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
     s = HostScript()
     s.link_init()
@@ -378,31 +407,44 @@ def enumeration_script(skp=True, latency=256):
         # SKP Ordered Set (2 symbols) between packets: the framing is then shifted by 2 symbols in
         # the received words (re-aligned by the PHY).
         s.skp()
-    s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor", latency)
+    s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor", latency, status_gap)
     if skp:
         s.skp()
-    s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor", latency)
-    s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor", latency)
+    s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor", latency, status_gap)
+    s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor", latency, status_gap)
     s.control_write(setup_packet(0x00, 0x09, 0x0001, 0, 0), "set_configuration")
+    if bulk:
+        # Bulk OUT (EP2) then Bulk IN (EP1): looped back by the device.
+        for i, payload in enumerate(bulk_payloads()):
+            s.bulk_out(payload, ept=2, dp_seq=i, name=f"bulk_out_{i}")
+        s.idle(1024)
+        for i in range(len(bulk_payloads())):
+            s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256)
     s.end()
     return s
+
+def bulk_payloads():
+    """Bulk test packets (short and max size packets)."""
+    return [[(7*i + 3) & 0xff for i in range(64)], [(i ^ (i >> 8)) & 0xff for i in range(1024)]]
 
 # Simulation Output Parsing ------------------------------------------------------------------------
 
 def parse_sim_output(output, script):
-    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output)."""
-    sections = {}
-    name     = None
-    words    = []
-    def flush():
-        if name is not None:
-            sections[name] = decode_packets(words)
+    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output), a packet
+    belongs to the section in which it starts (the script can move to the next section while the
+    end of a packet is received)."""
+    words, sections_at = [], []
+    section = None
     for line in output.splitlines():
         p = line.split()
         if len(p) == 2 and p[0] == "HOST_MARK":
-            flush()
-            name, words = script.marks[int(p[1])], []
-        elif len(p) == 3 and p[0] == "HOST_RX":
+            section = script.marks[int(p[1])]
+        elif len(p) == 3 and p[0] == "HOST_RX" and section is not None:
             words.append((int(p[1], 16), int(p[2], 16)))
-    flush()
+            sections_at.append(section)
+    positions = []
+    packets   = decode_packets(words, positions)
+    sections  = {name: [] for name in script.marks}
+    for packet, position in zip(packets, positions):
+        sections[sections_at[position]].append(packet)
     return sections

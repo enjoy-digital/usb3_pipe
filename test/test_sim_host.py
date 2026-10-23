@@ -5,7 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """Host model <-> Device (USB3PHY + Daisho USB3 Core) Verilator simulation (sim.py): link training,
-link initialization and enumeration control transfers, as with an xHCI host."""
+link initialization, enumeration control transfers and Bulk OUT/IN transfers (looped back by the
+device), as with an xHCI host."""
 
 import sys
 import unittest
@@ -74,6 +75,12 @@ class TestSimHost(unittest.TestCase):
         # SET_CONFIGURATION: Setup ACK, Status ACK with the next expected sequence number.
         self.assertEqual(tps(sections["set_configuration"]), [(TP_SUB_ACK, 1, 1), (TP_SUB_ACK, 0, 1)])
 
+        # Bulk OUT (EP2): ACK TPs (NumP=1, next sequence number), then Bulk IN (EP1): the packets are
+        # looped back by the device (short and max size packets).
+        for i, payload in enumerate(bulk_payloads()):
+            self.assertEqual(tps(sections[f"bulk_out_{i}"]), [(TP_SUB_ACK, 1, i + 1)])
+            self.assertEqual(dpps(sections[f"bulk_in_{i}"]), [payload])
+
     def test_enumeration(self):
         # SKP Ordered Sets between packets (2 symbols: the framing is shifted in the received words).
         self.check_enumeration(self.run_sim())
@@ -84,6 +91,13 @@ class TestSimHost(unittest.TestCase):
     def test_enumeration_fast_host(self):
         # Data stage requested right after the SETUP ACK (no host latency).
         self.check_enumeration(self.run_sim("--host-latency", "0"))
+
+    @unittest.expectedFailure
+    def test_enumeration_back_to_back_header_packets(self):
+        # Data stage ACK TP immediately followed by the STATUS TP (no Logical Idle/SKP between the
+        # Header Packets): the Daisho core does not answer the STATUS TP (the xHCI host observed on
+        # hardware leaves ~100 words between them, 4 Idle words are enough).
+        self.check_enumeration(self.run_sim("--host-status-gap", "0", "--no-host-skp"))
 
 if __name__ == "__main__":
     unittest.main()
