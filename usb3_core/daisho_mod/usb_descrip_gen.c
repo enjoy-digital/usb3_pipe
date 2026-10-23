@@ -63,6 +63,7 @@ void write_buf8(u8 *buf, u32 size)
 		fwrite(buf-1, 1, 1, bin_2);
 		bytes_written_2 ++;
 	}
+	i_2 = bytes_written_2;
 }
 
 void write_buf32(u32 *buf, u32 size)
@@ -76,6 +77,7 @@ void write_buf32(u32 *buf, u32 size)
 		*buf++;
 		bytes_written_3 += 4;
 	}
+	i_3 = bytes_written_3/4;
 }
 
 void write_buf(void *buf, u32 size)
