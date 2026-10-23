@@ -121,7 +121,8 @@ class USB3SoC(SoCMini):
             self.comb += [
                 usb3_phy.source.connect(usb3_core.sink),
                 usb3_core.source.connect(usb3_phy.sink),
-                usb3_core.reset.eq(~usb3_phy.u0),
+                usb3_core.reset.eq(~(usb3_phy.ltssm.idle_handshake | usb3_phy.u0)),
+                usb3_core.u0.eq(usb3_phy.u0),
             ]
         else:
             self.comb += usb3_phy.source.ready.eq(1)
