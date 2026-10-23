@@ -99,7 +99,6 @@ class TestSimHost(unittest.TestCase):
         # Data stage requested right after the SETUP ACK (no host latency).
         self.check_enumeration(self.run_sim("--host-latency", "0"))
 
-    @unittest.expectedFailure
     def test_enumeration_back_to_back_header_packets(self):
         # Data stage ACK TP immediately followed by the STATUS TP (no Logical Idle/SKP between the
         # Header Packets): the Daisho core does not answer the STATUS TP (the xHCI host observed on
