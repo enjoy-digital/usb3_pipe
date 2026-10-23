@@ -10,7 +10,25 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common import COM
+from usb3_pipe.common import COM, SKP
+
+# LFSR helpers (Appendix B) ------------------------------------------------------------------------
+
+def lfsr_advance(state):
+    """Advance the X^16 + X^5 + X^4 + X^3 + 1 LFSR by one serial shift.
+
+    state is a list of 16 masks: each bit of the LFSR is the XOR of the bits of a reference state
+    selected by its mask.
+    """
+    msb = state[15]
+    new = [msb] + state[:15]
+    for i in [3, 4, 5]:
+        new[i] ^= msb
+    return new
+
+def lfsr_xor(signal, mask):
+    bits = [signal[i] for i in range(len(signal)) if (mask >> i) & 0x1]
+    return Reduce("XOR", bits) if bits else 0
 
 # Scrambler Unit (Appendix B) ----------------------------------------------------------------------
 
@@ -19,75 +37,47 @@ from usb3_pipe.common import COM
 class ScramblerUnit(LiteXModule):
     """Scrambler Unit
 
-    This module generates the scrambled datas for the USB3.0 link (X^16 + X^5 + X^4 + X^3 + 1 polynom).
+    This module generates the scrambling values of the 4 symbols of a USB3.0 link word (X^16 + X^5 +
+    X^4 + X^3 + 1 polynom). The LFSR advances 8 serial shifts on each symbol except SKP and is
+    initialized after each COM, including in the middle of a word (USB 3.2 6.3.1.3).
     """
-    def __init__(self, reset=0xffff):
-        self.value = Signal(32)
+    def __init__(self, reset=0xffff, seed=0xffff):
+        self.skp   = Signal(4)  # i: SKP symbol on lane i.
+        self.com   = Signal(4)  # i: COM symbol on lane i.
+        self.value = Signal(32) # o: Scrambling value of lane i: value[8*i:8*(i+1)].
 
         # # #
 
-        new = Signal(16)
-        cur = Signal(16, reset=reset)
+        cur   = Signal(16, reset=reset)
+        state = cur
+        for i in range(4):
+            # Symbol i value: LFSR output (D15) on each of its 8 serial shifts.
+            masks = [1 << n for n in range(16)]
+            for n in range(8):
+                self.comb += self.value[8*i + n].eq(lfsr_xor(state, masks[15]))
+                masks = lfsr_advance(masks)
 
-        self.comb += [
-            new[0].eq(cur[0]  ^ cur[6] ^ cur[8]  ^ cur[10]),
-            new[1].eq(cur[1]  ^ cur[7] ^ cur[9]  ^ cur[11]),
-            new[2].eq(cur[2]  ^ cur[8] ^ cur[10] ^ cur[12]),
-            new[3].eq(cur[3]  ^ cur[6] ^ cur[8]  ^ cur[9]  ^ cur[10] ^ cur[11] ^ cur[13]),
-            new[4].eq(cur[4]  ^ cur[6] ^ cur[7]  ^ cur[8]  ^ cur[9]  ^ cur[11] ^ cur[12] ^ cur[14]),
-            new[5].eq(cur[5]  ^ cur[6] ^ cur[7]  ^ cur[9]  ^ cur[12] ^ cur[13] ^ cur[15]),
-            new[6].eq(cur[0]  ^ cur[6] ^ cur[7]  ^ cur[8]  ^ cur[10] ^ cur[13] ^ cur[14]),
-            new[7].eq(cur[1]  ^ cur[7] ^ cur[8]  ^ cur[9]  ^ cur[11] ^ cur[14] ^ cur[15]),
-            new[8].eq(cur[0]  ^ cur[2] ^ cur[8]  ^ cur[9]  ^ cur[10] ^ cur[12] ^ cur[15]),
-            new[9].eq(cur[1]  ^ cur[3] ^ cur[9]  ^ cur[10] ^ cur[11] ^ cur[13]),
-            new[10].eq(cur[0] ^ cur[2] ^ cur[4]  ^ cur[10] ^ cur[11] ^ cur[12] ^ cur[14]),
-            new[11].eq(cur[1] ^ cur[3] ^ cur[5]  ^ cur[11] ^ cur[12] ^ cur[13] ^ cur[15]),
-            new[12].eq(cur[2] ^ cur[4] ^ cur[6]  ^ cur[12] ^ cur[13] ^ cur[14]),
-            new[13].eq(cur[3] ^ cur[5] ^ cur[7]  ^ cur[13] ^ cur[14] ^ cur[15]),
-            new[14].eq(cur[4] ^ cur[6] ^ cur[8]  ^ cur[14] ^ cur[15]),
-            new[15].eq(cur[5] ^ cur[7] ^ cur[9]  ^ cur[15]),
-
-            self.value[0].eq(cur[15]),
-            self.value[1].eq(cur[14]),
-            self.value[2].eq(cur[13]),
-            self.value[3].eq(cur[12]),
-            self.value[4].eq(cur[11]),
-            self.value[5].eq(cur[10]),
-            self.value[6].eq(cur[9]),
-            self.value[7].eq(cur[8]),
-            self.value[8].eq(cur[7]),
-            self.value[9].eq(cur[6]),
-            self.value[10].eq(cur[5]),
-            self.value[11].eq(cur[4]  ^ cur[15]),
-            self.value[12].eq(cur[3]  ^ cur[14] ^ cur[15]),
-            self.value[13].eq(cur[2]  ^ cur[13] ^ cur[14] ^ cur[15]),
-            self.value[14].eq(cur[1]  ^ cur[12] ^ cur[13] ^ cur[14]),
-            self.value[15].eq(cur[0]  ^ cur[11] ^ cur[12] ^ cur[13]),
-            self.value[16].eq(cur[10] ^ cur[11] ^ cur[12] ^ cur[15]),
-            self.value[17].eq(cur[9]  ^ cur[10] ^ cur[11] ^ cur[14]),
-            self.value[18].eq(cur[8]  ^ cur[9]  ^ cur[10] ^ cur[13]),
-            self.value[19].eq(cur[7]  ^ cur[8]  ^ cur[9]  ^ cur[12]),
-            self.value[20].eq(cur[6]  ^ cur[7]  ^ cur[8]  ^ cur[11]),
-            self.value[21].eq(cur[5]  ^ cur[6]  ^ cur[7]  ^ cur[10]),
-            self.value[22].eq(cur[4]  ^ cur[5]  ^ cur[6]  ^ cur[9]  ^ cur[15]),
-            self.value[23].eq(cur[3]  ^ cur[4]  ^ cur[5]  ^ cur[8]  ^ cur[14]),
-            self.value[24].eq(cur[2]  ^ cur[3]  ^ cur[4]  ^ cur[7]  ^ cur[13] ^ cur[15]),
-            self.value[25].eq(cur[1]  ^ cur[2]  ^ cur[3]  ^ cur[6]  ^ cur[12] ^ cur[14]),
-            self.value[26].eq(cur[0]  ^ cur[1]  ^ cur[2]  ^ cur[5]  ^ cur[11] ^ cur[13] ^ cur[15]),
-            self.value[27].eq(cur[0]  ^ cur[1]  ^ cur[4]  ^ cur[10] ^ cur[12] ^ cur[14]),
-            self.value[28].eq(cur[0]  ^ cur[3]  ^ cur[9]  ^ cur[11] ^ cur[13]),
-            self.value[29].eq(cur[2]  ^ cur[8]  ^ cur[10] ^ cur[12]),
-            self.value[30].eq(cur[1]  ^ cur[7]  ^ cur[9]  ^ cur[11]),
-            self.value[31].eq(cur[0]  ^ cur[6]  ^ cur[8]  ^ cur[10]),
-        ]
-        self.sync += cur.eq(new)
+            # LFSR state after symbol i.
+            new = Signal(16)
+            self.comb += [
+                If(self.com[i],
+                    new.eq(seed)
+                ).Elif(self.skp[i],
+                    new.eq(state)
+                ).Else(
+                    new.eq(Cat(*[lfsr_xor(state, mask) for mask in masks]))
+                )
+            ]
+            state = new
+        self.sync += cur.eq(state)
 
 # Scrambler (Appendix B) ---------------------------------------------------------------------------
 
 class Scrambler(LiteXModule):
     """Scrambler
 
-    This module scrambles the TX data/ctrl stream. K codes shall not be scrambled.
+    This module scrambles the TX data/ctrl stream. K codes shall not be scrambled, the LFSR does not
+    advance on SKP and is initialized after COM.
     """
     def __init__(self, reset=0x7dbd):
         self.enable = Signal(reset=1)
@@ -101,6 +91,8 @@ class Scrambler(LiteXModule):
         self.comb += sink.connect(source)
         for i in range(4):
             self.comb += [
+                unit.skp[i].eq(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == SKP.value)),
+                unit.com[i].eq(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == COM.value)),
                 If(~self.enable | sink.ctrl[i], # K codes shall not be scrambled.
                     source.data[8*i:8*(i+1)].eq(sink.data[8*i:8*(i+1)])
                 ).Else(
@@ -114,8 +106,8 @@ class Descrambler(LiteXModule):
     """Descrambler
 
     This module descrambles the RX data/ctrl stream. K codes shall not be scrambled. The descrambler
-    automatically synchronizes itself to the incoming stream and resets the scrambler unit when COM
-    characters are seen.
+    automatically synchronizes itself to the incoming stream: the LFSR is initialized after each
+    received COM.
     """
     def __init__(self, reset=0xffff):
         self.enable = Signal(reset=1)
@@ -126,14 +118,6 @@ class Descrambler(LiteXModule):
 
         self.scrambler = scrambler = Scrambler(reset=reset)
         self.comb += scrambler.enable.eq(self.enable)
-
-        # Synchronize on COM
-        for i in range(4):
-            self.comb += [
-                If(sink.valid & sink.ready & (sink.data[8*i:8*(i+1)] == COM.value) & sink.ctrl[i],
-                   scrambler.unit.reset.eq(1)
-                )
-            ]
 
         # Descramble data
         self.comb += [

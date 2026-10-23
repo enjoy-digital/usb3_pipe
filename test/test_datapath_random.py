@@ -173,10 +173,10 @@ class TestScramblingRandom(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.words, words)
 
-    # Symbol-level rules not implemented by the word-level (de)scrambler ---------------------------
-    # Minimal repros (see report). In USB3PIPE these situations should not occur: SKP are removed
-    # before the Descrambler (RXDatapath) and inserted after the Scrambler (TXDatapath), COM are
-    # word-aligned by the RXWordAligner, and Training Sequences bypass the Scrambler.
+    # Symbol-level rules (6.3.1.3) ----------------------------------------------------------------
+    # Minimal repros. In USB3PIPE, SKP are removed before the Descrambler (RXDatapath) and inserted
+    # after the Scrambler (TXDatapath), COM are word-aligned by the RXWordAligner, and Training
+    # Sequences bypass the Scrambler: the (de)scrambler still follows the rules at the symbol level.
 
     def run_word_level(self, dut, words):
         def generator(dut):
@@ -186,14 +186,12 @@ class TestScramblingRandom(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
         return dut.words
 
-    @unittest.expectedFailure
     def test_descrambler_skp_does_not_advance_lfsr(self):
         # 6.3.1.3: the LFSR is advanced on every symbol except SKP.
         plain = [(SKP.value*0x0101, 0b0011)] + [(0, 0)]*4 # SKP SKP D D, then D.
         wire  = symbols_to_words(ScramblerModel().process(words_to_symbols(plain)))
         self.assertEqual(self.run_word_level(Descrambler(), wire), plain)
 
-    @unittest.expectedFailure
     def test_descrambler_com_reset_mid_word(self):
         # 6.3.1.3: the LFSR is initialized after COM, including for the D symbols following a COM in
         # the same 32-bit word (COM not on the last lane).
@@ -201,7 +199,6 @@ class TestScramblingRandom(unittest.TestCase):
         wire  = symbols_to_words(ScramblerModel().process(words_to_symbols(plain)))
         self.assertEqual(self.run_word_level(Descrambler(), wire), plain)
 
-    @unittest.expectedFailure
     def test_scrambler_com_reset(self):
         # 6.3.1.3: the transmitter LFSR is also initialized after COM.
         plain = [(0, 0)]*2 + [(COM.value*0x01010101, 0b1111)] + [(0, 0)]*4
