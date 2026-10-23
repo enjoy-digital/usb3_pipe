@@ -11,7 +11,7 @@ reg [31:0] mem[0:127];
 reg [6:0] memadr;
 always @(posedge clk) begin
 	memadr <= adr;
-	dat_r = mem[memadr];
+	dat_r <= mem[memadr];
 end
 
 initial begin
