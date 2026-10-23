@@ -67,6 +67,33 @@ class CRC16(CRCComb):
     def __init__(self):
         CRCComb.__init__(self, width=16, poly=0x100b, init=0xffff, data_width=96)
 
+# CRC-16 Words ------------------------------------------------------------------------------------
+
+class CRC16Words(LiteXModule):
+    """CRC-16 of a Header Packet computed on its 32-bit words (one word per cycle: smaller and faster
+    than the 96-bit combinatorial CRC16).
+
+    clear: initialize the CRC, ce: process data (4 bytes, data[0:8] first). value: CRC of the
+    processed words (registered state).
+    """
+    def __init__(self):
+        self.clear = Signal()   # i
+        self.ce    = Signal()   # i
+        self.data  = Signal(32) # i
+        self.value = Signal(16) # o
+
+        # # #
+
+        state = Signal(16, reset=0xffff)
+        self.sync += [
+            If(self.clear,
+                state.eq(0xffff)
+            ).Elif(self.ce,
+                state.eq(Cat(*crc_next(16, 0x100b, state, self.data)))
+            )
+        ]
+        self.comb += self.value.eq(crc_value(16, state))
+
 # CRC-32 -------------------------------------------------------------------------------------------
 
 class CRC32(LiteXModule):

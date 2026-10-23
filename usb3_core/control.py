@@ -91,21 +91,30 @@ class USB3EndpointControl(USB3Endpoint):
         wIndex        = setup_w1[0:16]
         wLength       = setup_w1[16:32]
 
-        # Request matching (first match).
+        # Request matching (first match, registered: the request is decoded when the SETUP lands and
+        # used from its Data/Status stages).
         kind   = Signal(3)
         offset = Signal(max=max(len(rom), 2))
         length = Signal(16)
+        match_kind   = Signal(3)
+        match_offset = Signal(max=max(len(rom), 2))
+        match_length = Signal(16)
         cases  = None
-        for _bmRequestType, _bRequest, _wValue, _offset, _length, _kind in reversed(entries):
+        for _bmRequestType, _bRequest, _wValue, e_offset, e_length, e_kind in reversed(entries):
             match = (bmRequestType == _bmRequestType) & (bRequest == _bRequest)
             if _wValue is not None:
                 match = match & (wValue == _wValue)
-            action = [kind.eq(_kind), offset.eq(_offset), length.eq(_length)]
+            action = [match_kind.eq(e_kind), match_offset.eq(e_offset), match_length.eq(e_length)]
             cases = If(match, *action) if cases is None else If(match, *action).Else(cases)
-        self.comb += [kind.eq(KIND_STALL), cases]
+        self.comb += [match_kind.eq(KIND_STALL), cases]
 
         total = Signal(16)
-        self.comb += total.eq(Mux(wLength < length, wLength, length))
+        self.sync += [
+            kind.eq(match_kind),
+            offset.eq(match_offset),
+            length.eq(match_length),
+            total.eq(Mux(wLength < match_length, wLength, match_length)),
+        ]
         stall = Signal()
         self.comb += stall.eq(kind == KIND_STALL)
 

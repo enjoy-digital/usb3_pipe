@@ -29,7 +29,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common import *
-from usb3_core.crc    import CRC5, CRC16, CRC32
+from usb3_core.crc    import CRC5, CRC16, CRC16Words, CRC32
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -113,12 +113,17 @@ class USB3LinkLayer(LiteXModule):
         hp_seq    = Signal(3)
         hp_dl     = Signal()
         hp_is_dp  = Signal()
-        self.crc16_rx = crc16_rx = CRC16()
+        # CRC-16 computed on the words as received, checks registered with the last word (timings).
+        self.crc16_rx = crc16_rx = CRC16Words()
         self.crc5_rx  = crc5_rx  = CRC5()
         self.comb += [
-            crc16_rx.data.eq(Cat(hp_w[0], hp_w[1], hp_w[2])),
-            crc5_rx.data.eq(hp_w[3][16:27]),
-            hp_ok.eq((crc16_rx.value == hp_w[3][0:16]) & (crc5_rx.value == hp_w[3][27:32])),
+            crc16_rx.data.eq(rx_data),
+            crc5_rx.data.eq(rx_data[16:27]),
+        ]
+        self.sync += If(hp_last,
+            hp_ok.eq((crc16_rx.value == rx_data[0:16]) & (crc5_rx.value == rx_data[27:32]))
+        )
+        self.comb += [
             hp_seq.eq(hp_w[3][16:19]),
             hp_dl.eq(hp_w[3][16 + 9]),
             hp_is_dp.eq(hp_w[0][0:5]  == TYPE_DP),
@@ -126,7 +131,8 @@ class USB3LinkLayer(LiteXModule):
         self.sync += hp_check.eq(hp_last)
 
         # RX Link Commands checks ------------------------------------------------------------------
-        lc_check = Signal()   # Link Command received (pulse).
+        lc_valid = Signal()   # Link Command received (pulse, before registration).
+        lc_check = Signal()   # Link Command received (pulse, registered: timings).
         lc_info  = Signal(11)
         self.crc5_lc0 = crc5_lc0 = CRC5()
         self.crc5_lc1 = crc5_lc1 = CRC5()
@@ -137,6 +143,9 @@ class USB3LinkLayer(LiteXModule):
             crc5_lc1.data.eq(rx_data[16:27]),
             lc_ok0.eq(crc5_lc0.value == rx_data[11:16]),
             lc_ok1.eq(crc5_lc1.value == rx_data[27:32]),
+        ]
+        self.sync += [
+            lc_check.eq(lc_valid),
             lc_info.eq(Mux(lc_ok0, rx_data[0:11], rx_data[16:27])),
         ]
 
@@ -202,6 +211,7 @@ class USB3LinkLayer(LiteXModule):
             If(rx_valid,
                 If(rx_shp,
                     dpp_missing.eq(expect_now),
+                    crc16_rx.clear.eq(1),
                     NextValue(hp_count, 0),
                     NextState("HP")
                 ).Elif(rx_slc,
@@ -220,6 +230,7 @@ class USB3LinkLayer(LiteXModule):
             If(rx_valid,
                 Case(hp_count, {i: NextValue(hp_w[i], rx_data) for i in range(4)}),
                 NextValue(hp_count, hp_count + 1),
+                crc16_rx.ce.eq(hp_count != 3),
                 If(hp_count == 3,
                     hp_last.eq(1),
                     NextState("IDLE")
@@ -228,7 +239,7 @@ class USB3LinkLayer(LiteXModule):
         )
         rx_fsm.act("LC",
             If(rx_valid,
-                lc_check.eq(lc_ok0 | lc_ok1),
+                lc_valid.eq(lc_ok0 | lc_ok1),
                 NextState("IDLE")
             )
         )
