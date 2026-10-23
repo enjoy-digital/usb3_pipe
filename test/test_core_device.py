@@ -76,6 +76,19 @@ def check_core_enumeration(test, sections):
 
 
 class TestCoreDevice(unittest.TestCase):
+    def test_link_init(self):
+        # Link initialization with the reactive host: Advertisements (LGOOD_7, LCRD_A-D), Port
+        # Capability and Port Configuration Response LMPs (fast: no enumeration).
+        dut  = DUT(max_burst=2)
+        host = PyHost(dut.phy)
+        def scenario():
+            yield from pyhost_link_init(host)
+            for _ in range(64):
+                yield
+            self.assertEqual(host.lcs[:5], [LGOOD(7)] + [LCRD(x) for x in range(4)])
+            self.assertEqual([(hp[0] >> 5) & 0xf for hp in host.hps[:2]], [LMP_SUB_PORT_CAP, LMP_SUB_PORT_CFG_RESP])
+        run_pyhost(dut, host, scenario())
+
     @pytest.mark.slow
     def test_enumeration(self):
         # Migen simulation (PHY stand-in, no SKP).
