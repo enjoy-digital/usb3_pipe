@@ -65,8 +65,7 @@ def loopback(dev, size, count, random_sizes=False, timeout=1000, seed=0):
     nbytes = 0
     t0     = time.time()
     for i in range(count):
-        # Packets of 32-bit words (USB3Core endpoints data granularity).
-        n    = 4*rng.randint(1, size//4) if random_sizes else size
+        n    = rng.randint(1, size) if random_sizes else size
         data = bytes(rng.randrange(256) for _ in range(n))
         dev.write(EP_OUT, data, timeout=timeout)
         back = bytes(dev.read(EP_IN, MAX_SIZE, timeout=timeout))
@@ -85,14 +84,14 @@ def loopback(dev, size, count, random_sizes=False, timeout=1000, seed=0):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--size",         default=1024, type=int, help="Packets size (bytes, multiple of 4, max 1024).")
+    parser.add_argument("--size",         default=1024, type=int, help="Packets size (bytes, max 1024).")
     parser.add_argument("--count",        default=100,  type=int, help="Number of packets.")
     parser.add_argument("--random-sizes", action="store_true",    help="Random packets sizes (up to --size).")
     parser.add_argument("--timeout",      default=1000, type=int, help="Transfers timeout (ms).")
     parser.add_argument("--seed",         default=0,    type=int, help="Random seed.")
     parser.add_argument("command",        choices=["info", "loopback"])
     args = parser.parse_args()
-    assert (args.size % 4 == 0) and (4 <= args.size <= MAX_SIZE)
+    assert 1 <= args.size <= MAX_SIZE
 
     dev = open_device()
     info(dev)

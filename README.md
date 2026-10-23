@@ -20,7 +20,7 @@ Current solutions for USB3 connectivity with an FPGA require the use of an exter
 
 [> Targets
 ----------
-While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) when used with a customized [Daisho USB3 core](https://github.com/enjoy-digital/daisho).
+While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) with its native USB3 Device Core (`usb3_core`, Link/Protocol Layers in Migen/LiteX).
 
 It currently targets Xilinx Kintex7 and Artix7.
 
@@ -87,7 +87,7 @@ You should see the USB3.0 initialization between a Host and Device:
 
 At this point, all the steps of the USB3.0 PIPE initialization have succeeded and the USB3.0 Core can start transmitting packets.
 
-The Device runs the Daisho USB3.0 Core, the Host a scripted Host Link/Protocol Layer model
+The Device runs the USB3 Device Core (`usb3_core`), the Host a scripted Host Link/Protocol Layer model
 (`usb3_core/host_model.py`, packets formats/CRCs checked against an xHCI host) that behaves like a
 real host: Header Sequence Number/Credits Advertisements right after U0, Port Capability/Configuration
 LMPs, SKP Ordered Sets between packets, then enumeration control transfers (GET_DESCRIPTOR Device/
@@ -137,7 +137,7 @@ Once the FPGA is loaded, the link will be automatically established with the com
 
 [> USB3 Device Core
 --------------------
-`usb3_core/` is a native Migen/LiteX USB3.0 SuperSpeed device core (Link Layer, Protocol Layer,
+`usb3_core/` is a Migen/LiteX USB3.0 SuperSpeed device core (Link Layer, Protocol Layer,
 Control Endpoint, Bulk Endpoints with bursts). It connects to the PHY only through the `USB3PHY` Link
 interface (data/ctrl symbol streams, LTSSM status and Link-Layer control: see `usb3_pipe/phy.py`), so
 it can be used with any PHY providing the same interface.
@@ -167,7 +167,7 @@ Example designs (`./acorn.py --build --example ...`):
 - `cdc_uartbone`: CDC-ACM serial port (no driver needed) carrying the UARTBone protocol: the SoC bus
   is accessible over USB3 with `litex_server --uart --uart-port /dev/ttyACM0`.
 
-Simulation: `./sim.py --core native` (Host model <-> PHYs <-> native core), unit/system tests in
+Simulation: `./sim.py` (Host model <-> PHYs <-> USB3 Device Core), unit/system tests in
 `test/test_native_*.py` and `test/test_sim_host.py`.
 
 [> Standalone core generator
