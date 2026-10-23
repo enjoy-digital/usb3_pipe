@@ -1,0 +1,408 @@
+#
+# This file is part of USB3-PIPE project.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# SPDX-License-Identifier: BSD-2-Clause
+
+"""USB3 Host model (simulation).
+
+Scripted Host (Downstream Port) Link/Protocol Layer, used to test the USB3 Core (device) and the PHY
+against a host behaving like a real xHCI host: Header Sequence Number/Credits Advertisements right
+after U0 entry, Port Capability/Configuration LMPs, control transfers. The packets formats/CRCs are
+checked against packets captured on hardware (xHCI host, see test/test_host_model.py).
+
+- Packets encoders (Link Layer words: 32-bit data/4-bit ctrl, first symbol on data[31:24]).
+- USB3HostModel: plays a script (send words, wait for received words, request SKP Ordered Sets
+  insertion) and logs the received words with Display ("HOST_RX <data> <ctrl>") while running.
+- Scripts builders (link initialization, control transfers).
+"""
+
+import zlib
+
+from migen import *
+from migen.genlib.misc import WaitTimer
+
+from litex.gen import *
+
+from litex.soc.interconnect import stream
+
+# CRCs (USB 3.2 7.2.1/7.2.2: bits transmitted LSB first, inverted remainder) -----------------------
+
+def _crc(data_bits, width, poly, init):
+    crc = init
+    for bit in data_bits:
+        msb = (crc >> (width - 1)) & 0x1
+        crc = (crc << 1) & ((1 << width) - 1)
+        if bit ^ msb:
+            crc ^= poly
+    crc ^= (1 << width) - 1
+    return int("{:0{}b}".format(crc, width)[::-1], 2)
+
+def crc5(value, nbits=11):
+    """CRC-5 of Link Commands/Link Control Words (x^5+x^2+1)."""
+    return _crc([(value >> i) & 0x1 for i in range(nbits)], 5, 0x05, 0x1f)
+
+def crc16(data):
+    """CRC-16 of Header Packets (x^16+x^12+x^3+x+1)."""
+    return _crc([(byte >> i) & 0x1 for byte in data for i in range(8)], 16, 0x100b, 0xffff)
+
+def crc32(data):
+    """CRC-32 of Data Packet Payloads."""
+    return zlib.crc32(bytes(data))
+
+# Symbols <-> Link Layer Words ---------------------------------------------------------------------
+
+SHP = 0xfb # K27.7.
+SDP = 0x5c # K28.2.
+SLC = 0xfe # K30.7.
+END = 0xfd # K29.7.
+EPF = 0xf7 # K23.7.
+
+def words_from_symbols(symbols):
+    """(byte, k) symbols -> Link Layer (data, ctrl) words (padded with Logical Idle)."""
+    symbols = symbols + [(0x00, 0)]*((-len(symbols)) % 4)
+    words   = []
+    for i in range(0, len(symbols), 4):
+        data = ctrl = 0
+        for byte, k in symbols[i:i+4]:
+            data = (data << 8) | byte
+            ctrl = (ctrl << 1) | k
+        words.append((data, ctrl))
+    return words
+
+def symbols_from_words(words):
+    symbols = []
+    for data, ctrl in words:
+        for i in reversed(range(4)):
+            symbols.append(((data >> 8*i) & 0xff, (ctrl >> i) & 0x1))
+    return symbols
+
+def framing(k):
+    return [(k, 1)]*3 + [(EPF, 1)]
+
+def le_bytes(value, n):
+    return list(value.to_bytes(n, "little"))
+
+# Link Commands (USB 3.2 7.2.2) --------------------------------------------------------------------
+
+def LGOOD(n): return 0x000 | (n & 0x7)
+def LCRD(x):  return 0x080 | (x & 0x3)
+def LRTY():   return 0x100
+def LUP():    return 0x400
+def LDN():    return 0x580
+
+def link_command(info):
+    lc = info | (crc5(info) << 11)
+    return words_from_symbols(framing(SLC) + [(b, 0) for b in le_bytes(lc, 2)*2])
+
+# Header Packets (USB 3.2 7.2.1, 8.3) --------------------------------------------------------------
+
+def header_packet(dw0, dw1, dw2, seq):
+    """Header Packet: SHP framing, 3 DWords, CRC-16 and Link Control Word (Header Sequence Number)."""
+    header = le_bytes(dw0, 4) + le_bytes(dw1, 4) + le_bytes(dw2, 4)
+    lcw    = (seq & 0x7) | (crc5(seq & 0x7) << 11)
+    return words_from_symbols(framing(SHP) + [(b, 0) for b in header + le_bytes(crc16(header), 2) + le_bytes(lcw, 2)])
+
+def data_packet_payload(payload):
+    """Data Packet Payload: SDP framing, payload, CRC-32 and END framing."""
+    payload = list(payload)
+    return words_from_symbols(framing(SDP) + [(b, 0) for b in payload + le_bytes(crc32(payload), 4)] + framing(END))
+
+# LMPs (USB 3.2 8.4).
+LMP_SUB_PORT_CAP      = 4
+LMP_SUB_PORT_CFG      = 5
+LMP_SUB_PORT_CFG_RESP = 6
+
+def lmp_port_capability(seq):
+    # Downstream Port: 5Gbps, 4 Rx Header Buffers, Downstream capable (as sent by an xHCI host).
+    return header_packet(0x00000000 | (LMP_SUB_PORT_CAP << 5) | (1 << 9), 0x00010004, 0, seq)
+
+def lmp_port_configuration(seq):
+    return header_packet(0x00000000 | (LMP_SUB_PORT_CFG << 5) | (1 << 9), 0, 0, seq)
+
+# Transaction Packets (USB 3.2 8.5).
+TP_SUB_ACK    = 1
+TP_SUB_NRDY   = 2
+TP_SUB_ERDY   = 3
+TP_SUB_STATUS = 4
+TP_SUB_STALL  = 5
+
+def tp(subtype, seq, addr=0, ept=0, direction=0, nump=0, tp_seq=0, pp=0):
+    dw0 = 0x04 | (addr << 25)
+    dw1 = subtype | (direction << 7) | (ept << 8) | (nump << 16) | (tp_seq << 21)
+    dw2 = pp << 27
+    return header_packet(dw0, dw1, dw2, seq)
+
+def dph(seq, length, addr=0, ept=0, dp_seq=0, setup=0):
+    dw0 = 0x08 | (addr << 25)
+    dw1 = dp_seq | (ept << 8) | (setup << 15) | (length << 16)
+    return header_packet(dw0, dw1, 0, seq)
+
+# Received Packets Decoding ------------------------------------------------------------------------
+
+def decode_packets(words):
+    """Decode received Link Layer words into packets: ("LC", info), ("HP", dw0, dw1, dw2, seq, crc_ok),
+    ("DPP", payload, crc_ok)."""
+    symbols = [s for s in symbols_from_words(words)]
+    packets = []
+    i = 0
+    while i < len(symbols):
+        frame = [b for b, k in symbols[i:i+4] if k]
+        if symbols[i:i+4] == framing(SLC):
+            lc   = symbols[i+4][0] | (symbols[i+5][0] << 8)
+            info = lc & 0x7ff
+            packets.append(("LC", info, (lc >> 11) == crc5(info)))
+            i += 8
+        elif symbols[i:i+4] == framing(SHP):
+            data = [b for b, k in symbols[i+4:i+20]]
+            dws  = [int.from_bytes(bytes(data[4*j:4*j+4]), "little") for j in range(3)]
+            crc  = int.from_bytes(bytes(data[12:14]), "little")
+            lcw  = int.from_bytes(bytes(data[14:16]), "little")
+            packets.append(("HP", *dws, lcw & 0x7, crc == crc16(data[:12])))
+            i += 20
+        elif symbols[i:i+4] == framing(SDP):
+            j = i + 4
+            while j < len(symbols) and symbols[j:j+4] != framing(END):
+                j += 1
+            data = [b for b, k in symbols[i+4:j]]
+            payload, crc = data[:-4], int.from_bytes(bytes(data[-4:]), "little")
+            packets.append(("DPP", payload, crc == crc32(payload)))
+            i = j + 4
+        else:
+            i += 1
+    return packets
+
+# USB3 Host Model (gateware) -----------------------------------------------------------------------
+
+OP_SEND = 0 # Send data/ctrl word (first/last packet delimiters).
+OP_WAIT = 1 # Wait a received word matching data (under mask)/ctrl.
+OP_SKP  = 2 # Request a SKP Ordered Set insertion (SerDes model).
+OP_MARK = 3 # Display a step marker.
+OP_END  = 4 # End of script.
+OP_IDLE = 5 # Logical Idle for data cycles.
+
+class USB3HostModel(LiteXModule):
+    """Scripted USB3 Host Link/Protocol Layer model.
+
+    The script is a list of (op, data, ctrl, mask, first, last) steps, see the scripts builders. The
+    received words are displayed ("HOST_RX <data> <ctrl>") while the script runs, the received
+    packets are then checked by the test from the simulation output.
+    """
+    def __init__(self, script, wait_timeout=2**16):
+        self.enable   = Signal() # i: Run the script (ex: LTSSM in U0), restarts it when deasserted.
+        self.sink     = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source   = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.skp      = Signal() # o: SKP Ordered Set insertion request (SerDes model).
+        self.done     = Signal() # o
+        self.error    = Signal() # o
+
+        # # #
+
+        # Script ROM.
+        layout = [("op", 3), ("data", 32), ("ctrl", 4), ("mask", 32), ("first", 1), ("last", 1)]
+        width  = sum(w for _, w in layout)
+        def encode(step):
+            value, offset = 0, 0
+            for (name, w), v in zip(layout, step):
+                value  |= (v & ((1 << w) - 1)) << offset
+                offset += w
+            return value
+        mem  = Memory(width, len(script) + 1, init=[encode(s) for s in script] + [encode((OP_END, 0, 0, 0, 0, 0))])
+        port = mem.get_port(async_read=True)
+        self.specials += mem, port
+        step  = Signal(max=len(script) + 1)
+        fields = {}
+        offset = 0
+        for name, w in layout:
+            fields[name] = Signal(w, name=f"script_{name}")
+            self.comb += fields[name].eq(port.dat_r[offset:offset + w])
+            offset += w
+        self.comb += port.adr.eq(step)
+
+        # RX logging.
+        self.comb += sink.ready.eq(1)
+        self.sync += If(self.enable & ~self.done & sink.valid,
+            Display("HOST_RX %08x %01x", sink.data, sink.ctrl)
+        )
+
+        # Script execution.
+        timer = WaitTimer(wait_timeout)
+        self.submodules += timer
+        idle_count = Signal(16)
+        match = Signal()
+        self.comb += match.eq(sink.valid &
+            ((sink.data & fields["mask"]) == (fields["data"] & fields["mask"])) &
+            (sink.ctrl == fields["ctrl"]))
+        self.comb += [
+            source.data.eq(fields["data"]),
+            source.ctrl.eq(fields["ctrl"]),
+            source.first.eq(fields["first"]),
+            source.last.eq(fields["last"]),
+        ]
+        run = Signal()
+        self.comb += run.eq(self.enable & ~self.error)
+        self.comb += If(self.enable, Case(fields["op"], {
+            OP_SEND: [
+                source.valid.eq(run),
+            ],
+            OP_WAIT: [
+                timer.wait.eq(run),
+            ],
+            OP_SKP: [
+                self.skp.eq(run),
+            ],
+            OP_END: [
+                self.done.eq(1),
+            ],
+            "default": []
+        }))
+        self.sync += If(~self.enable,
+            step.eq(0),
+            idle_count.eq(0),
+            self.error.eq(0),
+        ).Elif(~self.error,
+            Case(fields["op"], {
+                OP_SEND: If(source.valid & source.ready, step.eq(step + 1)),
+                OP_WAIT: [
+                    If(match,
+                        step.eq(step + 1)
+                    ).Elif(timer.done,
+                        self.error.eq(1),
+                        Display("HOST_TIMEOUT step %d", step)
+                    )
+                ],
+                OP_SKP:  step.eq(step + 1),
+                OP_MARK: [
+                    Display("HOST_MARK %d", fields["data"]),
+                    step.eq(step + 1)
+                ],
+                OP_IDLE: [
+                    idle_count.eq(idle_count + 1),
+                    If(idle_count == fields["data"],
+                        idle_count.eq(0),
+                        step.eq(step + 1)
+                    )
+                ],
+                "default": []
+            })
+        )
+
+# Scripts Builders ---------------------------------------------------------------------------------
+
+class HostScript:
+    """Host script builder (USB3HostModel steps), tracking the Header Sequence Numbers and the Rx
+    Header Buffer Credits returned to the device."""
+    def __init__(self):
+        self.steps     = []
+        self.tx_seq    = 0 # Host Header Sequence Number.
+        self.rx_seq    = 0 # Device Header Sequence Number (expected).
+        self.marks     = []
+
+    def send(self, words):
+        for i, (data, ctrl) in enumerate(words):
+            self.steps.append((OP_SEND, data, ctrl, 0, int(i == 0), int(i == len(words) - 1)))
+
+    def send_hp(self, builder, *args, **kwargs):
+        self.send(builder(*args, seq=self.tx_seq, **kwargs))
+        self.tx_seq = (self.tx_seq + 1) % 8
+
+    def wait(self, data, ctrl=0, mask=0xffffffff):
+        self.steps.append((OP_WAIT, data, ctrl, mask, 0, 0))
+
+    def wait_hp(self):
+        # Wait a device Header Packet and acknowledge it (LGOOD_n + LCRD_x, 7.2.4).
+        self.wait(0xfbfbfbf7, ctrl=0b1111)
+        self.send(link_command(LGOOD(self.rx_seq)))
+        self.send(link_command(LCRD(self.rx_seq % 4)))
+        self.rx_seq = (self.rx_seq + 1) % 8
+
+    def idle(self, cycles):
+        self.steps.append((OP_IDLE, cycles, 0, 0, 0, 0))
+
+    def skp(self):
+        # SKP Ordered Set between packets: Logical Idle around the request (SerDes model latency).
+        self.idle(32)
+        self.steps.append((OP_SKP, 0, 0, 0, 0, 0))
+        self.idle(32)
+
+    def mark(self, name):
+        self.marks.append(name)
+        self.steps.append((OP_MARK, len(self.marks) - 1, 0, 0, 0, 0))
+
+    # Link initialization (7.2.4.1.1, 8.4.5): Advertisements right after U0, Port Capability and
+    # Port Configuration LMPs.
+    def link_init(self):
+        self.mark("link_init")
+        self.send(link_command(LGOOD(7)))
+        for x in range(4):
+            self.send(link_command(LCRD(x)))
+        self.send_hp(lmp_port_capability)
+        self.wait_hp() # Device Port Capability LMP.
+        self.send_hp(lmp_port_configuration)
+        self.wait_hp() # Device Port Configuration Response LMP.
+
+    # Control transfers (8.12.2).
+    def control_read(self, setup, name, latency=256):
+        self.mark(name)
+        self.send_hp(dph, length=8, setup=1)
+        self.send(data_packet_payload(setup))
+        self.wait_hp()                                                # ACK TP (SETUP).
+        self.idle(latency)                                            # Host latency (xHCI: ~1.5us).
+        self.send_hp(tp, TP_SUB_ACK, nump=1, tp_seq=0, pp=1)          # Data stage request.
+        self.wait_hp()                                                # DPH (+DPP).
+        self.idle(128)                                                # DPP (END framing not aligned).
+        self.send_hp(tp, TP_SUB_ACK, nump=0, tp_seq=1)                # Data acknowledgement.
+        self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
+        self.wait_hp()                                                # ACK TP (Status).
+
+    def control_write(self, setup, name):
+        self.mark(name)
+        self.send_hp(dph, length=8, setup=1)
+        self.send(data_packet_payload(setup))
+        self.wait_hp()                                                # ACK TP (SETUP).
+        self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
+        self.wait_hp()                                                # ACK TP (Status).
+
+    def end(self):
+        self.mark("end")
+        self.steps.append((OP_END, 0, 0, 0, 0, 0))
+
+def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
+    return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
+
+def enumeration_script(skp=True, latency=256):
+    """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
+    s = HostScript()
+    s.link_init()
+    if skp:
+        # SKP Ordered Set (2 symbols) between packets: the framing is then shifted by 2 symbols in
+        # the received words (re-aligned by the PHY).
+        s.skp()
+    s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor", latency)
+    if skp:
+        s.skp()
+    s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor", latency)
+    s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor", latency)
+    s.control_write(setup_packet(0x00, 0x09, 0x0001, 0, 0), "set_configuration")
+    s.end()
+    return s
+
+# Simulation Output Parsing ------------------------------------------------------------------------
+
+def parse_sim_output(output, script):
+    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output)."""
+    sections = {}
+    name     = None
+    words    = []
+    def flush():
+        if name is not None:
+            sections[name] = decode_packets(words)
+    for line in output.splitlines():
+        p = line.split()
+        if len(p) == 2 and p[0] == "HOST_MARK":
+            flush()
+            name, words = script.marks[int(p[1])], []
+        elif len(p) == 3 and p[0] == "HOST_RX":
+            words.append((int(p[1], 16), int(p[2], 16)))
+    flush()
+    return sections

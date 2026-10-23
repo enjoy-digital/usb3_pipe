@@ -23,7 +23,7 @@ end
 
 always @(posedge rd_clk) begin
 	rd_adr_i <= rd_adr;
-	rd_dat_r = mem[rd_adr_i];
+	rd_dat_r <= mem[rd_adr_i];
 end
 
 endmodule
