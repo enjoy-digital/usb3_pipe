@@ -19,6 +19,7 @@ from litex.build.io import CRG
 from litex.build.sim import SimPlatform
 from litex.build.sim.config import SimConfig
 
+from litex.soc.interconnect import stream
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
@@ -99,23 +100,62 @@ class USB3SerDesModel(LiteXModule):
         self.comb += rx_datapath.sink.valid.eq(1)
         for i in range(nwords):
             self.comb += [
-                encoder.k[i].eq(tx_datapath.source.ctrl[i]),
-                encoder.d[i].eq(tx_datapath.source.data[8*i:8*(i+1)]),
                 rx_datapath.sink.ctrl[i].eq(decoders[i].k),
                 rx_datapath.sink.data[8*i:8*(i+1)].eq(decoders[i].d),
             ]
 
-        # SKP Ordered Set insertion (as transmitted by a host: a single SKP Ordered Set shifts the
-        # partner's received words by 2 symbols): the TX datapath is held for one word.
+        # TX symbols with SKP Ordered Set insertion (as transmitted by a host: a single SKP Ordered
+        # Set (2 symbols) shifts the partner's received words by 2 symbols). With 4 symbols per
+        # word, the stream is then shifted by 2 symbols (2 symbols carried to the next word) until
+        # the next insertion, the TX datapath being held for one word every 2 insertions.
         skp_insert = Signal()
+        shifted    = Signal()
+        carry_d    = Signal(16)
+        carry_k    = Signal(2)
+        tx_d       = Signal(8*nwords)
+        tx_k       = Signal(nwords)
+        skp_d      = Replicate(Constant(SKP.value, 8), 2)
+        src        = tx_datapath.source
         self.sync += If(self.tx_skp, skp_insert.eq(1)).Elif(skp_insert, skp_insert.eq(0))
-        self.comb += tx_datapath.source.ready.eq(~skp_insert)
         if nwords == 2:
-            for i in range(nwords):
-                self.comb += If(skp_insert,
-                    encoder.k[i].eq(1),
-                    encoder.d[i].eq(SKP.value),
+            self.comb += [
+                src.ready.eq(~skp_insert),
+                If(skp_insert,
+                    tx_d.eq(skp_d), tx_k.eq(0b11)
+                ).Else(
+                    tx_d.eq(src.data), tx_k.eq(src.ctrl)
                 )
+            ]
+        else:
+            self.comb += [
+                If(~shifted,
+                    src.ready.eq(1),
+                    If(skp_insert,
+                        tx_d.eq(Cat(skp_d, src.data[:16])), tx_k.eq(Cat(Constant(0b11, 2), src.ctrl[:2]))
+                    ).Else(
+                        tx_d.eq(src.data), tx_k.eq(src.ctrl)
+                    )
+                ).Else(
+                    src.ready.eq(~skp_insert),
+                    If(skp_insert,
+                        tx_d.eq(Cat(carry_d, skp_d)), tx_k.eq(Cat(carry_k, Constant(0b11, 2)))
+                    ).Else(
+                        tx_d.eq(Cat(carry_d, src.data[:16])), tx_k.eq(Cat(carry_k, src.ctrl[:2]))
+                    )
+                )
+            ]
+            self.sync += [
+                If(src.ready,
+                    carry_d.eq(src.data[16:]),
+                    carry_k.eq(src.ctrl[2:]),
+                ),
+                If(skp_insert, shifted.eq(~shifted)),
+            ]
+        for i in range(nwords):
+            self.comb += [
+                encoder.k[i].eq(tx_k[i]),
+                encoder.d[i].eq(tx_d[8*i:8*(i+1)]),
+            ]
 
         # Pattern/Polarity/Shift emulation.
         tx_data    = Signal(phy_dw)
@@ -320,15 +360,20 @@ class USB3PIPESim(SoCMini):
                      sides in U0.
     - host_skp:      SKP Ordered Sets inserted by the Host between packets (with_core).
     - host_latency:  Host latency (cycles) between the SETUP ACK and the Data stage request.
+    - host_status_gap: Host gap (cycles) between the Data stage ACK TP and the STATUS TP.
     - host_pm:       Host LGO_U1/LGO_U2 requests after the enumeration (with_core).
     - rx_word_shift: RX shift (in 10-bit symbols) of the SerDes models.
     - ppm/ssc:       Host/Device in separate clock domains, the Device clock offset by ppm and/or with
                      SSC. Each SerDes model receives in the partner's (recovered) clock domain.
     - prbs_words:    Words to check on both sides before ending the simulation (without core).
     """
-    def __init__(self, phy_dw=20, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
-        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_pm=False):
+    def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
+        prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False):
         sys_clk_freq = int(133e6)
+        # SerDes models data width: 4 symbols per clock with the core (full PIPE rate: Daisho can't be
+        # back-pressured), 2 with the PRBS stand-ins.
+        if phy_dw is None:
+            phy_dw = 40 if with_core else 20
 
         # Platform.
         platform = Platform()
@@ -370,7 +415,7 @@ class USB3PIPESim(SoCMini):
 
             if with_core and (name == "host"):
                 # Scripted host Link/Protocol Layer (link initialization, enumeration).
-                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency, pm=host_pm).steps))
+                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency, status_gap=host_status_gap, pm=host_pm).steps))
                 self.add_module(name="host_model", module=host_model)
                 self.comb += [
                     phy.source.connect(host_model.sink),
@@ -381,6 +426,13 @@ class USB3PIPESim(SoCMini):
             elif with_core:
                 core = renamer(USB3Core(platform, daisho_core="daisho_mod"))
                 self.add_module(name=f"{name}_usb3_core", module=core)
+                # Bulk loopback: EP2 OUT -> EP1 IN.
+                loopback = renamer(stream.SyncFIFO([("data", 32)], 2*256, buffered=True))
+                self.add_module(name=f"{name}_loopback", module=loopback)
+                self.comb += [
+                    core.ep2_source.connect(loopback.sink),
+                    loopback.source.connect(core.ep1_sink),
+                ]
                 self.comb += [
                     phy.source.connect(core.sink),
                     core.source.connect(phy.sink),
@@ -479,6 +531,7 @@ def main():
     parser.add_argument("--max-cycles",    default=2**24,       help="Simulation timeout (sys clock cycles).")
     parser.add_argument("--no-host-skp",   action="store_true", help="No SKP Ordered Sets inserted by the Host model.")
     parser.add_argument("--host-latency",  default=256,         help="Host model latency before the Data stage requests (cycles).")
+    parser.add_argument("--host-status-gap", default=64,        help="Host model gap between the Data stage ACK TP and the STATUS TP (cycles).")
     parser.add_argument("--host-pm",       action="store_true", help="Host model U1/U2 requests (LGO_U1/LGO_U2) after the enumeration.")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
@@ -501,6 +554,7 @@ def main():
         max_cycles    = int(args.max_cycles),
         host_skp      = not args.no_host_skp,
         host_latency  = int(args.host_latency),
+        host_status_gap = int(args.host_status_gap),
         host_pm       = args.host_pm)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,

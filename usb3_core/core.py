@@ -10,49 +10,145 @@ from migen import *
 
 from litex.gen import *
 
-from litex.soc.interconnect.csr import *
 from litex.soc.interconnect import stream
 
 from usb3_core.daisho_mod.usb3.usb3_top import USB3Top
 
 
-# USB3 Core Endpoint Control -----------------------------------------------------------------------
+# USB3 Core Endpoints ------------------------------------------------------------------------------
 
-class USB3CoreEndpointControl(LiteXModule):
+# Daisho endpoints are double-buffered RAMs (2 x 1024 bytes): the data words are transmitted/received
+# with their first byte on data[31:24] (as the descriptors).
+
+USB3_CORE_EP_WORDS = 256 # 1024 bytes (SuperSpeed Bulk max packet size).
+
+class USB3CoreEndpointIN(LiteXModule):
+    """USB3 Core IN Endpoint (Device -> Host, EP1).
+
+    Writes the packets of the sink stream (32-bit words, last: end of packet, packets longer than
+    1024 bytes are split) to the endpoint buffer and commits them (one packet per buffer).
+    """
     def __init__(self):
-        # Not functional but prevents synthesis optimizations
-        self._buf_in_addr       = CSRStorage(9)
-        self._buf_in_data       = CSRStorage(32)
-        self._buf_in_wren       = CSR()
-        self._buf_in_request    = CSRStatus()
-        self._buf_in_ready      = CSRStatus()
-        self._buf_in_commit     = CSR()
-        self._buf_in_commit_len = CSRStorage(11)
-        self._buf_in_commit_ack = CSRStatus()
-        self._buf_out_addr      = CSRStorage(9)
-        self._buf_out_q         = CSRStatus(32)
-        self._buf_out_len       = CSRStatus(11)
-        self._buf_out_hasdata   = CSRStatus()
-        self._buf_out_arm       = CSR()
-        self._buf_out_arm_ack   = CSRStatus()
+        self.sink = sink = stream.Endpoint([("data", 32)])
+
+        # Daisho endpoint interface.
+        self.buf_in_addr       = Signal(9)  # o
+        self.buf_in_data       = Signal(32) # o
+        self.buf_in_wren       = Signal()   # o
+        self.buf_in_ready      = Signal()   # i
+        self.buf_in_commit     = Signal()   # o
+        self.buf_in_commit_len = Signal(11) # o
+        self.buf_in_commit_ack = Signal()   # i
 
         # # #
 
-        self.buf_in_addr       = self._buf_in_addr.storage
-        self.buf_in_data       = self._buf_in_data.storage
-        self.buf_in_wren       = self._buf_in_wren.re & self._buf_in_wren.r
-        self.buf_in_request    = self._buf_in_request.status
-        self.buf_in_ready      = self._buf_in_ready.status
-        self.buf_in_commit     = self._buf_in_commit.re & self._buf_in_commit.r
-        self.buf_in_commit_len = self._buf_in_commit_len.storage
-        self.buf_in_commit_ack = self._buf_in_commit_ack.status
-        self.buf_out_addr      = self._buf_out_addr.storage
-        self.buf_out_q         = self._buf_out_q.status
-        self.buf_out_len       = self._buf_out_len.status
-        self.buf_out_hasdata   = self._buf_out_hasdata.status
-        self.buf_out_arm       = self._buf_out_arm.re & self._buf_out_arm.r
-        self.buf_out_arm_ack   = self._buf_out_arm_ack.status
+        count = Signal(max=USB3_CORE_EP_WORDS + 1)
 
+        self.fsm = fsm = FSM(reset_state="WRITE")
+        fsm.act("WRITE",
+            sink.ready.eq(self.buf_in_ready),
+            self.buf_in_addr.eq(count),
+            self.buf_in_data.eq(sink.data),
+            If(sink.valid & sink.ready,
+                self.buf_in_wren.eq(1),
+                NextValue(count, count + 1),
+                If(sink.last | (count == (USB3_CORE_EP_WORDS - 1)),
+                    NextState("COMMIT")
+                )
+            )
+        )
+        fsm.act("COMMIT",
+            self.buf_in_commit.eq(1),
+            self.buf_in_commit_len.eq(4*count),
+            If(self.buf_in_commit_ack,
+                NextState("COMMIT-ACK")
+            )
+        )
+        fsm.act("COMMIT-ACK",
+            If(~self.buf_in_commit_ack,
+                NextValue(count, 0),
+                NextState("WRITE")
+            )
+        )
+
+class USB3CoreEndpointOUT(LiteXModule):
+    """USB3 Core OUT Endpoint (Host -> Device, EP2).
+
+    Reads the received packets from the endpoint buffer to the source stream (32-bit words, last: end
+    of packet) and re-arms the endpoint buffer.
+    """
+    def __init__(self, fifo_depth=8):
+        self.source = source = stream.Endpoint([("data", 32)])
+
+        # Daisho endpoint interface.
+        self.buf_out_addr    = Signal(9)  # o
+        self.buf_out_q       = Signal(32) # i
+        self.buf_out_len     = Signal(11) # i
+        self.buf_out_hasdata = Signal()   # i
+        self.buf_out_arm     = Signal()   # o
+        self.buf_out_arm_ack = Signal()   # i
+
+        # # #
+
+        # Words read from the endpoint buffer (2 clocks read latency) to a FIFO.
+        self.fifo = fifo = stream.SyncFIFO([("data", 32)], fifo_depth)
+        self.comb += fifo.source.connect(source)
+
+        nwords   = Signal(9)
+        count    = Signal(10)
+        inflight = Signal(max=fifo_depth + 1)
+        rd_valid = Signal(2)
+        rd_last  = Signal(2)
+        issue    = Signal()
+        self.comb += [
+            nwords.eq((self.buf_out_len + 3)[2:]),
+            self.buf_out_addr.eq(count),
+        ]
+        self.sync += [
+            rd_valid.eq(Cat(issue, rd_valid[0])),
+            rd_last.eq(Cat(issue & (count == (nwords - 1)), rd_last[0])),
+            inflight.eq(inflight + issue - (fifo.sink.valid & fifo.sink.ready)),
+        ]
+        self.comb += [
+            fifo.sink.valid.eq(rd_valid[1]),
+            fifo.sink.data.eq(self.buf_out_q),
+            fifo.sink.last.eq(rd_last[1]),
+        ]
+
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            NextValue(count, 0),
+            If(self.buf_out_hasdata & (self.buf_out_len != 0),
+                NextState("READ")
+            ).Elif(self.buf_out_hasdata,
+                NextState("ARM") # Zero-length packet.
+            )
+        )
+        fsm.act("READ",
+            issue.eq((fifo.level + inflight) < (fifo_depth - 1)),
+            If(issue,
+                NextValue(count, count + 1),
+                If(count == (nwords - 1),
+                    NextState("FLUSH")
+                )
+            )
+        )
+        fsm.act("FLUSH",
+            If((rd_valid == 0),
+                NextState("ARM")
+            )
+        )
+        fsm.act("ARM",
+            self.buf_out_arm.eq(1),
+            If(self.buf_out_arm_ack,
+                NextState("ARM-ACK")
+            )
+        )
+        fsm.act("ARM-ACK",
+            If(~self.buf_out_arm_ack,
+                NextState("IDLE")
+            )
+        )
 
 # USB3 Core ----------------------------------------------------------------------------------------
 
@@ -64,8 +160,10 @@ class USB3Core(LiteXModule):
     - New top to only keep link/protocol layers and and endpoints.
     - Additional logic to emulate Daisho's internal ltssm states.
     - Additional TX FIFO to handle back-pressure from the SerDes. (not handled by Daisho)
+    - Bulk endpoints as streams: ep1_sink (EP1 IN, Device -> Host), ep2_source (EP2 OUT, Host ->
+      Device), 32-bit words (first byte on data[31:24]), last: end of packet (max 1024 bytes).
     """
-    def __init__(self, platform, with_endpoint=False, daisho_core="daisho"):
+    def __init__(self, platform, daisho_core="daisho"):
         self.reset  = Signal() # i: Core reset (LTSSM not in Polling.Idle/Recovery.Idle/U0).
         self.u0     = Signal() # i: LTSSM in U0.
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -161,28 +259,28 @@ class USB3Core(LiteXModule):
             usb3_top.out_stall.eq(out_stall),
         ]
 
-        # Daisho USB3 core endpoinst ---------------------------------------------------------------
-        if with_endpoint:
-            self.usb3_endpoint_control = usb3_endpoint_control = USB3CoreEndpointControl()
-            self.comb += [
-                # IN buffer (host->device)
-                usb3_top.buf_in_addr.eq(usb3_endpoint_control.buf_in_addr),
-                usb3_top.buf_in_data.eq(usb3_endpoint_control.buf_in_data),
-                usb3_top.buf_in_wren.eq(usb3_endpoint_control.buf_in_wren),
-                usb3_endpoint_control.buf_in_request.eq(usb3_top.buf_in_request),
-                usb3_endpoint_control.buf_in_ready.eq(usb3_top.buf_in_ready),
-                usb3_top.buf_in_commit.eq(usb3_endpoint_control.buf_in_commit),
-                usb3_top.buf_in_commit_len.eq(usb3_endpoint_control.buf_in_commit_len),
-                usb3_endpoint_control.buf_in_commit_ack.eq(usb3_top.buf_in_commit_ack),
+        # Daisho USB3 core endpoints --------------------------------------------------------------
+        # EP1: IN (Device -> Host) from ep1_sink, EP2: OUT (Host -> Device) to ep2_source.
+        self.ep1 = ep1 = USB3CoreEndpointIN()
+        self.ep2 = ep2 = USB3CoreEndpointOUT()
+        self.ep1_sink   = ep1.sink
+        self.ep2_source = ep2.source
+        self.comb += [
+            usb3_top.buf_in_addr.eq(ep1.buf_in_addr),
+            usb3_top.buf_in_data.eq(ep1.buf_in_data),
+            usb3_top.buf_in_wren.eq(ep1.buf_in_wren),
+            ep1.buf_in_ready.eq(usb3_top.buf_in_ready),
+            usb3_top.buf_in_commit.eq(ep1.buf_in_commit),
+            usb3_top.buf_in_commit_len.eq(ep1.buf_in_commit_len),
+            ep1.buf_in_commit_ack.eq(usb3_top.buf_in_commit_ack),
 
-                # OUT buffer (device->host)
-                usb3_top.buf_out_addr.eq(usb3_endpoint_control.buf_out_addr),
-                usb3_endpoint_control.buf_out_q.eq(usb3_top.buf_out_q),
-                usb3_endpoint_control.buf_out_len.eq(usb3_top.buf_out_len),
-                usb3_endpoint_control.buf_out_hasdata.eq(usb3_top.buf_out_hasdata),
-                usb3_top.buf_out_arm.eq(usb3_endpoint_control.buf_out_arm),
-                usb3_endpoint_control.buf_out_arm_ack.eq(usb3_top.buf_out_arm_ack),
-            ]
+            usb3_top.buf_out_addr.eq(ep2.buf_out_addr),
+            ep2.buf_out_q.eq(usb3_top.buf_out_q),
+            ep2.buf_out_len.eq(usb3_top.buf_out_len),
+            ep2.buf_out_hasdata.eq(usb3_top.buf_out_hasdata),
+            usb3_top.buf_out_arm.eq(ep2.buf_out_arm),
+            ep2.buf_out_arm_ack.eq(usb3_top.buf_out_arm_ack),
+        ]
 
         # Daisho USB3 sources ----------------------------------------------------------------------
         daisho_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), daisho_core)
