@@ -139,9 +139,36 @@ LTSSM state encodings: `usb3_pipe.gen.get_ltssm_states()`.
 ./scripts/usb3_bulk.py loopback --count 1000 --random-sizes
 # Soak: PHY counters (U0/Recovery/U1/U2/U3 entries), enumeration and USB kernel messages every period,
 # Bulk loopback batches, periodic host reconnects (JSON lines log + summary).
-./scripts/usb3_soak.py --port 1240 --csr-csv build/acorn/csr.csv --duration 28800 --period 10 \
-    --bulk 64 --reconnect-every 1800 --log soak.jsonl
+./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 --period 10 \
+    --bulk 64 --reconnect-every 150 --log soak.jsonl
 ```
+
+Full duplex bandwidth/soak with data checked on both sides (`--example bench`):
+
+```sh
+./scripts/usb3_bench.py both --csr-csv build/sqrl_acorn/csr.csv --port 1240
+./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 --period 30 --bench 20
+```
+
+## USB3 Device Core: Header Packets trace
+
+`USB3DeviceCore.add_csr(with_trace=True)` (enabled in the `acorn.py` examples) records the received and
+transmitted Header Packets (TPs/DPHs/LMPs, ITPs skipped) with timestamps: the Protocol Layer exchanges
+with the host (control transfers, bursts, NRDY/ERDY flow control, retries) are visible without USB
+analyzer.
+
+```sh
+./scripts/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv clear
+# ... host activity (ex: litex_term, ffplay) ...
+./scripts/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv dump
+ 523164.672us TX TP   ERDY      ept 1 dir 1 nump  2 seq  0
+ 523165.952us RX TP   ACK       ept 1 dir 1 nump  2 seq  0
+ 523165.952us TX DPH  ept 1 dir 1 seq  0 len     1
+ 523166.720us RX TP   ACK       ept 1 dir 1 nump  0 seq  1
+```
+
+The core status CSRs (`usb3_core_status`: ready/configured/address, `rx_lbad`, `tx_retry`,
+`recovery_req`) count the Link Layer errors/Recovery requests (`usb3_soak.py` logs them).
 
 ## Transceiver Reference Clock (Acorn)
 

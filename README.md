@@ -3,10 +3,10 @@
                         / / / / __/ _ )|_  /___/ _ \/  _/ _ \/ __/
                        / /_/ /\ \/ _  |/_ <___/ ___// // ___/ _/
                        \____/___/____/____/  /_/  /___/_/  /___/
-                             Copyright (c) 2019-2025, EnjoyDigital
+                             Copyright (c) 2019-2026, EnjoyDigital
                                       Powered by LiteX
 ```
-[![](https://travis-ci.com/enjoy-digital/usb3_pipe.svg?branch=master)](https://travis-ci.com/enjoy-digital/usb3_pipe)
+[![](https://github.com/enjoy-digital/usb3_pipe/actions/workflows/ci.yml/badge.svg)](https://github.com/enjoy-digital/usb3_pipe/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)
 
 [> Intro
@@ -14,188 +14,99 @@
 
 ![](doc/acorn_baseboard_sfp2usb_0.jpg)
 
-The aim of this project is to experiment with [High Speed Transceivers (SERDES)](https://en.wikipedia.org/wiki/Multi-gigabit_transceiver) of popular FPGAs to create a [USB3.0 PIPE interface](https://www.intel.com/content/dam/www/public/us/en/documents/white-papers/phy-interface-pci-express-sata-usb30-architectures-3.1.pdf).
+USB3-PIPE provides **USB3.0 SuperSpeed (5Gbps) for FPGAs without any external USB chip**: the FPGA
+transceivers are directly connected to the USB3 connector, the PHY (USB3 PIPE + LTSSM) and a complete
+USB3 Device Core (Link/Protocol layers, endpoints, device classes) are implemented in the fabric, in
+Migen/LiteX.
 
-Current solutions for USB3 connectivity with an FPGA require the use of an external SerDes chip ([TI TUSB1310A - SuperSpeed 5 Gbps USB 3.0 Transceiver with PIPE and ULPI Interfaces](http://www.ti.com/product/TUSB1310A)) or external FIFO chip ([FTDI FT60X](https://www.ftdichip.com/Products/ICs/FT600.html) or Cypress [FX3](https://www.cypress.com/products/ez-usb-fx3-superspeed-usb-30-peripheral-controller)). With this project, we want to see if it's possible to just use the transceivers of the FPGA for the USB3 connectivity and have the USB3 PIPE directly implemented in the fabric (and then avoid any external chip!)
+Other USB3 solutions for FPGAs rely on an external PHY ([TI TUSB1310A](http://www.ti.com/product/TUSB1310A))
+or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/ft600q-b/), Infineon
+[FX3](https://www.infineon.com/cms/en/product/universal-serial-bus/usb-peripheral-controllers-for-superspeed/ez-usb-fx3-usb-5-gbps-peripheral-controller/)).
 
-[> Targets
-----------
-While we hope this wrapper will eventually support multiple protocols through the PIPE interface (such as PCIe, SATA, DisplayPort) it is currently targeting support for [USB3.0 SuperSpeed](https://en.wikipedia.org/wiki/USB_3.0#Data_encoding) with its native USB3 Device Core (`usb3_core`, Link/Protocol Layers in Migen/LiteX).
+**Status** (USB 3.2 Gen 1x1 device, Acorn CLE-215+ (Artix7 GTP) + SFP2USB adapter, Linux xHCI host):
 
-It currently targets Xilinx Kintex7 and Artix7.
+| | |
+|---|---|
+| Enumeration | SuperSpeed (5000M), standard Linux drivers (usbfs, cdc_acm, uvcvideo, usb-storage) |
+| Bulk bandwidth | IN 446 MB/s, OUT 449 MB/s, full duplex 376 + 400 MB/s (~90% of 5Gbps 8b/10b) |
+| Stability | 139 GB full duplex transferred with data checked: 0 errors, no retry/Recovery |
+| Demos | Bulk loopback/benchmark, LiteX BIOS console (CDC-ACM), UVC camera up to 1080p60, Mass Storage RAM disk, composite camera + console |
 
-[> Test Hardware
-----------------
-One of the following boards:
- - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html)
- - [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard)
+[> Features
+-----------
+- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX SerDes, LFPS, Training Sequences, 8b/10b, scrambling,
+  SKP insertion/removal, word/framing alignment, polarity, LTSSM (Polling/U0/Recovery/U1-U3/Hot/Warm
+  Reset/Compliance/Loopback), debug counters. Also generated as a standalone Verilog core.
+- **USB3 Device Core** (`usb3_core/`): Link Layer (header flow control, retries, LMPs, timers), Protocol
+  Layer, Control Endpoint (standard requests, class/vendor request handler), Bulk IN/OUT endpoints with
+  bursts, descriptors builder, Header Packets trace (debug).
+- **Device classes**: vendor Bulk, CDC-ACM (serial port/LiteX console), UVC (video camera), MSC (mass
+  storage), composite devices.
+- **Simulation**: Verilator Host model <-> PHYs <-> Device Core (`sim.py`), Migen unit/system tests with
+  Python host models (~300 tests).
 
-paired with the [SFP2USB](http://xillybus.com/sfp2usb-module) borrowed from [XillyUSB](http://xillybus.com/xillyusb) project:
+```
+       USB3 Host (xHCI)
+             |  SuperSpeed (5Gbps)
+  +----------+----------------------------------------------------------------------------+
+  | FPGA     |                                                                            |
+  |  +-------+-------+   +---------------------+   +--------------------------------------+ |
+  |  | Transceiver   |-->| USB3 PIPE + LTSSM   |-->| USB3 Device Core                      | |
+  |  | (GTP/GTX)     |<--| (usb3_pipe.USB3PHY) |<--| Link -> Protocol -> EP0/Bulk endpoints| |
+  |  +---------------+   +---------------------+   +----+------------+------------+-------+ |
+  |                                                     |            |            |         |
+  |                                              CDC-ACM/UART   UVC camera   Mass Storage   |
+  +-------------------------------------------------------------------------------------------+
+```
+
+[> Hardware
+-----------
+- [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard) (Mini) with an Acorn
+  CLE-215+ (`acorn.py`, main development/validation target) or [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`kc705.py`).
+- [SFP2USB](http://xillybus.com/sfp2usb-module) adapter (from the [XillyUSB](http://xillybus.com/xillyusb)
+  project) or the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board.
 
 ![LiteX Acorn Baseboard + SFP2USB](doc/acorn_baseboard_sfp2usb_2.jpg)
 
- or with the [SFP2USBPCIsh-to-USB3.0](https://github.com/enjoy-digital/usb3_pipe/blob/master/doc/breakout_board.pdf) breakout board:
+Any 7-Series board with a transceiver routed to a SFP/PCIe connector can be used with a target file.
 
-![PCIsh-to-USB3.0](doc/breakout_board.jpg)
-
- **Note:** Any 7-Series board with a SFP or PCIe connector with also be suitable but will require creating a platform/target file if not already supported in [LiteX-Boards](https://github.com/litex-hub/litex-boards).
-
-[> Toolchain
-------------
-This project targets Xilinx Vivado for Kintex7 / Artix7 support. In the future, it should also be possible to use [F4PGA](https://f4pga.org/) toolchains to build the design.
-
-
-[> Prerequisites
-----------------
+[> Getting started
+------------------
 ```sh
-$ sudo apt install build-essential wget git python3-setuptools
-$ git clone https://github.com/enjoy-digital/usb3_pipe/
-$ cd usb3_pipe
-```
+# LiteX: https://github.com/enjoy-digital/litex/wiki/Installation, Verilator (simulation), Vivado (hardware).
+$ git clone https://github.com/enjoy-digital/usb3_pipe && cd usb3_pipe
+$ pip3 install -e .
 
-[> Installing LiteX
--------------------
-Follow LiteX installation [guide](https://github.com/enjoy-digital/litex/wiki/Installation).
-
-[> Installing Verilator
------------------------
-```sh
-$ sudo apt install verilator
-$ sudo apt install libevent-dev libjson-c-dev
-```
-
-[> Running the LiteX simulation
--------------------------------
-```sh
+# Simulation: Host model <-> PHYs <-> USB3 Device Core (link training, enumeration, Bulk transfers).
 $ ./sim.py
-```
-You should see the USB3.0 initialization between a Host and Device:
-```
-[00000000] HOST entering Polling.LFPS state
-[00000000] DEV  entering Polling.LFPS state
-[00000000] HOST entering Polling.LFPS state
-[00000000] DEV  entering Polling.LFPS state
-[00026641] HOST entering Polling.RxEQ state
-[00026641] DEV  entering Polling.RxEQ state
-[01075207] HOST entering Polling.Active state
-[01075207] DEV  entering Polling.Active state
-[01075296] HOST entering Polling.Configuration state
-[01075296] DEV  entering Polling.Configuration state
-[01075423] HOST entering Polling.Idle state
-[01075423] DEV  entering Polling.Idle state
+$ pytest test
+
+# Hardware: build/load (JTAG) the Bulk loopback example, check the enumeration, run a loopback.
+$ ./acorn.py --build --load --with-jtagbone
+$ lsusb -t
+$ ./scripts/usb3_bulk.py loopback --size 1024 --count 1000
 ```
 
-At this point, all the steps of the USB3.0 PIPE initialization have succeeded and the USB3.0 Core can start transmitting packets.
+[> Demos
+--------
+Build with `./acorn.py --build --load --example <name>`, see [doc/examples.md](doc/examples.md):
 
-The Device runs the USB3 Device Core (`usb3_core`), the Host a scripted Host Link/Protocol Layer model
-(`usb3_core/host_model.py`, packets formats/CRCs checked against an xHCI host) that behaves like a
-real host: Header Sequence Number/Credits Advertisements right after U0, Port Capability/Configuration
-LMPs, SKP Ordered Sets between packets, then enumeration control transfers (GET_DESCRIPTOR Device/
-Configuration/String, SET_CONFIGURATION). The received packets are displayed (`HOST_RX`) and checked
-by `test/test_sim_host.py`:
-```
-HOST_MARK          0   (link_init)
-HOST_MARK          1   (get_device_descriptor)
-...
-HOST script done
-```
-Options: `--no-host-skp` (no SKP Ordered Sets from the Host), `--host-latency` (Host latency before the
-Data stage requests), `--no-core` (PRBS Link-Layer stand-ins on both sides, with `--ppm`/`--ssc`).
+| Example | Device | Host side |
+|---|---|---|
+| `loopback` | Vendor Bulk OUT -> Bulk IN | `scripts/usb3_bulk.py loopback` |
+| `bench` | Vendor Bulk counters source/checker | `scripts/usb3_bench.py in\|out\|both` |
+| `cdc_uartbone` | CDC-ACM serial port (UARTBone) | `litex_server --uart --uart-port /dev/ttyACM0` |
+| `console` (`--cpu-type vexriscv`) | CDC-ACM LiteX BIOS console | `litex_term /dev/ttyACM0` |
+| `uvc` | UVC camera, YUY2 test pattern (480p60/720p60/1080p30/1080p60) | `ffplay -f v4l2 -video_size 1920x1080 /dev/video0`, VLC |
+| `msc` | Mass Storage 512KB FAT RAM disk | `/dev/sdX`, mount |
+| `composite` (`--cpu-type vexriscv`) | UVC camera + CDC-ACM console | both at the same time |
 
-To have a .vcd waveform of the simulation, run it with --trace (`--trace-start`/`--trace-end` in ps,
-1 cycle = 1us):
-```sh
-$ ./sim.py --trace
-$ gtkwave build/sim/gateware/sim.vcd
-```
-
-[> Running on hardware
-----------------------
-### Build the FPGA bitstream
-Once installed, build the bitstream with:
-```sh
-$ ./target.py --build (can be kc705 or acorn)
-```
-
-### Prepare the hardware:
-![Hardware Setup](doc/acorn_baseboard_sfp2usb_1.jpg)
-- Put the SFP2USB module into the SFP cage of the board.
-- Connect the USB3.0 cable between the SFP2USB module and the computer.
-- Connect the JTAG programming cable to the FPGA board.
-- Power on the hardware
-
-### Load the FPGA bitstream
-To load the bitstream to you board, run:
-```sh
-$ ./target.py --load
-```
-
-### Verify USB3.0 link establishment
-Once the FPGA is loaded, the link will be automatically established with the computer and an Openmoko, Inc USB3.0 device should be enumerated.
-
-**Note:** Enumeration has only been done on a few hardware setups and there is still work in progress to improve reliability.
-
-[> USB3 Device Core
---------------------
-`usb3_core/` is a Migen/LiteX USB3.0 SuperSpeed device core (Link Layer, Protocol Layer,
-Control Endpoint, Bulk Endpoints with bursts). It connects to the PHY only through the `USB3PHY` Link
-interface (data/ctrl symbol streams, LTSSM status and Link-Layer control: see `usb3_pipe/phy.py`), so
-it can be used with any PHY providing the same interface.
-
-```python
-from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
-from usb3_core.descriptors import bulk_descriptors
-
-self.usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq,
-    descriptors = bulk_descriptors(vid=0x1d50, pid=0x605a, max_burst=8),
-    endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)])
-# endpoints[0].sink: Device -> Host packets, endpoints[1].source: Host -> Device packets (32-bit
-# words, first byte on data[7:0], last/last_be: end of packet).
-```
-
-- `link.py`: framing, Header Packets flow control (sequence numbers, credits, LBAD/LRTY retries,
-  Advertisements), timers (Recovery on timeouts), LUP keep-alive, LMPs, U3 entry (U1/U2 rejected).
-- `protocol.py`: Transaction/Data Packets dispatch, responses, TX arbitration.
-- `endpoints.py`: Bulk IN/OUT endpoints with bursts (MaxBurst up to 16), retries, NRDY/ERDY flow control.
-- `control.py`/`descriptors.py`: Control Endpoint (standard and class requests), descriptors builder
-  (vendor Bulk interface, CDC-ACM).
-
-Example designs (`./acorn.py --build --example ...`):
-- `loopback`: Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1), `scripts/usb3_bulk.py loopback`.
-- `bench`: Bulk IN counter source/Bulk OUT counter checker, `scripts/usb3_bench.py in|out|both`.
-- `cdc_uartbone`: CDC-ACM serial port (no driver needed) carrying the UARTBone protocol: the SoC bus
-  is accessible over USB3 with `litex_server --uart --uart-port /dev/ttyACM0`.
-
-Simulation: `./sim.py` (Host model <-> PHYs <-> USB3 Device Core), unit/system tests in
-`test/test_native_*.py` and `test/test_sim_host.py`.
-
-[> Standalone core generator
-----------------------------
-The USB3.0 PHY (FPGA transceiver + USB3 PIPE + LTSSM) can also be generated as a standalone Verilog
-core, to be integrated in a design that is not built with LiteX. The core provides a link-trained
-32-bit symbol stream (with K-symbol flags) over AXI-Stream, along with the LTSSM status, and can be
-used with any USB3.0 Link Layer.
-
-The core is described by a YAML configuration file (see [examples](examples)):
-```sh
-$ usb3_pipe_gen examples/a7_device.yml --output-dir build/usb3_pipe_core
-```
-The main configuration parameters are:
- - `phy`: Transceiver (`A7USB3SerDes`: Artix7 GTP, `K7USB3SerDes`: Kintex7 GTX).
- - `sys_clk_freq`: Core/user clock frequency (>= 125MHz).
- - `refclk`/`refclk_freq`: Transceiver reference clock (`pads`: dedicated `refclk_p/n` ports, `sys`: core clock).
- - `role`: `device` (Upstream Port) or `host` (Downstream Port).
- - `with_link_ctrl`: Expose the LTSSM Link-Layer control interface (PM handshake, directed transitions).
- - `usb_core`: Include the USB3 Device Core: a complete USB3.0 device with Bulk IN/OUT AXI-Stream
-   endpoints (`bulk_in_*`/`bulk_out_*`, `usb_vid`/`usb_pid`/`usb_product`/`usb_max_burst` parameters),
-   see `examples/a7_usb_device.yml`.
-
-The generator produces in the output directory:
- - `gateware/usb3_pipe_core.v`: Verilog of the core.
- - `gateware/usb3_pipe_core.xdc`: Timing constraints of the core (to be scoped to the core).
- - `gateware/*.init`: Memories initialization files.
- - `usb3_pipe_core_inst.v`: Instantiation template.
- - `usb3_pipe_core_ltssm.vh`: LTSSM states encoding of the `ltssm_state` port (Verilog `localparam`s).
- - `usb3_pipe_core.md`: Documentation of the core (ports, clocking, data format, link bring-up and
-   integration notes) for the selected configuration.
+[> Documentation
+----------------
+- [doc/usb3-pipe.md](doc/usb3-pipe.md): PHY (SerDes, PIPE, LTSSM, Link interface).
+- [doc/usb3-core.md](doc/usb3-core.md): USB3 Device Core (Link/Protocol layers, endpoints, request
+  handler, device classes, resources).
+- [doc/examples.md](doc/examples.md): example designs and host tools.
+- [doc/standalone-core.md](doc/standalone-core.md): standalone Verilog core generator (`usb3_pipe_gen`).
+- [doc/debugging-guide.md](doc/debugging-guide.md): hardware debugging (CSRs, trace, LiteScope, soak).
+- [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md): Gen 2x1 (10Gbps)/Gen 1x2 (2x5Gbps) roadmap.

@@ -1,88 +1,121 @@
 # USB3 Device Core (`usb3_core`)
 
-Migen/LiteX USB3.0 SuperSpeed (Gen 1x1, 5Gbps) device core: Link Layer, Protocol Layer, Control
-Endpoint and Bulk Endpoints. It runs at the PIPE rate (32-bit words at 125MHz) in the `sys` clock
-domain of the PHY.
+Migen/LiteX USB 3.2 Gen 1x1 (SuperSpeed, 5Gbps) device core: Link Layer, Protocol Layer, Control
+Endpoint, Bulk Endpoints and device classes (CDC-ACM, UVC, Mass Storage). It runs at the PIPE rate
+(32-bit words at 125MHz) in the `sys` clock domain of the PHY ([usb3-pipe.md](usb3-pipe.md)).
 
 ```
             USB3PHY (usb3_pipe)                         USB3DeviceCore (usb3_core)
  SerDes -> PIPE -> LTSSM                       link.py        protocol.py           endpoints
    source (data/ctrl) ------------------>  RX parser  --> Header dispatch ---> EP0 (control.py)
    sink   (data/ctrl) <------------------  TX framer  <-- TX arbitration <--- Bulk IN/OUT
-   u0/polling_idle/hot_reset ----------->  Header flow control (seq/credits/retry)
-   lgo_u1/2/3, tx_lau/tx_lxu <---------->  Link PM (U3 accepted, U1/U2 rejected)
-   directed_recovery, link_activity <---   Timers / Recovery requests
+   u0/polling_idle/hot_reset ----------->  Header flow control (seq/credits/retry)     |
+   lgo_u1/2/3, tx_lau/tx_lxu <---------->  Link PM (U3 accepted, U1/U2 rejected)       |
+   directed_recovery, link_activity <---   Timers / Recovery requests              Functions:
+                                                                                   CDC-ACM, UVC, MSC
 ```
 
-## PHY interface
+## Usage
 
-The core only uses the `USB3PHY` Link interface (see `usb3_pipe/phy.py`), any PHY providing it can be
-used:
-- `sink`/`source`: 32-bit data + 4-bit ctrl (K-symbols) words, first symbol on `data[31:24]`. The PHY
-  sends Logical Idle when `sink.valid` is low, `sink.ready` is low during SKP insertions; `source`
-  can't be back-pressured.
-- Status: `u0`, `polling_idle`, `hot_reset` (link reset: Header Sequence Numbers to 0).
-- Link-Layer control: `lgo_u1/2/3` (LGO_Ux received), `tx_lau`/`tx_lxu` (LTSSM decision),
-  `directed_recovery` (Link Layer errors/timeouts), `link_activity` (LTSSM U0 recovery timeout).
+```python
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors
 
-## Link Layer (`link.py`, USB 3.2 chapter 7)
+self.usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq,
+    descriptors = bulk_descriptors(vid=0x1d50, pid=0x605a, max_burst=8),
+    endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)])
+self.usb3_core.add_csr(with_trace=True) # Status/statistics CSRs, Header Packets trace.
+# endpoints[0].sink: Device -> Host packets, endpoints[1].source: Host -> Device packets (32-bit words,
+# first byte on data[7:0], last/last_be: end of packet with the last valid byte).
+```
 
-- RX: framing parser (SHP/SLC/SDP framing words aligned by the PHY), CRC-16/CRC-5 checks of Header
-  Packets/Link Control Words, CRC-32 of Data Packet Payloads (length from the DPH, any byte count).
-- Header Packets flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x,
-  LBAD on errors (packets ignored until LRTY), LRTY + retransmission on LBAD (DL bit set, DPP not
-  resent: the Protocol Layer retries), Advertisements on each U0 entry (state kept across Recovery).
-- Recovery requested on: Header Sequence Number/LGOOD/LCRD order errors, PENDING_HP_TIMER (3us),
-  CREDIT_HP_TIMER (5ms).
-- U0 keep-alive (LUP after 10us without transmission), LMPs (Port Capability, Port Configuration
-  Response, Set Link Function), LGO_U3 accepted through the LTSSM, LGO_U1/U2 rejected (LXU) unless
-  `u1_u2_enable` or Force_LinkPM_Accept.
+Device classes (complete devices, or functions to compose a device):
 
-## Protocol Layer and endpoints
+```python
+from usb3_core.cdc_acm import USB3CDCACM # LiteX UART PHY: self.uart = UART(USB3CDCACM(phy, sys_clk_freq))
+from usb3_core.uvc     import USB3UVC    # UVC camera (test pattern).
+from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk.
+```
 
-- `protocol.py`: received headers dispatched in order to all endpoints (broadcast + strobe), DPHs
-  processed with the status of their DPP, TP responses queued (with the Device Address of their
-  generation), PING_RESPONSE, TX arbitration (responses first), DPPs sent in DPH order.
-- `endpoints.py`:
-  - `USB3BulkIN(ept, max_burst)`: `sink` stream (data, last, last_be), packets split at 1024 bytes,
-    rings of `max_burst` slots, sent in bursts within the host window (ACK TP NumP), kept until
-    acknowledged (retries), flow control: EOB/NRDY -> ERDY -> new host request. The last max size
-    packet is held while the user is still writing (bursts continued instead of EOB round trips).
-  - `USB3BulkOUT(ept, max_burst)`: `source` stream, DPPs landed as received, acknowledged in order
-    (NumP: free slots, retry on CRC errors), ERDY after a NumP of 0.
-- `control.py`: EP0 requests from a table built by `descriptors.py` (standard requests, class/vendor
-  requests with constant IN responses or accepted OUT data), unsupported requests stalled.
-- `descriptors.py`: `bulk_descriptors()` (vendor interface, Bulk IN/OUT), `cdc_acm_descriptors()`
-  (CDC-ACM: no driver needed on Linux/macOS/Windows 10+).
+## Modules
 
-## Examples
+| Module | File | Description |
+|---|---|---|
+| `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function), LGO_U3 accepted, LGO_U1/U2 rejected (LXU). |
+| `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order. |
+| `USB3BulkIN`/`USB3BulkOUT` | `endpoints.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`. |
+| `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), class/vendor request handler (`with_ep0_handler`). |
+| `USB3Descriptors` | `descriptors.py` | Descriptors builder (device, configuration with SuperSpeed companions, BOS, strings, IADs). |
+| `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints, `add_csr()`. |
+| `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port, LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
+| `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes. |
+| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine, block RAM disk (FAT image). |
+| `USB3Bench` | `bench.py` | Bandwidth benchmark source/checker. |
+| `USB3CoreTrace` | `trace.py` | Header Packets trace (debug). |
+| `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Parallel CRCs (equations generated from the polynoms). |
+| Host models | `host_model.py` | Scripted Host gateware model (`sim.py`), Python host models for Migen tests. |
 
-| Example (`acorn.py --example`) | Host side                                                      |
-|--------------------------------|----------------------------------------------------------------|
-| `loopback`                     | `scripts/usb3_bulk.py loopback --size 1024 --count 1000`       |
-| `bench`                        | `scripts/usb3_bench.py in\|out\|both [--csr-csv ...]`            |
-| `cdc_uartbone`                 | `litex_server --uart --uart-port /dev/ttyACM0`, `litex_cli --regs` |
+## Control requests handler
 
-`usb3_pipe_gen` can also generate the PHY + core as a standalone Verilog core with AXI-Stream Bulk
-endpoints (`usb_core: True`).
+With `USB3DeviceCore(..., with_ep0_handler=True)`, class/vendor requests not in the requests table are
+delegated to user logic on `core.ep0`:
 
-## Performance (Acorn CLE-215+, SFP2USB, xHCI host, Linux)
+| Signals | Description |
+|---|---|
+| `req_setup`, `req_valid`, `req_type`, `req_request`, `req_value`, `req_index`, `req_length` | Request (pulse/level, SETUP fields). |
+| `req_stall` | The handler stalls the request. |
+| `req_in` (data 32, last, last_be) | IN Data stage response (up to 512 bytes), written after `req_setup`. |
+| `req_out` (data 32, last, last_be) | OUT Data stage data (no back-pressure). |
+| `req_done` | Status stage completed (all requests, ex: SET_INTERFACE/SET_CONTROL_LINE_STATE tracking). |
 
-| Test                                    | Result                                     |
-|-----------------------------------------|--------------------------------------------|
-| Bulk IN (`usb3_bench.py in --no-check`) | 446 MB/s                                   |
-| Bulk OUT (`usb3_bench.py out`)          | 449 MB/s                                   |
-| Full duplex (`usb3_bench.py both`)      | IN 376 MB/s + OUT 400 MB/s                 |
-| 3 min full duplex soak, data checked    | 139 GB, 0 errors, no LBAD/retry/Recovery   |
-| CDC-ACM UARTBone                        | ~6000 CSR reads/s                          |
+## Composite devices
 
-(5Gbps with 8b/10b: 500 MB/s of symbols, ~90% reached with 1024 bytes packets.)
+Functions attach to a device's EP0/endpoints, descriptors are concatenated (see the `composite` example
+in `acorn.py`):
+
+```python
+descriptors = USB3Descriptors(device_class=DEVICE_CLASS_IAD,
+    interfaces = uvc_interfaces(UVC_MODES, vc_interface=0, ept=1) +
+        cdc_acm_interfaces(comm_interface=2, notif_ept=4, in_ept=2, out_ept=3))
+add_cdc_acm_requests(descriptors)
+core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[USB3BulkIN(1, 16), USB3BulkIN(2, 2),
+    USB3BulkOUT(3, 2), USB3BulkIN(4, 2)], with_ep0_handler=True)
+uvc = USB3UVCFunction(core.ep0, core.endpoints[0], core.link.reset, sys_clk_freq)
+acm = USB3CDCACMFunction(core.ep0, core.endpoints[1], core.endpoints[2])
+```
+
+## Performance (Acorn CLE-215+, SFP2USB, Linux xHCI host)
+
+| Test | Result |
+|---|---|
+| Bulk IN (`usb3_bench.py in --no-check`) | 446 MB/s |
+| Bulk OUT (`usb3_bench.py out`) | 449 MB/s |
+| Full duplex (`usb3_bench.py both`) | IN 376 MB/s + OUT 400 MB/s |
+| 3 min full duplex soak, data checked | 139 GB, 0 errors, no LBAD/retry/Recovery |
+| UVC 1920x1080@60 YUY2 | 60.00 fps (~249 MB/s) |
+| MSC READ(10)/WRITE(10) | 186/227 MB/s (single command) |
+| CDC-ACM UARTBone | ~6000 CSR reads/s |
+
+## Resources
+
+Out-of-context synthesis/placement, xc7a200t-3, 125MHz (`scripts/usb3_resources.py`):
+
+| Block | LUTs | FFs | BRAM36 | WNS |
+|---|---|---|---|---|
+| Link Layer | 1649 | 1034 | 0 | +1.86ns |
+| Control Endpoint (bulk descriptors) | 176 | 131 | 0 | +3.34ns |
+| Bulk IN (MaxBurst 8) | 258 | 191 | 2 | +1.71ns |
+| Bulk OUT (MaxBurst 8) | 171 | 165 | 2 | +2.09ns |
+| Device (Link + Protocol + EP0 + Bulk IN/OUT) | 2550 | 1682 | 4 | +0.93ns |
+
+A complete Acorn design (PHY + core + debug + bench) uses ~6000 LUTs (4.5% of the XC7A200T).
 
 ## Limitations
 
-- Gen 1x1 only (see `doc/gen2-x2-roadmap.md` for Gen 2x1/Gen 1x2).
-- Bulk and Control endpoints (no Isochronous/Interrupt data, Streams). An Interrupt IN endpoint can be
-  declared (descriptors) with a Bulk IN endpoint that never has data (CDC-ACM notifications).
-- U1/U2 rejected (descriptors advertise 0 exit latencies: hosts disable LPM), U3 entry/exit through
-  the LTSSM (not validated on hardware yet: the test host never suspends the device).
+- Gen 1x1 only ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
+- Bulk/Control endpoints (no Isochronous, Streams). Interrupt IN endpoints can be declared with a Bulk
+  IN endpoint (ex: CDC-ACM notifications, never sent).
+- U1/U2 rejected (descriptors advertise 0 exit latencies: hosts disable LPM), U3 entry/exit through the
+  LTSSM (not validated on hardware).
 - Function remote wakeup, LTM, PTM not supported.
