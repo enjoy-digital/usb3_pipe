@@ -62,15 +62,23 @@ class _CRG(LiteXModule):
     def __init__(self, platform, sys_clk_freq):
         self.cd_sys    = ClockDomain()
         self.cd_oob    = ClockDomain()
-        self.cd_clk125 = ClockDomain()
+        self.cd_clk200 = ClockDomain()
 
         # # #
 
+        # Clk200.
+        clk200_pads = platform.request("clk200")
+        clk200      = Signal()
+        self.specials += [
+            Instance("IBUFDS", i_I=clk200_pads.p, i_IB=clk200_pads.n, o_O=clk200),
+            Instance("BUFG",   i_I=clk200, o_O=self.cd_clk200.clk),
+        ]
+
+        # PLL.
         self.pll = pll = S7PLL(speedgrade=-2)
-        pll.register_clkin(platform.request("clk200"), 200e6)
-        pll.create_clkout(self.cd_sys,    sys_clk_freq,   margin=0)
-        pll.create_clkout(self.cd_oob,    sys_clk_freq/8, margin=0)
-        pll.create_clkout(self.cd_clk125, 125e6,          margin=0)
+        pll.register_clkin(clk200, 200e6)
+        pll.create_clkout(self.cd_sys, sys_clk_freq,   margin=0)
+        pll.create_clkout(self.cd_oob, sys_clk_freq/8, margin=0)
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
@@ -96,8 +104,8 @@ class USB3SoC(SoCMini):
         self.usb3_serdes = usb3_serdes = A7USB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = ClockSignal("clk125"),
-            refclk_freq  = 125e6,
+            refclk_pads  = ClockSignal("clk200"), # Directly from the oscillator (no PLL jitter).
+            refclk_freq  = 200e6,
             tx_pads      = platform.request("sfp_tx"),
             rx_pads      = platform.request("sfp_rx"),
             rxcdr_cfg    = rxcdr_cfg)
