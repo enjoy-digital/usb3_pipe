@@ -78,7 +78,8 @@ class USB3BytePacker(LiteXModule):
                 source.last.eq(1),
                 Case(idx, {1: source.last_be.eq(0b0001), 2: source.last_be.eq(0b0010), 3: source.last_be.eq(0b0100)}),
             ),
-            sink.ready.eq(~pending | (source.valid & source.ready)),
+            # No byte accepted while a partial word is sent (its index is reset).
+            sink.ready.eq((~pending | (source.valid & source.ready)) & ~send_part),
         ]
         self.sync += [
             If(source.valid & source.ready,

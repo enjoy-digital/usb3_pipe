@@ -81,5 +81,38 @@ class TestCoreBridge(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(packets, bursts)
 
+    def test_packer_backpressure(self):
+        # Random back-pressure (endpoint not ready) and bytes arriving right after the idle flush:
+        # the byte stream is preserved (found on hardware: bytes duplicated at the partial words).
+        rng    = random.Random(3)
+        data   = [rng.randrange(256) for _ in range(400)]
+        dut    = USB3BytePacker(idle_cycles=4)
+        out    = []
+        def generator(dut):
+            for byte in data:
+                for _ in range(rng.choice([0, 0, 0, 3, 5, 8])):
+                    yield dut.sink.valid.eq(0)
+                    yield
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(byte)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+        def checker(dut):
+            for _ in range(8000):
+                ready = rng.random() < 0.5
+                yield dut.source.ready.eq(int(ready))
+                yield
+                if ready and (yield dut.source.valid):
+                    word = (yield dut.source.data)
+                    be   = (yield dut.source.last_be)
+                    n    = 4
+                    if (yield dut.source.last) and be:
+                        n = {1: 1, 2: 2, 4: 3, 8: 4}[be]
+                    out.extend(list(word.to_bytes(4, "little"))[:n])
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(out, data)
+
 if __name__ == "__main__":
     unittest.main()
