@@ -133,5 +133,13 @@ class TestIdleHandshake(unittest.TestCase):
         self.assertTrue(driven_by(dut.ltssm.rx_idle8,       dut.pipe.idle_done))
         self.assertTrue(driven_by(dut.pipe.idle_handshake, dut.ltssm.idle_handshake))
 
+    def test_phy_link_interface(self):
+        # USB3PHY exposes the LTSSM Link-Layer control interface (same Signals, reset values kept).
+        from usb3_pipe.phy import USB3PHY_LINK_CTRL
+        dut = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        for name, direction in USB3PHY_LINK_CTRL:
+            self.assertIs(getattr(dut, name), getattr(dut.ltssm, name))
+        self.assertEqual(dut.link_activity.reset.value, 1)
+
 if __name__ == "__main__":
     unittest.main()

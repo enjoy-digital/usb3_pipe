@@ -313,9 +313,9 @@ class USB3PIPECore(SoCMini):
         if config["with_link_ctrl"]:
             for name, direction in USB3PHY_LINK_CTRL:
                 if direction == "i":
-                    self.comb += getattr(phy.ltssm, name).eq(platform.request(name))
+                    self.comb += getattr(phy, name).eq(platform.request(name))
                 else:
-                    self.comb += platform.request(name).eq(getattr(phy.ltssm, name))
+                    self.comb += platform.request(name).eq(getattr(phy, name))
 
 # Documentation ------------------------------------------------------------------------------------
 
