@@ -304,12 +304,9 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
             self.assertLessEqual(n, cycles(12e-3) + 4)
         run(new_dut(), generator)
 
-    @unittest.expectedFailure
     def test_polling_configuration_timer_starts_on_entry(self):
-        # SPEC: tPollingConfigurationTimeout (12ms, Table 7-12) is started upon entry to
-        # Polling.Configuration (7.5.4.9.1). Polling.Active and Polling.Configuration share the same
-        # 12ms WaitTimer with wait held continuously across the transition, so the timer is not
-        # restarted: time spent in Polling.Active is deducted from Polling.Configuration.
+        # tPollingConfigurationTimeout (12ms, Table 7-12) is started upon entry to
+        # Polling.Configuration (7.5.4.9.1): time spent in Polling.Active is not deducted from it.
         def generator(dut):
             yield from self.goto(dut, "Polling.Active")
             for _ in range(cycles(12e-3)*3//4):
@@ -453,25 +450,22 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
         # tU1PingTimeout is not gated by with_timers: disable the other timers to use a large scale.
         run(new_dut(COMPLIANCE_SCALE, with_timers=False), generator)
 
-    def test_u3_ds_wakeup_retries_then_ess_inactive(self):
-        # DS U3 wakeup without response: tNoLFPSResponseTimeout (10ms), 2 retries after
-        # tU3WakeupRetryDelay (100ms), then eSS.Inactive (7.2.4.2.4).
+    def test_u3_ds_wakeup_retries_stay_u3(self):
+        # DS U3 wakeup without response: tNoLFPSResponseTimeout (10ms), then retry after
+        # tU3WakeupRetryDelay (100ms), remaining in U3 (7.2.4.2.7, no failure limit).
         def generator(dut):
             yield dut.ds_port.eq(1)
             yield from self.goto(dut, "U3")
             yield from pulse(dut.wakeup_u3_req)
             bursts = 0
             prev   = 0
-            for _ in range(3*cycles(10e-3) + 2*cycles(100e-3) + 64):
-                s   = yield from state(dut)
+            for _ in range(4*cycles(10e-3) + 3*cycles(100e-3) + 64):
+                self.assertEqual((yield from state(dut)), "U3")
                 cur = yield dut.lfps_tx_wakeup_u3
                 bursts += (cur & ~prev) & 1
                 prev = cur
-                if s == "eSS.Inactive":
-                    break
                 yield
-            self.assertEqual((yield from state(dut)), "eSS.Inactive")
-            self.assertEqual(bursts, 3)
+            self.assertGreaterEqual(bursts, 4)
         run(new_dut(), generator)
 
     def test_pm_lc_timer_timeout(self):
@@ -559,41 +553,33 @@ class TestLTSSMWarmReset(unittest.TestCase, WarmResetChecks):
                 scale = COMPLIANCE_SCALE if src == "Compliance" else TIMER_SCALE
                 run(new_dut(scale, with_timers=(src == "Compliance")), generator)
 
-# SPEC deviations: Warm Reset must be honored in every state (except eSS.Disabled). An upstream port
-# shall transition to Rx.Detect upon detection of Warm Reset, a downstream port when directed to
-# issue Warm Reset (USB 3.2 6.9 / 7.4.2 / exit conditions of 7.5.2.2 eSS.Inactive, 7.5.4.x Polling,
-# 7.5.7.2 U1, 7.5.8.2 U2, 7.5.10.x Recovery, 7.5.11.3 Loopback.Exit, 7.5.12.x Hot Reset). The
-# implementation only checks lfps_rx_reset in U0/U1/U2/U3/Compliance/Loopback and warm_reset_req in
-# Polling.Idle/U0/U3/Compliance/Loopback.
+# Warm Reset in every state (except eSS.Disabled): an upstream port shall transition to Rx.Detect upon
+# detection of Warm Reset, a downstream port when directed to issue Warm Reset (USB 3.2 6.9 / 7.4.2 /
+# exit conditions of 7.5.2.2 eSS.Inactive, 7.5.4.x Polling, 7.5.7.2 U1, 7.5.8.2 U2, 7.5.10.x
+# Recovery, 7.5.11.3 Loopback.Exit, 7.5.12.x Hot Reset).
 
-UFP_WARM_RESET_MISSING = [
+UFP_WARM_RESET_STATES = [
     "Polling.LFPS", "Polling.RxEQ", "Polling.Active", "Polling.Configuration", "Polling.Idle",
     "Recovery.Active", "Recovery.Configuration", "Recovery.Idle",
     "HotReset.Active", "HotReset.Exit", "Loopback.Exit", "eSS.Inactive",
 ]
-DS_WARM_RESET_MISSING = [
+DS_WARM_RESET_STATES = [
     "Polling.LFPS", "Polling.RxEQ", "Polling.Active", "Polling.Configuration",
     "U1", "U2",
     "Recovery.Active", "Recovery.Configuration", "Recovery.Idle",
     "HotReset.Active", "HotReset.Exit", "Loopback.Exit", "eSS.Inactive",
 ]
 
-class TestLTSSMWarmResetSpec(unittest.TestCase, WarmResetChecks):
-    pass
+class TestLTSSMWarmResetAllStates(unittest.TestCase, WarmResetChecks):
+    def test_ufp_warm_reset_detect_all_states(self):
+        for src in UFP_WARM_RESET_STATES:
+            with self.subTest(state=src):
+                self.check_rx_warm_reset(src)
 
-def _name(s):
-    return s.lower().replace(".", "_")
-
-def _ufp_test(src):
-    return unittest.expectedFailure(lambda self: self.check_rx_warm_reset(src))
-
-def _ds_test(src):
-    return unittest.expectedFailure(lambda self: self.check_ds_warm_reset(src))
-
-for _src in UFP_WARM_RESET_MISSING:
-    setattr(TestLTSSMWarmResetSpec, "test_ufp_warm_reset_detect_in_" + _name(_src), _ufp_test(_src))
-for _src in DS_WARM_RESET_MISSING:
-    setattr(TestLTSSMWarmResetSpec, "test_ds_directed_warm_reset_in_" + _name(_src), _ds_test(_src))
+    def test_ds_directed_warm_reset_all_states(self):
+        for src in DS_WARM_RESET_STATES:
+            with self.subTest(state=src):
+                self.check_ds_warm_reset(src)
 
 # Polling.Idle / Recovery.Idle exits (USB 3.2 7.5.4.10.2, 7.5.10.5.2) ------------------------------
 
@@ -695,13 +681,10 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
             yield from self.expect(dut, "Loopback.Exit", 4)
         run(new_dut(), generator)
 
-    @unittest.expectedFailure
     def test_polling_configuration_directed_loopback_sets_ts2_loopback_bit(self):
-        # SPEC: a port directed to Loopback as master sets the Loopback bit in the Link
-        # Configuration field of the TS2 it transmits in Polling.Configuration (7.5.4.9.1, Table
-        # 6-6), which is how the slave learns it must enter Loopback from Polling.Idle (7.5.4.10.2).
-        # tx_ts2_loopback is only asserted in Recovery.Configuration/Idle (lb_pending from U0), so a
-        # master directed during Polling enters Loopback alone and the partner goes to U0.
+        # A port directed to Loopback as master sets the Loopback bit in the Link Configuration field
+        # of the TS2 it transmits in Polling.Configuration (7.5.4.9.1, Table 6-6), which is how the
+        # slave learns it must enter Loopback from Polling.Idle (7.5.4.10.2).
         def generator(dut):
             yield dut.loopback_capable.eq(1)
             yield dut.directed_loopback.eq(1)
@@ -764,18 +747,27 @@ class TestLTSSMHotReset(unittest.TestCase, LTSSMDriver):
             self.assertTrue((yield from stay_in(dut, "U0", 16)))
         run(new_dut(), generator)
 
-    @unittest.expectedFailure
     def test_ds_hot_reset_from_u0_goes_through_recovery(self):
-        # SPEC: Hot Reset is signaled with the Reset bit of TS2 ordered sets (7.4.2): a DS directed
-        # to Hot Reset in U0 transitions to Recovery (7.5.6.2), sends TS2 with Reset=1 in
-        # Recovery.Configuration and enters Hot Reset from Recovery.Idle (7.5.10.5.2); Hot Reset is
-        # only entered from Polling.Idle / Recovery.Idle (Figure 7-13). The implementation jumps
-        # from U0 directly to HotReset.Active (the U1/U2 paths already go through Recovery).
+        # Hot Reset is signaled with the Reset bit of TS2 ordered sets (7.4.2): a DS directed to Hot
+        # Reset in U0 transitions to Recovery (7.5.6.2), sends TS2 with Reset=1 in
+        # Recovery.Configuration and enters Hot Reset from Recovery.Idle (7.5.10.5.2).
         def generator(dut):
             yield dut.ds_port.eq(1)
             yield from self.goto(dut, "U0")
             yield dut.hot_reset_req.eq(1)
             yield from self.expect(dut, "Recovery.Active", 4)
+            self.assertEqual((yield dut.tx_ts2_reset), 0)
+            yield from pulse(dut.ts_rx_ts1)
+            yield from pulse(dut.ts_tx_done)
+            yield from self.expect(dut, "Recovery.Configuration")
+            self.assertEqual((yield dut.ts_tx_ts2), 1)
+            self.assertEqual((yield dut.tx_ts2_reset), 1)
+            yield from pulse(dut.ts_rx_ts2)
+            yield from pulse(dut.ts_tx_done)
+            yield from pulse(dut.ts_tx_done)
+            yield from self.expect(dut, "HotReset.Active", 8)
+            yield
+            self.assertEqual((yield dut.tx_ts2_reset), 1)
         run(new_dut(), generator)
 
     def test_ds_hot_reset_from_u1_u2_through_recovery(self):
@@ -887,13 +879,10 @@ class TestLTSSMCompliance(unittest.TestCase, LTSSMDriver):
                     self.assertTrue((yield from stay_in(dut, "Compliance", 64)))
                 run(new_dut(COMPLIANCE_SCALE), generator)
 
-    @unittest.expectedFailure
     def test_ufp_polling_lfps_timeout_after_link_up_is_not_compliance(self):
-        # SPEC: Polling.LFPS -> Compliance Mode on the 360ms timeout only if the port has not yet
-        # successfully completed Polling.LFPS since power-on / Warm Reset (first-time entry,
-        # 7.5.4.3.2); otherwise the port goes to Rx.Detect (DS) / eSS.Disabled (UFP), never to
-        # Compliance. The implementation has no such qualifier: a UFP that was in U0 and re-trains
-        # (e.g. after eSS.Inactive) enters Compliance when the partner is silent for 360ms.
+        # Polling.LFPS -> Compliance Mode on the 360ms timeout only if the port has not yet
+        # successfully completed Polling.LFPS since power-on / Warm Reset (7.5.4.3.2): a UFP that was
+        # in U0 and re-trains (e.g. after eSS.Inactive) must not enter Compliance.
         def generator(dut):
             yield from self.goto(dut, "eSS.Inactive") # Was in U0 before.
             yield from self.expect(dut, "Polling.LFPS", cycles(12e-3, dut.scale) + 32)

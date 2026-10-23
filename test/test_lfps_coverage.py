@@ -372,11 +372,9 @@ class TestLFPSBurstDetection(unittest.TestCase):
             with self.subTest(sys_clk_freq=f):
                 self.check_u2_u3_threshold(f)
 
-    @unittest.expectedFailure
     def test_u2_u3_detection_threshold_150mhz(self):
-        # BUG candidate: time_to_cycles() float ceil: 80e-6*150e6 = 12000.000000000002 -> 12001,
-        # an exact 80us burst (12000 cycles) is not detected as U2/Loopback Exit / U3 Wakeup.
-        # (Masked in hardware by the RXIdleFilter stretch.)
+        # An exact 80us burst (12000 cycles at 150MHz) is detected as U2/Loopback Exit / U3 Wakeup
+        # (time_to_cycles() rounding: 80e-6*150e6 = 12000.000000000002 must give 12000).
         self.check_u2_u3_threshold(150e6)
 
     def test_exit_levels_released_at_burst_end(self):
@@ -501,16 +499,13 @@ class TestLFPSUnitArbitration(unittest.TestCase):
         for _, length in bursts:
             self.assertTrue(0.6e-6 <= length/f <= 1.4e-6)
 
-    @unittest.expectedFailure
     def test_polling_restart_while_busy_no_runt_burst(self):
-        # BUG candidate: tx_polling dropped mid-burst and re-asserted within the 10us repeat period:
-        # LFPSGenerator is still in RUN (not restarted), the remaining part of the burst is sent:
-        # runt burst shorter than Polling tBurst min (0.6us, Table 6-30).
+        # tx_polling dropped mid-burst and re-asserted within the 10us repeat period: the generation
+        # restarts with a full burst (no runt burst shorter than tBurst min 0.6us, Table 6-30).
         f     = 125e6
         trace = self.record(f, [(60, {"tx_polling": 1, "tx_idle": 1}), (40, {"tx_polling": 0}),
             (2000, {"tx_polling": 1})])
-        # Bursts after the re-assertion (the first one is truncated by the request drop itself):
-        # currently a 27 cycles (216ns) runt at 125MHz, then full 1us bursts.
+        # Bursts after the re-assertion (the first one is truncated by the request drop itself).
         bursts = [(s, l) for s, l in runs([t[0] for t in trace], 0) if s >= 100]
         self.assertGreaterEqual(len(bursts), 1)
         for _, length in bursts:
