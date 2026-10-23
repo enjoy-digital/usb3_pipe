@@ -77,7 +77,7 @@ class _CRG(LiteXModule):
 class USB3SoC(SoCMini):
     def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
         with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
-        rxcdr_cfg=None):
+        rxcdr_cfg=None, gtp_params={}):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -102,6 +102,7 @@ class USB3SoC(SoCMini):
             rx_pads      = platform.request("sfp_rx"),
             rxcdr_cfg    = rxcdr_cfg)
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
+        usb3_serdes.gtp.gtp_params.update(gtp_params) # Debug overrides (--gtp-param).
 
         # USB3 PHY (PIPE + LTSSM) ------------------------------------------------------------------
         self.usb3_phy = usb3_phy = USB3PHY(
@@ -197,6 +198,7 @@ def main():
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath"])
+    parser.add_argument("--gtp-param",         action="append", default=[], help="GTP parameter override NAME=VALUE (debug, ex: p_RXCDR_HOLD_DURING_EIDLE=1).")
     parser.add_argument("--rxcdr-cfg",         default=None,        help="GTP RXCDR_CFG override (hex, debug).")
     parser.add_argument("--output-dir",        default=None,        help="Build directory (default: build/sqrl_acorn).")
     args = parser.parse_args()
@@ -223,7 +225,8 @@ def main():
         with_analyzer     = args.with_analyzer,
         analyzer_group    = args.analyzer_group,
         analyzer_csv      = os.path.join(output_dir, "analyzer.csv"),
-        rxcdr_cfg         = None if args.rxcdr_cfg is None else int(args.rxcdr_cfg, 0))
+        rxcdr_cfg         = None if args.rxcdr_cfg is None else int(args.rxcdr_cfg, 0),
+        gtp_params        = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)})
     builder = Builder(soc, output_dir=output_dir, csr_csv=os.path.join(output_dir, "csr.csv"))
     builder.build(run=args.build)
 
