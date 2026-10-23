@@ -10,6 +10,8 @@ Migen simulation with a PHY stand-in (U0, data/ctrl words)."""
 import random
 import unittest
 
+import pytest
+
 from migen import *
 
 from litex.gen import *
@@ -129,50 +131,49 @@ def dpps(packets):
 
 # Tests --------------------------------------------------------------------------------------------
 
+def check_native_enumeration(test, sections):
+    """Enumeration + Bulk loopback checks of the native core (bulk_descriptors)."""
+    # Packets integrity (CRCs).
+    for name, packets in sections.items():
+        for packet in packets:
+            test.assertTrue(packet[-1], f"{name}: bad CRC {packet}")
+
+    # Link initialization: Advertisements, Port Capability, Port Configuration Response.
+    link_init = sections["link_init"]
+    lcs = [p[1] for p in link_init if p[0] == "LC"]
+    test.assertEqual(lcs[:5], [LGOOD(7)] + [LCRD(x) for x in range(4)])
+    test.assertEqual(lmps(link_init), [LMP_SUB_PORT_CAP, LMP_SUB_PORT_CFG_RESP])
+
+    # GET_DESCRIPTOR (Device).
+    descriptors = bulk_descriptors()
+    packets = sections["get_device_descriptor"]
+    test.assertEqual(tps(packets), [(TP_SUB_ACK, 1, 1), (TP_SUB_ACK, 0, 1)])
+    test.assertEqual(dpps(packets), [descriptors.device()])
+
+    # GET_DESCRIPTOR (Configuration, 9 bytes).
+    test.assertEqual(dpps(sections["get_configuration_descriptor"]), [descriptors.configuration()[:9]])
+
+    # GET_DESCRIPTOR (String 1).
+    test.assertEqual(dpps(sections["get_string_descriptor"]), [descriptors.string(1)])
+
+    # SET_CONFIGURATION.
+    test.assertEqual(tps(sections["set_configuration"]), [(TP_SUB_ACK, 1, 1), (TP_SUB_ACK, 0, 1)])
+
+    # Bulk OUT -> loopback -> Bulk IN.
+    for i, payload in enumerate(bulk_payloads()):
+        acks = tps(sections[f"bulk_out_{i}"])
+        test.assertEqual(len(acks), 1)
+        test.assertEqual((acks[0][0], acks[0][2]), (TP_SUB_ACK, i + 1))
+        test.assertEqual(dpps(sections[f"bulk_in_{i}"]), [payload])
+
+
 class TestNativeCore(unittest.TestCase):
-    def run_enumeration(self, **kwargs):
-        script   = enumeration_script(**kwargs)
-        dut      = DUT()
-        out      = run_script(dut, script)
-        sections = parse_sim_output(out, script)
-        return dut, sections
-
-    def check_crcs(self, sections):
-        for name, packets in sections.items():
-            for packet in packets:
-                self.assertTrue(packet[-1], f"{name}: bad CRC {packet}")
-
+    @pytest.mark.slow
     def test_enumeration(self):
-        dut, sections = self.run_enumeration(skp=False)
-        self.check_crcs(sections)
-
-        # Link initialization: Advertisements, Port Capability, Port Configuration Response.
-        link_init = sections["link_init"]
-        lcs = [p[1] for p in link_init if p[0] == "LC"]
-        self.assertEqual(lcs[:5], [LGOOD(7)] + [LCRD(x) for x in range(4)])
-        self.assertEqual(lmps(link_init), [LMP_SUB_PORT_CAP, LMP_SUB_PORT_CFG_RESP])
-
-        # GET_DESCRIPTOR (Device).
-        descriptors = bulk_descriptors()
-        packets = sections["get_device_descriptor"]
-        self.assertEqual(tps(packets), [(TP_SUB_ACK, 1, 1), (TP_SUB_ACK, 0, 1)])
-        self.assertEqual(dpps(packets), [descriptors.device()])
-
-        # GET_DESCRIPTOR (Configuration, 9 bytes).
-        self.assertEqual(dpps(sections["get_configuration_descriptor"]), [descriptors.configuration()[:9]])
-
-        # GET_DESCRIPTOR (String 1).
-        self.assertEqual(dpps(sections["get_string_descriptor"]), [descriptors.string(1)])
-
-        # SET_CONFIGURATION.
-        self.assertEqual(tps(sections["set_configuration"]), [(TP_SUB_ACK, 1, 1), (TP_SUB_ACK, 0, 1)])
-
-        # Bulk OUT -> loopback -> Bulk IN.
-        for i, payload in enumerate(bulk_payloads()):
-            acks = tps(sections[f"bulk_out_{i}"])
-            self.assertEqual(len(acks), 1)
-            self.assertEqual((acks[0][0], acks[0][2]), (TP_SUB_ACK, i + 1))
-            self.assertEqual(dpps(sections[f"bulk_in_{i}"]), [payload])
+        # Migen simulation (PHY stand-in, no SKP).
+        script   = enumeration_script(skp=False)
+        out      = run_script(DUT(), script)
+        check_native_enumeration(self, parse_sim_output(out, script))
 
 if __name__ == "__main__":
     unittest.main()

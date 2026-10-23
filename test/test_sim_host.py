@@ -16,6 +16,10 @@ from pathlib import Path
 
 from usb3_core.host_model import *
 
+from usb3_core.descriptors import bulk_descriptors
+
+from test.test_native_core import check_native_enumeration
+
 ROOT = Path(__file__).resolve().parents[1]
 
 def device_descriptors():
@@ -43,7 +47,10 @@ class TestSimHost(unittest.TestCase):
         out = p.stdout or ""
         self.assertEqual(p.returncode, 0, out[-4000:])
         self.assertIn("HOST script done", out, out[-4000:])
-        return parse_sim_output(out, enumeration_script(skp="--no-host-skp" not in args, pm="--host-pm" in args))
+        return parse_sim_output(out, enumeration_script(
+            skp        = "--no-host-skp" not in args,
+            status_gap = int(args[args.index("--host-status-gap") + 1]) if "--host-status-gap" in args else 64,
+            pm         = "--host-pm" in args))
 
     def check_enumeration(self, sections):
         # Packets integrity (CRCs).
@@ -109,6 +116,31 @@ class TestSimHost(unittest.TestCase):
             self.assertNotIn(LAU(), lcs, name)
         packets = sections["get_device_descriptor_after_pm"]
         self.assertEqual(dpps(packets), [device_descriptors()])
+
+# Native USB3 Device Core -------------------------------------------------------------------------
+
+class TestSimHostNative(TestSimHost):
+    def run_sim(self, *args):
+        return TestSimHost.run_sim(self, "--core", "native", "--output-dir", "build/sim_host_native", *args)
+
+    def check_enumeration(self, sections):
+        check_native_enumeration(self, sections)
+
+    def test_enumeration_back_to_back_header_packets(self):
+        # Data stage ACK TP immediately followed by the STATUS TP (no Logical Idle/SKP between the
+        # Header Packets, xfail with the Daisho core).
+        self.check_enumeration(self.run_sim("--host-status-gap", "0", "--no-host-skp"))
+
+    def test_lgo_u1_u2_rejected(self):
+        # LGO_U1/LGO_U2 rejected with LXU (U1/U2 not enabled), the link stays in U0.
+        sections = self.run_sim("--host-pm")
+        self.check_enumeration(sections)
+        for name in ["lgo_u1", "lgo_u2"]:
+            lcs = [p[1] for p in sections[name] if p[0] == "LC"]
+            self.assertIn(LXU(), lcs, name)
+            self.assertNotIn(LAU(), lcs, name)
+        packets = sections["get_device_descriptor_after_pm"]
+        self.assertEqual(dpps(packets), [bulk_descriptors().device()])
 
 if __name__ == "__main__":
     unittest.main()
