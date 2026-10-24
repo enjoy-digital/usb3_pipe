@@ -9,7 +9,7 @@ import unittest
 
 from migen import *
 
-from usb3_core.crc        import CRC5, CRC16, CRC32
+from usb3_core.crc        import CRC5, CRC16, CRC16Words, CRC32
 from usb3_core.host_model import crc5, crc16, crc32
 
 class TestCoreCRC(unittest.TestCase):
@@ -29,6 +29,24 @@ class TestCoreCRC(unittest.TestCase):
             for _ in range(32):
                 data = [rng.randrange(256) for _ in range(12)]
                 yield dut.data.eq(int.from_bytes(bytes(data), "little"))
+                yield
+                self.assertEqual((yield dut.value), crc16(data))
+        run_simulation(dut, generator(dut))
+
+    def test_crc16_words(self):
+        rng = random.Random(161)
+        dut = CRC16Words()
+        def generator(dut):
+            for _ in range(16):
+                data = [rng.randrange(256) for _ in range(12)]
+                yield dut.clear.eq(1)
+                yield
+                yield dut.clear.eq(0)
+                for i in range(3):
+                    yield dut.ce.eq(1)
+                    yield dut.data.eq(int.from_bytes(bytes(data[4*i:4*i+4]), "little"))
+                    yield
+                yield dut.ce.eq(0)
                 yield
                 self.assertEqual((yield dut.value), crc16(data))
         run_simulation(dut, generator(dut))

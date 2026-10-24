@@ -28,7 +28,10 @@ class USB3ProtocolLayer(LiteXModule):
     def __init__(self, link, endpoints, dev_addr):
         # # #
 
-        rx_hp = link.rx_hp
+        # Received Header Packets (registered: timings).
+        self.rx_hp = rx_hp = stream.PipeValid(header_layout())
+        self.comb += link.rx_hp.connect(rx_hp.sink)
+        rx_hp = rx_hp.source
         h     = HeaderFields(rx_hp.dw0, rx_hp.dw1, rx_hp.dw2)
 
         # DPP status (one per accepted DPH, in order) ----------------------------------------------
