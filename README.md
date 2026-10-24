@@ -111,6 +111,15 @@ Build with `./acorn.py --build --load --example <name>`, see [doc/examples.md](d
 - [doc/debugging-guide.md](doc/debugging-guide.md): hardware debugging (CSRs, trace, LiteScope, soak).
 - [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md): Gen 2x1 (10Gbps)/Gen 1x2 (2x5Gbps) roadmap.
 
+[> Links
+--------
+- [USB 3.2 Specification](https://www.usb.org/document-library/usb-32-revision-11-june-2022) (Physical
+  Layer: chapter 6, Link Layer: chapter 7, Protocol Layer: chapter 8, Device Framework: chapter 9).
+- [Xillybus USB SuperSpeed tutorials](http://xillybus.com/tutorials/usb-superspeed): LTSSM/LFPS,
+  packets, bursts, power management, training by example.
+- Other open source USB3 implementations: [Daisho](https://github.com/greatscottgadgets/daisho),
+  [gmm7550-usb](https://github.com/GMM-7550/gmm7550-usb).
+
 [> Credits
 ----------
 - [bunnie](https://www.bunniestudios.com/) for the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board
