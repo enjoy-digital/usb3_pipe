@@ -642,20 +642,25 @@ class K7USB3SerDes(USB3SerDes):
         self.pll = pll = GTXChannelPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
         gtx = self.add_transceiver("gtx", GTX, pll, tx_pads, rx_pads, sys_clk_freq)
 
-        # Override GTX RX termination for USB3 (800 mV Term Voltage) -------------------------------
-        rxcdr_cfgs = {
-            1 : 0x0380008bff10400010,
-            2 : 0x0380008bff10200010,
-            4 : 0x0380008bff10100010,
-            8 : 0x0380008bff10080010,
-           16 : 0x0380008bff10080010,
-        }
+        # Override GTX RX settings for USB3 ---------------------------------------------------------
+        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
+        # the Xilinx 7-Series Transceivers Wizard (SATA, SSC) and PCIe Gen2 (pcie_7x) GT wrappers:
+        # - RXCDR_CFG: SSC tolerant CDR settings (RXOUT_DIV=1).
+        # - RXCDR_HOLD_DURING_EIDLE/RX_DFE_LPM_HOLD_DURING_EIDLE: the CDR/LPM keep their state during
+        #   Electrical Idle/LFPS.
+        # - LPM mode (as PCIe Gen1/Gen2).
+        # - RX_CM_SEL/RX_CM_TRIM: Programmable, 800mV.
+        assert pll.config['d'] == 1 # 5Gbps.
         gtx.gtx_params.update(
-            p_RX_CM_SEL  = 0b11,
-            p_RX_CM_TRIM = 0b1010,
-            p_RXCDR_CFG  = rxcdr_cfgs[pll.config['d']],
-            p_PMA_RSV    = 0x18480,
-            p_PMA_RSV2   = 0x2050,
+            p_RXCDR_CFG                    = 0x03_8000_8BFF_4010_0008,
+            p_RXCDR_HOLD_DURING_EIDLE      = 0b1,
+            p_RX_DFE_LPM_HOLD_DURING_EIDLE = 0b1,
+            p_RX_DFE_LPM_CFG               = 0x0904,
+            i_RXLPMEN                      = 0b1,
+            p_RX_CM_SEL                    = 0b11,
+            p_RX_CM_TRIM                   = 0b010,
+            p_PMA_RSV                      = 0x00018480,
+            p_PMA_RSV2                     = 0x2050,
         )
 
         # Override GTX TX termination for USB3 (800 mV Term Voltage) -------------------------------
@@ -664,9 +669,10 @@ class K7USB3SerDes(USB3SerDes):
         )
 
         # Override GTX parameters/signals for USB3 LFPS --------------------------------------------
+        # PCS_RSVD_ATTR: OOB powered up (bit 8), OOB clock from CLKRSVD[0] (bit 3).
         rx_idle = Signal()
         gtx.gtx_params.update(
-            p_PCS_RSVD_ATTR    = 0x000000000100,
+            p_PCS_RSVD_ATTR    = 0x000000000108,
             p_RXOOB_CFG        = 0b0000110,
             i_CLKRSVD          = ClockSignal("oob"),
             i_RXELECIDLEMODE   = 0b00,
