@@ -73,8 +73,8 @@ class RXSKPRemover(LiteXModule):
         frag_bytes = pipe.source.bytes
 
         # Store Data/Ctrl in a 64/8-bit Shift Register ---------------------------------------------
-        sr_data  = Signal(64)
-        sr_ctrl  = Signal(8)
+        sr_data  = Signal(64, reset_less=True)
+        sr_ctrl  = Signal(8,  reset_less=True)
         sr_bytes = Signal(4)
         cases = {}
         cases[0] = [
