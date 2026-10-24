@@ -21,8 +21,8 @@ from litex.soc.interconnect.csr import *
 
 class USB3Bench(LiteXModule):
     def __init__(self, with_csr=True):
-        self.source = source = stream.Endpoint([("data", 32), ("last_be", 4)]) # To Bulk IN.
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("last_be", 4)]) # From Bulk OUT.
+        self.source = source = stream.Endpoint([("data", 32), ("be", 4)]) # To Bulk IN.
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("be", 4)]) # From Bulk OUT.
 
         self.source_enable = Signal(reset=1) # i
         self.clear         = Signal()        # i: Counters clear (the next received word is not checked).
@@ -37,6 +37,7 @@ class USB3Bench(LiteXModule):
         self.comb += [
             source.valid.eq(self.source_enable),
             source.data.eq(count),
+            source.be.eq(0b1111),
         ]
         self.sync += If(source.valid & source.ready,
             count.eq(count + 1),

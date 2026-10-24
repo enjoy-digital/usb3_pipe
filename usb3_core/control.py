@@ -53,9 +53,9 @@ class USB3EndpointControl(USB3Endpoint):
     - req_setup (pulse)/req_valid (level, until the next request): request fields (req_type,
       req_request, req_value, req_index, req_length).
     - req_stall: the handler stalls the request (to set within a few cycles after req_setup).
-    - req_in   : IN Data stage response (32-bit words, first byte on data[7:0], last/last_be), up to
+    - req_in   : IN Data stage response (32-bit words, first byte on data[7:0], last/be), up to
                  512 bytes, written by the handler after req_setup (sent when complete).
-    - req_out  : OUT Data stage data (32-bit words, last/last_be), no back-pressure.
+    - req_out  : OUT Data stage data (32-bit words, last/be), no back-pressure.
     - req_done : Status stage completed (pulse), for all requests (ex: SET_INTERFACE tracking).
     """
     def __init__(self, descriptors, with_handler=False):
@@ -78,8 +78,8 @@ class USB3EndpointControl(USB3Endpoint):
         self.req_length  = Signal(16) # o
         self.req_stall   = Signal()   # i
         self.req_done    = Signal()   # o
-        self.req_in      = stream.Endpoint([("data", 32), ("last_be", 4)]) # i
-        self.req_out     = stream.Endpoint([("data", 32), ("last_be", 4)]) # o
+        self.req_in      = stream.Endpoint([("data", 32), ("be", 4)]) # i
+        self.req_out     = stream.Endpoint([("data", 32), ("be", 4)]) # o
 
         # # #
 
@@ -251,8 +251,7 @@ class USB3EndpointControl(USB3Endpoint):
                     resp_words.eq(resp_words + 1),
                     If(self.req_in.last,
                         resp_ready.eq(1),
-                        resp_len.eq(4*resp_words + Mux(self.req_in.last_be != 0,
-                            last_be_to_bytes(self.req_in.last_be), 4)),
+                        resp_len.eq(4*resp_words + be_to_bytes(self.req_in.be)),
                     )
                 )
             ]
@@ -261,9 +260,7 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_out.valid.eq(self.rx_dpp.valid & ~self.rx_dpp_setup & (kind == KIND_HANDLER)),
                 self.req_out.data.eq(self.rx_dpp.data),
                 self.req_out.last.eq(self.rx_dpp.last),
-                If(self.rx_dpp.last & (self.rx_dpp.bytes != 4),
-                    self.req_out.last_be.eq(bytes_to_last_be(self.rx_dpp.bytes))
-                ),
+                self.req_out.be.eq(Mux(self.rx_dpp.last, bytes_to_be(self.rx_dpp.bytes), 0b1111)),
             ]
         self.comb += self.req_done.eq(self.hdr_strobe & status_tp & ~stall)
 

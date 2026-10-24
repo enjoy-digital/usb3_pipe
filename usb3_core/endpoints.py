@@ -146,15 +146,15 @@ class USB3Endpoint(LiteXModule):
 class USB3BulkIN(USB3Endpoint):
     """Bulk IN Endpoint (Device -> Host).
 
-    sink: packets to send (data: 32-bit words, first byte on data[0:8], last: end of packet with
-    last_be the last valid byte (0: full word)), packets longer than 1024 bytes are split.
+    sink: packets to send (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end of
+    packet), packets longer than 1024 bytes are split.
     flush: drop the buffered packets (and the packet being written), ex: stream restarted.
     """
     def __init__(self, ept, max_burst=8):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=1)
         self.max_burst = max_burst
-        self.sink  = sink = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.sink  = sink = stream.Endpoint([("data", 32), ("be", 4)])
         self.flush = Signal() # i
 
         # # #
@@ -205,7 +205,7 @@ class USB3BulkIN(USB3Endpoint):
                 If(wr_commit,
                     wr_count.eq(0),
                     lengths[wr_ptr[0:pbits-1]].eq(4*wr_count +
-                        Mux(sink.last, last_be_to_bytes(sink.last_be), 4)),
+                        Mux(sink.last, be_to_bytes(sink.be), 4)),
                     wr_ptr.eq(wr_ptr + 1),
                 )
             )
@@ -370,14 +370,14 @@ class USB3BulkIN(USB3Endpoint):
 class USB3BulkOUT(USB3Endpoint):
     """Bulk OUT Endpoint (Host -> Device).
 
-    source: received packets (data: 32-bit words, first byte on data[0:8], last: end of packet with
-    last_be the last valid byte (0: full word)). Zero-length packets are dropped.
+    source: received packets (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end of
+    packet). Zero-length packets are dropped.
     """
     def __init__(self, ept, max_burst=8):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=0)
         self.max_burst = max_burst
-        self.source = source = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
 
         # # #
 
@@ -490,7 +490,7 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, need_erdy.eq(0))
 
         # Reader (user) ----------------------------------------------------------------------------
-        self.fifo = fifo = stream.SyncFIFO([("data", 32), ("last_be", 4)], 16)
+        self.fifo = fifo = stream.SyncFIFO([("data", 32), ("be", 4)], 16)
         rd_count  = Signal(9)
         rd_len    = Signal(11)
         rd_words  = Signal(9)
@@ -511,7 +511,7 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += [
             rd_valid.eq(rd_issue),
             rd_last.eq(rd_issue & (rd_count + 1 >= rd_words)),
-            rd_be.eq(Mux(rd_count + 1 >= rd_words, bytes_to_last_be(rd_len), 0)),
+            rd_be.eq(Mux(rd_count + 1 >= rd_words, bytes_to_be(rd_len), 0b1111)),
             If(~rd_active,
                 # Next decided slot: read it (valid, not empty) or skip it.
                 If(rd_ptr != decide_ptr,
@@ -534,6 +534,6 @@ class USB3BulkOUT(USB3Endpoint):
             fifo.sink.valid.eq(rd_valid),
             fifo.sink.data.eq(rd_port.dat_r),
             fifo.sink.last.eq(rd_last),
-            fifo.sink.last_be.eq(rd_be),
+            fifo.sink.be.eq(rd_be),
             fifo.source.connect(source),
         ]

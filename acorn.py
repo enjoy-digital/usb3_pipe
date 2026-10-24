@@ -219,7 +219,7 @@ class USB3SoC(SoCCore):
 
             if example == "loopback":
                 # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (scripts/usb3_bulk.py).
-                self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True)
+                self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True)
                 self.comb += [
                     usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
                     usb3_loopback.source.connect(usb3_core.endpoints[0].sink),

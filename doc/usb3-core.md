@@ -27,7 +27,7 @@ self.usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq,
     endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)])
 self.usb3_core.add_csr(with_trace=True) # Status/statistics CSRs, Header Packets trace.
 # endpoints[0].sink: Device -> Host packets, endpoints[1].source: Host -> Device packets (32-bit words,
-# first byte on data[7:0], last/last_be: end of packet with the last valid byte).
+# first byte on data[7:0], be: valid bytes (full except on the last word), last: end of packet).
 ```
 
 Device classes (complete devices, or functions to compose a device):
@@ -65,8 +65,8 @@ delegated to user logic on `core.ep0`:
 |---|---|
 | `req_setup`, `req_valid`, `req_type`, `req_request`, `req_value`, `req_index`, `req_length` | Request (pulse/level, SETUP fields). |
 | `req_stall` | The handler stalls the request. |
-| `req_in` (data 32, last, last_be) | IN Data stage response (up to 512 bytes), written after `req_setup`. |
-| `req_out` (data 32, last, last_be) | OUT Data stage data (no back-pressure). |
+| `req_in` (data 32, be, last) | IN Data stage response (up to 512 bytes), written after `req_setup`. |
+| `req_out` (data 32, be, last) | OUT Data stage data (no back-pressure). |
 | `req_done` | Status stage completed (all requests, ex: SET_INTERFACE/SET_CONTROL_LINE_STATE tracking). |
 
 ## Composite devices

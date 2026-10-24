@@ -212,17 +212,17 @@ class USB3UVCControl(LiteXModule):
                 0: [
                     ep0.req_in.data.eq(probes[mode*9 + count]),
                     ep0.req_in.last.eq(count == 8),
-                    ep0.req_in.last_be.eq(0b0010), # 34 bytes.
+                    ep0.req_in.be.eq(Mux(count == 8, 0b0011, 0b1111)), # 34 bytes.
                 ],
                 1: [
                     ep0.req_in.data.eq(UVC_PROBE_SIZE),
                     ep0.req_in.last.eq(1),
-                    ep0.req_in.last_be.eq(0b0010), # 2 bytes.
+                    ep0.req_in.be.eq(0b0011), # 2 bytes.
                 ],
                 2: [
                     ep0.req_in.data.eq(0x03),
                     ep0.req_in.last.eq(1),
-                    ep0.req_in.last_be.eq(0b0001), # 1 byte.
+                    ep0.req_in.be.eq(0b0001), # 1 byte.
                 ],
             }),
         ]
@@ -277,7 +277,7 @@ class USB3UVCStream(LiteXModule):
         self.start  = Signal()                       # i
         self.stop   = Signal()                       # i
         self.mode   = Signal(max=max(len(modes), 2)) # i
-        self.source = source = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
         self.frames = Signal(32)                     # o: Frames sent.
 
         # # #
@@ -382,6 +382,7 @@ class USB3UVCStream(LiteXModule):
         )
         fsm.act("HEADER",
             source.valid.eq(1),
+            source.be.eq(0b1111),
             Case(hdr, {
                 0: source.data.eq(Cat(C(UVC_HEADER_SIZE, 8), info, pts[0:16])),
                 1: source.data.eq(Cat(pts[16:32], stc[0:16])),
@@ -397,6 +398,7 @@ class USB3UVCStream(LiteXModule):
         )
         fsm.act("DATA",
             source.valid.eq(1),
+            source.be.eq(0b1111),
             source.data.eq(Cat(y0, u, y1, v)),
             source.last.eq((p_words == 1) | (f_words == 1)),
             If(source.ready,
