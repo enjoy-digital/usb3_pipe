@@ -103,6 +103,7 @@ Build with `./acorn.py --build --load --example <name>`, see [doc/examples.md](d
 | `console` (`--cpu-type vexriscv`) | CDC-ACM LiteX BIOS console | `litex_term /dev/ttyACM0` |
 | `uvc` | UVC camera, YUY2 test pattern (480p60/720p60/1080p30/1080p60) | `ffplay -f v4l2 -video_size 1920x1080 /dev/video0`, VLC |
 | `msc` | Mass Storage 512KB FAT RAM disk | `/dev/sdX`, mount |
+| `msc_dram` | Mass Storage 512MB DDR3 disk (not yet validated on hardware) | `mkfs.vfat /dev/sdX`, mount |
 | `composite` (`--cpu-type vexriscv`) | UVC camera + CDC-ACM console | both at the same time |
 
 [> Documentation

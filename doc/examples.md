@@ -85,6 +85,33 @@ sd 2:0:0:0: [sda] 1024 512-byte logical blocks: (524 kB/512 KiB)
 
 Mount it (`udisksctl mount -b /dev/sdX` or the desktop), READ(10) ~186 MB/s, WRITE(10) ~227 MB/s.
 
+## `msc_dram`: Mass Storage DRAM disk (not yet validated on hardware)
+
+512MB disk in the Acorn DDR3 (upper half of the 1GB DRAM, LiteDRAM DMAs: `USB3MSCDRAM`):
+
+```sh
+$ ./acorn.py --build --load --example msc_dram   # Enables the DDR3 and a VexRiscv CPU.
+```
+
+Build (Vivado 2024.1, xc7a200t-3, sys 125MHz, DDR3 500MT/s): timing met (sys WNS +0.36ns), 11.7K LUTs,
+8.5K FFs, 32 BRAM tiles.
+
+The DDR3 is initialized/calibrated by the LiteX BIOS (the disk reports NOT READY until the BIOS
+sets `ddrctrl_init_done`), the BIOS console is on a crossover UART reachable through UARTBone:
+
+```sh
+$ litex_server --uart --uart-port /dev/ttyUSBX
+$ litex_term crossover   # DRAM initialization/memtest logs.
+```
+
+The disk is not formatted (DRAM content is lost at each power-up/reload): format it from the host
+before mounting it:
+
+```sh
+$ sudo mkfs.vfat /dev/sdX   # Whole disk, or partition it first (fdisk).
+$ udisksctl mount -b /dev/sdX
+```
+
 ## `composite`: camera + console (`--cpu-type vexriscv`)
 
 One USB3 device with a UVC camera (interfaces 0-1, EP1) and a CDC-ACM BIOS console (interfaces 2-3,
