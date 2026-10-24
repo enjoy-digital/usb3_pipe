@@ -4,6 +4,10 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 PIPE (USB 3.2 chapter 6): LFPS and Training Sequences units, scrambling, Logical Idle, Idle
+handshake, framing alignment, on top of a USB3 SerDes.
+"""
+
 from migen import *
 
 from litex.gen import *

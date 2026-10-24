@@ -4,6 +4,10 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 PHY debug (doc/debugging-guide.md): LTSSM state history and counters (USB3PHYDebug), RX errors
+(USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug).
+"""
+
 from functools import reduce
 from operator import xor
 

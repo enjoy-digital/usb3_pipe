@@ -4,6 +4,10 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 Low Frequency Periodic Signaling (USB 3.2 6.9): Polling, Ping, U1/U2 exit, U3 wakeup and Warm
+Reset LFPS generation/detection.
+"""
+
 # LFPS is the first signaling to happen during the initialization of the USB3.0 link.
 
 # LFPS allows partners to exchange Out Of Band (OOB) controls/commands and consists of bursts where
