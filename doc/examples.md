@@ -73,6 +73,23 @@ $ vlc v4l2:///dev/video0:width=1280:height=720
 $ v4l2-ctl --set-fmt-video=width=1920,height=1080 --set-parm=60 --stream-mmap --stream-count=300   # 60.00 fps
 ```
 
+## `uvc_iso`: USB Video Class camera, Isochronous (not yet validated on hardware)
+
+Same camera as `uvc` with Isochronous streaming (the usual UVC camera mode): VideoStreaming interface
+with alternate setting 0 (no endpoint) and 1 (Isochronous IN EP1, MaxBurst 16, Mult 0, bInterval 1:
+16KB per 125us service interval, ~131MB/s), one UVC payload per service interval
+(dwMaxPayloadTransferSize = wBytesPerInterval = 16384), zero-length packets between frames. uvcvideo
+selects alternate setting 1 to start the stream, alternate setting 0 to stop it. Modes fitting the
+bandwidth: 640x480@60, 1280x720@30/60, 1920x1080@30.
+
+```sh
+$ lsusb -v -d 1d50:605a | grep -A4 "bAlternateSetting\|Isochronous"
+$ v4l2-ctl --list-formats-ext
+$ ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 -framerate 60 /dev/video0
+$ v4l2-ctl --set-fmt-video=width=1920,height=1080 --set-parm=30 --stream-mmap --stream-count=300
+$ sudo dmesg | grep -i uvc   # Bandwidth/alternate setting errors.
+```
+
 ## `msc`: Mass Storage RAM disk
 
 512KB block RAM disk, pre-formatted (FAT) with a `README.TXT` at build time:

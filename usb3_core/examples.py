@@ -11,6 +11,7 @@
 - cdc_uartbone : CDC-ACM serial port carrying UARTBone (litex_server --uart --uart-port /dev/ttyACMx).
 - console      : CDC-ACM SoC console, BIOS (litex_term /dev/ttyACMx), requires a CPU.
 - uvc          : UVC camera, YUY2 test pattern (ffplay/VLC /dev/videoX).
+- uvc_iso      : UVC camera, YUY2 test pattern, Isochronous streaming (not yet validated on hardware).
 - msc          : Mass Storage 512KB FAT RAM disk (/dev/sdX).
 - msc_dram     : Mass Storage DRAM disk (upper half of the DRAM, /dev/sdX, mkfs.vfat needed), requires
                  a DRAM controller (soc.sdram) initialized by the BIOS (CPU).
@@ -31,7 +32,7 @@ from usb3_core.bench       import USB3Bench
 from usb3_core.uvc         import USB3UVC, USB3UVCFunction, uvc_interfaces, UVC_MODES
 from usb3_core.msc         import USB3MSC, USB3MSCDRAM, msc_fat_image
 
-USB3_EXAMPLES = ["loopback", "bench", "cdc_uartbone", "console", "uvc", "msc", "msc_dram", "composite"]
+USB3_EXAMPLES = ["loopback", "bench", "cdc_uartbone", "console", "uvc", "uvc_iso", "msc", "msc_dram", "composite"]
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -112,6 +113,12 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
     # UVC camera (test pattern): ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
     elif example == "uvc":
         soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq)
+        usb3_uvc.core.add_csr(with_trace=True)
+
+    # UVC camera (test pattern), Isochronous streaming (16KB per 125us service interval, ~131MB/s):
+    # ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 -framerate 60 /dev/videoX.
+    elif example == "uvc_iso":
+        soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq, transfer="iso", max_burst=16)
         usb3_uvc.core.add_csr(with_trace=True)
 
     # USB3 CDC-ACM serial port: SoC console or Wishbone bridge.

@@ -1,7 +1,7 @@
 # USB3 Device Core (`usb3_core`)
 
 Migen/LiteX USB 3.2 Gen 1x1 (SuperSpeed, 5Gbps) device core: Link Layer, Protocol Layer, Control
-Endpoint, Bulk Endpoints and device classes (CDC-ACM, UVC, Mass Storage). It runs at the PIPE rate
+Endpoint, Bulk/Isochronous Endpoints and device classes (CDC-ACM, UVC, Mass Storage). It runs at the PIPE rate
 (32-bit words at 125MHz) in the `sys` clock domain of the PHY ([usb3-pipe.md](usb3-pipe.md)).
 
 ```
@@ -55,11 +55,12 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB
 | `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function, U2 Inactivity Timeout), LGO_U3 accepted, LGO_U1/U2 accepted when idle with `with_lpm` (else LXU), LPMA forwarded, U1/U2 exit on pending packets. |
 | `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order. |
 | `USB3BulkIN`/`USB3BulkOUT` | `endpoints.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`. |
+| `USB3IsoIN` | `endpoints.py` | Isochronous IN endpoint (MaxBurst 1-16, Mult 0): one transfer per service interval, sent on the host ACK TPs (Seq Num 0, then Seq Num + NumP), LPF on the last packet, zero-length DP when no data, no retry/flow control, `flush`. |
 | `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), U1/U2 Enable (SET/CLEAR_FEATURE, GET_STATUS), class/vendor request handler (`with_ep0_handler`). |
 | `USB3Descriptors` | `descriptors.py` | Descriptors builder (device, configuration with SuperSpeed companions, BOS, strings, IADs). |
 | `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints, `add_csr()`. |
 | `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port, LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
-| `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes. |
+| `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes, Bulk (default) or Isochronous (`transfer="iso"`) streaming. |
 | `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine on a storage (stream interface): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`). |
 | `USB3Bench` | `bench.py` | Bandwidth benchmark source/checker. |
 | `USB3CoreTrace` | `trace.py` | Header Packets trace (debug). |
@@ -78,6 +79,28 @@ delegated to user logic on `core.ep0`:
 | `req_in` (data 32, be, last) | IN Data stage response (up to 512 bytes), written after `req_setup`. |
 | `req_out` (data 32, be, last) | OUT Data stage data (no back-pressure). |
 | `req_done` | Status stage completed (all requests, ex: SET_INTERFACE/SET_CONTROL_LINE_STATE tracking). |
+
+SET_INTERFACE is also decoded by EP0 for all devices: `set_interface` (pulse, Status stage),
+`interface`, `alt_setting`. GET_INTERFACE returns the current alternate setting of the interface
+(reset on SET_CONFIGURATION).
+
+## Isochronous IN endpoints
+
+`USB3IsoIN(ept, max_burst)` (USB 3.2 8.12.6, Mult of 0): `sink` takes service interval transfers
+(`last`: end of the transfer, up to `max_burst` x 1024 bytes), each one sent in one service interval
+as 1024 bytes packets, the last one (short or not) with the Last Packet Flag (DPH bit 1:6). The host
+requests the packets with ACK TPs (first one with a Seq Num of 0, then previous Seq Num + NumP):
+a complete buffered transfer is sent from Seq Num 0 within the requested window, or a zero-length DP
+(Seq Num 0, LPF) when no complete transfer is buffered (Table 8-33). No TP response, no retry, no
+NRDY/ERDY; the end of a transfer interrupted by the next service interval is dropped. PINGs are
+answered by the Protocol Layer (PING_RESPONSE), ITPs are ignored. Statistics: `n_transfers`,
+`n_zlps`, `n_drops`.
+
+Descriptors: `USB3EndpointDescriptor(ept, 1, kind=EP_ISOCHRONOUS, max_burst, interval, sync=EP_SYNC_ASYNC)`
+(SuperSpeed companion: bMaxBurst, Mult 0, wBytesPerInterval = max_burst x 1024) in an interface
+alternate setting (`USB3InterfaceDescriptor(..., alt=1)`, alternate setting 0 without endpoint: zero
+bandwidth), see `iso_in_descriptors()`. The host selects the alternate setting (SET_INTERFACE) before
+starting the service intervals: the user logic starts its stream on `ep0.set_interface`.
 
 ## Composite devices
 
@@ -144,8 +167,8 @@ A complete Acorn design (PHY + core + debug + bench) uses ~6000 LUTs (4.5% of th
 ## Limitations
 
 - Gen 1x1 only ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
-- Bulk/Control endpoints (no Isochronous, Streams). Interrupt IN endpoints can be declared with a Bulk
-  IN endpoint (ex: CDC-ACM notifications, never sent).
+- Bulk/Control endpoints, Isochronous IN (Mult of 0): no Isochronous OUT, no Streams. Interrupt IN
+  endpoints can be declared with a Bulk IN endpoint (ex: CDC-ACM notifications, never sent).
 - U1/U2 rejected by default (descriptors advertise 0 exit latencies: hosts disable LPM). With
   `with_lpm`: host initiated U1/U2 entry only (no device initiated entry, U1/U2 Enable only reported),
   validated in simulation only (not on hardware yet). U3 entry/exit through the LTSSM (not validated
