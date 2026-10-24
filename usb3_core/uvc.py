@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Video Class camera (UVC 1.1, Bulk streaming, YUY2 test pattern).
+"""USB3 Video Class camera (UVC 1.1, Bulk or Isochronous streaming, YUY2 test pattern).
 
 A USB3 device exposing a UVC camera (/dev/videoX, no driver needed) streaming an uncompressed YUY2
 test pattern (color bars, moving marker, moving luma band) in several modes selected by the host
@@ -13,13 +13,20 @@ test pattern (color bars, moving marker, moving luma band) in several modes sele
     ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/video0
 
 - Descriptors: IAD, VideoControl (Camera Input Terminal -> Streaming Output Terminal), VideoStreaming
-  (Uncompressed YUY2 format, one frame descriptor per mode, Bulk IN endpoint).
+  (Uncompressed YUY2 format, one frame descriptor per mode, Bulk IN endpoint or alternate settings
+  0/1 without/with an Isochronous IN endpoint).
 - USB3UVCControl: VS PROBE/COMMIT requests (EP0 request handler).
 - USB3UVCStream  : test pattern generator and payloads (12-byte payload header: FID/EOF/PTS/SCR).
 - USB3UVC        : complete device (USB3DeviceCore + control + stream).
 
-Bulk streaming (UVC 1.1 2.4.3.2.2): payloads of dwMaxPayloadTransferSize bytes (header + data), the
-last payload of a frame ends with a short packet (checked at build time for each mode).
+Bulk streaming (UVC 1.1 2.4.3.2.2, default): payloads of dwMaxPayloadTransferSize bytes (header +
+data), the last payload of a frame ends with a short packet (checked at build time for each mode).
+Started on COMMIT.
+
+Isochronous streaming (transfer="iso", UVC 1.1 2.4.3.2.1): one payload per service interval
+(dwMaxPayloadTransferSize = wBytesPerInterval = max_burst x 1024 bytes, Mult of 0, bInterval 1:
+125us, up to ~131MB/s), zero-length packets between frames. Started by SET_INTERFACE of the
+VideoStreaming interface to alternate setting 1 (after COMMIT), stopped by alternate setting 0.
 """
 
 from migen import *
@@ -29,7 +36,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN
+from usb3_core.endpoints   import USB3BulkIN, USB3IsoIN
 from usb3_core.descriptors import *
 
 # Constants ----------------------------------------------------------------------------------------
@@ -67,6 +74,9 @@ UVC_PAYLOAD_SIZE = 32768
 # Default modes: (width, height, fps), YUY2 (16 bits/pixel).
 UVC_MODES = [(640, 480, 60), (1280, 720, 60), (1920, 1080, 30), (1920, 1080, 60)]
 
+# Default isochronous modes (16KB per 125us service interval: ~131MB/s).
+UVC_ISO_MODES = [(640, 480, 60), (1280, 720, 30), (1280, 720, 60), (1920, 1080, 30)]
+
 # Color bars (BT.601 YUV): white, yellow, cyan, green, magenta, red, blue, black.
 UVC_BARS = [(235, 128, 128), (210, 16, 146), (170, 166, 16), (145, 54, 34), (106, 202, 222),
     (81, 90, 240), (41, 240, 110), (16, 128, 128)]
@@ -77,12 +87,15 @@ def frame_size(width, height):
 def frame_interval(fps):
     return 10_000_000//fps # 100ns units.
 
-def check_modes(modes, payload_size):
-    """The last payload of each frame must end with a short packet (bulk payload delimitation)."""
+def check_modes(modes, payload_size, bulk=True):
+    """Pattern constraints, bulk: the last payload of each frame must end with a short packet (payload
+    delimitation, isochronous: delimited by the service intervals)."""
     data_size = payload_size - UVC_HEADER_SIZE
     for width, height, fps in modes:
         assert (width % 16) == 0, "width must be a multiple of 16 (color bars, 2 pixels per word)."
         assert (height % 8) == 0, "height must be a multiple of 8."
+        if not bulk:
+            continue
         last = UVC_HEADER_SIZE + (frame_size(width, height) % data_size or data_size)
         assert (last % 1024) != 0 or last == payload_size, \
             f"{width}x{height}: last payload of {last} bytes not ended by a short packet."
@@ -107,8 +120,13 @@ def uvc_probe(modes, mode, payload_size, clk_freq):
     return (le16(0) + [1, uvc_frame_index(modes, mode)] + le32(frame_interval(fps)) + le16(0)*4 + le16(0) +
         le32(frame_size(width, height)) + le32(payload_size) + le32(clk_freq) + [0x03, 0, 0, 0])
 
-def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_000):
-    """UVC function: IAD, VideoControl and VideoStreaming interfaces (VS: vc_interface + 1)."""
+def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_000, transfer="bulk",
+    interval=1):
+    """UVC function: IAD, VideoControl and VideoStreaming interfaces (VS: vc_interface + 1).
+
+    transfer: "bulk" (Bulk IN endpoint) or "iso" (VS alternate setting 0 without endpoint, alternate
+    setting 1 with the Isochronous IN endpoint, bInterval: interval)."""
+    assert transfer in ["bulk", "iso"]
     vs_interface = vc_interface + 1
     iad = [8, DESC_IAD, vc_interface, 2, CC_VIDEO, SC_VIDEO_INTERFACE_COLLECTION, 0x00, 0]
 
@@ -133,16 +151,26 @@ def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_
     vs_color  = [6, DESC_CS_INTERFACE, VS_COLORFORMAT, 1, 1, 4]
     vs_hdr    = [14, DESC_CS_INTERFACE, VS_INPUT_HEADER, 1] + \
         le16(14 + len(vs_fmt) + len(vs_frames) + len(vs_color)) + [0x80 | ept, 0, 2, 0, 0, 0, 1, 0]
-    vs = USB3InterfaceDescriptor(vs_interface, cls=CC_VIDEO, subclass=SC_VIDEOSTREAMING,
-        extra=vs_hdr + vs_fmt + vs_frames + vs_color,
-        endpoints=[USB3EndpointDescriptor(ept, direction=1, max_burst=max_burst)])
-    return [iad, vc, vs]
+    if transfer == "bulk":
+        vs = USB3InterfaceDescriptor(vs_interface, cls=CC_VIDEO, subclass=SC_VIDEOSTREAMING,
+            extra=vs_hdr + vs_fmt + vs_frames + vs_color,
+            endpoints=[USB3EndpointDescriptor(ept, direction=1, max_burst=max_burst)])
+        return [iad, vc, vs]
+    # Isochronous: alternate setting 0 (zero bandwidth) with the class specific descriptors, alternate
+    # setting 1 with the Isochronous IN endpoint (Asynchronous, wBytesPerInterval: max_burst x 1024).
+    vs0 = USB3InterfaceDescriptor(vs_interface, alt=0, cls=CC_VIDEO, subclass=SC_VIDEOSTREAMING,
+        extra=vs_hdr + vs_fmt + vs_frames + vs_color)
+    vs1 = USB3InterfaceDescriptor(vs_interface, alt=1, cls=CC_VIDEO, subclass=SC_VIDEOSTREAMING,
+        endpoints=[USB3EndpointDescriptor(ept, direction=1, kind=EP_ISOCHRONOUS, max_burst=max_burst,
+            interval=interval, sync=EP_SYNC_ASYNC)])
+    return [iad, vc, vs0, vs1]
 
-def uvc_descriptors(modes=UVC_MODES, ept=1, max_burst=16, clk_freq=125_000_000, **kwargs):
+def uvc_descriptors(modes=UVC_MODES, ept=1, max_burst=16, clk_freq=125_000_000, transfer="bulk", interval=1,
+    **kwargs):
     kwargs.setdefault("product",      "USB3-PIPE Camera")
     kwargs.setdefault("device_class", DEVICE_CLASS_IAD)
     return USB3Descriptors(interfaces=uvc_interfaces(modes, ept=ept, max_burst=max_burst,
-        clk_freq=clk_freq), **kwargs)
+        clk_freq=clk_freq, transfer=transfer, interval=interval), **kwargs)
 
 # UVC Control (PROBE/COMMIT) -----------------------------------------------------------------------
 
@@ -267,13 +295,14 @@ class USB3UVCControl(LiteXModule):
 # UVC Stream (pattern + payloads) ------------------------------------------------------------------
 
 class USB3UVCStream(LiteXModule):
-    """YUY2 test pattern frames in UVC Bulk payloads.
+    """YUY2 test pattern frames in UVC payloads.
 
     start (pulse): start streaming in mode (stream restarted), stop (pulse): stop streaming.
-    source: payloads (to the Bulk IN endpoint, last: end of payload).
+    source: payloads (to the Bulk IN endpoint, or the Isochronous IN endpoint: one payload per service
+    interval, last: end of payload).
     """
-    def __init__(self, modes, clk_freq, payload_size=UVC_PAYLOAD_SIZE):
-        check_modes(modes, payload_size)
+    def __init__(self, modes, clk_freq, payload_size=UVC_PAYLOAD_SIZE, bulk=True):
+        check_modes(modes, payload_size, bulk)
         self.start  = Signal()                       # i
         self.stop   = Signal()                       # i
         self.mode   = Signal(max=max(len(modes), 2)) # i
@@ -434,38 +463,70 @@ class USB3UVCStream(LiteXModule):
 # USB3 UVC Function -------------------------------------------------------------------------------
 
 class USB3UVCFunction(LiteXModule):
-    """UVC camera function of a USB3 device (EP0 with request handler, Bulk IN video endpoint).
+    """UVC camera function of a USB3 device (EP0 with request handler, Bulk or Isochronous IN video
+    endpoint).
 
-    The stream is started on COMMIT, stopped by CLEAR_FEATURE(ENDPOINT_HALT) on the video endpoint
-    (uvcvideo bulk stream off) or a link reset, the buffered packets are then flushed.
+    Bulk: the stream is started on COMMIT, stopped by CLEAR_FEATURE(ENDPOINT_HALT) on the video
+    endpoint (uvcvideo bulk stream off) or a link reset.
+    Isochronous (USB3IsoIN endpoint, payload_size: max_burst x 1024): the stream is started by
+    SET_INTERFACE of the VideoStreaming interface to a non-zero alternate setting (committed mode),
+    stopped by alternate setting 0 (uvcvideo stream off) or a link reset.
+    The buffered packets are flushed on start/stop.
     """
-    def __init__(self, ep0, bulk_in, link_reset, clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE,
+    def __init__(self, ep0, video_in, link_reset, clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE,
         vs_interface=1):
+        iso = isinstance(video_in, USB3IsoIN)
+        if iso:
+            assert payload_size <= video_in.max_burst*1024
         self.control = control = USB3UVCControl(ep0, modes, payload_size, clk_freq, vs_interface)
-        self.stream  = stream  = USB3UVCStream(modes, clk_freq, payload_size)
+        self.stream  = stream  = USB3UVCStream(modes, clk_freq, payload_size, bulk=not iso)
 
         # # #
 
-        stop = Signal()
+        start = Signal()
+        stop  = Signal()
+        if iso:
+            alt_set = Signal()
+            self.comb += [
+                alt_set.eq(ep0.set_interface & (ep0.interface == vs_interface)),
+                start.eq(alt_set & (ep0.alt_setting != 0)),
+                stop.eq((alt_set & (ep0.alt_setting == 0)) | link_reset),
+            ]
+        else:
+            self.comb += [
+                start.eq(control.commit),
+                stop.eq((ep0.clear_halt & (ep0.clear_ept == video_in.ept)) | link_reset),
+            ]
         self.comb += [
-            stop.eq((ep0.clear_halt & (ep0.clear_ept == bulk_in.ept)) | link_reset),
-            stream.start.eq(control.commit),
+            stream.start.eq(start),
             stream.stop.eq(stop),
             stream.mode.eq(control.mode),
-            bulk_in.flush.eq(control.commit | stop),
-            stream.source.connect(bulk_in.sink),
+            video_in.flush.eq(start | stop),
+            stream.source.connect(video_in.sink),
         ]
 
 # USB3 UVC -----------------------------------------------------------------------------------------
 
 class USB3UVC(LiteXModule):
-    """USB3 UVC camera device (test pattern, see USB3UVCFunction)."""
-    def __init__(self, phy, sys_clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE, max_burst=16,
-        **kwargs):
+    """USB3 UVC camera device (test pattern, see USB3UVCFunction).
+
+    transfer: "bulk" (default) or "iso" (Isochronous IN endpoint, payload_size: max_burst x 1024 by
+    default, bInterval: interval).
+    """
+    def __init__(self, phy, sys_clk_freq, modes=None, payload_size=None, max_burst=16, transfer="bulk",
+        interval=1, **kwargs):
+        assert transfer in ["bulk", "iso"]
+        iso      = (transfer == "iso")
         clk_freq = int(sys_clk_freq)
-        descriptors = uvc_descriptors(modes, ept=1, max_burst=max_burst, clk_freq=clk_freq, **kwargs)
+        if modes is None:
+            modes = UVC_ISO_MODES if iso else UVC_MODES
+        if payload_size is None:
+            payload_size = max_burst*1024 if iso else UVC_PAYLOAD_SIZE
+        descriptors = uvc_descriptors(modes, ept=1, max_burst=max_burst, clk_freq=clk_freq,
+            transfer=transfer, interval=interval, **kwargs)
+        endpoint = USB3IsoIN(ept=1, max_burst=max_burst) if iso else USB3BulkIN(ept=1, max_burst=max_burst)
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
-            endpoints        = [USB3BulkIN(ept=1, max_burst=max_burst)],
+            endpoints        = [endpoint],
             with_ep0_handler = True)
         self.function = USB3UVCFunction(core.ep0, core.endpoints[0], core.link.reset, clk_freq,
             modes, payload_size)

@@ -115,5 +115,115 @@ class TestCoreUVC(unittest.TestCase):
             self.assertEqual(fids, [fids[0]]*n + [1 - fids[0]]*n)
         run_pyhost(dut, host, scenario())
 
+# Isochronous --------------------------------------------------------------------------------------
+
+class ISODUT(LiteXModule):
+    def __init__(self, max_burst=1):
+        self.phy = phy = PHYStandIn()
+        self.uvc = USB3UVC(phy, CLK_FREQ, modes=MODES, max_burst=max_burst, transfer="iso")
+
+class TestCoreUVCIso(unittest.TestCase):
+    def test_iso_descriptors(self):
+        d      = uvc_descriptors(UVC_ISO_MODES, max_burst=16, transfer="iso")
+        config = d.configuration()
+        self.assertEqual(config[2] | (config[3] << 8), len(config))
+        self.assertEqual(config[4], 2) # VideoControl + VideoStreaming (2 alternate settings).
+        descs = parse_descriptors(config)
+        interfaces = [x for x in descs if x[1] == DESC_INTERFACE]
+        self.assertEqual([(x[2], x[3], x[4], x[5], x[6]) for x in interfaces],
+            [(0, 0, 0, CC_VIDEO, SC_VIDEOCONTROL), (1, 0, 0, CC_VIDEO, SC_VIDEOSTREAMING),
+             (1, 1, 1, CC_VIDEO, SC_VIDEOSTREAMING)])
+        # Class specific VS descriptors on alternate setting 0, VS Input Header bEndpointAddress.
+        vs_hdr = [x for x in descs if x[1] == DESC_CS_INTERFACE and x[2] == VS_INPUT_HEADER][1]
+        self.assertEqual(vs_hdr[6], 0x81)
+        self.assertLess(descs.index(vs_hdr), descs.index(interfaces[2]))
+        # Isochronous IN endpoint (Asynchronous, 1024 bytes, bInterval 1), companion: bMaxBurst 15,
+        # Mult 0, wBytesPerInterval 16384 (= dwMaxPayloadTransferSize).
+        ep   = [x for x in descs if x[1] == DESC_ENDPOINT][0]
+        comp = [x for x in descs if x[1] == DESC_SS_EP_COMP][0]
+        self.assertEqual(ep[2:7], [0x81, 0x05, 0x00, 0x04, 1])
+        self.assertEqual(comp[2:6], [15, 0, 0x00, 0x40])
+        probe = uvc_probe(UVC_ISO_MODES, 0, 16*1024, 125_000_000)
+        self.assertEqual(int.from_bytes(bytes(probe[22:26]), "little"), 16*1024)
+        # Isochronous modes: no bulk short packet constraint.
+        check_modes(UVC_ISO_MODES, 16*1024, bulk=False)
+
+    def test_iso_stream(self):
+        # 1 packet per service interval (1024 bytes payloads): 64x8 frames (1024 bytes) in 2 payloads
+        # (1012 + 12 bytes of data), zero-length packets between frames.
+        dut  = ISODUT(max_burst=1)
+        host = PyHost(dut.phy)
+        payload_size = 1024
+        def scenario():
+            yield from pyhost_link_init(host)
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            # GET_CUR PROBE: dwMaxPayloadTransferSize = wBytesPerInterval.
+            probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+            self.assertEqual(probe, uvc_probe(MODES, 0, payload_size, CLK_FREQ))
+            # SET_CUR PROBE/COMMIT (mode 1): no streaming on alternate setting 0.
+            probe2 = uvc_probe(MODES, 1, payload_size, CLK_FREQ)
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_COMMIT_CONTROL << 8, 1, 34), probe2)))
+            for _ in range(512):
+                yield
+            self.assertEqual((yield dut.uvc.function.stream.frames), 0)
+            # SET_INTERFACE(1, 1): stream start.
+            self.assertEqual((yield from pyhost_control_in(host, setup_packet(0x81, 0x0a, 0, 1, 1))), [0])
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x01, 0x0b, 1, 1, 0))))
+            self.assertEqual((yield from pyhost_control_in(host, setup_packet(0x81, 0x0a, 0, 1, 1))), [1])
+            # Service intervals until 2 frames received.
+            payloads = []
+            zlps     = 0
+            for _ in range(64):
+                dps = yield from pyhost_iso_in(host, ept=1, bursts=[1], ping=False)
+                self.assertEqual(len(dps), 1)
+                d, p, crc = dps[0]
+                self.assertTrue(crc)
+                self.assertEqual((d["seq"], d["lpf"]), (0, 1))
+                if len(p) == 0:
+                    zlps += 1
+                    continue
+                self.assertLessEqual(len(p), payload_size)
+                payloads.append(p)
+                if sum((p[1] >> 1) & 1 for p in payloads) == 2:
+                    break
+                for _ in range(16):
+                    yield
+            self.assertGreater(zlps, 0)
+            # Frames reassembly (FID/EOF).
+            width, height, _ = MODES[1]
+            frames = []
+            pixels = []
+            fids   = []
+            for p in payloads:
+                self.assertEqual(p[0], UVC_HEADER_SIZE)
+                self.assertEqual(p[1] & 0x8c, 0x8c) # EOH, SCR, PTS.
+                fids.append(p[1] & 1)
+                pixels += p[UVC_HEADER_SIZE:]
+                if p[1] & 0x2:
+                    frames.append((fids[-1], pixels))
+                    pixels = []
+            self.assertEqual(len(frames), 2)
+            self.assertEqual([len(p) for p in payloads], [payload_size, UVC_HEADER_SIZE + 12]*2)
+            for frame, (fid, pixels) in enumerate(frames):
+                self.assertEqual(len(pixels), frame_size(width, height))
+                self.assertEqual(fid, (frames[0][0] + frame) % 2)
+                # First line: color bars, marker at x = 4*frame.
+                for x in range(0, width, 2):
+                    y_ref = [235, 210, 170, 145, 106, 81, 41, 16][x//8]
+                    y0 = 235 if x == 4*frame else y_ref
+                    y1 = 235 if x + 1 == 4*frame else y_ref
+                    self.assertEqual((pixels[2*x], pixels[2*x + 2]), (y0, y1), f"frame {frame} x {x}")
+            # SET_INTERFACE(1, 0): stream stop, zero-length packets.
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x01, 0x0b, 0, 1, 0))))
+            frames_stop = (yield dut.uvc.function.stream.frames)
+            for _ in range(2):
+                dps = yield from pyhost_iso_in(host, ept=1, bursts=[1], ping=False)
+                self.assertEqual(dps[0][0]["length"], 0)
+                for _ in range(256):
+                    yield
+            self.assertEqual((yield dut.uvc.function.stream.frames), frames_stop)
+        run_pyhost(dut, host, scenario())
+
 if __name__ == "__main__":
     unittest.main()
