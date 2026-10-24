@@ -72,7 +72,7 @@ USB3PHY_STATUS = [
 # LTSSM Link-Layer control interface (PM handshake, directed requests): (name, direction).
 USB3PHY_LINK_CTRL = [
     ("lgo_u1",            "i"), ("lgo_u2",         "i"), ("lgo_u3",        "i"),
-    ("lau",               "i"), ("lxu",            "i"),
+    ("lau",               "i"), ("lxu",            "i"), ("lpma",          "i"),
     ("req_u1",            "i"), ("req_u2",         "i"), ("req_u3",        "i"),
     ("tx_lgo_u1",         "o"), ("tx_lgo_u2",      "o"), ("tx_lgo_u3",     "o"),
     ("tx_lau",            "o"), ("tx_lxu",         "o"), ("tx_lpma",       "o"),
@@ -133,6 +133,7 @@ class USB3PHY(LiteXModule):
         # Link-Layer Control -----------------------------------------------------------------------
         for name, direction in USB3PHY_LINK_CTRL:
             setattr(self, name, getattr(ltssm, name))
+        self.u2_timeout = ltssm.u2_timeout # i: U2 Inactivity Timeout (LMP value, 0: disabled).
 
         # LTSSM State ------------------------------------------------------------------------------
         ltssm.finalize() # Elaborate the FSM to expose its state/encoding.
