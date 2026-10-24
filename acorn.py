@@ -33,6 +33,7 @@ from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors, cdc_acm_descriptors
 from usb3_core.bridge      import USB3UARTBone
 from usb3_core.bench       import USB3Bench
+from usb3_core.uvc         import USB3UVC
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -147,7 +148,11 @@ class USB3SoC(SoCMini):
             )
 
         # USB3 Core --------------------------------------------------------------------------------
-        if with_core:
+        if with_core and example == "uvc":
+            # UVC camera (test pattern): ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
+            self.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq)
+            usb3_uvc.core.add_csr(with_trace=True)
+        elif with_core:
             if example == "cdc_uartbone":
                 # CDC-ACM: Data Bulk IN/OUT (EP1/EP2), Notification Interrupt IN (EP3, unused).
                 descriptors = cdc_acm_descriptors(max_burst=2)
@@ -254,7 +259,7 @@ def main():
     parser.add_argument("--with-jtagbone",     action="store_true", help="Enable JTAGBone.")
     parser.add_argument("--no-uartbone",       action="store_true", help="Disable UARTBone.")
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
-    parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=["loopback", "bench", "cdc_uartbone"])
+    parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=["loopback", "bench", "cdc_uartbone", "uvc"])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath", "phase"])

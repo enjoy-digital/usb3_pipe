@@ -148,12 +148,14 @@ class USB3BulkIN(USB3Endpoint):
 
     sink: packets to send (data: 32-bit words, first byte on data[0:8], last: end of packet with
     last_be the last valid byte (0: full word)), packets longer than 1024 bytes are split.
+    flush: drop the buffered packets (and the packet being written), ex: stream restarted.
     """
     def __init__(self, ept, max_burst=8):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=1)
         self.max_burst = max_burst
-        self.sink = sink = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.sink  = sink = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.flush = Signal() # i
 
         # # #
 
@@ -196,7 +198,9 @@ class USB3BulkIN(USB3Endpoint):
         wr_commit = Signal()
         self.comb += wr_commit.eq(sink.valid & sink.ready & (sink.last | (wr_count == MAX_PACKET_WORDS - 1)))
         self.sync += [
-            If(sink.valid & sink.ready,
+            If(self.flush,
+                wr_count.eq(0),
+            ).Elif(sink.valid & sink.ready,
                 wr_count.eq(wr_count + 1),
                 If(wr_commit,
                     wr_count.eq(0),
@@ -345,6 +349,10 @@ class USB3BulkIN(USB3Endpoint):
                 fc_req.eq(0),
                 nrdy_pending.eq(0),
                 erdy_pending.eq(0),
+            ),
+            If(self.flush,
+                ack_ptr.eq(wr_ptr),
+                snd_ptr.eq(wr_ptr),
             ),
         ]
 
