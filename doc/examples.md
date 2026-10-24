@@ -96,13 +96,11 @@ $ ./acorn.py --build --load --example msc_dram   # Enables the DDR3 and a VexRis
 Build (Vivado 2024.1, xc7a200t-3, sys 125MHz, DDR3 500MT/s): timing met (sys WNS +0.36ns), 11.7K LUTs,
 8.5K FFs, 32 BRAM tiles.
 
-The DDR3 is initialized/calibrated by the LiteX BIOS (the disk reports NOT READY until the BIOS
-sets `ddrctrl_init_done`), the BIOS console is on a crossover UART reachable through UARTBone:
-
-```sh
-$ litex_server --uart --uart-port /dev/ttyUSBX
-$ litex_term crossover   # DRAM initialization/memtest logs.
-```
+The DDR3 is initialized/calibrated by the LiteX BIOS at power-up: the disk reports NOT READY until
+the DRAM controller is back under hardware control after the BIOS initialization (and no
+`ddrctrl_init_error`). The BIOS console goes to a stub UART (a crossover UART would block the BIOS,
+and the DRAM initialization, until a host reads it), check the initialization with the
+`ddrctrl_init_done`/`ddrctrl_init_error` CSRs (UARTBone/JTAGBone, `litex_cli --regs`).
 
 The disk is not formatted (DRAM content is lost at each power-up/reload): format it from the host
 before mounting it:

@@ -333,13 +333,13 @@ class USB3MSCDRAM(USB3MSCStorage):
 
 class USB3MSCSCSI(LiteXModule):
     """Bulk-Only Transport/SCSI command engine on a storage (USB3MSCStorage: BRAM/DRAM)."""
-    def __init__(self, bulk_in, bulk_out, storage):
+    def __init__(self, bulk_in, bulk_out, storage, inquiry_product="USB3-PIPE RAMDisk"):
         blocks = storage.blocks
 
         # # #
 
         # Responses ROM (opcode -> offset/length).
-        responses = scsi_responses(blocks)
+        responses = scsi_responses(blocks, product=inquiry_product)
         rom   = []
         table = {}
         for opcode, data in responses.items():
@@ -602,7 +602,8 @@ class USB3MSCSCSI(LiteXModule):
 
 class USB3MSC(LiteXModule):
     """USB3 Mass Storage device: block RAM disk (size, optional image) or storage (ex: USB3MSCDRAM)."""
-    def __init__(self, phy, sys_clk_freq, size=512*1024, image=None, storage=None, max_burst=8, **kwargs):
+    def __init__(self, phy, sys_clk_freq, size=512*1024, image=None, storage=None, max_burst=8,
+        inquiry_product="USB3-PIPE RAMDisk", **kwargs):
         descriptors = msc_descriptors(max_burst=max_burst, **kwargs)
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[
             USB3BulkIN(ept=1,  max_burst=max_burst),
@@ -611,4 +612,4 @@ class USB3MSC(LiteXModule):
         if storage is None:
             storage = USB3MSCRAMStorage(size, image)
         self.storage = storage
-        self.scsi    = USB3MSCSCSI(core.endpoints[0], core.endpoints[1], storage)
+        self.scsi    = USB3MSCSCSI(core.endpoints[0], core.endpoints[1], storage, inquiry_product)

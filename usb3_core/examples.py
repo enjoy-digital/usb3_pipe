@@ -17,6 +17,8 @@
 - composite    : UVC camera + CDC-ACM SoC console in one device, requires a CPU.
 """
 
+from migen import *
+
 from litex.soc.cores.uart import UART, Stream2Wishbone
 from litex.soc.interconnect import stream
 
@@ -86,17 +88,24 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback"):
         rd_port   = soc.sdram.crossbar.get_port(mode="read")
         wr_port   = soc.sdram.crossbar.get_port(mode="write")
         dram_size = (2**rd_port.address_width)*(rd_port.data_width//8)
-        # Ready once the DRAM is initialized by the BIOS (ddrctrl init_done, when available).
-        ready = None
+        # Ready once the DRAM is initialized by the BIOS: DFII back to hardware control after the
+        # software control of the initialization/calibration, no initialization error reported
+        # (ddrctrl, when available).
+        dfii_sel = soc.sdram.dfii._control.fields.sel
+        dfii_sw  = Signal() # DFII has been under software control.
+        ready    = Signal()
+        soc.sync += If(~dfii_sel, dfii_sw.eq(1))
+        soc.comb += ready.eq(dfii_sw & dfii_sel)
         if hasattr(soc, "ddrctrl"):
-            ready = soc.ddrctrl.init_done.storage & ~soc.ddrctrl.init_error.storage
+            soc.comb += If(soc.ddrctrl.init_error.storage, ready.eq(0))
         usb3_msc_dram = USB3MSCDRAM(rd_port, wr_port,
             size  = dram_size//2,
             base  = dram_size//2, # Upper half: lower half left to the CPU (BIOS memtest, software).
             ready = ready)
         soc.usb3_msc = usb3_msc = USB3MSC(usb3_phy, sys_clk_freq,
-            storage = usb3_msc_dram,
-            product = "USB3-PIPE DRAM Disk")
+            storage         = usb3_msc_dram,
+            product         = "USB3-PIPE DRAM Disk",
+            inquiry_product = "USB3-PIPE DRAM")
         usb3_msc.core.add_csr(with_trace=True)
 
     # UVC camera (test pattern): ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.

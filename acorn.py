@@ -108,18 +108,19 @@ class USB3SoC(SoCCore):
 
         # SoCCore ----------------------------------------------------------------------------------
         # No CPU by default (bridges only), CPU with the console example (BIOS on the USB3 CDC-ACM).
-        # DRAM: CPU required (BIOS DRAM initialization/calibration), BIOS console on a crossover UART
-        # (litex_server --uart + litex_term crossover).
+        # DRAM: CPU required (BIOS DRAM initialization/calibration). The BIOS console goes to a stub
+        # UART: a crossover UART would block the BIOS (and the DRAM initialization) until a host
+        # reads it. Initialization status: ddrctrl_init_done/init_error CSRs.
         assert not (with_dram and cpu_type is None), "DRAM requires a CPU (BIOS initialization)."
-        with_crossover_uart = with_dram and example not in ["console", "composite"]
+        with_stub_uart = with_dram and example not in ["console", "composite"]
         SoCCore.__init__(self, platform, sys_clk_freq,
             ident                = "USB3SoC",
             ident_version        = True,
             cpu_type             = cpu_type,
             integrated_rom_size  = 0x10000 if cpu_type is not None else 0,
             integrated_sram_size = 0x2000  if cpu_type is not None else 0,
-            with_uart            = with_crossover_uart,
-            uart_name            = "crossover",
+            with_uart            = with_stub_uart,
+            uart_name            = "stub",
             with_timer           = cpu_type is not None,
         )
 
@@ -279,7 +280,7 @@ def main():
         parser.print_help()
 
     output_dir = args.output_dir or "build/sqrl_acorn"
-    # DRAM disk: DDR3 SDRAM, initialized by the BIOS (VexRiscv CPU by default).
+    # DRAM disk: DDR3 SDRAM, initialized by the BIOS (VexRiscv CPU by default, console on a stub UART).
     with_dram = args.with_dram or (args.example == "msc_dram")
     cpu_type  = args.cpu_type
     if with_dram and cpu_type is None:
