@@ -87,6 +87,31 @@ class TestCoreMSC(unittest.TestCase):
             self.assertEqual(status, 1)
         run_pyhost(dut, host, scenario())
 
+    def test_ram_banks(self):
+        # Disk RAM built from several banks: initialization, writes and reads across the banks.
+        words = 64
+        init  = [(0x1000 + i) for i in range(words)]
+        dut   = USB3MSCRAM(words, init=init, bank_words=16)
+        mem   = list(init)
+        def generator():
+            # Write odd words.
+            for i in range(1, words, 2):
+                yield dut.wr_port.adr.eq(i)
+                yield dut.wr_port.dat_w.eq(0xcafe0000 + i)
+                yield dut.wr_port.we.eq(1)
+                yield
+                mem[i] = 0xcafe0000 + i
+            yield dut.wr_port.we.eq(0)
+            # Read all words (1 cycle latency).
+            for i in range(words):
+                yield dut.rd_port.adr.eq(i)
+                yield dut.rd_port.re.eq(1)
+                yield
+                yield dut.rd_port.re.eq(0)
+                yield
+                self.assertEqual((yield dut.rd_port.dat_r), mem[i])
+        run_simulation(dut, generator())
+
     def test_fat_image(self):
         image = msc_fat_image(512*1024, {"README.TXT": "Hello\n"})
         if image is None:
