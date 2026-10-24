@@ -392,13 +392,17 @@ class HostScript:
         self.send(data_packet_payload(payload))
         self.wait_hp()                                                # ACK TP.
 
-    def bulk_in(self, ept, dp_seq, name, latency=256):
+    def bulk_in(self, ept, dp_seq, name, latency=256, erdy=False):
         # ACK TP (NumP=1) requesting a data packet, DPH + DPP from the device, ACK TP acknowledging it.
+        # With erdy: the window closed by the host (NumP=0) with more data available, the device sends
+        # an ERDY (as Linux xHCI hosts, the next request waits for it).
         self.mark(name)
         self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=1, tp_seq=dp_seq, pp=1)
         self.wait_hp()                                                # DPH (+DPP).
         self.idle(latency)                                            # DPP (END framing not aligned).
         self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=0, tp_seq=(dp_seq + 1) % 32)
+        if erdy:
+            self.wait_hp()                                            # ERDY TP.
 
     # Link Power Management (7.2.4.2): LGO_Ux request, LAU/LXU response.
     def lgo(self, n, response, name):
@@ -433,7 +437,8 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
             s.bulk_out(payload, ept=2, dp_seq=i, name=f"bulk_out_{i}")
         s.idle(1024)
         for i in range(len(bulk_payloads())):
-            s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256)
+            s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256,
+                erdy = (i + 1) < len(bulk_payloads()))
     if pm:
         # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
         s.lgo(1, LXU(), "lgo_u1")
