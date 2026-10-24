@@ -1,7 +1,7 @@
 #
 # This file is part of USB3-PIPE project.
 #
-# Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 Low Frequency Periodic Signaling (USB 3.2 6.9): Polling, Ping, U1/U2 exit, U3 wakeup and Warm
