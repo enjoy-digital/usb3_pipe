@@ -25,7 +25,7 @@ the standalone core ([standalone-core.md](standalone-core.md)).
 | `USB3PHY` | `phy.py` | PIPE + LTSSM with the Link interface (below). |
 | `USB3PHYDebug`/`USB3SerDesDebug` | `debug.py` | State history, counters, measurements CSRs ([debugging-guide.md](debugging-guide.md)). |
 | `usb3_pipe_gen` | `gen.py` | Standalone Verilog core generator. |
-| Gen 2/x2 units | `gen2.py`, `lanes.py` | 128b/132b gearbox/aligner, Gen 2 scrambler, x2 striping/deskew ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
+| Gen 2/x2 units | `gen2.py`, `lanes.py`, `ssp.py`, `x2.py` | 128b/132b TX/RX (Ordered Sets, scrambler, gearbox, aligner), SSP Polling (SCD/LBPM), Gen 1x2 PHY ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
 
 ## Link interface (`USB3PHY`)
 
