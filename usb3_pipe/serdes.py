@@ -4,8 +4,8 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 SerDes (USB 3.2 chapter 6): Artix7 GTP/Kintex7 GTX transceivers at 5Gbps and the TX/RX datapaths
-(8b/10b, word alignment, polarity, SKP insertion/removal, electrical idle/LFPS).
+"""USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX) at 5Gbps and the
+TX/RX datapaths (8b/10b, word alignment, polarity, SKP insertion/removal, electrical idle/LFPS).
 """
 
 from functools import reduce
@@ -538,10 +538,18 @@ class RXDatapath(LiteXModule):
             word_aligner.source.connect(self.source),
         ]
 
-# Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
+# USB3 Serializer/Deserializer --------------------------------------------------------------------
 
-class K7USB3SerDes(LiteXModule):
-    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+class USB3SerDes(LiteXModule):
+    """USB3 SerDes on a LiteICLink transceiver.
+
+    Common part of the transceivers: 5Gbps, 20-bit with 8b/10b, TX/RX buffers (no clock aligner, word
+    alignment done in the RX datapath), TX/RX datapaths (SKP insertion/removal, CDC, word alignment),
+    LFPS (TX pattern/electrical idle, filtered RX electrical idle), RX decode errors (Warm Reset LFPS
+    detection) and timing constraints. Transceivers specific parts (PLL, USB3 parameters overrides,
+    electrical idle/OOB signals) are done by the subclasses.
+    """
+    def __init__(self):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -558,54 +566,81 @@ class K7USB3SerDes(LiteXModule):
         self.rx_errors   = Signal()   # o
 
         self.tx_skp_enable = Signal(reset=1) # i
-        self.rx_align    = Signal()   # i
-        self.rx_reset    = Signal()   # i: RX re-initialization (PMA/CDR/PCS reset sequence).
+        self.rx_align      = Signal()        # i
+        self.rx_reset      = Signal()        # i: RX re-initialization (PMA/CDR/PCS reset sequence).
 
-        # # #
-
-        from liteiclink.transceiver.gtx_7series import GTXChannelPLL, GTX
-
-        # Clock ------------------------------------------------------------------------------------
+    def get_refclk(self, refclk_pads, buffer="IBUFDS_GTE2"):
+        """Transceiver reference clock: from dedicated pads (buffer) or a fabric clock."""
         if isinstance(refclk_pads, (Signal, ClockSignal)):
-            refclk = refclk_pads
-        else:
-            refclk = Signal()
-            self.specials += [
-                Instance("IBUFDS_GTE2",
-                    i_CEB = 0,
-                    i_I   = refclk_pads.p,
-                    i_IB  = refclk_pads.n,
-                    o_O   = refclk
-                )
-            ]
+            return refclk_pads
+        refclk = Signal()
+        self.specials += Instance(buffer,
+            i_CEB = 0,
+            i_I   = refclk_pads.p,
+            i_IB  = refclk_pads.n,
+            o_O   = refclk
+        )
+        return refclk
 
-        # PLL --------------------------------------------------------------------------------------
-        self.pll = pll = GTXChannelPLL(refclk, refclk_freq, 5e9)
-
-        # Transceiver ------------------------------------------------------------------------------
-        self.gtx = gtx = GTX(pll, tx_pads, rx_pads, sys_clk_freq,
+    def add_transceiver(self, name, xcvr_cls, pll, tx_pads, rx_pads, sys_clk_freq):
+        """Transceiver channel (added as name) with the TX/RX datapaths."""
+        xcvr = xcvr_cls(pll, tx_pads, rx_pads, sys_clk_freq,
             data_width       = 20,
             clock_aligner    = False,
             tx_buffer_enable = True,
             rx_buffer_enable = True,
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
-        gtx.add_stream_endpoints()
+        self.add_module(name=name, module=xcvr)
+        xcvr.add_stream_endpoints()
         self.tx_datapath     = tx_datapath     = TXDatapath("tx")
-        self.rx_substitution = rx_substitution = RXErrorSubstitution(gtx, "rx")
+        self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx")
         self.rx_datapath     = rx_datapath     = RXDatapath("rx")
         self.comb += [
-            gtx.tx_enable.eq(self.enable),
-            gtx.rx_enable.eq(self.enable & ~self.rx_reset),
-            self.ready.eq(gtx.tx_ready & gtx.rx_ready),
-            gtx.rx_align.eq(self.rx_align),
+            xcvr.tx_enable.eq(self.enable),
+            xcvr.rx_enable.eq(self.enable & ~self.rx_reset),
+            self.ready.eq(xcvr.tx_ready & xcvr.rx_ready),
+            xcvr.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
             tx_datapath.skp_enable.eq(self.tx_skp_enable),
-            tx_datapath.source.connect(gtx.sink),
-            gtx.source.connect(rx_substitution.sink),
+            tx_datapath.source.connect(xcvr.sink),
+            xcvr.source.connect(rx_substitution.sink),
             rx_substitution.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(self.source),
         ]
+        return xcvr
+
+    def add_lfps(self, xcvr, rx_idle):
+        """LFPS: TX pattern, filtered RX electrical idle (from the transceiver's OOB detector) and RX
+        decode errors (Warm Reset LFPS detection)."""
+        self.comb += [
+            xcvr.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
+            xcvr.tx_pattern.eq(self.tx_pattern),
+        ]
+        self.rx_idle_filter  = RXIdleFilter(rx_idle)
+        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
+        self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
+        self.rx_error_monitor = RXErrorMonitor(xcvr.decoders, clock_domain="rx")
+        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
+
+    def add_timing_constraints(self, platform, sys_clk, xcvr):
+        platform.add_period_constraint(xcvr.cd_tx.clk, 1e9/xcvr.tx_clk_freq)
+        platform.add_period_constraint(xcvr.cd_rx.clk, 1e9/xcvr.rx_clk_freq)
+        platform.add_false_path_constraints(sys_clk, xcvr.cd_tx.clk, xcvr.cd_rx.clk)
+
+# Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
+
+class K7USB3SerDes(USB3SerDes):
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+        USB3SerDes.__init__(self)
+
+        # # #
+
+        from liteiclink.serdes.gtx_7series import GTXChannelPLL, GTX
+
+        # PLL / Transceiver ------------------------------------------------------------------------
+        self.pll = pll = GTXChannelPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
+        gtx = self.add_transceiver("gtx", GTX, pll, tx_pads, rx_pads, sys_clk_freq)
 
         # Override GTX RX termination for USB3 (800 mV Term Voltage) -------------------------------
         rxcdr_cfgs = {
@@ -629,7 +664,7 @@ class K7USB3SerDes(LiteXModule):
         )
 
         # Override GTX parameters/signals for USB3 LFPS --------------------------------------------
-        rx_idle   = Signal()
+        rx_idle = Signal()
         gtx.gtx_params.update(
             p_PCS_RSVD_ATTR    = 0x000000000100,
             p_RXOOB_CFG        = 0b0000110,
@@ -639,94 +674,25 @@ class K7USB3SerDes(LiteXModule):
             i_TXPDELECIDLEMODE = 0b1,
             i_TXELECIDLE       = self.tx_idle
         )
-
-        self.rx_idle_filter = RXIdleFilter(rx_idle)
-        self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
-        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
-
-        # RX decode errors (Warm Reset LFPS detection) ---------------------------------------------
-        self.rx_error_monitor = RXErrorMonitor(gtx.decoders, clock_domain="rx")
-        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
-
-        self.comb += [
-            gtx.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
-            gtx.tx_pattern.eq(self.tx_pattern)
-        ]
+        self.add_lfps(gtx, rx_idle)
 
         # Timing constraints -----------------------------------------------------------------------
-        platform.add_period_constraint(gtx.cd_tx.clk, 1e9/gtx.tx_clk_freq)
-        platform.add_period_constraint(gtx.cd_rx.clk, 1e9/gtx.rx_clk_freq)
-        platform.add_false_path_constraints(sys_clk, gtx.cd_tx.clk, gtx.cd_rx.clk)
+        self.add_timing_constraints(platform, sys_clk, gtx)
 
 # Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
-class A7USB3SerDes(LiteXModule):
+class A7USB3SerDes(USB3SerDes):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
         rxcdr_cfg=None):
-        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-
-        self.enable = Signal(reset=1) # i
-        self.ready  = Signal()        # o
-
-        self.tx_polarity = Signal()   # i
-        self.tx_idle     = Signal()   # i
-        self.tx_pattern  = Signal(20) # i
-        self.tx_lfps     = Signal()   # i: LFPS burst, transmit tx_pattern raw.
-
-        self.rx_polarity = Signal()   # i
-        self.rx_idle     = Signal()   # o
-        self.rx_errors   = Signal()   # o
-
-        self.tx_skp_enable = Signal(reset=1) # i
-        self.rx_align    = Signal()   # i
-        self.rx_reset    = Signal()   # i: RX re-initialization (PMA/CDR/PCS reset sequence).
+        USB3SerDes.__init__(self)
 
         # # #
 
-        from liteiclink.transceiver.gtp_7series import GTPQuadPLL, GTP
+        from liteiclink.serdes.gtp_7series import GTPQuadPLL, GTP
 
-        # Clock ------------------------------------------------------------------------------------
-        if isinstance(refclk_pads, (Signal, ClockSignal)):
-            refclk = refclk_pads
-        else:
-            refclk = Signal()
-            self.specials += [
-                Instance("IBUFDS_GTE2",
-                    i_CEB = 0,
-                    i_I   = refclk_pads.p,
-                    i_IB  = refclk_pads.n,
-                    o_O   = refclk
-                )
-            ]
-
-        # PLL --------------------------------------------------------------------------------------
-        self.pll = pll = GTPQuadPLL(refclk, refclk_freq, 5e9)
-
-        # Transceiver ------------------------------------------------------------------------------
-        self.gtp = gtp = GTP(pll, tx_pads, rx_pads, sys_clk_freq,
-            data_width       = 20,
-            clock_aligner    = False,
-            tx_buffer_enable = True,
-            rx_buffer_enable = True,
-            tx_polarity      = self.tx_polarity,
-            rx_polarity      = self.rx_polarity)
-        gtp.add_stream_endpoints()
-        self.tx_datapath     = tx_datapath     = TXDatapath("tx")
-        self.rx_substitution = rx_substitution = RXErrorSubstitution(gtp, "rx")
-        self.rx_datapath     = rx_datapath     = RXDatapath("rx")
-        self.comb += [
-            gtp.tx_enable.eq(self.enable),
-            gtp.rx_enable.eq(self.enable & ~self.rx_reset),
-            self.ready.eq(gtp.tx_ready & gtp.rx_ready),
-            gtp.rx_align.eq(self.rx_align),
-            self.sink.connect(tx_datapath.sink),
-            tx_datapath.skp_enable.eq(self.tx_skp_enable),
-            tx_datapath.source.connect(gtp.sink),
-            gtp.source.connect(rx_substitution.sink),
-            rx_substitution.source.connect(rx_datapath.sink),
-            rx_datapath.source.connect(self.source),
-        ]
+        # PLL / Transceiver ------------------------------------------------------------------------
+        self.pll = pll = GTPQuadPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
+        gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq)
 
         # Override GTP RX settings for USB3 ---------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):
@@ -752,7 +718,7 @@ class A7USB3SerDes(LiteXModule):
         )
 
         # Override GTP parameters/signals to allow LFPS --------------------------------------------
-        rx_idle   = Signal()
+        rx_idle = Signal()
         gtp.gtp_params.update(
             p_PCS_RSVD_ATTR    = 0x000000000100,
             p_RXOOB_CLK_CFG    = "FABRIC",
@@ -763,21 +729,7 @@ class A7USB3SerDes(LiteXModule):
             i_TXPDELECIDLEMODE = 0b1,
             i_TXELECIDLE       = self.tx_idle
         )
-
-        self.rx_idle_filter = RXIdleFilter(rx_idle)
-        self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
-        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
-
-        # RX decode errors (Warm Reset LFPS detection) ---------------------------------------------
-        self.rx_error_monitor = RXErrorMonitor(gtp.decoders, clock_domain="rx")
-        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
-
-        self.comb += [
-            gtp.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
-            gtp.tx_pattern.eq(self.tx_pattern)
-        ]
+        self.add_lfps(gtp, rx_idle)
 
         # Timing constraints -----------------------------------------------------------------------
-        platform.add_period_constraint(gtp.cd_tx.clk, 1e9/gtp.tx_clk_freq)
-        platform.add_period_constraint(gtp.cd_rx.clk, 1e9/gtp.rx_clk_freq)
-        platform.add_false_path_constraints(sys_clk, gtp.cd_tx.clk, gtp.cd_rx.clk)
+        self.add_timing_constraints(platform, sys_clk, gtp)
