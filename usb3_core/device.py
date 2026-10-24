@@ -27,11 +27,12 @@ from litex.soc.interconnect.csr import *
 from usb3_core.link      import USB3LinkLayer
 from usb3_core.protocol  import USB3ProtocolLayer
 from usb3_core.control   import USB3EndpointControl
+from usb3_core.trace     import USB3CoreTrace
 
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
-    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1):
+    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1, with_ep0_handler=False):
         self.endpoints = endpoints
 
         # # #
@@ -40,7 +41,7 @@ class USB3DeviceCore(LiteXModule):
         self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
 
         # Control Endpoint.
-        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors))
+        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors, with_handler=with_ep0_handler))
         self.comb += ep0.reset.eq(link.reset)
 
         # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
@@ -57,8 +58,11 @@ class USB3DeviceCore(LiteXModule):
         self.ready      = link.ready
         self.configured = ep0.configured
 
-    def add_csr(self):
-        """Status/statistics CSRs (scripts/usb3_debug.py)."""
+    def add_csr(self, with_trace=False, trace_depth=512):
+        """Status/statistics CSRs (scripts/usb3_debug.py), optional Header Packets trace
+        (scripts/usb3_trace.py)."""
+        if with_trace:
+            self.trace = USB3CoreTrace(self.link, depth=trace_depth)
         self._status = CSRStatus(fields=[
             CSRField("ready",      size=1, description="U0, link initialized."),
             CSRField("configured", size=1, description="Configured (SET_CONFIGURATION)."),

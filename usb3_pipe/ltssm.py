@@ -4,6 +4,10 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 Link Training and Status State Machine (USB 3.2 7.5): Polling, U0, Recovery, U1/U2/U3, Hot/Warm
+Reset, Compliance, Loopback, eSS.Inactive, PM handshake and timers.
+"""
+
 from migen import *
 from migen.genlib.misc import WaitTimer
 

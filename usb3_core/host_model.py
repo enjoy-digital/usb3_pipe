@@ -392,13 +392,17 @@ class HostScript:
         self.send(data_packet_payload(payload))
         self.wait_hp()                                                # ACK TP.
 
-    def bulk_in(self, ept, dp_seq, name, latency=256):
+    def bulk_in(self, ept, dp_seq, name, latency=256, erdy=False):
         # ACK TP (NumP=1) requesting a data packet, DPH + DPP from the device, ACK TP acknowledging it.
+        # With erdy: the window closed by the host (NumP=0) with more data available, the device sends
+        # an ERDY (as Linux xHCI hosts, the next request waits for it).
         self.mark(name)
         self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=1, tp_seq=dp_seq, pp=1)
         self.wait_hp()                                                # DPH (+DPP).
         self.idle(latency)                                            # DPP (END framing not aligned).
         self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=0, tp_seq=(dp_seq + 1) % 32)
+        if erdy:
+            self.wait_hp()                                            # ERDY TP.
 
     # Link Power Management (7.2.4.2): LGO_Ux request, LAU/LXU response.
     def lgo(self, n, response, name):
@@ -433,7 +437,8 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
             s.bulk_out(payload, ept=2, dp_seq=i, name=f"bulk_out_{i}")
         s.idle(1024)
         for i in range(len(bulk_payloads())):
-            s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256)
+            s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256,
+                erdy = (i + 1) < len(bulk_payloads()))
     if pm:
         # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
         s.lgo(1, LXU(), "lgo_u1")
@@ -672,3 +677,72 @@ def pyhost_link_init(host):
     host.send_hp(lmp_port_capability)
     host.send_hp(lmp_port_configuration)
     yield from host.wait(lambda: len(host.hps) >= 2)
+
+# Control transfers (reactive host).
+
+def pyhost_wait_tp(host, n0, subtypes=(TP_SUB_ACK, TP_SUB_STALL)):
+    """Wait a Transaction Packet received after host.hps[n0], returns its fields."""
+    def find():
+        for hp in host.hps[n0:]:
+            f = tp_fields(hp)
+            if f["type"] == 0x04 and f["subtype"] in subtypes:
+                return f
+    yield from host.wait(lambda: find() is not None)
+    return find()
+
+def pyhost_control_in(host, setup):
+    """Control read (one Data stage packet): returns the data or None if stalled."""
+    n0 = len(host.hps)
+    d0 = len(host.dpps)
+    host.send_hp(dph, length=8, setup=1)
+    host.send(data_packet_payload(setup))
+    yield from pyhost_wait_tp(host, n0)
+    n1 = len(host.hps)
+    host.send_hp(tp, TP_SUB_ACK, nump=1, tp_seq=0, pp=1)
+    yield from host.wait(lambda: (len(host.dpps) > d0) or
+        any(tp_fields(hp)["subtype"] == TP_SUB_STALL for hp in host.hps[n1:] if (hp[0] & 0x1f) == 0x04))
+    if len(host.dpps) == d0:
+        return None
+    host.send_hp(tp, TP_SUB_ACK, nump=0, tp_seq=1)
+    n2 = len(host.hps)
+    host.send_hp(tp, TP_SUB_STATUS)
+    yield from pyhost_wait_tp(host, n2)
+    return host.dpps[d0][0]
+
+def pyhost_control_out(host, setup, data=None):
+    """Control write (optional one packet Data stage): returns False if stalled."""
+    n0 = len(host.hps)
+    host.send_hp(dph, length=8, setup=1)
+    host.send(data_packet_payload(setup))
+    yield from pyhost_wait_tp(host, n0)
+    if data:
+        n1 = len(host.hps)
+        host.send_hp(dph, length=len(data), dp_seq=0)
+        host.send(data_packet_payload(data))
+        f = yield from pyhost_wait_tp(host, n1)
+        if f["subtype"] == TP_SUB_STALL:
+            return False
+    n2 = len(host.hps)
+    host.send_hp(tp, TP_SUB_STATUS)
+    f = yield from pyhost_wait_tp(host, n2)
+    return f["subtype"] == TP_SUB_ACK
+
+def pyhost_bulk_in(host, ept, count, seq=0, nump=8):
+    """Bulk IN: read count packets (DPPs) from the endpoint, acknowledging them and requesting again
+    after ERDY (flow control). Returns (packets, next sequence number)."""
+    d0     = len(host.dpps)
+    erdys  = lambda: sum(1 for hp in host.hps if (hp[0] & 0x1f) == 0x04 and
+        tp_fields(hp)["subtype"] == TP_SUB_ERDY and tp_fields(hp)["ept"] == ept)
+    e0     = erdys()
+    host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=nump, tp_seq=seq, pp=1)
+    while len(host.dpps) - d0 < count:
+        n = len(host.dpps)
+        e = erdys()
+        yield from host.wait(lambda: (len(host.dpps) > n) or (erdys() > e))
+        if len(host.dpps) > n:
+            seq = (seq + len(host.dpps) - n) % 32
+            host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1,
+                nump=(nump if len(host.dpps) - d0 < count else 0), tp_seq=seq, pp=1)
+        else:
+            host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=nump, tp_seq=seq, pp=1)
+    return [d[0] for d in host.dpps[d0:d0 + count]], seq

@@ -4,6 +4,9 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 Gen 1 scrambling (USB 3.2 6.3.1.3, Appendix B): symbol level LFSR, Scrambler/Descrambler.
+"""
+
 from migen import *
 
 from litex.gen import *

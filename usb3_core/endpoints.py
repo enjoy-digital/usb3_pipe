@@ -148,12 +148,14 @@ class USB3BulkIN(USB3Endpoint):
 
     sink: packets to send (data: 32-bit words, first byte on data[0:8], last: end of packet with
     last_be the last valid byte (0: full word)), packets longer than 1024 bytes are split.
+    flush: drop the buffered packets (and the packet being written), ex: stream restarted.
     """
     def __init__(self, ept, max_burst=8):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=1)
         self.max_burst = max_burst
-        self.sink = sink = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.sink  = sink = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.flush = Signal() # i
 
         # # #
 
@@ -196,7 +198,9 @@ class USB3BulkIN(USB3Endpoint):
         wr_commit = Signal()
         self.comb += wr_commit.eq(sink.valid & sink.ready & (sink.last | (wr_count == MAX_PACKET_WORDS - 1)))
         self.sync += [
-            If(sink.valid & sink.ready,
+            If(self.flush,
+                wr_count.eq(0),
+            ).Elif(sink.valid & sink.ready,
                 wr_count.eq(wr_count + 1),
                 If(wr_commit,
                     wr_count.eq(0),
@@ -220,9 +224,9 @@ class USB3BulkIN(USB3Endpoint):
             acked_ptr.eq(ack_ptr + acked),
         ]
 
-        # Flow control (8.10.1): after an EOB DP or a NRDY, the window is closed until the host
-        # requests again after our ERDY. ACK TPs received for packets sent before the EOB (with a
-        # NumP still open) do not reopen it.
+        # Flow control (8.10.1/8.10.2): after an EOB DP, a NRDY or a window closed by the host (NumP
+        # of 0), an ERDY is sent when data is available and the host requests again. ACK TPs
+        # received for packets sent before an EOB (with a NumP still open) do not reopen the window.
         fc_eob  = Signal() # EOB sent: waiting for the acknowledgement of the sent packets.
         fc_data = Signal() # Waiting for data: ERDY when a packet is available.
         fc_req  = Signal() # ERDY sent: waiting for the host request.
@@ -284,6 +288,11 @@ class USB3BulkIN(USB3Endpoint):
                     fc_eob.eq(1),
                     win_nump.eq(0),
                 ),
+                # A short packet ends the transfer/burst (8.10.2): the host discards the next ones,
+                # wait for its ACK TP (new request or NumP=0 and ERDY).
+                If(snd_len != MAX_PACKET_SIZE,
+                    win_nump.eq(0),
+                ),
             ),
             If(self.tx_hp.valid & self.tx_hp.ready & nrdy_pending, nrdy_pending.eq(0)),
             If(self.tx_hp.valid & self.tx_hp.ready & ~nrdy_pending & erdy_pending,
@@ -314,12 +323,17 @@ class USB3BulkIN(USB3Endpoint):
                     fc_eob.eq(0),
                     fc_data.eq(0),
                     fc_req.eq(0),
-                ).Elif(~fc | (fc_req & (h.nump != 0)),
+                ).Elif(~fc_eob,
                     win_seq.eq(h.tp_seq),
                     win_nump.eq(h.nump),
+                    fc_data.eq(0),
                     fc_req.eq(0),
-                    # Request without available packet: NRDY, ERDY when data available.
-                    If((h.nump != 0) & (acked_ptr == wr_ptr),
+                    If(h.nump == 0,
+                        # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when data
+                        # is available (the host may also request again on its own).
+                        fc_data.eq(1),
+                    ).Elif(acked_ptr == wr_ptr,
+                        # Request without available packet: NRDY, ERDY when data available.
                         nrdy_pending.eq(1),
                         fc_data.eq(1),
                         win_nump.eq(0),
@@ -335,6 +349,10 @@ class USB3BulkIN(USB3Endpoint):
                 fc_req.eq(0),
                 nrdy_pending.eq(0),
                 erdy_pending.eq(0),
+            ),
+            If(self.flush,
+                ack_ptr.eq(wr_ptr),
+                snd_ptr.eq(wr_ptr),
             ),
         ]
 

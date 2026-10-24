@@ -4,6 +4,10 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 SerDes (USB 3.2 chapter 6): Artix7 GTP/Kintex7 GTX transceivers at 5Gbps and the TX/RX datapaths
+(8b/10b, word alignment, polarity, SKP insertion/removal, electrical idle/LFPS).
+"""
+
 from functools import reduce
 from operator import or_
 

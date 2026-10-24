@@ -24,6 +24,9 @@ DESC_SS_EP_COMP    = 0x30
 DESC_IAD           = 0x0b
 DESC_CS_INTERFACE  = 0x24
 
+# Device class of devices with Interface Association Descriptors (Miscellaneous, Common Class, IAD).
+DEVICE_CLASS_IAD = (0xef, 0x02, 0x01)
+
 EP_BULK      = 0x02
 EP_INTERRUPT = 0x03
 
@@ -81,17 +84,19 @@ class USB3Descriptors:
         product      = "USB3-PIPE",
         serial       = "0001",
         interfaces   = [],
-        max_power_ma = 0):
+        max_power_ma = 0,
+        device_class = (0x00, 0x00, 0x00)):
         self.vid          = vid
         self.pid          = pid
         self.bcd_device   = bcd_device
         self.strings      = [manufacturer, product, serial]
         self.interfaces   = interfaces
         self.max_power_ma = max_power_ma
+        self.device_class = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
         self.class_requests = [] # (bmRequestType, bRequest, IN response bytes or None).
 
     def device(self):
-        return [18, DESC_DEVICE] + le16(0x0320) + [0x00, 0x00, 0x00, 9] + \
+        return [18, DESC_DEVICE] + le16(0x0320) + list(self.device_class) + [9] + \
             le16(self.vid) + le16(self.pid) + le16(self.bcd_device) + [1, 2, 3, 1]
 
     def configuration(self):
@@ -168,25 +173,33 @@ def bulk_descriptors(in_ept=1, out_ept=2, max_burst=8, **kwargs):
     ])
     return USB3Descriptors(interfaces=[interface], **kwargs)
 
-def cdc_acm_descriptors(notif_ept=3, in_ept=1, out_ept=2, max_burst=8, **kwargs):
-    """CDC-ACM (Abstract Control Model) function: Communication Interface (notification Interrupt
-    IN endpoint, never sending notifications) and Data Interface (Bulk IN/OUT)."""
-    iad = [8, DESC_IAD, 0, 2, 0x02, 0x02, 0x01, 0]
+def cdc_acm_interfaces(comm_interface=0, notif_ept=3, in_ept=1, out_ept=2, max_burst=8):
+    """CDC-ACM (Abstract Control Model) function: IAD, Communication Interface (notification Interrupt
+    IN endpoint, never sending notifications) and Data Interface (comm_interface + 1, Bulk IN/OUT)."""
+    data_interface = comm_interface + 1
+    iad = [8, DESC_IAD, comm_interface, 2, 0x02, 0x02, 0x01, 0]
     cs  = []
-    cs += [5, DESC_CS_INTERFACE, 0x00] + le16(0x0110) # Header.
-    cs += [5, DESC_CS_INTERFACE, 0x01, 0x00, 1]       # Call Management.
-    cs += [4, DESC_CS_INTERFACE, 0x02, 0x02]          # ACM (Line Coding/Serial State).
-    cs += [5, DESC_CS_INTERFACE, 0x06, 0, 1]          # Union.
-    comm = USB3InterfaceDescriptor(0, cls=0x02, subclass=0x02, protocol=0x01, extra=cs, endpoints=[
-        USB3EndpointDescriptor(notif_ept, direction=1, kind=EP_INTERRUPT, max_packet=16, interval=9),
-    ])
-    data = USB3InterfaceDescriptor(1, cls=0x0a, endpoints=[
+    cs += [5, DESC_CS_INTERFACE, 0x00] + le16(0x0110)                 # Header.
+    cs += [5, DESC_CS_INTERFACE, 0x01, 0x00, data_interface]          # Call Management.
+    cs += [4, DESC_CS_INTERFACE, 0x02, 0x02]                          # ACM (Line Coding/Serial State).
+    cs += [5, DESC_CS_INTERFACE, 0x06, comm_interface, data_interface] # Union.
+    comm = USB3InterfaceDescriptor(comm_interface, cls=0x02, subclass=0x02, protocol=0x01, extra=cs,
+        endpoints=[USB3EndpointDescriptor(notif_ept, direction=1, kind=EP_INTERRUPT, max_packet=16, interval=9)])
+    data = USB3InterfaceDescriptor(data_interface, cls=0x0a, endpoints=[
         USB3EndpointDescriptor(in_ept,  direction=1, max_burst=max_burst),
         USB3EndpointDescriptor(out_ept, direction=0, max_burst=max_burst),
     ])
-    descriptors = USB3Descriptors(interfaces=[iad, comm, data], **kwargs)
-    # SET_LINE_CODING/GET_LINE_CODING (115200 8N1)/SET_CONTROL_LINE_STATE.
+    return [iad, comm, data]
+
+def add_cdc_acm_requests(descriptors):
+    """CDC-ACM class requests: SET_LINE_CODING, GET_LINE_CODING (115200 8N1), SET_CONTROL_LINE_STATE."""
     descriptors.add_class_request(0x21, 0x20)
     descriptors.add_class_request(0xa1, 0x21, le32(115200) + [0, 0, 8])
     descriptors.add_class_request(0x21, 0x22)
+
+def cdc_acm_descriptors(notif_ept=3, in_ept=1, out_ept=2, max_burst=8, **kwargs):
+    """CDC-ACM device."""
+    kwargs.setdefault("device_class", DEVICE_CLASS_IAD)
+    descriptors = USB3Descriptors(interfaces=cdc_acm_interfaces(0, notif_ept, in_ept, out_ept, max_burst), **kwargs)
+    add_cdc_acm_requests(descriptors)
     return descriptors

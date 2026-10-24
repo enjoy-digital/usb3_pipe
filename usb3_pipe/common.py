@@ -4,6 +4,9 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3 PHY common definitions: symbols (6.3.5), Ordered Sets (TS1/TS2/TSEQ), Link Configuration.
+"""
+
 from migen import *
 
 from litex.gen import *

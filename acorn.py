@@ -6,7 +6,6 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-import sys
 
 from migen import *
 
@@ -15,10 +14,10 @@ from litex.gen import *
 from litex_boards.platforms import sqrl_acorn
 
 from litex.build.generic_platform import *
-from litex.build.xilinx import VivadoProgrammer
 
 from litex.soc.cores.clock import *
 from litex.soc.cores.xadc import S7SystemMonitor
+from litex.soc.cores.uart import UART, Stream2Wishbone
 from litex.soc.interconnect import stream
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
@@ -30,9 +29,12 @@ from usb3_pipe.phy   import USB3PHY
 from usb3_pipe.debug import USB3PHYDebug, USB3SerDesDebug
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
-from usb3_core.descriptors import bulk_descriptors, cdc_acm_descriptors
-from usb3_core.bridge      import USB3UARTBone
+from usb3_core.descriptors import bulk_descriptors, cdc_acm_interfaces, add_cdc_acm_requests
+from usb3_core.descriptors import USB3Descriptors, DEVICE_CLASS_IAD
+from usb3_core.cdc_acm     import USB3CDCACM, USB3CDCACMFunction
 from usb3_core.bench       import USB3Bench
+from usb3_core.uvc         import USB3UVC, USB3UVCFunction, uvc_interfaces, UVC_MODES
+from usb3_core.msc         import USB3MSC, msc_fat_image
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -88,9 +90,9 @@ class _CRG(LiteXModule):
 
 # USB3SoC ------------------------------------------------------------------------------------------
 
-class USB3SoC(SoCMini):
+class USB3SoC(SoCCore):
     def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
-        example="loopback",
+        example="loopback", cpu_type=None,
         with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
         rxcdr_cfg=None, gtp_params={}, lpm_hold="none"):
         sys_clk_freq = int(125e6)
@@ -98,8 +100,17 @@ class USB3SoC(SoCMini):
         # CRG --------------------------------------------------------------------------------------
         self.crg = _CRG(platform, sys_clk_freq)
 
-        # SoCMini ----------------------------------------------------------------------------------
-        SoCMini.__init__(self, platform, sys_clk_freq, ident="USB3SoC", ident_version=True)
+        # SoCCore ----------------------------------------------------------------------------------
+        # No CPU by default (bridges only), CPU with the console example (BIOS on the USB3 CDC-ACM).
+        SoCCore.__init__(self, platform, sys_clk_freq,
+            ident                = "USB3SoC",
+            ident_version        = True,
+            cpu_type             = cpu_type,
+            integrated_rom_size  = 0x10000 if cpu_type is not None else 0,
+            integrated_sram_size = 0x2000  if cpu_type is not None else 0,
+            with_uart            = False,
+            with_timer           = cpu_type is not None,
+        )
 
         # UARTBone / JTAGBone ----------------------------------------------------------------------
         if with_uartbone:
@@ -147,15 +158,62 @@ class USB3SoC(SoCMini):
             )
 
         # USB3 Core --------------------------------------------------------------------------------
-        if with_core:
-            if example == "cdc_uartbone":
-                # CDC-ACM: Data Bulk IN/OUT (EP1/EP2), Notification Interrupt IN (EP3, unused).
-                descriptors = cdc_acm_descriptors(max_burst=2)
-                endpoints   = [USB3BulkIN(ept=1, max_burst=2), USB3BulkOUT(ept=2, max_burst=2),
-                    USB3BulkIN(ept=3, max_burst=2)]
+        if with_core and example == "composite":
+            # Composite device: UVC camera (interfaces 0-1, EP1) + CDC-ACM SoC console (interfaces
+            # 2-3, EP2-4), one USB3 device: ffplay /dev/videoX while using litex_term /dev/ttyACMx.
+            assert cpu_type is not None, "composite example requires a CPU (--cpu-type)."
+            descriptors = USB3Descriptors(
+                product      = "USB3-PIPE Camera + Console",
+                device_class = DEVICE_CLASS_IAD,
+                interfaces   = uvc_interfaces(UVC_MODES, vc_interface=0, ept=1, max_burst=16, clk_freq=sys_clk_freq) +
+                    cdc_acm_interfaces(comm_interface=2, notif_ept=4, in_ept=2, out_ept=3, max_burst=2))
+            add_cdc_acm_requests(descriptors)
+            self.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors,
+                endpoints = [
+                    USB3BulkIN(ept=1,  max_burst=16), # UVC video.
+                    USB3BulkIN(ept=2,  max_burst=2),  # CDC-ACM data IN.
+                    USB3BulkOUT(ept=3, max_burst=2),  # CDC-ACM data OUT.
+                    USB3BulkIN(ept=4,  max_burst=2),  # CDC-ACM notifications (unused).
+                ],
+                with_ep0_handler = True)
+            usb3_core.add_csr(with_trace=True)
+            ep0 = usb3_core.ep0
+            self.usb3_uvc = USB3UVCFunction(ep0, usb3_core.endpoints[0], usb3_core.link.reset, sys_clk_freq)
+            self.usb3_acm = usb3_acm = USB3CDCACMFunction(ep0, usb3_core.endpoints[1], usb3_core.endpoints[2])
+            self.uart = UART(usb3_acm, tx_fifo_depth=64, rx_fifo_depth=64)
+            if self.irq.enabled:
+                self.irq.add("uart", use_loc_if_exists=True)
             else:
-                descriptors = bulk_descriptors(max_burst=8)
-                endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]
+                self.add_constant("UART_POLLING")
+        elif with_core and example == "msc":
+            # Mass Storage RAM disk (512KB, FAT with a README): /dev/sdX.
+            readme = "USB3-PIPE RAM disk: USB3.0 SuperSpeed Mass Storage from an FPGA (LiteX/usb3_pipe).\n"
+            image  = msc_fat_image(512*1024, {"README.TXT": readme})
+            self.usb3_msc = usb3_msc = USB3MSC(usb3_phy, sys_clk_freq, size=512*1024, image=image)
+            usb3_msc.core.add_csr(with_trace=True)
+        elif with_core and example == "uvc":
+            # UVC camera (test pattern): ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
+            self.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq)
+            usb3_uvc.core.add_csr(with_trace=True)
+        elif with_core and example in ["console", "cdc_uartbone"]:
+            # USB3 CDC-ACM serial port.
+            self.usb3_acm = usb3_acm = USB3CDCACM(usb3_phy, sys_clk_freq)
+            usb3_acm.core.add_csr(with_trace=True)
+            if example == "console":
+                # SoC console (BIOS) on the USB3 CDC-ACM: litex_term /dev/ttyACMx.
+                assert cpu_type is not None, "console example requires a CPU (--cpu-type)."
+                self.uart = UART(usb3_acm, tx_fifo_depth=64, rx_fifo_depth=64)
+                if self.irq.enabled:
+                    self.irq.add("uart", use_loc_if_exists=True)
+                else:
+                    self.add_constant("UART_POLLING")
+            if example == "cdc_uartbone":
+                # Wishbone bridge over the USB3 CDC-ACM: litex_server --uart --uart-port /dev/ttyACMx.
+                self.usb3_uartbone = usb3_uartbone = Stream2Wishbone(usb3_acm, clk_freq=sys_clk_freq)
+                self.bus.add_master(name="usb3_uartbone", master=usb3_uartbone.wishbone)
+        elif with_core:
+            descriptors = bulk_descriptors(max_burst=8)
+            endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]
             self.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints)
             usb3_core.add_csr()
 
@@ -166,10 +224,6 @@ class USB3SoC(SoCMini):
                     usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
                     usb3_loopback.source.connect(usb3_core.endpoints[0].sink),
                 ]
-            if example == "cdc_uartbone":
-                # Wishbone bridge over CDC-ACM (litex_server --uart --uart-port /dev/ttyACMx).
-                self.usb3_uartbone = usb3_uartbone = USB3UARTBone(endpoints[0], endpoints[1], sys_clk_freq)
-                self.bus.add_master(name="usb3_uartbone", master=usb3_uartbone.wishbone)
             if example == "bench":
                 # Bandwidth benchmark: EP1 IN counter source, EP2 OUT counter checker (scripts/usb3_bench.py).
                 self.usb3_bench = usb3_bench = USB3Bench()
@@ -254,7 +308,8 @@ def main():
     parser.add_argument("--with-jtagbone",     action="store_true", help="Enable JTAGBone.")
     parser.add_argument("--no-uartbone",       action="store_true", help="Disable UARTBone.")
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
-    parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=["loopback", "bench", "cdc_uartbone"])
+    parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=["loopback", "bench", "cdc_uartbone", "console", "uvc", "msc", "composite"])
+    parser.add_argument("--cpu-type",          default=None,        help="CPU (console example, ex: vexriscv).")
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath", "phase"])
@@ -280,6 +335,7 @@ def main():
         with_jtagbone     = args.with_jtagbone,
         with_core         = not args.no_core,
         example           = args.example,
+        cpu_type          = args.cpu_type,
         with_serdes_debug = args.with_serdes_debug,
         with_analyzer     = args.with_analyzer,
         analyzer_group    = args.analyzer_group,
