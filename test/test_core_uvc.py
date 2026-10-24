@@ -147,6 +147,18 @@ class TestCoreUVCIso(unittest.TestCase):
         self.assertEqual(int.from_bytes(bytes(probe[22:26]), "little"), 16*1024)
         # Isochronous modes: no bulk short packet constraint.
         check_modes(UVC_ISO_MODES, 16*1024, bulk=False)
+        # uvcvideo (uvc_video_start_transfer): alternate setting with wBytesPerInterval >=
+        # dwMaxPayloadTransferSize (-EIO otherwise), frame period from dwFrameInterval (S_PARM).
+        bpis = {1: comp[4] | (comp[5] << 8)} # VS alternate setting 0: no endpoint.
+        for m, (width, height, fps) in enumerate(UVC_ISO_MODES):
+            probe = uvc_probe(UVC_ISO_MODES, m, 16*1024, 125_000_000)
+            self.assertEqual(len(probe), UVC_PROBE_SIZE)
+            le32 = lambda o: int.from_bytes(bytes(probe[o:o+4]), "little")
+            self.assertEqual(le32(4), 10_000_000//fps)                      # dwFrameInterval.
+            self.assertEqual(le32(18), frame_size(width, height))           # dwMaxVideoFrameSize.
+            self.assertEqual(le32(26), 125_000_000)                         # dwClockFrequency.
+            alts = [alt for alt, bpi in bpis.items() if bpi >= le32(22)]   # dwMaxPayloadTransferSize.
+            self.assertEqual(alts, [1])
 
     def test_iso_stream(self):
         # 1 packet per service interval (1024 bytes payloads): 64x8 frames (1024 bytes) in 2 payloads
