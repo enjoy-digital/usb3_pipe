@@ -38,7 +38,8 @@ from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
 @ResetInserter()
 class USB3LTSSM(LiteXModule):
     """ Link Training and Status State Machine (section 7.5)"""
-    def __init__(self, sys_clk_freq, with_timers=True, timer_scale=1, u2_inactivity_timeout=1e-3):
+    def __init__(self, sys_clk_freq, with_timers=True, timer_scale=1, u2_inactivity_timeout=1e-3,
+        ssp=False):
         # Status -----------------------------------------------------------------------------------
         self.u0                 = Signal()
         self.recovery           = Signal()
@@ -135,6 +136,14 @@ class USB3LTSSM(LiteXModule):
         self.idle_handshake  = Signal()        # o: Idle Symbol handshake (transmit Idle Symbols)
         self.rx_idle8        = Signal(reset=1) # i: Idle handshake done (8 received + 16 sent)
                                              #     reset=1: short path when not connected (standalone LTSSM)
+
+        # SuperSpeedPlus Polling (ssp=True, usb3_pipe/ssp.py, 7.5.4.3-7.5.4.6) ---------------------
+        # In Polling.LFPS, ssp_polling runs the SSPPolling substates (SCD1/SCD2, LBPM PortMatch/
+        # PortConfig) instead of the SuperSpeed Polling.LFPS handshake: ssp_done exits to Polling.RxEQ,
+        # ssp_fallback (SuperSpeed partner) continues with the SuperSpeed handshake.
+        self.ssp_polling  = Signal() # o
+        self.ssp_done     = Signal() # i
+        self.ssp_fallback = Signal() # i
 
         # Compliance testability (7.5.4.3) ----------------------------------------------------------
         self.compliance_ping_count = Signal(16) # o: Ping.LFPS received count in Compliance
@@ -373,31 +382,41 @@ class USB3LTSSM(LiteXModule):
         )
 
         # LFPS State (7.5.4.3) ---------------------------------------------------------------------
+        polling_lfps = If(_360_ms_timer.done,
+            # 360ms timeout: Compliance for UFP (always enabled) and DS when directed
+            # (compliance_enable), only if the Polling.LFPS handshake has never been completed
+            # since power-on/Warm Reset (7.5.4.3.2: a later timeout is a training failure, not a
+            # passive compliance load). Otherwise retry training.
+            If(polling_lfps_ok | (self.ds_port & ~self.compliance_enable),
+                NextState("Polling.ExitToRxDetect")
+            ).Else(
+                NextState("Compliance")
+            )
+        )
+        ss_handshake = (self.lfps_tx_count >= tx_lfps_count)
+        if ssp:
+            polling_lfps = polling_lfps.Elif(self.ssp_done,
+                NextValue(polling_lfps_ok, 1),
+                NextState("Polling.RxEQ"),
+            )
+            ss_handshake = self.ssp_fallback & ss_handshake
+        polling_lfps = polling_lfps.Elif(ss_handshake,
+            If(self.lfps_rx_polling & ~rx_lfps_seen,
+                NextValue(rx_lfps_seen, 1),
+                NextValue(tx_lfps_count, self.lfps_tx_count + 4)
+            ),
+            If(rx_lfps_seen,
+                NextValue(polling_lfps_ok, 1),
+                NextState("Polling.RxEQ"),
+            )
+        )
         fsm.act("Polling.LFPS", # 1.
             *timers_off,
             self.lfps_tx_idle.eq(1),
             _360_ms_timer.wait.eq(with_timers),
-            self.lfps_tx_polling.eq(1),
-            If(_360_ms_timer.done,
-                # 360ms timeout: Compliance for UFP (always enabled) and DS when directed
-                # (compliance_enable), only if the Polling.LFPS handshake has never been completed
-                # since power-on/Warm Reset (7.5.4.3.2: a later timeout is a training failure, not a
-                # passive compliance load). Otherwise retry training.
-                If(polling_lfps_ok | (self.ds_port & ~self.compliance_enable),
-                    NextState("Polling.ExitToRxDetect")
-                ).Else(
-                    NextState("Compliance")
-                )
-            ).Elif(self.lfps_tx_count >= tx_lfps_count,
-                If(self.lfps_rx_polling & ~rx_lfps_seen,
-                    NextValue(rx_lfps_seen, 1),
-                    NextValue(tx_lfps_count, self.lfps_tx_count + 4)
-                ),
-                If(rx_lfps_seen,
-                    NextValue(polling_lfps_ok, 1),
-                    NextState("Polling.RxEQ"),
-                )
-            )
+            *([self.ssp_polling.eq(1), self.lfps_tx_polling.eq(self.ssp_fallback)] if ssp else
+              [self.lfps_tx_polling.eq(1)]),
+            polling_lfps,
         )
 
         # RxEQ State (7.5.4.4) ---------------------------------------------------------------------
