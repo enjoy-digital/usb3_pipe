@@ -34,6 +34,7 @@ from usb3_core.descriptors import USB3Descriptors, DEVICE_CLASS_IAD
 from usb3_core.cdc_acm     import USB3CDCACM, USB3CDCACMFunction
 from usb3_core.bench       import USB3Bench
 from usb3_core.uvc         import USB3UVC, USB3UVCFunction, uvc_interfaces, UVC_MODES
+from usb3_core.msc         import USB3MSC, msc_fat_image
 
 # USB3 IOs -----------------------------------------------------------------------------------------
 
@@ -184,6 +185,12 @@ class USB3SoC(SoCCore):
                 self.irq.add("uart", use_loc_if_exists=True)
             else:
                 self.add_constant("UART_POLLING")
+        elif with_core and example == "msc":
+            # Mass Storage RAM disk (512KB, FAT with a README): /dev/sdX.
+            readme = "USB3-PIPE RAM disk: USB3.0 SuperSpeed Mass Storage from an FPGA (LiteX/usb3_pipe).\n"
+            image  = msc_fat_image(512*1024, {"README.TXT": readme})
+            self.usb3_msc = usb3_msc = USB3MSC(usb3_phy, sys_clk_freq, size=512*1024, image=image)
+            usb3_msc.core.add_csr(with_trace=True)
         elif with_core and example == "uvc":
             # UVC camera (test pattern): ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
             self.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq)
@@ -301,7 +308,7 @@ def main():
     parser.add_argument("--with-jtagbone",     action="store_true", help="Enable JTAGBone.")
     parser.add_argument("--no-uartbone",       action="store_true", help="Disable UARTBone.")
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
-    parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=["loopback", "bench", "cdc_uartbone", "console", "uvc", "composite"])
+    parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=["loopback", "bench", "cdc_uartbone", "console", "uvc", "msc", "composite"])
     parser.add_argument("--cpu-type",          default=None,        help="CPU (console example, ex: vexriscv).")
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
