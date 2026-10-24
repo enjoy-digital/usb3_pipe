@@ -4,8 +4,9 @@
 # Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX) at 5Gbps and the
-TX/RX datapaths (8b/10b, word alignment, polarity, SKP insertion/removal, electrical idle/LFPS).
+"""USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY) at
+5Gbps and the TX/RX datapaths (8b/10b, word alignment, polarity, SKP insertion/removal, electrical
+idle/LFPS).
 """
 
 from functools import reduce
@@ -592,6 +593,7 @@ class USB3SerDes(LiteXModule):
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
         self.add_module(name=name, module=xcvr)
+        self.xcvr_name = name
         xcvr.add_stream_endpoints()
         self.tx_datapath     = tx_datapath     = TXDatapath("tx")
         self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx")
@@ -642,20 +644,25 @@ class K7USB3SerDes(USB3SerDes):
         self.pll = pll = GTXChannelPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
         gtx = self.add_transceiver("gtx", GTX, pll, tx_pads, rx_pads, sys_clk_freq)
 
-        # Override GTX RX termination for USB3 (800 mV Term Voltage) -------------------------------
-        rxcdr_cfgs = {
-            1 : 0x0380008bff10400010,
-            2 : 0x0380008bff10200010,
-            4 : 0x0380008bff10100010,
-            8 : 0x0380008bff10080010,
-           16 : 0x0380008bff10080010,
-        }
+        # Override GTX RX settings for USB3 ---------------------------------------------------------
+        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
+        # the Xilinx 7-Series Transceivers Wizard (SATA, SSC) and PCIe Gen2 (pcie_7x) GT wrappers:
+        # - RXCDR_CFG: SSC tolerant CDR settings (RXOUT_DIV=1).
+        # - RXCDR_HOLD_DURING_EIDLE/RX_DFE_LPM_HOLD_DURING_EIDLE: the CDR/LPM keep their state during
+        #   Electrical Idle/LFPS.
+        # - LPM mode (as PCIe Gen1/Gen2).
+        # - RX_CM_SEL/RX_CM_TRIM: Programmable, 800mV.
+        assert pll.config['d'] == 1 # 5Gbps.
         gtx.gtx_params.update(
-            p_RX_CM_SEL  = 0b11,
-            p_RX_CM_TRIM = 0b1010,
-            p_RXCDR_CFG  = rxcdr_cfgs[pll.config['d']],
-            p_PMA_RSV    = 0x18480,
-            p_PMA_RSV2   = 0x2050,
+            p_RXCDR_CFG                    = 0x03_8000_8BFF_4010_0008,
+            p_RXCDR_HOLD_DURING_EIDLE      = 0b1,
+            p_RX_DFE_LPM_HOLD_DURING_EIDLE = 0b1,
+            p_RX_DFE_LPM_CFG               = 0x0904,
+            i_RXLPMEN                      = 0b1,
+            p_RX_CM_SEL                    = 0b11,
+            p_RX_CM_TRIM                   = 0b010,
+            p_PMA_RSV                      = 0x00018480,
+            p_PMA_RSV2                     = 0x2050,
         )
 
         # Override GTX TX termination for USB3 (800 mV Term Voltage) -------------------------------
@@ -664,9 +671,10 @@ class K7USB3SerDes(USB3SerDes):
         )
 
         # Override GTX parameters/signals for USB3 LFPS --------------------------------------------
+        # PCS_RSVD_ATTR: OOB powered up (bit 8), OOB clock from CLKRSVD[0] (bit 3).
         rx_idle = Signal()
         gtx.gtx_params.update(
-            p_PCS_RSVD_ATTR    = 0x000000000100,
+            p_PCS_RSVD_ATTR    = 0x000000000108,
             p_RXOOB_CFG        = 0b0000110,
             i_CLKRSVD          = ClockSignal("oob"),
             i_RXELECIDLEMODE   = 0b00,
@@ -733,3 +741,70 @@ class A7USB3SerDes(USB3SerDes):
 
         # Timing constraints -----------------------------------------------------------------------
         self.add_timing_constraints(platform, sys_clk, gtp)
+
+# Xilinx Ultrascale+ USB3 Serializer/Deserializer --------------------------------------------------
+
+class USPUSB3SerDes(USB3SerDes):
+    """Ultrascale+ GTY USB3 SerDes (CPLL, reference clock from dedicated pads or from the fabric)."""
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+        USB3SerDes.__init__(self)
+
+        # # #
+
+        from liteiclink.serdes.gty_ultrascale import GTYChannelPLL, GTY
+
+        # PLL / Transceiver ------------------------------------------------------------------------
+        refclk_from_fabric = isinstance(refclk_pads, (Signal, ClockSignal))
+        refclk = self.get_refclk(refclk_pads, buffer="IBUFDS_GTE4")
+        self.pll = pll = GTYChannelPLL(refclk, refclk_freq, 5e9)
+        gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq)
+        assert pll.config['d'] == 1 # 5Gbps.
+
+        # Fabric reference clock: CPLL from GTGREFCLK.
+        if refclk_from_fabric:
+            gty.gty_params.update(
+                i_GTREFCLK0     = 0,
+                i_GTGREFCLK     = refclk,
+                i_CPLLREFCLKSEL = 0b111,
+            )
+
+        # Override GTY RX settings for USB3 ---------------------------------------------------------
+        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
+        # the Xilinx Ultrascale+ Transceivers Wizard (SATA preset at 5Gbps, SSC) and PCIe Gen2
+        # (pcie4_uscale_plus) GT wrappers:
+        # - RXCDR_CFG2/3: SSC tolerant CDR settings.
+        # - RX_SUM_*/RX_DEGEN_CTRL/RX_DFE_AGC_CFG1: 5Gbps settings (LiteICLink: high line rates ones).
+        # - RX/TX_CLK25_DIV: from the reference clock (also clocks the OOB detector).
+        # - RXCDRHOLD: the CDR keeps its state during Electrical Idle/LFPS (as pcie4_uscale_plus).
+        # - LPM mode (as PCIe Gen1/Gen2, LiteICLink default).
+        clk25_div = int((refclk_freq + 25e6 - 1)//25e6)
+        rx_idle   = Signal()
+        gty.gty_params.update(
+            p_RXCDR_CFG2                = 0x0263,
+            p_RXCDR_CFG2_GEN2           = 0x263,
+            p_RXCDR_CFG3                = 0x001a,
+            p_RXCDR_CFG3_GEN2           = 0b011010,
+            p_RX_SUM_VCMTUNE            = 0b0011,
+            p_RX_SUM_DEGEN_AVTT_OVERITE = 0b0,
+            p_RX_DEGEN_CTRL             = 0b100,
+            p_RX_DFE_AGC_CFG1           = 0b010,
+            p_RX_CLK25_DIV              = clk25_div,
+            p_TX_CLK25_DIV              = clk25_div,
+            i_RXCDRHOLD                 = rx_idle,
+        )
+
+        # Override GTY parameters/signals for USB3 LFPS --------------------------------------------
+        gty.gty_params.update(
+            p_OOB_PWRUP        = 0b1,
+            p_OOBDIVCTL        = 0b01,
+            p_RXOOB_CFG        = 0b000000110,
+            p_RXOOB_CLK_CFG    = "PMA",
+            i_RXELECIDLEMODE   = 0b00,
+            o_RXELECIDLE       = rx_idle,
+            i_TXPDELECIDLEMODE = 0b1,
+            i_TXELECIDLE       = self.tx_idle
+        )
+        self.add_lfps(gty, rx_idle)
+
+        # Timing constraints -----------------------------------------------------------------------
+        self.add_timing_constraints(platform, sys_clk, gty)

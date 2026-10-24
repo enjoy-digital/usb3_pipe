@@ -239,7 +239,7 @@ class USB3RXErrorsDebug(LiteXModule):
 # USB3 SerDes Debug --------------------------------------------------------------------------------
 
 class USB3SerDesDebug(LiteXModule):
-    """USB3 SerDes Debug (CSRs, hardware bring-up of A7USB3SerDes/K7USB3SerDes).
+    """USB3 SerDes Debug (CSRs, hardware bring-up of the USB3 SerDes: A7/K7/USP).
 
     - TX polarity / TX inhibit controls (TX inhibit can be restricted to an LTSSM state, ex to
       isolate the partner's signal from crosstalk during training).
@@ -262,7 +262,7 @@ class USB3SerDesDebug(LiteXModule):
 
         # # #
 
-        gt = getattr(serdes, "gtp", None) or getattr(serdes, "gtx")
+        gt = getattr(serdes, serdes.xcvr_name)
 
         # TX/Loopback controls.
         tx_inhibit_state = Signal()
