@@ -8,8 +8,9 @@
 
 Setup stage (SETUP DP, acknowledged), optional Data stage (IN: responses from a ROM built from the
 descriptors/requests table; OUT: data acknowledged and ignored), Status stage (STATUS TP,
-acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT) applied). Unsupported
-requests are stalled (STALL TP).
+acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT)/SET_FEATURE and
+CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) applied). GET_STATUS(Device) reports the U1/U2 Enable bits.
+Unsupported requests are stalled (STALL TP).
 """
 
 from migen import *
@@ -32,6 +33,13 @@ KIND_SET_ADDRESS       = 3
 KIND_SET_CONFIGURATION = 4
 KIND_CLEAR_FEATURE     = 5
 KIND_HANDLER           = 6 # Delegated to the user request handler.
+KIND_DEVICE_FEATURE    = 7 # SET/CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) (Device).
+
+USB_REQ_CLEAR_FEATURE = 0x01
+USB_REQ_SET_FEATURE   = 0x03
+
+FEATURE_U1_ENABLE = 48
+FEATURE_U2_ENABLE = 49
 
 EP0_HANDLER_WORDS = 128 # Request handler IN response buffer (512 bytes).
 
@@ -41,7 +49,18 @@ KINDS = {
     "set_address"       : KIND_SET_ADDRESS,
     "set_configuration" : KIND_SET_CONFIGURATION,
     "clear_feature"     : KIND_CLEAR_FEATURE,
+    "device_feature"    : KIND_DEVICE_FEATURE,
+    "device_status"     : KIND_IN,
 }
+
+# Memory Read Port Proxy ---------------------------------------------------------------------------
+
+class _ReadPortProxy:
+    """Memory read port interface (adr/re/dat_r), to modify the data read by a DPPReader."""
+    def __init__(self, port):
+        self.adr   = Signal(len(port.adr))
+        self.re    = Signal()
+        self.dat_r = Signal(len(port.dat_r))
 
 # USB3 Control Endpoint ----------------------------------------------------------------------------
 
@@ -67,6 +86,8 @@ class USB3EndpointControl(USB3Endpoint):
         self.clear_halt   = Signal()  # o: CLEAR_FEATURE(ENDPOINT_HALT) (pulse)...
         self.clear_ept    = Signal(4) # o: ...on this endpoint...
         self.clear_dir    = Signal()  # o: ...and direction.
+        self.u1_enable    = Signal()  # o: U1 Enable (SET/CLEAR_FEATURE(U1_ENABLE), 9.4.5).
+        self.u2_enable    = Signal()  # o: U2 Enable (SET/CLEAR_FEATURE(U2_ENABLE), 9.4.5).
 
         # Request handler interface.
         self.req_setup   = Signal()   # o
@@ -87,8 +108,11 @@ class USB3EndpointControl(USB3Endpoint):
         requests = descriptors.get_requests()
         rom      = []
         entries  = []
+        status_offset = None # GET_STATUS(Device) response word.
         for bmRequestType, bRequest, wValue, response, kind in requests:
             offset = len(rom)
+            if kind == "device_status":
+                status_offset = offset
             length = 0
             if response is not None:
                 data    = list(response) + [0]*((-len(response)) % 4)
@@ -203,6 +227,14 @@ class USB3EndpointControl(USB3Endpoint):
                 ),
                 If(kind == KIND_SET_CONFIGURATION,
                     self.configured.eq(wValue != 0)
+                ),
+                If(kind == KIND_DEVICE_FEATURE,
+                    If(wValue == FEATURE_U1_ENABLE,
+                        self.u1_enable.eq(bRequest == USB_REQ_SET_FEATURE)
+                    ),
+                    If(wValue == FEATURE_U2_ENABLE,
+                        self.u2_enable.eq(bRequest == USB_REQ_SET_FEATURE)
+                    ),
                 ),
             )
         ]
@@ -320,8 +352,23 @@ class USB3EndpointControl(USB3Endpoint):
         ]
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, send_pending.eq(0))
 
-        # ROM Reader.
-        self.reader = reader = DPPReader(rd_port, depth=8)
+        # Data stage IN in progress: U1/U2 entry rejected.
+        self.comb += self.pm_busy.eq(in_req | send_pending | jobs.source.valid)
+
+        # ROM Reader (GET_STATUS(Device) response: U1/U2 Enable bits D2/D3 inserted, 9.4.5).
+        rd_proxy = _ReadPortProxy(rd_port)
+        rd_adr   = Signal(len(rd_port.adr))
+        self.sync += If(rd_proxy.re, rd_adr.eq(rd_proxy.adr))
+        self.comb += [
+            rd_port.adr.eq(rd_proxy.adr),
+            rd_port.re.eq(rd_proxy.re),
+            rd_proxy.dat_r.eq(rd_port.dat_r),
+        ]
+        if status_offset is not None:
+            self.comb += If(rd_adr == status_offset,
+                rd_proxy.dat_r.eq(rd_port.dat_r | Cat(C(0, 2), self.u1_enable, self.u2_enable))
+            )
+        self.reader = reader = DPPReader(rd_proxy, depth=8)
         self.comb += [
             jobs.source.connect(reader.sink),
             reader.source.connect(self.tx_dpp),

@@ -30,6 +30,11 @@ DEVICE_CLASS_IAD = (0xef, 0x02, 0x01)
 EP_BULK      = 0x02
 EP_INTERRUPT = 0x03
 
+# U1/U2 Device Exit Latencies advertised with LPM (SuperSpeed USB Device Capability, 9.6.2.2): maximum
+# values (bU1DevExitLat: 10us, wU2DevExitLat: 2047us).
+U1_DEV_EXIT_LAT = 0x0a
+U2_DEV_EXIT_LAT = 0x07ff
+
 def le16(v):
     return [v & 0xff, (v >> 8) & 0xff]
 
@@ -78,6 +83,8 @@ class USB3Descriptors:
     """USB3 device descriptors.
 
     interfaces: list of USB3InterfaceDescriptor (or raw bytes for IADs/class descriptors).
+    with_lpm  : Link Power Management (U1/U2) supported: non-zero U1/U2 Device Exit Latencies in the
+                BOS (hosts enable U1/U2 only with non-zero exit latencies), see enable_lpm().
     """
     def __init__(self, vid=0x1d50, pid=0x605a, bcd_device=0x0100,
         manufacturer = "Enjoy-Digital",
@@ -85,7 +92,8 @@ class USB3Descriptors:
         serial       = "0001",
         interfaces   = [],
         max_power_ma = 0,
-        device_class = (0x00, 0x00, 0x00)):
+        device_class = (0x00, 0x00, 0x00),
+        with_lpm     = False):
         self.vid          = vid
         self.pid          = pid
         self.bcd_device   = bcd_device
@@ -93,7 +101,12 @@ class USB3Descriptors:
         self.interfaces   = interfaces
         self.max_power_ma = max_power_ma
         self.device_class = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
+        self.with_lpm     = with_lpm
         self.class_requests = [] # (bmRequestType, bRequest, IN response bytes or None).
+
+    def enable_lpm(self):
+        """U1/U2 supported (Link Layer accepting LGO_U1/LGO_U2): non-zero exit latencies."""
+        self.with_lpm = True
 
     def device(self):
         return [18, DESC_DEVICE] + le16(0x0320) + list(self.device_class) + [9] + \
@@ -114,10 +127,12 @@ class USB3Descriptors:
             self.max_power_ma//8] + body
 
     def bos(self):
-        # USB 2.0 Extension (no LPM) and SuperSpeed USB Device Capability: SuperSpeed only, U1/U2
-        # exit latencies of 0 (U1/U2 not supported: LGO_U1/LGO_U2 are rejected).
+        # USB 2.0 Extension (no USB 2.0 LPM) and SuperSpeed USB Device Capability: SuperSpeed only,
+        # U1/U2 exit latencies of 0 without LPM (U1/U2 not supported: LGO_U1/LGO_U2 are rejected).
+        u1_exit_lat = U1_DEV_EXIT_LAT if self.with_lpm else 0
+        u2_exit_lat = U2_DEV_EXIT_LAT if self.with_lpm else 0
         usb2_ext = [7, DESC_DEVICE_CAP, 0x02] + le32(0)
-        ss_cap   = [10, DESC_DEVICE_CAP, 0x03, 0x00] + le16(0x0008) + [3, 0x00] + le16(0x0000)
+        ss_cap   = [10, DESC_DEVICE_CAP, 0x03, 0x00] + le16(0x0008) + [3, u1_exit_lat] + le16(u2_exit_lat)
         caps     = usb2_ext + ss_cap
         return [5, DESC_BOS] + le16(5 + len(caps)) + [2] + caps
 
@@ -134,7 +149,8 @@ class USB3Descriptors:
     def get_requests(self):
         """Control requests table: list of (bmRequestType, bRequest, wValue, response bytes or None,
         kind). wValue None: any. kind: "in", "out", "set_address", "set_configuration",
-        "clear_feature"."""
+        "clear_feature", "device_feature" (SET/CLEAR_FEATURE(U1_ENABLE/U2_ENABLE)), "device_status"
+        (GET_STATUS(Device))."""
         r = []
         # GET_DESCRIPTOR.
         r.append((0x80, 0x06, (DESC_DEVICE        << 8) | 0, self.device(),        "in"))
@@ -142,14 +158,19 @@ class USB3Descriptors:
         r.append((0x80, 0x06, (DESC_BOS           << 8) | 0, self.bos(),           "in"))
         for i in range(len(self.strings) + 1):
             r.append((0x80, 0x06, (DESC_STRING << 8) | i, self.string(i), "in"))
-        # GET_STATUS (Device/Interface/Endpoint), GET_CONFIGURATION/GET_INTERFACE.
-        for bmRequestType in [0x80, 0x81, 0x82]:
+        # GET_STATUS (Device: U1/U2 Enable bits inserted by the Control Endpoint, Interface/Endpoint),
+        # GET_CONFIGURATION/GET_INTERFACE.
+        r.append((0x80, 0x00, None, [0x00, 0x00], "device_status"))
+        for bmRequestType in [0x81, 0x82]:
             r.append((bmRequestType, 0x00, None, [0x00, 0x00], "in"))
         r.append((0x80, 0x08, None, [0x01], "in"))
         r.append((0x81, 0x0a, None, [0x00], "in"))
         # SET_ADDRESS, SET_CONFIGURATION, SET/CLEAR_FEATURE, SET_INTERFACE, SET_SEL, SET_ISOCH_DELAY.
         r.append((0x00, 0x05, None, None, "set_address"))
         r.append((0x00, 0x09, None, None, "set_configuration"))
+        for bRequest in [0x03, 0x01]:
+            for feature in [48, 49]: # U1_ENABLE, U2_ENABLE.
+                r.append((0x00, bRequest, feature, None, "device_feature"))
         for bmRequestType in [0x00, 0x01, 0x02]:
             r.append((bmRequestType, 0x03, None, None, "out"))
         r.append((0x00, 0x01, None, None, "out"))
