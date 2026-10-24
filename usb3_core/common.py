@@ -31,7 +31,7 @@ def framing_word(k):
 def seq_add(seq, n, width=3):
     return (seq + n) & ((1 << width) - 1)
 
-# Byte enables (be, as LiteEth): valid bytes of each word, contiguous from data[0:8], full (0b1111)
+# Byte enables (be): valid bytes of each word, contiguous from data[0:8], full (0b1111)
 # except on the last word of a packet.
 
 def be_to_bytes(be):
