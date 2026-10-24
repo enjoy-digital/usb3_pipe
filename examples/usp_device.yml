@@ -1,0 +1,12 @@
+# USB3-PIPE standalone core: Kintex Ultrascale+ (GTY) USB3.0 device.
+# Similar to the Alibaba Cloud XCKU3P target (alibaba_xcku3p.py), with a dedicated transceiver refclk.
+{
+    "phy"          : "USPUSB3SerDes",
+    "device"       : "xcku3p-ffvb676-2-e",
+    "speedgrade"   : -2,
+    "sys_clk_freq" : 125e6,
+    "refclk"       : "pads",
+    "refclk_freq"  : 156.25e6,
+    "role"         : "device",
+    "usb_core"     : True,
+}
