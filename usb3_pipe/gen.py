@@ -15,7 +15,7 @@ an interface documentation, from a YAML configuration file:
 
     usb3_pipe_gen examples/a7_device.yml
 
-Current support: Xilinx 7-Series (Artix7 GTP / Kintex7 GTX).
+Current support: Xilinx 7-Series (Artix7 GTP / Kintex7 GTX), Ultrascale+ (GTY).
 """
 
 import os
@@ -31,13 +31,13 @@ from migen.genlib.resetsync import AsyncResetSynchronizer
 from litex.gen import *
 
 from litex.build.generic_platform import *
-from litex.build.xilinx import XilinxPlatform
+from litex.build.xilinx import XilinxPlatform, XilinxUSPPlatform
 
-from litex.soc.cores.clock import S7PLL
+from litex.soc.cores.clock import S7PLL, USPMMCM
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
-from usb3_pipe.serdes import A7USB3SerDes, K7USB3SerDes
+from usb3_pipe.serdes import A7USB3SerDes, K7USB3SerDes, USPUSB3SerDes
 from usb3_pipe.ltssm  import USB3LTSSM
 from usb3_pipe.phy    import USB3PHY, USB3PHY_STATUS, USB3PHY_LINK_CTRL
 
@@ -47,15 +47,16 @@ from usb3_core.descriptors import bulk_descriptors
 
 # Configuration ------------------------------------------------------------------------------------
 
-# Supported PHYs: SerDes class, default device (family).
+# Supported PHYs: SerDes class, default device (family), platform class, OOB clock PLL class.
 PHYS = {
-    "A7USB3SerDes" : (A7USB3SerDes, "xc7a"),
-    "K7USB3SerDes" : (K7USB3SerDes, "xc7k"),
+    "A7USB3SerDes"  : (A7USB3SerDes,  "xc7a",   XilinxPlatform,    S7PLL),
+    "K7USB3SerDes"  : (K7USB3SerDes,  "xc7k",   XilinxPlatform,    S7PLL),
+    "USPUSB3SerDes" : (USPUSB3SerDes, "xcku3p", XilinxUSPPlatform, USPMMCM),
 }
 
 # Configuration keys and default values.
 CONFIG_DEFAULTS = {
-    "phy"                  : None,     # A7USB3SerDes / K7USB3SerDes (required).
+    "phy"                  : None,     # A7USB3SerDes / K7USB3SerDes / USPUSB3SerDes (required).
     "device"               : None,     # FPGA device, defaults to the PHY's family.
     "speedgrade"           : -1,       # FPGA speedgrade (used for the OOB clock PLL).
     "sys_clk_freq"         : 125e6,    # sys clock frequency (>= 125MHz).
@@ -258,7 +259,7 @@ def get_ios(ports):
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(LiteXModule):
-    def __init__(self, platform, sys_clk_freq, speedgrade):
+    def __init__(self, platform, sys_clk_freq, speedgrade, pll_cls=S7PLL):
         self.cd_sys = ClockDomain()
         self.cd_oob = ClockDomain()
 
@@ -271,7 +272,7 @@ class _CRG(LiteXModule):
         self.comb += self.cd_sys.clk.eq(clk)
 
         # oob: sys/8 for the transceiver OOB/SIGVALID clock.
-        self.pll = pll = S7PLL(speedgrade=speedgrade)
+        self.pll = pll = pll_cls(speedgrade=speedgrade)
         self.comb += pll.reset.eq(rst)
         pll.register_clkin(clk, sys_clk_freq)
         pll.create_clkout(self.cd_oob, sys_clk_freq/8, margin=0)
@@ -289,7 +290,7 @@ class USB3PIPECore(SoCMini):
         sys_clk_freq = config["sys_clk_freq"]
 
         # CRG --------------------------------------------------------------------------------------
-        self.crg = _CRG(platform, sys_clk_freq, config["speedgrade"])
+        self.crg = _CRG(platform, sys_clk_freq, config["speedgrade"], pll_cls=PHYS[config["phy"]][3])
 
         # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq,
@@ -550,7 +551,7 @@ def main():
         parser.error(f"{args.config}: {e}")
 
     # Core.
-    platform = XilinxPlatform(config["device"], io=[], toolchain="vivado")
+    platform = PHYS[config["phy"]][2](config["device"], io=[], toolchain="vivado")
     soc      = USB3PIPECore(platform, config)
 
     # Build (Verilog/Constraints only).

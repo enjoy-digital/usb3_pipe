@@ -6,13 +6,14 @@ integrated in designs not built with LiteX (Vivado projects, other HDLs).
 ```sh
 $ usb3_pipe_gen examples/a7_device.yml     --output-dir build/usb3_pipe_core # PHY only.
 $ usb3_pipe_gen examples/a7_usb_device.yml --output-dir build/usb3_device    # PHY + Device Core.
+$ usb3_pipe_gen examples/usp_device.yml    --output-dir build/usb3_usp       # Ultrascale+ (GTY).
 ```
 
 ## Configuration (YAML)
 
 | Parameter | Default | Description |
 |---|---|---|
-| `phy` | (required) | Transceiver: `A7USB3SerDes` (Artix7 GTP), `K7USB3SerDes` (Kintex7 GTX). |
+| `phy` | (required) | Transceiver: `A7USB3SerDes` (Artix7 GTP), `K7USB3SerDes` (Kintex7 GTX), `USPUSB3SerDes` (Ultrascale+ GTY). |
 | `device` | PHY family | FPGA device. |
 | `speedgrade` | `-1` | FPGA speedgrade (OOB clock PLL). |
 | `sys_clk_freq` | `125e6` | Core/user clock frequency (>= 125MHz). |
