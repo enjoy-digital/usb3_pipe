@@ -10,7 +10,7 @@ Endpoint, Bulk Endpoints and device classes (CDC-ACM, UVC, Mass Storage). It run
    source (data/ctrl) ------------------>  RX parser  --> Header dispatch ---> EP0 (control.py)
    sink   (data/ctrl) <------------------  TX framer  <-- TX arbitration <--- Bulk IN/OUT
    u0/polling_idle/hot_reset ----------->  Header flow control (seq/credits/retry)     |
-   lgo_u1/2/3, tx_lau/tx_lxu <---------->  Link PM (U3 accepted, U1/U2 rejected)       |
+   lgo_u1/2/3, tx_lau/tx_lxu <---------->  Link PM (U3 accepted, U1/U2 with_lpm)       |
    directed_recovery, link_activity <---   Timers / Recovery requests              Functions:
                                                                                    CDC-ACM, UVC, MSC
 ```
@@ -30,6 +30,16 @@ self.usb3_core.add_csr(with_trace=True) # Status/statistics CSRs, Header Packets
 # first byte on data[7:0], be: valid bytes (full except on the last word), last: end of packet).
 ```
 
+U1/U2 Link Power Management (`with_lpm=True`, off by default): the BOS advertises non-zero U1/U2
+exit latencies (10us/2047us, hosts only enable U1/U2 with non-zero latencies), the Link Layer accepts
+the host LGO_U1/LGO_U2 (LAU) when idle (7.2.4.2.2: all packets acknowledged/credited both ways,
+nothing to transmit, no ACK TP expected by an endpoint), else rejects them (LXU). U1/U2 are entered
+on the host LPMA, exited by the host or by the device when it has packets to transmit (ex: ERDY),
+through Recovery (Advertisements on U0 re-entry). The U2 Inactivity Timeout LMP programs the LTSSM
+U1 -> U2 timeout. SET/CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) are tracked (`u1_enable`/`u2_enable`,
+GET_STATUS(Device) D2/D3) but the device never initiates U1/U2 entry. Without `with_lpm`,
+LGO_U1/LGO_U2 are rejected (LXU).
+
 Device classes (complete devices, or functions to compose a device):
 
 ```python
@@ -42,10 +52,10 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk.
 
 | Module | File | Description |
 |---|---|---|
-| `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function), LGO_U3 accepted, LGO_U1/U2 rejected (LXU). |
+| `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function, U2 Inactivity Timeout), LGO_U3 accepted, LGO_U1/U2 accepted when idle with `with_lpm` (else LXU), LPMA forwarded, U1/U2 exit on pending packets. |
 | `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order. |
 | `USB3BulkIN`/`USB3BulkOUT` | `endpoints.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`. |
-| `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), class/vendor request handler (`with_ep0_handler`). |
+| `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), U1/U2 Enable (SET/CLEAR_FEATURE, GET_STATUS), class/vendor request handler (`with_ep0_handler`). |
 | `USB3Descriptors` | `descriptors.py` | Descriptors builder (device, configuration with SuperSpeed companions, BOS, strings, IADs). |
 | `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints, `add_csr()`. |
 | `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port, LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
@@ -116,6 +126,8 @@ A complete Acorn design (PHY + core + debug + bench) uses ~6000 LUTs (4.5% of th
 - Gen 1x1 only ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
 - Bulk/Control endpoints (no Isochronous, Streams). Interrupt IN endpoints can be declared with a Bulk
   IN endpoint (ex: CDC-ACM notifications, never sent).
-- U1/U2 rejected (descriptors advertise 0 exit latencies: hosts disable LPM), U3 entry/exit through the
-  LTSSM (not validated on hardware).
+- U1/U2 rejected by default (descriptors advertise 0 exit latencies: hosts disable LPM). With
+  `with_lpm`: host initiated U1/U2 entry only (no device initiated entry, U1/U2 Enable only reported),
+  validated in simulation only (not on hardware yet). U3 entry/exit through the LTSSM (not validated
+  on hardware).
 - Function remote wakeup, LTM, PTM not supported.
