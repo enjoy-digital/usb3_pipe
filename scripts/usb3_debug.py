@@ -101,6 +101,11 @@ class USB3DebugClient:
             entries.append((self.reg("history_time").read(), self.state_name(self.reg("history_state").read())))
         return count, entries
 
+    def history_freeze(self, enable=True):
+        # Keep the first transitions after a clear (ex: capture a state exit), else the last ones.
+        if hasattr(self.bus.regs, f"{self.name}_history_freeze"):
+            self.reg("history_freeze").write(int(enable))
+
     def clear(self):
         self.reg("clear").write(1)
         if hasattr(self.bus.regs, "usb3_serdes_debug_rx_errors_clear"):

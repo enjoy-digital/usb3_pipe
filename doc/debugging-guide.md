@@ -170,6 +170,32 @@ analyzer.
 The core status CSRs (`usb3_core_status`: ready/configured/address, `rx_lbad`, `tx_retry`,
 `recovery_req`) count the Link Layer errors/Recovery requests (`usb3_soak.py` logs them).
 
+## Suspend/Resume (U3)
+
+Linux autosuspends the devices with a driver (UVC, CDC-ACM, Mass Storage examples): the link goes to
+U3 after a few seconds without activity and is resumed when the device is used again. A link in U3
+must not be retrained from the debug CSRs (the host still sees its port in U3: the device ends in
+Polling.LFPS timeout -> Compliance); `scripts/acorn_run.py` reports these attempts as `suspended`.
+
+`scripts/usb3_suspend.py` waits for the suspend, resumes the device through its device node and
+reports each resume as `clean` (U3 exit) or `reset` (U3 exit failed, the host reset the device),
+with the LTSSM history captured from U3 (`history_freeze`):
+
+```sh
+$ ./scripts/usb3_suspend.py --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
+cycle 2: clean (0.6s), LTSSM: Recovery.Active Recovery.Configuration Recovery.Idle U0 ...
+cycle 0: reset (1.7s), LTSSM: Polling.ExitToRxDetect Polling.Entry Polling.LFPS ... WarmReset ...
+```
+
+On the Acorn (composite example, xHCI host), ~40-70% of the resumes are clean, the others end with
+a host reset (functional, ~2.5s resume). Two failure modes are seen:
+- U3 -> Rx.Detect/Polling (Warm Reset from the host): the host U3 wakeup LFPS was not detected.
+- U3 -> Recovery.Active -> eSS.Inactive (12ms timeout): wakeup handshake done but no TS1 received
+  after the long Electrical Idle.
+
+Not improved by: RXBUF_RESET_ON_EIDLE, a GTP RX re-initialization on U3 exit, the reference clock on
+GTGREFCLK0. Open investigation.
+
 ## Transceiver Reference Clock (Acorn)
 
 The Acorn has no transceiver reference clock without a PCIe host (MGTREFCLK0 is the PCIe edge

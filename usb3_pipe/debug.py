@@ -40,7 +40,8 @@ class USB3PHYDebug(LiteXModule):
 
     Lightweight always-on observability of a USB3PHY, to be polled from the host (UARTBone/JTAGBone):
     - LTSSM state, SerDes ready.
-    - LTSSM state history (last `USB3PHY_DEBUG_HISTORY_DEPTH` transitions, state + us timestamp).
+    - LTSSM state history (last `USB3PHY_DEBUG_HISTORY_DEPTH` transitions, or the first ones after a
+      clear with history_freeze, state + us timestamp).
     - Event counters (TS/LFPS detections, RX errors/idle, K28.4 substitutions, U0/Recovery/U1/U2/U3
       entries).
     - PHY reset (re-runs link training from Polling) and counters/history clear.
@@ -87,6 +88,8 @@ class USB3PHYDebug(LiteXModule):
         self._history_index = CSRStorage(log2_int(depth), description="History entry to read (0 = oldest).")
         self._history_state = CSRStatus(8,  description="History entry state.")
         self._history_time  = CSRStatus(32, description="History entry timestamp (us).")
+        self._history_freeze = CSRStorage(description="Keep the first transitions after a clear "
+                                                       "(else the last ones).")
         history_count = self._history_count.status
         history       = Memory(8 + 32, depth)
         history_wr    = history.get_port(write_capable=True)
@@ -99,7 +102,8 @@ class USB3PHYDebug(LiteXModule):
         self.comb += [
             history_wr.adr.eq(history_count),
             history_wr.dat_w.eq(Cat(state, timestamp)),
-            history_wr.we.eq(state != state_d),
+            history_wr.we.eq((state != state_d) &
+                ~(self._history_freeze.storage & (history_count >= depth))),
             # Read relative to the oldest entry still in memory.
             If(history_count > depth,
                 history_rd.adr.eq(history_count + self._history_index.storage)
