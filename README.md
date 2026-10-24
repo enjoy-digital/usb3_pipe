@@ -110,3 +110,12 @@ Build with `./acorn.py --build --load --example <name>`, see [doc/examples.md](d
 - [doc/standalone-core.md](doc/standalone-core.md): standalone Verilog core generator (`usb3_pipe_gen`).
 - [doc/debugging-guide.md](doc/debugging-guide.md): hardware debugging (CSRs, trace, LiteScope, soak).
 - [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md): Gen 2x1 (10Gbps)/Gen 1x2 (2x5Gbps) roadmap.
+
+[> Credits
+----------
+- [bunnie](https://www.bunniestudios.com/) for the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board
+  used for the initial development.
+- [Antmicro](https://antmicro.com/) and [Google](https://opensource.google/) for sponsoring the initial
+  development of the project.
+- The [Daisho](https://github.com/greatscottgadgets/daisho) project for its USB3 core, used initially with
+  USB3-PIPE ([customized](https://github.com/enjoy-digital/daisho)) before the native USB3 Device Core.
