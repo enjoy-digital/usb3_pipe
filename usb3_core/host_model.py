@@ -483,9 +483,11 @@ class PHYStandIn:
     def __init__(self):
         self.source = stream.Endpoint(phy_layout())
         self.sink   = stream.Endpoint(phy_layout())
-        for name in ["u0", "polling_idle", "hot_reset", "recovery", "lgo_u1", "lgo_u2", "lgo_u3",
-            "tx_lau", "tx_lxu", "directed_recovery", "link_activity"]:
+        for name in ["u0", "u1", "u2", "polling_idle", "hot_reset", "recovery", "lgo_u1", "lgo_u2",
+            "lgo_u3", "lpma", "tx_lau", "tx_lxu", "exit_u1_req", "exit_u2_req", "directed_recovery",
+            "link_activity"]:
             setattr(self, name, Signal(name=name))
+        self.u2_timeout = Signal(8, name="u2_timeout")
 
 def play_script(dut, script, max_cycles=200000, tx_ready_rate=1.0, seed=0):
     """Play a HostScript against the DUT, returns the simulation output (HOST_MARK/HOST_RX lines)."""
