@@ -1,7 +1,7 @@
 #
 # This file is part of USB3-PIPE project.
 #
-# Copyright (c) 2019-2025 Florent Kermarrec <florent@enjoy-digital.fr>
+# Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY) at
