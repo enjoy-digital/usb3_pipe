@@ -34,7 +34,7 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 
 [> Features
 -----------
-- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX SerDes, LFPS, Training Sequences, 8b/10b, scrambling,
+- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY SerDes (LiteICLink), LFPS, Training Sequences, 8b/10b, scrambling,
   SKP insertion/removal, word/framing alignment, polarity, LTSSM (Polling/U0/Recovery/U1-U3/Hot/Warm
   Reset/Compliance/Loopback), debug counters. Also generated as a standalone Verilog core.
 - **USB3 Device Core** (`usb3_core/`): Link Layer (header flow control, retries, LMPs, timers), Protocol
@@ -62,13 +62,17 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 [> Hardware
 -----------
 - [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard) (Mini) with an Acorn
-  CLE-215+ (`acorn.py`, main development/validation target) or [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`kc705.py`).
+  CLE-215+ (`acorn.py`, main development/validation target).
+- [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`kc705.py`, Kintex7 GTX) and
+  Alibaba Cloud XCKU3P board (`alibaba_xcku3p.py`, Kintex Ultrascale+ GTY): build-tested, hardware
+  validation in progress.
 - [SFP2USB](http://xillybus.com/sfp2usb-module) adapter (from the [XillyUSB](http://xillybus.com/xillyusb)
   project) or the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board.
 
 ![LiteX Acorn Baseboard + SFP2USB](doc/acorn_baseboard_sfp2usb_2.jpg)
 
-Any 7-Series board with a transceiver routed to a SFP/PCIe connector can be used with a target file.
+Any 7-Series/Ultrascale+ board with a transceiver routed to a SFP/PCIe connector can be used with a target
+file (the example designs are shared: `usb3_core/examples.py`).
 
 [> Getting started
 ------------------

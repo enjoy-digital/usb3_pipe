@@ -16,7 +16,7 @@ the standalone core ([standalone-core.md](standalone-core.md)).
 
 | Module | File | Role |
 |---|---|---|
-| `A7USB3SerDes`/`K7USB3SerDes` | `serdes.py` | Artix7 GTP/Kintex7 GTX (liteiclink) at 5Gbps, TX/RX datapaths: 8b/10b (with error substitution), word alignment on COM, polarity, SKP insertion (TX, 6.4.3) and removal (RX), electrical idle/LFPS patterns. |
+| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY) at 5Gbps with their USB3 settings (SSC tolerant CDR, LFPS/OOB), TX/RX datapaths: 8b/10b (with error substitution), word alignment on COM, polarity, SKP insertion (TX, 6.4.3) and removal (RX), electrical idle/LFPS patterns. |
 | `LFPSUnit` | `lfps.py` | LFPS generation/detection (Polling, Ping, U1/U2 exit, U3 wakeup, Warm Reset), timings of 6.9. |
 | `TSUnit` | `training.py` | TSEQ/TS1/TS2 generation and detection (Link Configuration: reset, loopback, scrambling). |
 | `Scrambler`/`Descrambler` | `scrambling.py` | Gen 1 scrambler (6.3.1.3, symbol level: SKP does not advance, COM initializes). |
