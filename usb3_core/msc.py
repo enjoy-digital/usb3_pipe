@@ -97,6 +97,43 @@ def scsi_responses(blocks, vendor="EnjoyDig", product="USB3-PIPE RAMDisk", revis
             list(MSC_BLOCK_SIZE.to_bytes(2, "big")),
     }
 
+# USB3 MSC RAM Disk ----------------------------------------------------------------------------------
+
+class USB3MSCRAM(LiteXModule):
+    """Disk RAM (32-bit words): read port (adr/re/dat_r, 1 cycle latency), write port (adr/dat_w/we).
+
+    Built from banks of bank_words (8K words: RAMB36 without cascades, Vivado 7-Series cascaded RAMB36
+    on large memories can fail the REQP-1962 DRC).
+    """
+    def __init__(self, words, init=[], bank_words=8192):
+        bank_words = min(words, bank_words)
+        assert words % bank_words == 0
+        nbanks = words//bank_words
+        abits  = log2_int(words, need_pow2=False)
+        self.rd_port = Record([("adr", abits), ("re", 1), ("dat_r", 32)])
+        self.wr_port = Record([("adr", abits), ("dat_w", 32), ("we", 1)])
+
+        # # #
+
+        bbits   = log2_int(bank_words)
+        rd_bank = Signal(max=max(nbanks, 2))
+        rd_dats = []
+        for n in range(nbanks):
+            mem = Memory(32, bank_words, init=init[n*bank_words:(n+1)*bank_words])
+            rd  = mem.get_port(has_re=True)
+            wr  = mem.get_port(write_capable=True)
+            self.specials += mem, rd, wr
+            self.comb += [
+                rd.adr.eq(self.rd_port.adr[:bbits]),
+                rd.re.eq(self.rd_port.re),
+                wr.adr.eq(self.wr_port.adr[:bbits]),
+                wr.dat_w.eq(self.wr_port.dat_w),
+                wr.we.eq(self.wr_port.we & (self.wr_port.adr[bbits:] == n)),
+            ]
+            rd_dats.append(rd.dat_r)
+        self.sync += If(self.rd_port.re, rd_bank.eq(self.rd_port.adr[bbits:]))
+        self.comb += self.rd_port.dat_r.eq(Array(rd_dats)[rd_bank])
+
 # USB3 MSC SCSI ------------------------------------------------------------------------------------
 
 class USB3MSCSCSI(LiteXModule):
@@ -113,10 +150,9 @@ class USB3MSCSCSI(LiteXModule):
         if image is not None:
             image = bytes(image[:size]).ljust(size, b"\x00")
             init  = [int.from_bytes(image[4*i:4*i+4], "little") for i in range(words)]
-        mem = Memory(32, words, init=init)
-        rd_port = mem.get_port(has_re=True)
-        wr_port = mem.get_port(write_capable=True)
-        self.specials += mem, rd_port, wr_port
+        self.ram = ram = USB3MSCRAM(words, init=init)
+        rd_port  = ram.rd_port
+        wr_port  = ram.wr_port
 
         # Responses ROM (opcode -> offset/length).
         responses = scsi_responses(blocks)
