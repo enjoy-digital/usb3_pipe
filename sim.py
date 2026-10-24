@@ -23,6 +23,8 @@ from litex.soc.interconnect import stream
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
+from litex.soc.cores.code_8b10b import Encoder, Decoder
+
 from usb3_pipe.serdes import *
 from usb3_pipe.phy    import USB3PHY
 from usb3_core.host_model import USB3HostModel, enumeration_script

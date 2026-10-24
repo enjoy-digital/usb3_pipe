@@ -1,0 +1,12 @@
+# Build/simulation outputs.
+build/
+prog/
+csr.csv
+csr.json
+analyzer.csv
+*.vcd
+
+# Python.
+__pycache__/
+*.egg-info/
+.pytest_cache/

@@ -249,9 +249,12 @@ class TSUnit(LiteXModule):
 
     Detect/generate the Training Sequence Ordered Sets required for a USB3.0 link with simple
     control/status signals.
+
+    The detection is always enabled: TS1 must also be detected in U0 (partner entering Recovery,
+    7.5.6.2), rx_enable is informative (LTSSM states expecting Training Sequences).
     """
     def __init__(self, serdes):
-        self.rx_enable       = Signal() # i (Level)
+        self.rx_enable       = Signal() # i (Level, informative)
         self.rx_ts1          = Signal() # o (Pulse)
         self.rx_ts1_inv      = Signal() # o (Pulse)
         self.rx_ts2          = Signal() # o (Pulse)

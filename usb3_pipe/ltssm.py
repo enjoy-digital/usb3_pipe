@@ -552,7 +552,7 @@ class USB3LTSSM(LiteXModule):
                 NextState("Recovery.Active")
             # Real Recovery triggers (7.5.6.2): TS1 detect (trigger 2), tU0RecoveryTimeout (4),
             # directed (3).
-            ).Elif(self.ts_rx_ts1, # FIXME: trigger 2 of 7.5.6.2 (legacy bring-up trigger).
+            ).Elif(self.ts_rx_ts1, # TS1 received in U0: partner in Recovery (7.5.6.2, trigger 2).
                 NextValue(self.recovery, 1),
                 NextValue(rx_ts1_seen,     0),
                 NextValue(rx_ts1_inv_seen, 0),
@@ -1077,18 +1077,8 @@ class USB3LTSSM(LiteXModule):
             )
         )
 
-        # Exit to Compliance (legacy bring-up state, now unreachable: kept for compatibility) -------
-        fsm.act("Polling.ExitToCompliance", # 20.
-            *timers_off,
-            self.lfps_tx_idle.eq(1),
-            self.exit_to_compliance.eq(1),
-            If(self.lfps_rx_polling,
-                NextState("Polling.Entry")
-            ),
-        )
-
         # Exit to RxDetect (sandbox: transient, instant re-train, design section 4) ----------------------
-        fsm.act("Polling.ExitToRxDetect", # 21.
+        fsm.act("Polling.ExitToRxDetect", # 20.
             *timers_off,
             self.lfps_tx_idle.eq(1),
             self.exit_to_rx_detect.eq(1),
@@ -1104,7 +1094,7 @@ class USB3LTSSM(LiteXModule):
         # directed to issue Warm Reset (exit conditions of 7.5.2 to 7.5.12). Appended last to each
         # state: takes priority over the state's own transitions.
         for state in fsm.actions.keys():
-            if state in ["Polling.Entry", "Polling.ExitToCompliance", "Polling.ExitToRxDetect", "WarmReset"]:
+            if state in ["Polling.Entry", "Polling.ExitToRxDetect", "WarmReset"]:
                 continue
             fsm.act(state,
                 If(self.lfps_rx_reset,

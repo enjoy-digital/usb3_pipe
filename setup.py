@@ -14,7 +14,7 @@ if sys.version_info[:3] < (3, 5):
 setup(
     name="usb3_pipe",
     version="0.1.dev0",
-    description="Experiments with USB3.0 PIPE interface and FPGAs",
+    description="USB3.0 SuperSpeed PHY (FPGA transceivers) and USB3 Device Core for LiteX",
     long_description=Path("README.md").read_text(),
     long_description_content_type="text/markdown",
     author="Florent Kermarrec",

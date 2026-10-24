@@ -16,7 +16,7 @@ from pathlib import Path
 from usb3_core.host_model  import *
 from usb3_core.descriptors import bulk_descriptors
 
-from test.test_native_core import check_native_enumeration
+from test.test_core_device import check_core_enumeration
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,7 +37,7 @@ class TestSimHost(unittest.TestCase):
             pm         = "--host-pm" in args))
 
     def check_enumeration(self, sections):
-        check_native_enumeration(self, sections)
+        check_core_enumeration(self, sections)
 
     def test_enumeration(self):
         # SKP Ordered Sets between packets (2 symbols: the framing is shifted in the received words).
