@@ -31,6 +31,9 @@ KIND_OUT               = 2
 KIND_SET_ADDRESS       = 3
 KIND_SET_CONFIGURATION = 4
 KIND_CLEAR_FEATURE     = 5
+KIND_HANDLER           = 6 # Delegated to the user request handler.
+
+EP0_HANDLER_WORDS = 128 # Request handler IN response buffer (512 bytes).
 
 KINDS = {
     "in"                : KIND_IN,
@@ -43,7 +46,19 @@ KINDS = {
 # USB3 Control Endpoint ----------------------------------------------------------------------------
 
 class USB3EndpointControl(USB3Endpoint):
-    def __init__(self, descriptors):
+    """Control Endpoint.
+
+    with_handler: class/vendor requests not in the requests table are delegated to a user request
+    handler (UVC/MSC/CDC controls...):
+    - req_setup (pulse)/req_valid (level, until the next request): request fields (req_type,
+      req_request, req_value, req_index, req_length).
+    - req_stall: the handler stalls the request (to set within a few cycles after req_setup).
+    - req_in   : IN Data stage response (32-bit words, first byte on data[7:0], last/last_be), up to
+                 512 bytes, written by the handler after req_setup (sent when complete).
+    - req_out  : OUT Data stage data (32-bit words, last/last_be), no back-pressure.
+    - req_done : Status stage completed (pulse), for all requests (ex: SET_INTERFACE tracking).
+    """
+    def __init__(self, descriptors, with_handler=False):
         USB3Endpoint.__init__(self, ept=0, direction=0)
         self.rx_dpp_setup = Signal()  # i: Received DPP is a SETUP DP.
         self.dev_addr     = Signal(7) # o: Device Address (SET_ADDRESS).
@@ -52,6 +67,19 @@ class USB3EndpointControl(USB3Endpoint):
         self.clear_halt   = Signal()  # o: CLEAR_FEATURE(ENDPOINT_HALT) (pulse)...
         self.clear_ept    = Signal(4) # o: ...on this endpoint...
         self.clear_dir    = Signal()  # o: ...and direction.
+
+        # Request handler interface.
+        self.req_setup   = Signal()   # o
+        self.req_valid   = Signal()   # o
+        self.req_type    = Signal(8)  # o
+        self.req_request = Signal(8)  # o
+        self.req_value   = Signal(16) # o
+        self.req_index   = Signal(16) # o
+        self.req_length  = Signal(16) # o
+        self.req_stall   = Signal()   # i
+        self.req_done    = Signal()   # o
+        self.req_in      = stream.Endpoint([("data", 32), ("last_be", 4)]) # i
+        self.req_out     = stream.Endpoint([("data", 32), ("last_be", 4)]) # o
 
         # # #
 
@@ -68,7 +96,10 @@ class USB3EndpointControl(USB3Endpoint):
                 length  = len(response)
             entries.append((bmRequestType, bRequest, wValue, offset, length, KINDS[kind]))
         self.rom_data = rom
-        mem     = Memory(32, max(len(rom), 1), init=rom)
+        # ROM (descriptors/constant responses) followed by the request handler response buffer.
+        handler_base = len(rom)
+        mem_depth    = len(rom) + (EP0_HANDLER_WORDS if with_handler else 0)
+        mem     = Memory(32, max(mem_depth, 1), init=rom)
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, rd_port
 
@@ -94,10 +125,10 @@ class USB3EndpointControl(USB3Endpoint):
         # Request matching (first match, registered: the request is decoded when the SETUP lands and
         # used from its Data/Status stages).
         kind   = Signal(3)
-        offset = Signal(max=max(len(rom), 2))
+        offset = Signal(max=max(mem_depth, 2))
         length = Signal(16)
         match_kind   = Signal(3)
-        match_offset = Signal(max=max(len(rom), 2))
+        match_offset = Signal(max=max(mem_depth, 2))
         match_length = Signal(16)
         cases  = None
         for _bmRequestType, _bRequest, _wValue, e_offset, e_length, e_kind in reversed(entries):
@@ -106,7 +137,11 @@ class USB3EndpointControl(USB3Endpoint):
                 match = match & (wValue == _wValue)
             action = [match_kind.eq(e_kind), match_offset.eq(e_offset), match_length.eq(e_length)]
             cases = If(match, *action) if cases is None else If(match, *action).Else(cases)
-        self.comb += [match_kind.eq(KIND_STALL), cases]
+        default = [match_kind.eq(KIND_STALL)]
+        if with_handler:
+            # Class/vendor requests not in the table: request handler.
+            default = [If(bmRequestType[5:7] != 0, match_kind.eq(KIND_HANDLER)).Else(match_kind.eq(KIND_STALL))]
+        self.comb += [*default, cases]
 
         total = Signal(16)
         self.sync += [
@@ -116,7 +151,7 @@ class USB3EndpointControl(USB3Endpoint):
             total.eq(Mux(wLength < match_length, wLength, match_length)),
         ]
         stall = Signal()
-        self.comb += stall.eq(kind == KIND_STALL)
+        self.comb += stall.eq((kind == KIND_STALL) | ((kind == KIND_HANDLER) & self.req_stall))
 
         # Headers ----------------------------------------------------------------------------------
         h = self.hdr
@@ -178,24 +213,101 @@ class USB3EndpointControl(USB3Endpoint):
             self.clear_dir.eq(wIndex[7]),
         ]
 
+        # Request handler ----------------------------------------------------------------------------
+        new_setup = Signal()
+        self.comb += new_setup.eq(self.hdr_strobe & setup_dph & ok)
+        resp_ready = Signal()     # Handler IN response complete.
+        resp_len   = Signal(11)   # Handler IN response length (bytes).
+        resp_words = Signal(max=EP0_HANDLER_WORDS + 1)
+        if with_handler:
+            wr_port = mem.get_port(write_capable=True)
+            self.specials += wr_port
+            setup_d = Signal()
+            self.sync += [
+                setup_d.eq(new_setup), # kind registered one cycle after the SETUP.
+                self.req_setup.eq(setup_d & (kind == KIND_HANDLER)),
+                If(new_setup,
+                    self.req_valid.eq(0),
+                ).Elif(setup_d,
+                    self.req_valid.eq(kind == KIND_HANDLER),
+                ),
+            ]
+            self.comb += [
+                self.req_type.eq(bmRequestType),
+                self.req_request.eq(bRequest),
+                self.req_value.eq(wValue),
+                self.req_index.eq(wIndex),
+                self.req_length.eq(wLength),
+                self.req_in.ready.eq(self.req_valid & ~resp_ready & (resp_words != EP0_HANDLER_WORDS)),
+                wr_port.adr.eq(handler_base + resp_words),
+                wr_port.dat_w.eq(self.req_in.data),
+                wr_port.we.eq(self.req_in.valid & self.req_in.ready),
+            ]
+            self.sync += [
+                If(new_setup,
+                    resp_ready.eq(0),
+                    resp_words.eq(0),
+                ).Elif(self.req_in.valid & self.req_in.ready,
+                    resp_words.eq(resp_words + 1),
+                    If(self.req_in.last,
+                        resp_ready.eq(1),
+                        resp_len.eq(4*resp_words + Mux(self.req_in.last_be != 0,
+                            last_be_to_bytes(self.req_in.last_be), 4)),
+                    )
+                )
+            ]
+            # OUT Data stage: forwarded.
+            self.comb += [
+                self.req_out.valid.eq(self.rx_dpp.valid & ~self.rx_dpp_setup & (kind == KIND_HANDLER)),
+                self.req_out.data.eq(self.rx_dpp.data),
+                self.req_out.last.eq(self.rx_dpp.last),
+                If(self.rx_dpp.last & (self.rx_dpp.bytes != 4),
+                    self.req_out.last_be.eq(bytes_to_last_be(self.rx_dpp.bytes))
+                ),
+            ]
+        self.comb += self.req_done.eq(self.hdr_strobe & status_tp & ~stall)
+
         # Data stage IN ----------------------------------------------------------------------------
+        # IN data available: from the ROM (table responses) or the handler response (once complete).
+        in_total = Signal(16)
+        in_ready = Signal()
+        self.comb += [
+            If(kind == KIND_HANDLER,
+                in_ready.eq(resp_ready),
+                in_total.eq(Mux(wLength < resp_len, wLength, resp_len)),
+            ).Else(
+                in_ready.eq(kind == KIND_IN),
+                in_total.eq(total),
+            )
+        ]
+        in_req       = Signal()  # Host request (ACK TP with NumP) pending...
+        in_req_seq   = Signal(5) # ...for this Sequence Number.
         send_pending = Signal()
         send_seq     = Signal(5)
         send_offset  = Signal(16) # Bytes.
         send_len     = Signal(11)
         req_offset   = Signal(16)
-        self.comb += req_offset.eq(h.tp_seq*EP0_MAX_PACKET)
+        self.comb += req_offset.eq(in_req_seq*EP0_MAX_PACKET)
         self.sync += [
-            If(self.hdr_strobe & setup_dph, send_pending.eq(0)),
-            If(self.hdr_strobe & in_ack & (h.nump != 0) & (kind == KIND_IN) &
-                ((req_offset < total) | ((total == 0) & (h.tp_seq == 0))),
-                send_pending.eq(1),
-                send_seq.eq(h.tp_seq),
-                send_offset.eq(req_offset),
-                If(total - req_offset > EP0_MAX_PACKET,
-                    send_len.eq(EP0_MAX_PACKET)
-                ).Else(
-                    send_len.eq(total - req_offset)
+            If(self.hdr_strobe & setup_dph,
+                in_req.eq(0),
+                send_pending.eq(0),
+            ),
+            If(self.hdr_strobe & in_ack & (h.nump != 0) & ~stall,
+                in_req.eq(1),
+                in_req_seq.eq(h.tp_seq),
+            ),
+            If(in_req & in_ready & ~send_pending,
+                in_req.eq(0),
+                If((req_offset < in_total) | ((in_total == 0) & (in_req_seq == 0)),
+                    send_pending.eq(1),
+                    send_seq.eq(in_req_seq),
+                    send_offset.eq(req_offset),
+                    If(in_total - req_offset > EP0_MAX_PACKET,
+                        send_len.eq(EP0_MAX_PACKET)
+                    ).Else(
+                        send_len.eq(in_total - req_offset)
+                    )
                 )
             )
         ]
@@ -206,7 +318,7 @@ class USB3EndpointControl(USB3Endpoint):
             self.tx_hp.dw1.eq(dph_dw1(seq=send_seq, ept=0, direction=1, length=send_len)),
             self.tx_hp.dpp.eq(1),
             jobs.sink.valid.eq(self.tx_hp.valid & self.tx_hp.ready),
-            jobs.sink.adr.eq(offset + send_offset[2:]),
+            jobs.sink.adr.eq(Mux(kind == KIND_HANDLER, handler_base, offset) + send_offset[2:]),
             jobs.sink.length.eq(send_len),
         ]
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, send_pending.eq(0))
