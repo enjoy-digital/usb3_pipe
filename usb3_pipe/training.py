@@ -86,7 +86,7 @@ class TSChecker(LiteXModule):
         # been received without error: TS1/TS2 share the same first symbols, so a TS1 (or corrupted
         # TS) must not change the reported TS2 config.
         link_config   = Signal(8)
-        link_config_r = Signal(8)
+        link_config_r = Signal(8, reset_less=True)
         self.comb += link_config.eq(self.sink.data[8:16])
         if has_link_config:
             self.sync += [

@@ -53,9 +53,9 @@ class USB3EndpointControl(USB3Endpoint):
     - req_setup (pulse)/req_valid (level, until the next request): request fields (req_type,
       req_request, req_value, req_index, req_length).
     - req_stall: the handler stalls the request (to set within a few cycles after req_setup).
-    - req_in   : IN Data stage response (32-bit words, first byte on data[7:0], last/last_be), up to
+    - req_in   : IN Data stage response (32-bit words, first byte on data[7:0], last/be), up to
                  512 bytes, written by the handler after req_setup (sent when complete).
-    - req_out  : OUT Data stage data (32-bit words, last/last_be), no back-pressure.
+    - req_out  : OUT Data stage data (32-bit words, last/be), no back-pressure.
     - req_done : Status stage completed (pulse), for all requests (ex: SET_INTERFACE tracking).
     """
     def __init__(self, descriptors, with_handler=False):
@@ -78,8 +78,8 @@ class USB3EndpointControl(USB3Endpoint):
         self.req_length  = Signal(16) # o
         self.req_stall   = Signal()   # i
         self.req_done    = Signal()   # o
-        self.req_in      = stream.Endpoint([("data", 32), ("last_be", 4)]) # i
-        self.req_out     = stream.Endpoint([("data", 32), ("last_be", 4)]) # o
+        self.req_in      = stream.Endpoint([("data", 32), ("be", 4)]) # i
+        self.req_out     = stream.Endpoint([("data", 32), ("be", 4)]) # o
 
         # # #
 
@@ -125,8 +125,8 @@ class USB3EndpointControl(USB3Endpoint):
         # Request matching (first match, registered: the request is decoded when the SETUP lands and
         # used from its Data/Status stages).
         kind   = Signal(3)
-        offset = Signal(max=max(mem_depth, 2))
-        length = Signal(16)
+        offset = Signal(max=max(mem_depth, 2), reset_less=True)
+        length = Signal(16, reset_less=True)
         match_kind   = Signal(3)
         match_offset = Signal(max=max(mem_depth, 2))
         match_length = Signal(16)
@@ -143,7 +143,7 @@ class USB3EndpointControl(USB3Endpoint):
             default = [If(bmRequestType[5:7] != 0, match_kind.eq(KIND_HANDLER)).Else(match_kind.eq(KIND_STALL))]
         self.comb += [*default, cases]
 
-        total = Signal(16)
+        total = Signal(16, reset_less=True)
         self.sync += [
             kind.eq(match_kind),
             offset.eq(match_offset),
@@ -216,8 +216,8 @@ class USB3EndpointControl(USB3Endpoint):
         # Request handler ----------------------------------------------------------------------------
         new_setup = Signal()
         self.comb += new_setup.eq(self.hdr_strobe & setup_dph & ok)
-        resp_ready = Signal()     # Handler IN response complete.
-        resp_len   = Signal(11)   # Handler IN response length (bytes).
+        resp_ready = Signal()                    # Handler IN response complete.
+        resp_len   = Signal(11, reset_less=True) # Handler IN response length (bytes).
         resp_words = Signal(max=EP0_HANDLER_WORDS + 1)
         if with_handler:
             wr_port = mem.get_port(write_capable=True)
@@ -251,8 +251,7 @@ class USB3EndpointControl(USB3Endpoint):
                     resp_words.eq(resp_words + 1),
                     If(self.req_in.last,
                         resp_ready.eq(1),
-                        resp_len.eq(4*resp_words + Mux(self.req_in.last_be != 0,
-                            last_be_to_bytes(self.req_in.last_be), 4)),
+                        resp_len.eq(4*resp_words + be_to_bytes(self.req_in.be)),
                     )
                 )
             ]
@@ -261,9 +260,7 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_out.valid.eq(self.rx_dpp.valid & ~self.rx_dpp_setup & (kind == KIND_HANDLER)),
                 self.req_out.data.eq(self.rx_dpp.data),
                 self.req_out.last.eq(self.rx_dpp.last),
-                If(self.rx_dpp.last & (self.rx_dpp.bytes != 4),
-                    self.req_out.last_be.eq(bytes_to_last_be(self.rx_dpp.bytes))
-                ),
+                self.req_out.be.eq(Mux(self.rx_dpp.last, bytes_to_be(self.rx_dpp.bytes), 0b1111)),
             ]
         self.comb += self.req_done.eq(self.hdr_strobe & status_tp & ~stall)
 
@@ -280,12 +277,12 @@ class USB3EndpointControl(USB3Endpoint):
                 in_total.eq(total),
             )
         ]
-        in_req       = Signal()  # Host request (ACK TP with NumP) pending...
-        in_req_seq   = Signal(5) # ...for this Sequence Number.
+        in_req       = Signal()                   # Host request (ACK TP with NumP) pending...
+        in_req_seq   = Signal(5, reset_less=True)  # ...for this Sequence Number.
         send_pending = Signal()
-        send_seq     = Signal(5)
-        send_offset  = Signal(16) # Bytes.
-        send_len     = Signal(11)
+        send_seq     = Signal(5, reset_less=True)
+        send_offset  = Signal(16, reset_less=True) # Bytes.
+        send_len     = Signal(11, reset_less=True)
         req_offset   = Signal(16)
         self.comb += req_offset.eq(in_req_seq*EP0_MAX_PACKET)
         self.sync += [

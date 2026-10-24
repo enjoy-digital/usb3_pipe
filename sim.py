@@ -433,7 +433,7 @@ class USB3PIPESim(SoCMini):
                     descriptors = bulk_descriptors(max_burst=8),
                     endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]))
                 self.add_module(name=f"{name}_usb3_core", module=core)
-                loopback = renamer(stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True))
+                loopback = renamer(stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True))
                 self.add_module(name=f"{name}_loopback", module=loopback)
                 self.comb += [
                     core.endpoints[1].source.connect(loopback.sink),

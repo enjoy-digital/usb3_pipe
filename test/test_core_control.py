@@ -51,7 +51,7 @@ class DUT(LiteXModule):
             ep0.req_in.valid.eq(active),
             ep0.req_in.data.eq(Array(words)[index]),
             ep0.req_in.last.eq(index == len(words) - 1),
-            ep0.req_in.last_be.eq(0b0010), # 34 bytes: 2 bytes in the last word.
+            ep0.req_in.be.eq(Mux(index == len(words) - 1, 0b0011, 0b1111)), # 34 bytes: 2 bytes in the last word.
             ep0.req_out.ready.eq(1),
         ]
 
@@ -67,8 +67,8 @@ class TestCoreControl(unittest.TestCase):
             while True:
                 if (yield dut.core.ep0.req_out.valid):
                     data    = (yield dut.core.ep0.req_out.data)
-                    last_be = (yield dut.core.ep0.req_out.last_be)
-                    n       = {0b0001: 1, 0b0010: 2, 0b0100: 3}.get(last_be, 4)
+                    be      = (yield dut.core.ep0.req_out.be)
+                    n       = {0b0001: 1, 0b0011: 2, 0b0111: 3, 0b1111: 4}[be]
                     out.extend(list(data.to_bytes(4, "little"))[:n])
                 yield
         def wrapper():

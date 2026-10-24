@@ -26,6 +26,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_core.common      import bytes_to_be
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import *
@@ -129,7 +130,7 @@ class USB3MSCSCSI(LiteXModule):
         rom = Array(Constant(w, 32) for w in rom)
 
         # CBW.
-        cbw   = Array(Signal(32) for _ in range(8))
+        cbw   = Array(Signal(32, reset_less=True) for _ in range(8))
         count = Signal(4)
         sig   = cbw[0]
         tag   = cbw[1]
@@ -151,20 +152,20 @@ class USB3MSCSCSI(LiteXModule):
         sense_asc = Signal(8)
 
         # Status.
-        residue = Signal(32)
-        status  = Signal(8)
+        residue = Signal(32, reset_less=True)
+        status  = Signal(8, reset_less=True)
 
         # Data phase.
-        adr       = Signal(max=max(words, len(rom), 2))
-        remaining = Signal(32) # Bytes to send.
-        out       = Signal(32) # Bytes to receive/discard.
+        adr       = Signal(max=max(words, len(rom), 2), reset_less=True)
+        remaining = Signal(32, reset_less=True) # Bytes to send.
+        out       = Signal(32, reset_less=True) # Bytes to receive/discard.
 
         # RAM reader (1 cycle latency, prefetch FIFO).
-        self.fifo = fifo = stream.SyncFIFO([("data", 32), ("last_be", 4)], 8)
+        self.fifo = fifo = stream.SyncFIFO([("data", 32), ("be", 4)], 8)
         rd_issue = Signal()
         rd_valid = Signal()
-        rd_last  = Signal()
-        rd_rem   = Signal(32)
+        rd_last  = Signal(reset_less=True)
+        rd_rem   = Signal(32, reset_less=True)
         self.comb += [
             rd_port.adr.eq(adr),
             rd_port.re.eq(rd_issue),
@@ -177,6 +178,7 @@ class USB3MSCSCSI(LiteXModule):
             fifo.sink.valid.eq(rd_valid),
             fifo.sink.data.eq(rd_port.dat_r),
             fifo.sink.last.eq(rd_last),
+            fifo.sink.be.eq(0b1111),
         ]
 
         # Sense response: fixed format.
@@ -188,7 +190,7 @@ class USB3MSCSCSI(LiteXModule):
             Cat(sense_asc, C(0, 8), C(0, 16)),
             C(0, 32),
         ])
-        sense_word = Signal(3)
+        sense_word = Signal(3, reset_less=True)
 
         self.fsm = fsm = FSM(reset_state="CBW")
         fsm.act("CBW",
@@ -276,13 +278,11 @@ class USB3MSCSCSI(LiteXModule):
             ),
             Case(op, decode_cases)
         )
-        def last_be(n):
-            return Mux(n >= 4, 0, Mux(n == 1, 0b0001, Mux(n == 2, 0b0010, 0b0100)))
         fsm.act("ROM",
             bulk_in.sink.valid.eq(remaining != 0),
             bulk_in.sink.data.eq(rom[adr]),
             bulk_in.sink.last.eq(remaining <= 4),
-            bulk_in.sink.last_be.eq(last_be(remaining)),
+            bulk_in.sink.be.eq(Mux(remaining <= 4, bytes_to_be(remaining), 0b1111)),
             If(remaining == 0,
                 NextState("CSW")
             ).Elif(bulk_in.sink.ready,
@@ -294,7 +294,7 @@ class USB3MSCSCSI(LiteXModule):
             bulk_in.sink.valid.eq(remaining != 0),
             bulk_in.sink.data.eq(sense[sense_word]),
             bulk_in.sink.last.eq(remaining <= 4),
-            bulk_in.sink.last_be.eq(last_be(remaining)),
+            bulk_in.sink.be.eq(Mux(remaining <= 4, bytes_to_be(remaining), 0b1111)),
             If(remaining == 0,
                 NextValue(sense_key, 0),
                 NextValue(sense_asc, 0),
@@ -308,7 +308,7 @@ class USB3MSCSCSI(LiteXModule):
             bulk_in.sink.valid.eq(remaining != 0),
             bulk_in.sink.data.eq(0),
             bulk_in.sink.last.eq(remaining <= 4),
-            bulk_in.sink.last_be.eq(last_be(remaining)),
+            bulk_in.sink.be.eq(Mux(remaining <= 4, bytes_to_be(remaining), 0b1111)),
             If(remaining == 0,
                 NextState("CSW")
             ).Elif(bulk_in.sink.ready,
@@ -351,7 +351,7 @@ class USB3MSCSCSI(LiteXModule):
             bulk_in.sink.valid.eq(1),
             bulk_in.sink.data.eq(csw[csw_word]),
             bulk_in.sink.last.eq(csw_word == 3),
-            bulk_in.sink.last_be.eq(0b0001), # 13 bytes.
+            bulk_in.sink.be.eq(Mux(csw_word == 3, 0b0001, 0b1111)), # 13 bytes.
             If(bulk_in.sink.ready,
                 NextValue(csw_word, csw_word + 1),
                 If(csw_word == 3,

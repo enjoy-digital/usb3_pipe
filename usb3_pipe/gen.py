@@ -44,7 +44,6 @@ from usb3_pipe.phy    import USB3PHY, USB3PHY_STATUS, USB3PHY_LINK_CTRL
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors
-from usb3_core.common      import last_be_to_keep
 
 # Configuration ------------------------------------------------------------------------------------
 
@@ -373,24 +372,24 @@ class USB3PIPECore(SoCMini):
         ])
         bulk_in, bulk_out = usb_core.endpoints
 
-        # Bulk IN (tkeep: contiguous valid bytes -> last_be: last valid byte).
+        # Bulk IN (tkeep considered on the last word only, full words otherwise).
         in_tkeep = platform.request("bulk_in_tkeep")
         self.comb += [
             bulk_in.sink.valid.eq(platform.request("bulk_in_tvalid")),
             platform.request("bulk_in_tready").eq(bulk_in.sink.ready),
             bulk_in.sink.last.eq(platform.request("bulk_in_tlast")),
             bulk_in.sink.data.eq(platform.request("bulk_in_tdata")),
-            bulk_in.sink.last_be.eq(in_tkeep & ~(in_tkeep >> 1)),
+            bulk_in.sink.be.eq(Mux(bulk_in.sink.last, in_tkeep, 0b1111)),
         ]
 
-        # Bulk OUT (last_be -> tkeep).
+        # Bulk OUT.
         out_tkeep = platform.request("bulk_out_tkeep")
         self.comb += [
             platform.request("bulk_out_tvalid").eq(bulk_out.source.valid),
             bulk_out.source.ready.eq(platform.request("bulk_out_tready")),
             platform.request("bulk_out_tlast").eq(bulk_out.source.last),
             platform.request("bulk_out_tdata").eq(bulk_out.source.data),
-            out_tkeep.eq(last_be_to_keep(bulk_out.source.last_be)),
+            out_tkeep.eq(bulk_out.source.be),
             platform.request("usb_ready").eq(usb_core.ready),
             platform.request("usb_configured").eq(usb_core.configured),
         ]

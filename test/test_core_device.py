@@ -31,7 +31,7 @@ class DUT(LiteXModule):
             descriptors = bulk_descriptors(max_burst=max_burst),
             endpoints   = [USB3BulkIN(ept=1, max_burst=max_burst), USB3BulkOUT(ept=2, max_burst=max_burst)])
         # Bulk loopback: EP2 OUT -> EP1 IN.
-        self.loopback = loopback = stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True)
+        self.loopback = loopback = stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True)
         self.comb += [
             core.endpoints[1].source.connect(loopback.sink),
             loopback.source.connect(core.endpoints[0].sink),

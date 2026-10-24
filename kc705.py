@@ -128,7 +128,7 @@ class USB3SoC(SoCMini):
             descriptors = bulk_descriptors(max_burst=8),
             endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)])
         usb3_core.add_csr()
-        self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("last_be", 4)], 2*256, buffered=True)
+        self.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True)
         self.comb += [
             usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
             usb3_loopback.source.connect(usb3_core.endpoints[0].sink),

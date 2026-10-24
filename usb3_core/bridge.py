@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 byte streams helpers: 32-bit endpoint words (last/last_be) to/from bytes (CDC-ACM...)."""
+"""USB3 byte streams helpers: 32-bit endpoint words (last/be) to/from bytes (CDC-ACM...)."""
 
 from migen import *
 from migen.genlib.misc import WaitTimer
@@ -13,14 +13,14 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_core.common import last_be_to_bytes
+from usb3_core.common import be_to_bytes
 
 # Byte Unpacker ------------------------------------------------------------------------------------
 
 class USB3ByteUnpacker(LiteXModule):
-    """32-bit words (last_be on the last word of a packet) to bytes."""
+    """32-bit words (be: valid bytes) to bytes."""
     def __init__(self):
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("be", 4)])
         self.source = source = stream.Endpoint([("data", 8)])
 
         # # #
@@ -28,11 +28,7 @@ class USB3ByteUnpacker(LiteXModule):
         index  = Signal(2)
         nbytes = Signal(3)
         self.comb += [
-            If(sink.last & (sink.last_be != 0),
-                nbytes.eq(last_be_to_bytes(sink.last_be))
-            ).Else(
-                nbytes.eq(4)
-            ),
+            nbytes.eq(be_to_bytes(sink.be)),
             source.valid.eq(sink.valid),
             Case(index, {i: source.data.eq(sink.data[8*i:8*(i+1)]) for i in range(4)}),
             sink.ready.eq(source.ready & (index == (nbytes - 1))),
@@ -47,16 +43,16 @@ class USB3ByteUnpacker(LiteXModule):
 class USB3BytePacker(LiteXModule):
     """Bytes to 32-bit words. A complete word is held until the next byte (packet continues) or
     idle_cycles without bytes (packet ended: last), partial words are sent after idle_cycles (last
-    with last_be); packets are also ended at max_bytes."""
+    with be); packets are also ended at max_bytes."""
     def __init__(self, max_bytes=1024, idle_cycles=64):
         self.sink   = sink   = stream.Endpoint([("data", 8)])
-        self.source = source = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
 
         # # #
 
-        acc       = Signal(32)
+        acc       = Signal(32, reset_less=True)
         idx       = Signal(2)
-        out       = Signal(32)
+        out       = Signal(32, reset_less=True)
         pending   = Signal() # Complete word held.
         pkt_words = Signal(max=max_bytes//4)
         at_max    = Signal()
@@ -72,11 +68,11 @@ class USB3BytePacker(LiteXModule):
             If(pending,
                 source.data.eq(out),
                 source.last.eq(~sink.valid | at_max),
-                If(source.last, source.last_be.eq(0b1000)),
+                source.be.eq(0b1111),
             ).Else(
                 source.data.eq(acc),
                 source.last.eq(1),
-                Case(idx, {1: source.last_be.eq(0b0001), 2: source.last_be.eq(0b0010), 3: source.last_be.eq(0b0100)}),
+                Case(idx, {1: source.be.eq(0b0001), 2: source.be.eq(0b0011), 3: source.be.eq(0b0111)}),
             ),
             # No byte accepted while a partial word is sent (its index is reset).
             sink.ready.eq((~pending | (source.valid & source.ready)) & ~send_part),

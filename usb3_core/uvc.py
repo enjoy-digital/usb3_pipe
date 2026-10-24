@@ -187,10 +187,10 @@ class USB3UVCControl(LiteXModule):
         ]
 
         # IN responses.
-        mode   = Signal(max=max(n, 2)) # Probe returned.
-        count  = Signal(4)
+        mode   = Signal(max=max(n, 2))      # Probe returned.
+        count  = Signal(4, reset_less=True)
         active = Signal()
-        kind   = Signal(2)             # 0: probe, 1: GET_LEN, 2: GET_INFO.
+        kind   = Signal(2, reset_less=True) # 0: probe, 1: GET_LEN, 2: GET_INFO.
         self.comb += Case(ep0.req_request, {
             UVC_GET_CUR : mode.eq(Mux(selector == VS_COMMIT_CONTROL, commit_mode, probe_mode)),
             UVC_GET_MAX : mode.eq(n - 1),
@@ -212,26 +212,26 @@ class USB3UVCControl(LiteXModule):
                 0: [
                     ep0.req_in.data.eq(probes[mode*9 + count]),
                     ep0.req_in.last.eq(count == 8),
-                    ep0.req_in.last_be.eq(0b0010), # 34 bytes.
+                    ep0.req_in.be.eq(Mux(count == 8, 0b0011, 0b1111)), # 34 bytes.
                 ],
                 1: [
                     ep0.req_in.data.eq(UVC_PROBE_SIZE),
                     ep0.req_in.last.eq(1),
-                    ep0.req_in.last_be.eq(0b0010), # 2 bytes.
+                    ep0.req_in.be.eq(0b0011), # 2 bytes.
                 ],
                 2: [
                     ep0.req_in.data.eq(0x03),
                     ep0.req_in.last.eq(1),
-                    ep0.req_in.last_be.eq(0b0001), # 1 byte.
+                    ep0.req_in.be.eq(0b0001), # 1 byte.
                 ],
             }),
         ]
 
         # SET_CUR: bFrameIndex (byte 3)/dwFrameInterval (bytes 4-7) of the OUT data, applied at the
         # Status stage.
-        word         = Signal(4)
-        set_frame    = Signal(8)
-        set_interval = Signal(32)
+        word         = Signal(4, reset_less=True)
+        set_frame    = Signal(8, reset_less=True)
+        set_interval = Signal(32, reset_less=True)
         self.comb += ep0.req_out.ready.eq(1)
         self.sync += [
             If(ep0.req_setup, word.eq(0)),
@@ -277,7 +277,7 @@ class USB3UVCStream(LiteXModule):
         self.start  = Signal()                       # i
         self.stop   = Signal()                       # i
         self.mode   = Signal(max=max(len(modes), 2)) # i
-        self.source = source = stream.Endpoint([("data", 32), ("last_be", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
         self.frames = Signal(32)                     # o: Frames sent.
 
         # # #
@@ -290,11 +290,11 @@ class USB3UVCStream(LiteXModule):
         p_bar      = param([w//8 for w, h, f in modes])
         p_band     = param([h - h//8 for w, h, f in modes])
         p_interval = param([clk_freq//f for w, h, f in modes])
-        width    = Signal(16)
-        height   = Signal(16)
-        bar_w    = Signal(16)
-        band_y   = Signal(16)
-        interval = Signal(32)
+        width    = Signal(16, reset_less=True)
+        height   = Signal(16, reset_less=True)
+        bar_w    = Signal(16, reset_less=True)
+        band_y   = Signal(16, reset_less=True)
+        interval = Signal(32, reset_less=True)
 
         payload_words = (payload_size - UVC_HEADER_SIZE)//4
 
@@ -309,16 +309,16 @@ class USB3UVCStream(LiteXModule):
         self.sync += If(~tick, timer.eq(timer - 1))
 
         # Pattern state.
-        x       = Signal(16) # First pixel of the word.
-        y       = Signal(16)
-        bar     = Signal(3)
-        bar_x   = Signal(16) # Position in the bar.
+        x       = Signal(16, reset_less=True) # First pixel of the word.
+        y       = Signal(16, reset_less=True)
+        bar     = Signal(3, reset_less=True)
+        bar_x   = Signal(16, reset_less=True) # Position in the bar.
         marker  = Signal(16)
         fid     = Signal()
-        pts     = Signal(32)
-        p_words = Signal(32) # Data words left in the payload.
-        f_words = Signal(32) # Data words left in the frame.
-        hdr     = Signal(2)
+        pts     = Signal(32, reset_less=True)
+        p_words = Signal(32, reset_less=True) # Data words left in the payload.
+        f_words = Signal(32, reset_less=True) # Data words left in the frame.
+        hdr     = Signal(2, reset_less=True)
 
         # Pixels (word: Y0 U Y1 V).
         bars   = Array(Constant(yy | (u << 8) | (v << 16), 24) for yy, u, v in UVC_BARS)
@@ -382,6 +382,7 @@ class USB3UVCStream(LiteXModule):
         )
         fsm.act("HEADER",
             source.valid.eq(1),
+            source.be.eq(0b1111),
             Case(hdr, {
                 0: source.data.eq(Cat(C(UVC_HEADER_SIZE, 8), info, pts[0:16])),
                 1: source.data.eq(Cat(pts[16:32], stc[0:16])),
@@ -397,6 +398,7 @@ class USB3UVCStream(LiteXModule):
         )
         fsm.act("DATA",
             source.valid.eq(1),
+            source.be.eq(0b1111),
             source.data.eq(Cat(y0, u, y1, v)),
             source.last.eq((p_words == 1) | (f_words == 1)),
             If(source.ready,

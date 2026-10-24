@@ -31,19 +31,16 @@ def framing_word(k):
 def seq_add(seq, n, width=3):
     return (seq + n) & ((1 << width) - 1)
 
-# last_be (LiteX convention: one-hot last valid byte of the last word of a packet, 0: full word).
+# Byte enables (be): valid bytes of each word, contiguous from data[0:8], full (0b1111)
+# except on the last word of a packet.
 
-def last_be_to_bytes(last_be):
-    """last_be to valid bytes of the word (1-4)."""
-    return Mux(last_be[0], 1, Mux(last_be[1], 2, Mux(last_be[2], 3, 4)))
+def be_to_bytes(be):
+    """be to valid bytes of the word (1-4)."""
+    return Mux(be[3], 4, Mux(be[2], 3, Mux(be[1], 2, 1)))
 
-def last_be_to_keep(last_be):
-    """last_be to AXI-Stream tkeep (contiguous valid bytes)."""
-    return Mux(last_be[0], 0b0001, Mux(last_be[1], 0b0011, Mux(last_be[2], 0b0111, 0b1111)))
-
-def bytes_to_last_be(nbytes):
-    """Valid bytes of the last word (1-4, 2 LSBs used: 0 = 4) to last_be."""
-    return Mux(nbytes[0:2] == 1, 0b0001, Mux(nbytes[0:2] == 2, 0b0010, Mux(nbytes[0:2] == 3, 0b0100, 0b1000)))
+def bytes_to_be(nbytes):
+    """Valid bytes of the word (1-4, 2 LSBs used: 0 = 4) to be."""
+    return Mux(nbytes[0:2] == 1, 0b0001, Mux(nbytes[0:2] == 2, 0b0011, Mux(nbytes[0:2] == 3, 0b0111, 0b1111)))
 
 # Symbols (6.3.5) ----------------------------------------------------------------------------------
 
