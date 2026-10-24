@@ -52,8 +52,8 @@ class USB3CoreTrace(LiteXModule):
         ]
         # RX and TX on the same cycle: TX recorded on the next one.
         tx_pending = Signal()
-        tx_dw0     = Signal(32)
-        tx_dw1     = Signal(32)
+        tx_dw0     = Signal(32, reset_less=True)
+        tx_dw1     = Signal(32, reset_less=True)
         record     = Signal()
         entry      = Signal(64)
         self.comb += [

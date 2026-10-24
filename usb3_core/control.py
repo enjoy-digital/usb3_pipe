@@ -125,8 +125,8 @@ class USB3EndpointControl(USB3Endpoint):
         # Request matching (first match, registered: the request is decoded when the SETUP lands and
         # used from its Data/Status stages).
         kind   = Signal(3)
-        offset = Signal(max=max(mem_depth, 2))
-        length = Signal(16)
+        offset = Signal(max=max(mem_depth, 2), reset_less=True)
+        length = Signal(16, reset_less=True)
         match_kind   = Signal(3)
         match_offset = Signal(max=max(mem_depth, 2))
         match_length = Signal(16)
@@ -143,7 +143,7 @@ class USB3EndpointControl(USB3Endpoint):
             default = [If(bmRequestType[5:7] != 0, match_kind.eq(KIND_HANDLER)).Else(match_kind.eq(KIND_STALL))]
         self.comb += [*default, cases]
 
-        total = Signal(16)
+        total = Signal(16, reset_less=True)
         self.sync += [
             kind.eq(match_kind),
             offset.eq(match_offset),
@@ -216,8 +216,8 @@ class USB3EndpointControl(USB3Endpoint):
         # Request handler ----------------------------------------------------------------------------
         new_setup = Signal()
         self.comb += new_setup.eq(self.hdr_strobe & setup_dph & ok)
-        resp_ready = Signal()     # Handler IN response complete.
-        resp_len   = Signal(11)   # Handler IN response length (bytes).
+        resp_ready = Signal()                    # Handler IN response complete.
+        resp_len   = Signal(11, reset_less=True) # Handler IN response length (bytes).
         resp_words = Signal(max=EP0_HANDLER_WORDS + 1)
         if with_handler:
             wr_port = mem.get_port(write_capable=True)
@@ -277,12 +277,12 @@ class USB3EndpointControl(USB3Endpoint):
                 in_total.eq(total),
             )
         ]
-        in_req       = Signal()  # Host request (ACK TP with NumP) pending...
-        in_req_seq   = Signal(5) # ...for this Sequence Number.
+        in_req       = Signal()                   # Host request (ACK TP with NumP) pending...
+        in_req_seq   = Signal(5, reset_less=True)  # ...for this Sequence Number.
         send_pending = Signal()
-        send_seq     = Signal(5)
-        send_offset  = Signal(16) # Bytes.
-        send_len     = Signal(11)
+        send_seq     = Signal(5, reset_less=True)
+        send_offset  = Signal(16, reset_less=True) # Bytes.
+        send_len     = Signal(11, reset_less=True)
         req_offset   = Signal(16)
         self.comb += req_offset.eq(in_req_seq*EP0_MAX_PACKET)
         self.sync += [

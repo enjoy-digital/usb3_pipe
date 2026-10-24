@@ -50,9 +50,9 @@ class USB3BytePacker(LiteXModule):
 
         # # #
 
-        acc       = Signal(32)
+        acc       = Signal(32, reset_less=True)
         idx       = Signal(2)
-        out       = Signal(32)
+        out       = Signal(32, reset_less=True)
         pending   = Signal() # Complete word held.
         pkt_words = Signal(max=max_bytes//4)
         at_max    = Signal()

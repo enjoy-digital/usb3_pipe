@@ -130,7 +130,7 @@ class USB3MSCSCSI(LiteXModule):
         rom = Array(Constant(w, 32) for w in rom)
 
         # CBW.
-        cbw   = Array(Signal(32) for _ in range(8))
+        cbw   = Array(Signal(32, reset_less=True) for _ in range(8))
         count = Signal(4)
         sig   = cbw[0]
         tag   = cbw[1]
@@ -152,20 +152,20 @@ class USB3MSCSCSI(LiteXModule):
         sense_asc = Signal(8)
 
         # Status.
-        residue = Signal(32)
-        status  = Signal(8)
+        residue = Signal(32, reset_less=True)
+        status  = Signal(8, reset_less=True)
 
         # Data phase.
-        adr       = Signal(max=max(words, len(rom), 2))
-        remaining = Signal(32) # Bytes to send.
-        out       = Signal(32) # Bytes to receive/discard.
+        adr       = Signal(max=max(words, len(rom), 2), reset_less=True)
+        remaining = Signal(32, reset_less=True) # Bytes to send.
+        out       = Signal(32, reset_less=True) # Bytes to receive/discard.
 
         # RAM reader (1 cycle latency, prefetch FIFO).
         self.fifo = fifo = stream.SyncFIFO([("data", 32), ("be", 4)], 8)
         rd_issue = Signal()
         rd_valid = Signal()
-        rd_last  = Signal()
-        rd_rem   = Signal(32)
+        rd_last  = Signal(reset_less=True)
+        rd_rem   = Signal(32, reset_less=True)
         self.comb += [
             rd_port.adr.eq(adr),
             rd_port.re.eq(rd_issue),
@@ -190,7 +190,7 @@ class USB3MSCSCSI(LiteXModule):
             Cat(sense_asc, C(0, 8), C(0, 16)),
             C(0, 32),
         ])
-        sense_word = Signal(3)
+        sense_word = Signal(3, reset_less=True)
 
         self.fsm = fsm = FSM(reset_state="CBW")
         fsm.act("CBW",

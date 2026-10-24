@@ -187,10 +187,10 @@ class USB3UVCControl(LiteXModule):
         ]
 
         # IN responses.
-        mode   = Signal(max=max(n, 2)) # Probe returned.
-        count  = Signal(4)
+        mode   = Signal(max=max(n, 2))      # Probe returned.
+        count  = Signal(4, reset_less=True)
         active = Signal()
-        kind   = Signal(2)             # 0: probe, 1: GET_LEN, 2: GET_INFO.
+        kind   = Signal(2, reset_less=True) # 0: probe, 1: GET_LEN, 2: GET_INFO.
         self.comb += Case(ep0.req_request, {
             UVC_GET_CUR : mode.eq(Mux(selector == VS_COMMIT_CONTROL, commit_mode, probe_mode)),
             UVC_GET_MAX : mode.eq(n - 1),
@@ -229,9 +229,9 @@ class USB3UVCControl(LiteXModule):
 
         # SET_CUR: bFrameIndex (byte 3)/dwFrameInterval (bytes 4-7) of the OUT data, applied at the
         # Status stage.
-        word         = Signal(4)
-        set_frame    = Signal(8)
-        set_interval = Signal(32)
+        word         = Signal(4, reset_less=True)
+        set_frame    = Signal(8, reset_less=True)
+        set_interval = Signal(32, reset_less=True)
         self.comb += ep0.req_out.ready.eq(1)
         self.sync += [
             If(ep0.req_setup, word.eq(0)),
@@ -290,11 +290,11 @@ class USB3UVCStream(LiteXModule):
         p_bar      = param([w//8 for w, h, f in modes])
         p_band     = param([h - h//8 for w, h, f in modes])
         p_interval = param([clk_freq//f for w, h, f in modes])
-        width    = Signal(16)
-        height   = Signal(16)
-        bar_w    = Signal(16)
-        band_y   = Signal(16)
-        interval = Signal(32)
+        width    = Signal(16, reset_less=True)
+        height   = Signal(16, reset_less=True)
+        bar_w    = Signal(16, reset_less=True)
+        band_y   = Signal(16, reset_less=True)
+        interval = Signal(32, reset_less=True)
 
         payload_words = (payload_size - UVC_HEADER_SIZE)//4
 
@@ -309,16 +309,16 @@ class USB3UVCStream(LiteXModule):
         self.sync += If(~tick, timer.eq(timer - 1))
 
         # Pattern state.
-        x       = Signal(16) # First pixel of the word.
-        y       = Signal(16)
-        bar     = Signal(3)
-        bar_x   = Signal(16) # Position in the bar.
+        x       = Signal(16, reset_less=True) # First pixel of the word.
+        y       = Signal(16, reset_less=True)
+        bar     = Signal(3, reset_less=True)
+        bar_x   = Signal(16, reset_less=True) # Position in the bar.
         marker  = Signal(16)
         fid     = Signal()
-        pts     = Signal(32)
-        p_words = Signal(32) # Data words left in the payload.
-        f_words = Signal(32) # Data words left in the frame.
-        hdr     = Signal(2)
+        pts     = Signal(32, reset_less=True)
+        p_words = Signal(32, reset_less=True) # Data words left in the payload.
+        f_words = Signal(32, reset_less=True) # Data words left in the frame.
+        hdr     = Signal(2, reset_less=True)
 
         # Pixels (word: Y0 U Y1 V).
         bars   = Array(Constant(yy | (u << 8) | (v << 16), 24) for yy, u, v in UVC_BARS)

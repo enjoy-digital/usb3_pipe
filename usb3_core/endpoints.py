@@ -67,13 +67,13 @@ class DPPReader(LiteXModule):
         # # #
 
         self.prefetch = prefetch = stream.SyncFIFO(dpp_layout(), depth)
-        adr    = Signal(len(rd_port.adr))
-        rem    = Signal(11)
+        adr    = Signal(len(rd_port.adr), reset_less=True)
+        rem    = Signal(11, reset_less=True)
         active = Signal()
         issue  = Signal()
         valid  = Signal()
-        last   = Signal()
-        nbytes = Signal(3)
+        last   = Signal(reset_less=True)
+        nbytes = Signal(3, reset_less=True)
         zlp    = Signal()
         self.comb += [
             sink.ready.eq(~active),
@@ -167,7 +167,7 @@ class USB3BulkIN(USB3Endpoint):
         wr_port = mem.get_port(write_capable=True)
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, wr_port, rd_port
-        lengths = Array(Signal(11) for _ in range(n))
+        lengths = Array(Signal(11, reset_less=True) for _ in range(n))
 
         wr_ptr  = Signal(pbits) # Next slot written by the user.
         ack_ptr = Signal(pbits) # Oldest slot not acknowledged by the host.
@@ -212,8 +212,8 @@ class USB3BulkIN(USB3Endpoint):
         ]
 
         # Host requests (ACK TP) -------------------------------------------------------------------
-        win_seq   = Signal(5) # Host window: Sequence Number of the next packet requested...
-        win_nump  = Signal(5) # ...and number of packets requested from win_seq.
+        win_seq   = Signal(5, reset_less=True) # Host window: Sequence Number of the next packet requested...
+        win_nump  = Signal(5)                  # ...and number of packets requested from win_seq.
         h = self.hdr
         ack = Signal()
         self.comb += ack.eq(self.hdr_strobe & self.tp_addressed(TP_SUB_ACK))
@@ -389,8 +389,8 @@ class USB3BulkOUT(USB3Endpoint):
         wr_port = mem.get_port(write_capable=True)
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, wr_port, rd_port
-        lengths = Array(Signal(11) for _ in range(n))
-        valids  = Array(Signal()   for _ in range(n))
+        lengths = Array(Signal(11, reset_less=True) for _ in range(n))
+        valids  = Array(Signal(reset_less=True)     for _ in range(n))
 
         land_ptr   = Signal(pbits) # Next slot to land a DPP.
         decide_ptr = Signal(pbits) # Next landed slot to accept/discard (Protocol Layer, in order).
@@ -408,8 +408,8 @@ class USB3BulkOUT(USB3Endpoint):
         # Landing (DPPs written as received) -------------------------------------------------------
         land_count = Signal(9)
         land_bytes = Signal(11)
-        land_en    = Signal() # Slot available at the DPP start (latched).
-        land_data  = Signal() # DPP data received.
+        land_en    = Signal(reset_less=True) # Slot available at the DPP start (latched).
+        land_data  = Signal()                # DPP data received.
         landing    = Signal()
         self.comb += [
             If(land_data,
@@ -491,13 +491,13 @@ class USB3BulkOUT(USB3Endpoint):
 
         # Reader (user) ----------------------------------------------------------------------------
         self.fifo = fifo = stream.SyncFIFO([("data", 32), ("be", 4)], 16)
-        rd_count  = Signal(9)
+        rd_count  = Signal(9, reset_less=True)
         rd_len    = Signal(11)
         rd_words  = Signal(9)
         rd_active = Signal()
         rd_valid  = Signal()
-        rd_last   = Signal()
-        rd_be     = Signal(4)
+        rd_last   = Signal(reset_less=True)
+        rd_be     = Signal(4, reset_less=True)
         rd_issue  = Signal()
         rd_slot   = Signal(pbits - 1)
         self.comb += [

@@ -88,8 +88,8 @@ class USB3LinkLayer(LiteXModule):
         # RX Words ---------------------------------------------------------------------------------
         # Registered (timings: the PHY RX datapath output is combinatorial).
         rx_valid = Signal()
-        rx_data  = Signal(32)
-        rx_ctrl  = Signal(4)
+        rx_data  = Signal(32, reset_less=True)
+        rx_ctrl  = Signal(4, reset_less=True)
         self.comb += phy.source.ready.eq(1)
         self.sync += [
             rx_valid.eq(phy.source.valid & u0),
@@ -106,10 +106,10 @@ class USB3LinkLayer(LiteXModule):
         ]
 
         # RX Header Packets checks -----------------------------------------------------------------
-        hp_w      = [Signal(32) for _ in range(4)] # DW0, DW1, DW2, CRC-16/Link Control Word.
+        hp_w      = [Signal(32, reset_less=True) for _ in range(4)] # DW0, DW1, DW2, CRC-16/Link Control Word.
         hp_last   = Signal() # Last Header Packet word received.
         hp_check  = Signal() # Header Packet received, checked (pulse).
-        hp_ok     = Signal()
+        hp_ok     = Signal(reset_less=True)
         hp_seq    = Signal(3)
         hp_dl     = Signal()
         hp_is_dp  = Signal()
@@ -133,7 +133,7 @@ class USB3LinkLayer(LiteXModule):
         # RX Link Commands checks ------------------------------------------------------------------
         lc_valid = Signal()   # Link Command received (pulse, before registration).
         lc_check = Signal()   # Link Command received (pulse, registered: timings).
-        lc_info  = Signal(11)
+        lc_info  = Signal(11, reset_less=True)
         self.crc5_lc0 = crc5_lc0 = CRC5()
         self.crc5_lc1 = crc5_lc1 = CRC5()
         lc_ok0 = Signal()
@@ -152,9 +152,9 @@ class USB3LinkLayer(LiteXModule):
         # RX DPP expectation (from the last accepted DPH) ------------------------------------------
         hp_accept    = Signal() # Header Packet accepted (with hp_check).
         dpp_expect   = Signal()
-        dpp_length   = Signal(16)
-        dpp_ept      = Signal(4)
-        dpp_setup    = Signal()
+        dpp_length   = Signal(16, reset_less=True)
+        dpp_ept      = Signal(4, reset_less=True)
+        dpp_setup    = Signal(reset_less=True)
         dpp_new      = Signal() # Accepted DPH (with DPP) this cycle.
         expect_now   = Signal()
         length_now   = Signal(16)
@@ -175,11 +175,11 @@ class USB3LinkLayer(LiteXModule):
         ]
 
         # RX Parser --------------------------------------------------------------------------------
-        hp_count  = Signal(2)
-        dpp_rem   = Signal(17)
-        dpp_off   = Signal(2)
-        dpp_first = Signal()
-        dpp_prev  = Signal(32)
+        hp_count  = Signal(2, reset_less=True)
+        dpp_rem   = Signal(17, reset_less=True)
+        dpp_off   = Signal(2, reset_less=True)
+        dpp_first = Signal(reset_less=True)
+        dpp_prev  = Signal(32, reset_less=True)
         dpp_pb    = Signal(3)
         dpp_crc   = Signal(32)
         dpp_end   = Signal() # DPP CRC word received (pulse).
@@ -352,9 +352,9 @@ class USB3LinkLayer(LiteXModule):
         ]
 
         # TX Header Buffers ------------------------------------------------------------------------
-        tx_dws  = Array(Signal(96) for _ in range(LINK_HP_BUFFERS))
-        tx_dpps = Array(Signal()   for _ in range(LINK_HP_BUFFERS))
-        tx_sent = Array(Signal()   for _ in range(LINK_HP_BUFFERS))
+        tx_dws  = Array(Signal(96, reset_less=True) for _ in range(LINK_HP_BUFFERS))
+        tx_dpps = Array(Signal(reset_less=True)     for _ in range(LINK_HP_BUFFERS))
+        tx_sent = Array(Signal()                     for _ in range(LINK_HP_BUFFERS))
         tx_count = Signal(4)
         tx_full  = Signal()
         self.comb += [
@@ -402,11 +402,11 @@ class USB3LinkLayer(LiteXModule):
         tx_ready = tx_pipe.sink.ready
 
         # Selected Link Command/Header Packet.
-        lc_word   = Signal(32)
-        hp_dws    = Signal(96)
-        hp_dpp    = Signal()
+        lc_word   = Signal(32, reset_less=True)
+        hp_dws    = Signal(96, reset_less=True)
+        hp_dpp    = Signal(reset_less=True)
         hp_lcw    = Signal(16)
-        hp_info   = Signal(11)
+        hp_info   = Signal(11, reset_less=True)
         self.crc16_tx  = crc16_tx  = CRC16()
         self.crc5_tx   = crc5_tx   = CRC5()
         self.crc5_lctx = crc5_lctx = CRC5()
@@ -452,11 +452,11 @@ class USB3LinkLayer(LiteXModule):
             ),
         ]
 
-        dpp_b     = Signal(3)
-        dpp_tail1 = Signal(32)
-        dpp_tail2 = Signal(32)
-        dpp_ctrl1 = Signal(4)
-        dpp_ctrl2 = Signal(4)
+        dpp_b     = Signal(3, reset_less=True)
+        dpp_tail1 = Signal(32, reset_less=True)
+        dpp_tail2 = Signal(32, reset_less=True)
+        dpp_ctrl1 = Signal(4, reset_less=True)
+        dpp_ctrl2 = Signal(4, reset_less=True)
         self.crc32_tx = crc32_tx = CRC32()
         self.comb += [
             crc32_tx.data.eq(self.tx_dpp.data),

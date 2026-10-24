@@ -45,7 +45,7 @@ class USB3Bench(LiteXModule):
         )
 
         # Sink.
-        expected = Signal(32)
+        expected = Signal(32, reset_less=True)
         self.comb += sink.ready.eq(1)
         self.sync += [
             If(sink.valid,
