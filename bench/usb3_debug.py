@@ -25,23 +25,17 @@ SerDes (--with-serdes-debug):
   ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv tx-inhibit-state Polling.Active
   ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv reconnect --wait 12
 
-Host (Linux, kern.log readable: adm group):
+Host (Linux, kernel log readable: /var/log/kern.log with the adm group, or journalctl -k):
   ./bench/usb3_debug.py host
 """
 
-import os
-import re
-import sys
-import glob
 import json
 import time
 import argparse
 
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from litex import RemoteClient
+from common import add_remote_args, open_remote # First: repository root on the path.
+from common import add_kern_log_args, DEFAULT_KERN_LOG, kern_log_lines, usb_kernel_messages
+from common import usb_superspeed_devices
 
 from usb3_pipe.debug import USB3PHYDebug, USB3PHY_DEBUG_HISTORY_DEPTH
 from usb3_pipe.gen   import get_ltssm_states
@@ -189,32 +183,25 @@ class GTDRPClient:
 
 # Host (Linux) -------------------------------------------------------------------------------------
 
-def host_status(lines=20):
-    # SuperSpeed ports/devices (sysfs) and the last USB kernel messages.
-    r = {"devices": [], "kern_log": []}
-    for d in glob.glob("/sys/bus/usb/devices/*"):
-        def attr(name):
-            try:
-                return open(os.path.join(d, name)).read().strip()
-            except OSError:
-                return None
-        if attr("speed") in ["5000", "10000", "20000"] and attr("idVendor") and attr("bDeviceClass") != "09":
-            r["devices"].append({k: attr(k) for k in ["idVendor", "idProduct", "manufacturer", "product",
-                "serial", "speed", "bConfigurationValue"]} | {"path": os.path.basename(d)})
-    try:
-        with open("/var/log/kern.log", errors="replace") as f:
-            r["kern_log"] = [l.split("] ", 1)[-1] for l in f.read().splitlines() if re.search(r"\busb\d* ", l)][-lines:]
-    except OSError as e:
-        r["kern_log"] = [str(e)]
+def host_status(lines=20, kern_log=DEFAULT_KERN_LOG):
+    # SuperSpeed devices (sysfs, hubs excluded) and the last USB kernel messages (kern_log: None to
+    # skip them).
+    devices = usb_superspeed_devices(with_hubs=False, attrs=["idVendor", "idProduct", "manufacturer",
+        "product", "serial", "speed", "bConfigurationValue"])
+    r = {"devices": [d | {"path": path} for path, d in devices.items()], "kern_log": []}
+    if kern_log is not None:
+        try:
+            r["kern_log"] = usb_kernel_messages(kern_log_lines(kern_log))[-lines:]
+        except OSError as e:
+            r["kern_log"] = [str(e)]
     return r
 
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="USB3 PHY Debug client.")
-    parser.add_argument("--csr-csv", default="build/sqrl_acorn/csr.csv", help="CSR configuration file.")
-    parser.add_argument("--host",    default="localhost",                help="litex_server host.")
-    parser.add_argument("--port",    default=1234, type=int,             help="litex_server port.")
+    add_remote_args(parser)
+    add_kern_log_args(parser)
     parser.add_argument("--wait",    default=1.0,  type=float,           help="Wait time (s) after retrain.")
     parser.add_argument("--period",  default=0.2,  type=float,           help="Watch polling period (s).")
     parser.add_argument("--count",   default=12,   type=int,             help="rx-check: number of RX re-initializations.")
@@ -225,11 +212,10 @@ def main():
     args = parser.parse_args()
 
     if args.command == "host":
-        print(json.dumps(host_status(), indent=1))
+        print(json.dumps(host_status(kern_log=args.kern_log), indent=1))
         return
 
-    bus = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
-    bus.open()
+    bus = open_remote(args)
     dbg = USB3DebugClient(bus)
 
     def print_history():

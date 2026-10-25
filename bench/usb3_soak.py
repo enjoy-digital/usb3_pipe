@@ -19,7 +19,6 @@ Examples:
       --period 30 --bench 20
 """
 
-import os
 import re
 import sys
 import json
@@ -29,26 +28,12 @@ import subprocess
 
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from litex import RemoteClient
+from common import add_remote_args, open_remote # First: repository root on the path.
+from common import add_kern_log_args, KernLog, usb_kernel_messages
 
 from usb3_debug import USB3DebugClient, GTDRPClient, host_status
 
 # Kernel Log ---------------------------------------------------------------------------------------
-
-class KernelLog:
-    """New USB kernel messages since the last read (/var/log/kern.log, adm group)."""
-    def __init__(self, filename="/var/log/kern.log"):
-        self.filename = filename
-        self.pos      = os.path.getsize(filename)
-
-    def read(self):
-        with open(self.filename, errors="replace") as f:
-            f.seek(self.pos)
-            lines    = f.read().splitlines()
-            self.pos = f.tell()
-        return [l.split("] ", 1)[-1] for l in lines if re.search(r"\busb\d* ", l)]
 
 KERNEL_EVENTS = {
     "new_device"    : "new SuperSpeed USB device",
@@ -76,10 +61,10 @@ def bulk_batch(count):
         import usb.util
         usb.util.dispose_resources(dev)
 
-def bench_run(duration, csr_csv, port):
+def bench_run(duration, csr_csv, host, port):
     # Full duplex benchmark (usb3_bench.py both), returns MB/s and errors or the error.
     cmd = [sys.executable, str(Path(__file__).resolve().parent / "usb3_bench.py"), "both",
-        "--duration", str(duration), "--csr-csv", csr_csv, "--port", str(port)]
+        "--duration", str(duration), "--csr-csv", csr_csv, "--host", host, "--port", str(port)]
     try:
         out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             timeout=duration + 60).stdout
@@ -101,21 +86,19 @@ def bench_run(duration, csr_csv, port):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--csr-csv",         default="build/sqrl_acorn/csr.csv", help="CSR configuration file.")
-    parser.add_argument("--host",            default="localhost",                help="litex_server host.")
-    parser.add_argument("--port",            default=1234, type=int,             help="litex_server port.")
+    add_remote_args(parser)
     parser.add_argument("--duration",        default=3600, type=float,           help="Test duration (s).")
     parser.add_argument("--period",          default=10,   type=float,           help="Logging period (s).")
     parser.add_argument("--bulk",            default=0,    type=int,             help="Bulk loopback packets per period (0: disabled, --example loopback).")
     parser.add_argument("--bench",           default=0,    type=float,           help="Full duplex benchmark duration per period (s, 0: disabled, --example bench).")
     parser.add_argument("--reconnect-every", default=0,    type=float,           help="Reconnect period (s, 0: never).")
     parser.add_argument("--log",             default="soak.jsonl",               help="JSON lines log file.")
+    add_kern_log_args(parser)
     args = parser.parse_args()
 
-    bus = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
-    bus.open()
+    bus    = open_remote(args)
     dbg    = USB3DebugClient(bus)
-    klog   = KernelLog()
+    klog   = KernLog(args.kern_log)
     totals = {k: 0 for k in KERNEL_EVENTS}
     totals.update({"periods": 0, "enumerated": 0, "bulk_packets": 0, "bulk_errors": 0, "bench_runs": 0,
         "bench_errors": 0, "reconnects": 0})
@@ -129,6 +112,7 @@ def main():
     totals["core"] = core_counters(bus)
     print(json.dumps({"summary": totals}))
     bus.close()
+    klog.close()
 
 def core_counters(bus):
     # USB3 Device Core statistics (when present).
@@ -156,14 +140,14 @@ def soak(args, bus, dbg, klog, totals, t0, last_reconnect):
                 totals["reconnects"] += 1
                 entry["reconnect"] = True
             status  = dbg.status()
-            host    = host_status(lines=0)
+            host    = host_status(lines=0, kern_log=None)
             devices = [d for d in host["devices"] if (d["idVendor"], d["idProduct"]) == ("1d50", "605a")]
             entry["phy"]  = {k: status[k] for k in ["ltssm_state", "u0", "recovery", "u1", "u2", "u3",
                 "lfps_reset", "rx_max_good_run", "rx_tx_ppm"] if k in status}
             if hasattr(bus.regs, "xadc_temperature"):
                 entry["temperature"] = round(bus.regs.xadc_temperature.read()*503.975/4096 - 273.15, 1)
             entry["host"] = devices[0] if devices else None
-            kernel = klog.read()
+            kernel = usb_kernel_messages(klog.new_lines())
             entry["kernel"] = {k: sum(v in l for l in kernel) for k, v in KERNEL_EVENTS.items()}
             entry["kernel_lines"] = kernel[-4:]
             if args.bulk and devices:
@@ -171,7 +155,7 @@ def soak(args, bus, dbg, klog, totals, t0, last_reconnect):
                 totals["bulk_packets"] += entry["bulk"].get("packets", 0)
                 totals["bulk_errors"]  += entry["bulk"].get("errors", 0)
             if args.bench and devices:
-                entry["bench"] = bench_run(args.bench, args.csr_csv, args.port)
+                entry["bench"] = bench_run(args.bench, args.csr_csv, args.host, args.port)
                 totals["bench_runs"]   += 1
                 totals["bench_errors"] += entry["bench"].get("errors", 1)
             entry["core"] = core_counters(bus)

@@ -19,11 +19,10 @@ Example:
 
 import os
 import re
-import sys
 import argparse
 import subprocess
 
-from pathlib import Path
+import common # Repository root on the path.
 
 from migen import *
 
@@ -31,8 +30,6 @@ from litex.gen import *
 from litex.gen.fhdl.verilog import convert
 
 from litex.soc.interconnect import stream
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from usb3_core.host_model  import PHYStandIn
 from usb3_core.crc         import CRC16, CRC32

@@ -15,7 +15,7 @@ Examples:
 
 import argparse
 
-from litex import RemoteClient
+from common import add_remote_args, open_remote
 
 TYPES       = {0x00: "LMP", 0x04: "TP", 0x08: "DPH", 0x0c: "ITP"}
 TP_SUBTYPES = {1: "ACK", 2: "NRDY", 3: "ERDY", 4: "STATUS", 5: "STALL", 6: "DEV_NOTIF", 7: "PING",
@@ -40,15 +40,12 @@ def decode(entry):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--csr-csv", default="build/sqrl_acorn/csr.csv", help="CSR configuration file.")
-    parser.add_argument("--host",    default="localhost",                help="litex_server host.")
-    parser.add_argument("--port",    default=1234, type=int,             help="litex_server port.")
+    add_remote_args(parser)
     parser.add_argument("--prefix",  default=None,                       help="Trace CSRs prefix (default: autodetect).")
     parser.add_argument("command",   choices=["clear", "dump"])
     args = parser.parse_args()
 
-    bus = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
-    bus.open()
+    bus = open_remote(args)
     prefix = args.prefix or [n[:-len("_count")] for n in bus.regs.__dict__ if n.endswith("trace_count")][0]
     reg    = lambda name: getattr(bus.regs, f"{prefix}_{name}")
     if args.command == "clear":

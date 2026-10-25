@@ -9,9 +9,10 @@
 """Acorn USB3 hardware test run.
 
 Loads a bitstream (JTAG, SRAM only) on the Acorn (selected by its baseboard FTDI USB product
-string), starts litex_server (JTAGBone, on a dedicated port), retrains the link N times through the USB3PHYDebug CSRs and
-records for each attempt the PHY status/history and the host side view (new kern.log lines, USB
-port states). Results are written to build/hw_runs/<timestamp>/.
+string), starts litex_server (JTAGBone, on a dedicated port: 1240 by default), retrains the link N
+times through the USB3PHYDebug CSRs and records for each attempt the PHY status/history and the
+host side view (new kernel log lines, USB port states). Results are written to
+build/hw_runs/<timestamp>/.
 
 Example:
   ./bench/acorn_run.py --build-dir build/sqrl_acorn --attempts 20
@@ -21,15 +22,14 @@ import os
 import sys
 import json
 import time
-import glob
 import signal
 import argparse
 import subprocess
 
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+from common import ROOT, add_kern_log_args, KernLog # First: repository root on the path.
+from common import usb_find_device, usb_ports_state, usb_superspeed_devices
 
 from litex import RemoteClient
 
@@ -38,19 +38,6 @@ from usb3_debug import USB3DebugClient
 ACORN_FTDI_PRODUCT = "Quad RS232-HS" # LiteX Acorn Baseboard (Mini) FT4232H.
 
 # Helpers ------------------------------------------------------------------------------------------
-
-def find_ftdi(product):
-    """Return (busnum, devnum, location) of the USB device with the given product string."""
-    for dev in glob.glob("/sys/bus/usb/devices/*"):
-        try:
-            if Path(dev, "product").read_text().strip() == product:
-                busnum   = int(Path(dev, "busnum").read_text())
-                devnum   = int(Path(dev, "devnum").read_text())
-                location = Path(dev).name.replace("-", ":", 1) # OpenOCD ftdi_location (bus:ports).
-                return busnum, devnum, location
-        except OSError:
-            pass
-    raise RuntimeError(f"FTDI '{product}' not found.")
 
 def openocd_config(location, filename):
     """OpenOCD config for the Acorn baseboard FT4232H (channel A), selected by USB location."""
@@ -66,52 +53,22 @@ reset_config none
 source [find cpld/xilinx-xc7.cfg]
 """)
 
-def usb_ports_state():
-    states = {}
-    for p in sorted(glob.glob("/sys/bus/usb/devices/*/usb*-port*")):
-        try:
-            states[Path(p).name] = Path(p, "state").read_text().strip()
-        except OSError:
-            pass
-    return states
-
-def usb_superspeed_devices():
-    devs = {}
-    for d in glob.glob("/sys/bus/usb/devices/[0-9]*-[0-9]*"):
-        if ":" in Path(d).name:
-            continue
-        try:
-            speed = Path(d, "speed").read_text().strip()
-            if speed in ["5000", "10000", "20000"]:
-                prod = Path(d, "product").read_text().strip() if Path(d, "product").exists() else ""
-                devs[Path(d).name] = {"speed": speed, "product": prod}
-        except OSError:
-            pass
-    return devs
-
-class KernLog:
-    def __init__(self, path="/var/log/kern.log"):
-        self.path = path
-        self.pos  = os.path.getsize(path)
-
-    def new_lines(self):
-        with open(self.path, errors="replace") as f:
-            f.seek(self.pos)
-            lines = f.read()
-            self.pos = f.tell()
-        return [l for l in lines.splitlines() if "usb" in l.lower() or "xhci" in l.lower()]
+def usb_kern_lines(kern):
+    """New USB/xHCI kernel messages."""
+    return [l for l in kern.new_lines() if "usb" in l.lower() or "xhci" in l.lower()]
 
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Acorn USB3 hardware test run.")
-    parser.add_argument("--build-dir", default="build/sqrl_acorn",  help="Acorn build directory.")
-    parser.add_argument("--no-load",   action="store_true",          help="Do not load the bitstream.")
-    parser.add_argument("--port",      default=1240, type=int,   help="litex_server port (dedicated).")
-    parser.add_argument("--attempts",  default=20, type=int,         help="Link training attempts.")
-    parser.add_argument("--wait",      default=2.0, type=float,      help="Time (s) after each retrain.")
-    parser.add_argument("--soak",      default=0.0, type=float,      help="Final soak time (s) in the reached state.")
-    parser.add_argument("--out",       default=None,                 help="Output directory.")
+    parser.add_argument("--build-dir", default="build/sqrl_acorn",    help="Acorn build directory.")
+    parser.add_argument("--no-load",   action="store_true",            help="Do not load the bitstream.")
+    parser.add_argument("--port",      default=1240, type=int,         help="Port of the litex_server started by this script (dedicated, not the LiteX default 1234: other servers may use it).")
+    parser.add_argument("--attempts",  default=20,   type=int,         help="Link training attempts.")
+    parser.add_argument("--wait",      default=2.0,  type=float,       help="Time (s) after each retrain.")
+    parser.add_argument("--soak",      default=0.0,  type=float,       help="Final soak time (s) in the reached state.")
+    parser.add_argument("--out",       default=None,                   help="Output directory.")
+    add_kern_log_args(parser)
     args = parser.parse_args()
 
     build_dir = Path(args.build_dir)
@@ -126,8 +83,8 @@ def main():
         log.flush()
         print(json.dumps(entry), flush=True)
 
-    kern = KernLog()
-    busnum, devnum, location = find_ftdi(ACORN_FTDI_PRODUCT)
+    kern = KernLog(args.kern_log)
+    busnum, devnum, location = usb_find_device(ACORN_FTDI_PRODUCT)
     record("setup", bitstream=str(bitstream), ftdi=f"{busnum}:{devnum}", location=location,
         ports=usb_ports_state(), ss_devices=usb_superspeed_devices())
 
@@ -158,30 +115,31 @@ def main():
 
     dbg = USB3DebugClient(bus)
     try:
-        record("initial", status=dbg.status(), history=dbg.history()[1], kern=kern.new_lines())
+        record("initial", status=dbg.status(), history=dbg.history()[1], kern=usb_kern_lines(kern))
         for attempt in range(args.attempts):
             # A link suspended by the host (U3, ex: autosuspend of the UVC/CDC-ACM examples) is not
             # retrained: the host still sees the port in U3 and would not train it (the device
             # would end in Polling.LFPS timeout -> Compliance).
             if dbg.status()["ltssm_state"] == "U3":
-                record("suspended", n=attempt, kern=kern.new_lines())
+                record("suspended", n=attempt, kern=usb_kern_lines(kern))
                 time.sleep(args.wait)
                 continue
             dbg.retrain()
             time.sleep(args.wait)
             count, history = dbg.history()
             record("attempt", n=attempt, status=dbg.status(), transitions=count, history=history,
-                kern=kern.new_lines(), ports=usb_ports_state(), ss_devices=usb_superspeed_devices())
+                kern=usb_kern_lines(kern), ports=usb_ports_state(), ss_devices=usb_superspeed_devices())
         if args.soak:
             dbg.clear()
             t0 = time.time()
             while time.time() - t0 < args.soak:
                 time.sleep(min(10.0, args.soak))
-                record("soak", status=dbg.status(), kern=kern.new_lines(), ss_devices=usb_superspeed_devices())
+                record("soak", status=dbg.status(), kern=usb_kern_lines(kern), ss_devices=usb_superspeed_devices())
     finally:
         bus.close()
         os.killpg(server.pid, signal.SIGTERM)
         server.wait()
+        kern.close()
     print(f"Results: {out_dir}")
 
 if __name__ == "__main__":

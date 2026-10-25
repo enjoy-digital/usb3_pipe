@@ -27,10 +27,7 @@ import time
 import argparse
 import collections
 
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import add_remote_args, open_remote # First: repository root on the path.
 
 from usb3_pipe.gen import get_ltssm_states
 
@@ -206,13 +203,11 @@ def analyze(filename, ns_per_sample=8, ppm_window=32):
 # Capture ------------------------------------------------------------------------------------------
 
 def capture(args):
-    from litex import RemoteClient
     from litescope import LiteScopeAnalyzerDriver
     from usb3_debug import USB3DebugClient
 
     states = get_ltssm_states()
-    bus    = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
-    bus.open()
+    bus    = open_remote(args)
     dbg      = USB3DebugClient(bus)
     analyzer = LiteScopeAnalyzerDriver(bus.regs, "analyzer", config_csv=args.analyzer_csv)
     analyzer.configure_group(0)
@@ -254,10 +249,8 @@ def capture(args):
 
 def main():
     parser = argparse.ArgumentParser(description="USB3 LiteScope capture/analysis.")
-    parser.add_argument("--csr-csv",      default="build/sqrl_acorn/csr.csv",      help="CSR configuration file.")
+    add_remote_args(parser)
     parser.add_argument("--analyzer-csv", default="build/sqrl_acorn/analyzer.csv", help="Analyzer configuration file.")
-    parser.add_argument("--host",         default="localhost",                     help="litex_server host.")
-    parser.add_argument("--port",         default=1234, type=int,                  help="litex_server port.")
     parser.add_argument("--state",        default=None,                            help="Trigger on LTSSM state entry (STATE) or transition (FROM:TO).")
     parser.add_argument("--data",         default=None,                            help="Trigger on a Link Layer RX data word (hex, x: don't care nibble).")
     parser.add_argument("--offset",       default=16,   type=int,                  help="Trigger offset (samples).")

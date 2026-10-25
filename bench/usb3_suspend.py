@@ -14,35 +14,20 @@ CDC-ACM, Mass Storage), resumes it by opening its device node, then checks the r
 - reset: the U3 exit failed and the host reset the device (kernel "reset SuperSpeed USB device").
 The LTSSM history is captured from U3 (history_freeze) to see where the U3 exit failed.
 
-Requires a litex_server connected to the SoC (USB3PHYDebug) and read access to /var/log/kern.log.
+Requires a litex_server connected to the SoC (USB3PHYDebug) and read access to the kernel log
+(/var/log/kern.log: adm group, --kern-log, journalctl -k when missing).
 
 Example (uvc/composite examples):
   ./bench/usb3_suspend.py --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
 """
 
-import os
-import sys
 import time
 import argparse
 import subprocess
 
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from litex import RemoteClient
+from common import add_remote_args, open_remote, add_kern_log_args, KernLog # First: repository root on the path.
 
 from usb3_debug import USB3DebugClient
-
-# Kernel Log ---------------------------------------------------------------------------------------
-
-class KernLog:
-    def __init__(self, path="/var/log/kern.log"):
-        self.f = open(path, errors="replace")
-        self.f.seek(0, os.SEEK_END)
-
-    def new_lines(self):
-        return [l.rstrip() for l in self.f.readlines()]
 
 # Resume -------------------------------------------------------------------------------------------
 
@@ -63,15 +48,13 @@ def main():
     parser.add_argument("--dev",     required=True,           help="Device node used to resume the device (/dev/videoX, /dev/ttyACMx).")
     parser.add_argument("--cycles",  default=8,  type=int,    help="Suspend/resume cycles.")
     parser.add_argument("--timeout", default=30, type=float,  help="Suspend wait timeout (s).")
-    parser.add_argument("--csr-csv", default="build/sqrl_acorn/csr.csv", help="CSR configuration file.")
-    parser.add_argument("--host",    default="localhost",     help="litex_server host.")
-    parser.add_argument("--port",    default=1234, type=int,  help="litex_server port.")
+    add_remote_args(parser)
+    add_kern_log_args(parser)
     args = parser.parse_args()
 
-    bus = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
-    bus.open()
+    bus  = open_remote(args)
     dbg  = USB3DebugClient(bus)
-    kern = KernLog()
+    kern = KernLog(args.kern_log)
 
     results = {"clean": 0, "reset": 0, "failed": 0, "no_suspend": 0}
     try:
@@ -100,6 +83,7 @@ def main():
                 " ".join(state for _, state in history[:8]) + (" ..." if len(history) > 8 else ""))
     finally:
         bus.close()
+        kern.close()
     print("Results: " + ", ".join(f"{k}: {v}" for k, v in results.items()))
 
 if __name__ == "__main__":
