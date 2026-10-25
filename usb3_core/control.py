@@ -77,7 +77,6 @@ class USB3EndpointControl(USB3Endpoint):
     """
     def __init__(self, descriptors, with_handler=False):
         USB3Endpoint.__init__(self, ept=0, direction=0)
-        self.rx_dpp_setup  = Signal()  # i: Received DPP is a SETUP DP.
         self.dev_addr      = Signal(7) # o: Device Address (SET_ADDRESS).
         self.configured    = Signal()  # o: Configured (SET_CONFIGURATION != 0).
         self.reset_seqs    = Signal()  # o: SET_CONFIGURATION: endpoints Sequence Numbers reset (pulse).

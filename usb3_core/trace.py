@@ -6,9 +6,10 @@
 
 """USB3 Device Core Header Packets trace (debug, scripts/usb3_trace.py).
 
-Records the received (accepted by the Link Layer) and transmitted Header Packets (TPs/DPHs/LMPs) in a
-memory with a timestamp: the Protocol Layer exchanges with a real host can be observed without
-analyzer (ex: flow control, NRDY/ERDY, control transfers).
+Records the received (accepted by the Link Layer) and transmitted Header Packets of the Protocol Layer
+(TPs/DPHs, ITPs excluded; LMPs are handled in the Link Layer and not recorded) in a memory with a
+timestamp: the Protocol Layer exchanges with a real host can be observed without analyzer (ex: flow
+control, NRDY/ERDY, control transfers).
 
 Entry (64-bit): dw1[0:32], type[32:37] (DW0[4:0]), direction[37] (0: RX, 1: TX), timestamp[38:64]
 (sys clock cycles/16).
@@ -19,6 +20,8 @@ from migen import *
 from litex.gen import *
 
 from litex.soc.interconnect.csr import *
+
+from usb3_core.common import TYPE_ITP
 
 # USB3 Core Trace ----------------------------------------------------------------------------------
 
@@ -47,7 +50,7 @@ class USB3CoreTrace(LiteXModule):
         tx = Signal()
         # ITPs (sent every 125us by the host) are not recorded.
         self.comb += [
-            rx.eq(link.rx_hp.valid & link.rx_hp.ready & (link.rx_hp.dw0[0:5] != 0x0c)),
+            rx.eq(link.rx_hp.valid & link.rx_hp.ready & (link.rx_hp.dw0[0:5] != TYPE_ITP)),
             tx.eq(link.tx_hp.valid & link.tx_hp.ready),
         ]
         # RX and TX on the same cycle: TX recorded on the next one.

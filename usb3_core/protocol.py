@@ -74,7 +74,8 @@ class USB3ProtocolLayer(LiteXModule):
                 ep.rx_dpp_done.eq(link.rx_dpp_done & sel),
                 ep.rx_dpp_ok.eq(link.rx_dpp_ok),
             ]
-            if hasattr(ep, "rx_dpp_setup"):
+            # SETUP DPs: Control Endpoint only.
+            if ep.ept == 0:
                 self.comb += ep.rx_dpp_setup.eq(link.rx_dpp.setup)
         self.comb += link.rx_dpp.ready.eq(1)
 

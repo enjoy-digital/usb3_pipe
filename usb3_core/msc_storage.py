@@ -56,7 +56,8 @@ class USB3MSCRAM(LiteXModule):
     Built from banks of bank_words (8K words: RAMB36 without cascades, Vivado 7-Series cascaded RAMB36
     on large memories can fail the REQP-1962 DRC).
     """
-    def __init__(self, words, init=[], bank_words=8192):
+    def __init__(self, words, init=None, bank_words=8192):
+        init       = [] if init is None else init
         bank_words = min(words, bank_words)
         assert words % bank_words == 0
         nbanks = words//bank_words

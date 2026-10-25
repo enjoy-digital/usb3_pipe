@@ -4,7 +4,8 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Device Core (SuperSpeed Gen1 Link and Protocol Layers, Control Endpoint, Bulk Endpoints).
+"""USB3 Device Core (SuperSpeed Gen1 Link and Protocol Layers, Control Endpoint, Bulk/Isochronous
+Endpoints).
 
 Connects to a USB3 PHY through its Link interface (see usb3_pipe.phy.USB3PHY): any PHY providing the
 same interface can be used.
@@ -37,8 +38,9 @@ from usb3_core.trace     import USB3CoreTrace
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
-    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1, with_ep0_handler=False,
-        with_lpm=False):
+    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=None, timer_scale=1,
+        with_ep0_handler=False, with_lpm=False):
+        endpoints      = [] if endpoints is None else endpoints
         self.endpoints = endpoints
 
         # # #
@@ -56,7 +58,7 @@ class USB3DeviceCore(LiteXModule):
         self.comb += ep0.reset.eq(link.reset)
 
         # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
-        for i, ep in enumerate(endpoints):
+        for ep in endpoints:
             self.add_module(name=f"ep{ep.ept}_{['out', 'in'][ep.direction]}", module=ep)
             self.comb += ep.reset_seq.eq(link.reset | ep0.reset_seqs |
                 (ep0.clear_halt & (ep0.clear_ept == ep.ept) & (ep0.clear_dir == ep.direction)))

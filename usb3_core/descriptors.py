@@ -110,15 +110,15 @@ class USB3EndpointDescriptor:
 
 class USB3InterfaceDescriptor:
     """Interface descriptor (alt: alternate setting), class specific descriptors and endpoints."""
-    def __init__(self, number, cls=0xff, subclass=0x00, protocol=0x00, endpoints=[], extra=[], string=0,
-        alt=0):
+    def __init__(self, number, cls=0xff, subclass=0x00, protocol=0x00, endpoints=None, extra=None,
+        string=0, alt=0):
         self.number    = number
         self.alt       = alt
         self.cls       = cls
         self.subclass  = subclass
         self.protocol  = protocol
-        self.endpoints = endpoints
-        self.extra     = extra # Class specific descriptors (bytes).
+        self.endpoints = [] if endpoints is None else endpoints
+        self.extra     = [] if extra     is None else extra # Class specific descriptors (bytes).
         self.string    = string
 
     def bytes(self):
@@ -142,7 +142,7 @@ class USB3Descriptors:
         manufacturer = "Enjoy-Digital",
         product      = "USB3-PIPE",
         serial       = "0001",
-        interfaces   = [],
+        interfaces   = None,
         max_power_ma = 0,
         device_class = (0x00, 0x00, 0x00),
         with_lpm     = False):
@@ -150,7 +150,7 @@ class USB3Descriptors:
         self.pid          = pid
         self.bcd_device   = bcd_device
         self.strings      = [manufacturer, product, serial]
-        self.interfaces   = interfaces
+        self.interfaces   = [] if interfaces is None else interfaces
         self.max_power_ma = max_power_ma
         self.device_class = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
         self.with_lpm     = with_lpm

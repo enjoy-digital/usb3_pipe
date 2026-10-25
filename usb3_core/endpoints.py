@@ -35,24 +35,25 @@ class USB3Endpoint(LiteXModule):
         self.direction = direction # 0: OUT, 1: IN.
 
         # Protocol Layer interface.
-        self.hdr_dw0     = Signal(32) # i
-        self.hdr_dw1     = Signal(32) # i
-        self.hdr_dw2     = Signal(32) # i
-        self.hdr_strobe  = Signal()   # i
-        self.dpp_ok      = Signal()   # i
-        self.dpp_landed  = Signal()   # i
-        self.resp_valid  = Signal()   # o
-        self.resp_dw1    = Signal(32) # o
-        self.tx_hp       = stream.Endpoint(tx_header_layout()) # o
-        self.tx_dpp      = stream.Endpoint(dpp_layout())       # o
-        self.rx_dpp      = stream.Endpoint(dpp_layout())       # i
-        self.rx_dpp_done = Signal() # i
-        self.rx_dpp_ok   = Signal() # i
-        self.landed      = Signal() # o: rx DPP landed in a slot (with rx_dpp_done).
-        self.pm_busy     = Signal() # o: U1/U2 entry rejected (ex: ACK TP expected, 7.2.4.2.2).
+        self.hdr_dw0      = Signal(32) # i
+        self.hdr_dw1      = Signal(32) # i
+        self.hdr_dw2      = Signal(32) # i
+        self.hdr_strobe   = Signal()   # i
+        self.dpp_ok       = Signal()   # i
+        self.dpp_landed   = Signal()   # i
+        self.resp_valid   = Signal()   # o
+        self.resp_dw1     = Signal(32) # o
+        self.tx_hp        = stream.Endpoint(tx_header_layout()) # o
+        self.tx_dpp       = stream.Endpoint(dpp_layout())       # o
+        self.rx_dpp       = stream.Endpoint(dpp_layout())       # i
+        self.rx_dpp_done  = Signal() # i
+        self.rx_dpp_ok    = Signal() # i
+        self.rx_dpp_setup = Signal() # i: Received DPP is a SETUP DP (Control Endpoint).
+        self.landed       = Signal() # o: rx DPP landed in a slot (with rx_dpp_done).
+        self.pm_busy      = Signal() # o: U1/U2 entry rejected (ex: ACK TP expected, 7.2.4.2.2).
 
         # Control.
-        self.reset_seq   = Signal() # i: Sequence Numbers reset (SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
+        self.reset_seq = Signal() # i: Sequence Numbers reset (SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
 
         self.hdr = HeaderFields(self.hdr_dw0, self.hdr_dw1, self.hdr_dw2)
 

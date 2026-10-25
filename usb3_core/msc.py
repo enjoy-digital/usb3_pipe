@@ -50,6 +50,16 @@ SCSI_READ_10               = 0x28
 SCSI_WRITE_10              = 0x2a
 SCSI_SYNCHRONIZE_CACHE_10  = 0x35
 
+# Sense data (SPC-4 4.5): fixed format response code, sense keys, additional sense codes (ASC).
+SENSE_FIXED_CURRENT        = 0x70
+SENSE_KEY_NO_SENSE         = 0x0
+SENSE_KEY_NOT_READY        = 0x2
+SENSE_KEY_ILLEGAL_REQUEST  = 0x5
+SENSE_ASC_NONE             = 0x00
+SENSE_ASC_NOT_READY        = 0x04 # LOGICAL UNIT NOT READY.
+SENSE_ASC_INVALID_OPCODE   = 0x20 # INVALID COMMAND OPERATION CODE.
+SENSE_ASC_LBA_OUT_OF_RANGE = 0x21 # LOGICAL BLOCK ADDRESS OUT OF RANGE.
+
 # Descriptors --------------------------------------------------------------------------------------
 
 def msc_descriptors(in_ept=1, out_ept=2, max_burst=8, **kwargs):
@@ -65,8 +75,9 @@ def msc_descriptors(in_ept=1, out_ept=2, max_burst=8, **kwargs):
 
 # Disk Image ---------------------------------------------------------------------------------------
 
-def msc_fat_image(size, files={}, label="USB3PIPE"):
+def msc_fat_image(size, files=None, label="USB3PIPE"):
     """FAT disk image (mkfs.fat + mtools) with files ({name: content}), None if the tools are missing."""
+    files = {} if files is None else files
     try:
         with tempfile.TemporaryDirectory() as d:
             img = os.path.join(d, "disk.img")
@@ -158,9 +169,10 @@ class USB3MSCSCSI(LiteXModule):
         ]
 
         # Sense response: fixed format.
-        # Fixed format: byte 0: 0x70, byte 2: sense key, byte 7: additional length (10), byte 12: ASC.
+        # Fixed format: byte 0: response code, byte 2: sense key, byte 7: additional length (10), byte
+        # 12: ASC.
         sense = Array([
-            Cat(C(0x70, 8), C(0, 8), sense_key, C(0, 4), C(0, 8)),
+            Cat(C(SENSE_FIXED_CURRENT, 8), C(0, 8), sense_key, C(0, 4), C(0, 8)),
             Cat(C(0, 8), C(0, 8), C(0, 8), C(10, 8)),
             C(0, 32),
             Cat(sense_asc, C(0, 8), C(0, 16)),
@@ -201,8 +213,8 @@ class USB3MSCSCSI(LiteXModule):
             decode_cases[opcode] = [NextValue(residue, dlen), NextState("CSW")]
         # Storage not ready (ex: DRAM not yet initialized): NOT READY/LOGICAL UNIT NOT READY.
         not_ready = [
-            NextValue(sense_key, 0x02),
-            NextValue(sense_asc, 0x04),
+            NextValue(sense_key, SENSE_KEY_NOT_READY),
+            NextValue(sense_asc, SENSE_ASC_NOT_READY),
             NextValue(status, 1),
         ]
         decode_cases[SCSI_TEST_UNIT_READY] = [
@@ -218,7 +230,8 @@ class USB3MSCSCSI(LiteXModule):
                 NextValue(remaining, dlen),
                 NextState("PAD"),
             ).Elif((lba + nblk) > blocks,
-                NextValue(sense_key, 0x05), NextValue(sense_asc, 0x21), # LBA out of range.
+                NextValue(sense_key, SENSE_KEY_ILLEGAL_REQUEST),
+                NextValue(sense_asc, SENSE_ASC_LBA_OUT_OF_RANGE),
                 NextValue(status, 1),
                 NextValue(remaining, dlen),
                 NextState("PAD"),
@@ -236,7 +249,8 @@ class USB3MSCSCSI(LiteXModule):
                 NextValue(out, dlen),
                 NextState("DISCARD"),
             ).Elif((lba + nblk) > blocks,
-                NextValue(sense_key, 0x05), NextValue(sense_asc, 0x21),
+                NextValue(sense_key, SENSE_KEY_ILLEGAL_REQUEST),
+                NextValue(sense_asc, SENSE_ASC_LBA_OUT_OF_RANGE),
                 NextValue(status, 1),
                 NextValue(out, dlen),
                 NextState("DISCARD"),
@@ -248,8 +262,8 @@ class USB3MSCSCSI(LiteXModule):
         ]
         decode_cases["default"] = [
             # Unsupported: ILLEGAL REQUEST/INVALID COMMAND OPERATION CODE, data phase padded/discarded.
-            NextValue(sense_key, 0x05),
-            NextValue(sense_asc, 0x20),
+            NextValue(sense_key, SENSE_KEY_ILLEGAL_REQUEST),
+            NextValue(sense_asc, SENSE_ASC_INVALID_OPCODE),
             NextValue(status, 1),
             NextValue(residue, dlen),
             If(dlen == 0,
@@ -265,8 +279,8 @@ class USB3MSCSCSI(LiteXModule):
         fsm.act("DECODE",
             NextValue(status, 0),
             If(op != SCSI_REQUEST_SENSE,
-                NextValue(sense_key, 0),
-                NextValue(sense_asc, 0),
+                NextValue(sense_key, SENSE_KEY_NO_SENSE),
+                NextValue(sense_asc, SENSE_ASC_NONE),
             ),
             Case(op, decode_cases)
         )
@@ -288,8 +302,8 @@ class USB3MSCSCSI(LiteXModule):
             bulk_in.sink.last.eq(remaining <= 4),
             bulk_in.sink.be.eq(Mux(remaining <= 4, bytes_to_be(remaining), 0b1111)),
             If(remaining == 0,
-                NextValue(sense_key, 0),
-                NextValue(sense_asc, 0),
+                NextValue(sense_key, SENSE_KEY_NO_SENSE),
+                NextValue(sense_asc, SENSE_ASC_NONE),
                 NextState("CSW")
             ).Elif(bulk_in.sink.ready,
                 NextValue(sense_word, sense_word + 1),

@@ -26,6 +26,10 @@ from usb3_core.common    import *
 from usb3_core.dpp       import DPPReader
 from usb3_core.endpoints import USB3Endpoint, MAX_PACKET_SIZE, MAX_PACKET_WORDS
 
+# Constants ----------------------------------------------------------------------------------------
+
+WR_IDLE_CYCLES = 64 # Bulk IN: writer idle cycles before a last max size packet is sent (burst end).
+
 # USB3 Bulk IN Endpoint ----------------------------------------------------------------------------
 
 class USB3BulkIN(USB3Endpoint):
@@ -127,11 +131,12 @@ class USB3BulkIN(USB3Endpoint):
         snd_last = Signal() # Last written packet.
         # Writer activity: while the user is writing, the last written max size packet is held until
         # the next one is written (burst continued instead of an EOB and a flow control round trip).
-        wr_idle  = Signal(max=65)
+        wr_idle  = Signal(max=WR_IDLE_CYCLES + 1)
         wr_busy  = Signal()
-        self.sync += If(sink.valid, wr_idle.eq(0)).Elif(wr_idle != 64, wr_idle.eq(wr_idle + 1))
+        self.sync += If(sink.valid, wr_idle.eq(0)).Elif(wr_idle != WR_IDLE_CYCLES,
+            wr_idle.eq(wr_idle + 1))
         self.comb += [
-            wr_busy.eq(sink.valid | (wr_idle != 64)),
+            wr_busy.eq(sink.valid | (wr_idle != WR_IDLE_CYCLES)),
             snd_last.eq(snd_next == wr_ptr),
             avail.eq((snd_ptr != wr_ptr) & ~(snd_last & wr_busy & (snd_len == MAX_PACKET_SIZE))),
             in_win.eq(((snd_seq - win_seq) & 0x1f) < win_nump),
