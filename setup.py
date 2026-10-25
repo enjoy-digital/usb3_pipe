@@ -29,7 +29,7 @@ setup(
           "setuptools",
         ]
     },
-    packages                      = find_packages(exclude=("test*", "sim*", "doc*", "examples*", "scripts*")),
+    packages                      = find_packages(exclude=("test*", "sim*", "doc*", "examples*", "bench*")),
     include_package_data          = True,
     keywords                      = "HDL ASIC FPGA hardware design",
     classifiers                   = [

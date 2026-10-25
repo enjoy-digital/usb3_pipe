@@ -13,8 +13,8 @@ interface signals as ports, sys clock constrained, ports considered registered a
 report its LUTs/FFs/BRAMs and its timing (WNS at the target frequency).
 
 Example:
-  ./scripts/usb3_resources.py --sys-clk-freq 125e6
-  ./scripts/usb3_resources.py --blocks link endpoint_in
+  ./bench/usb3_resources.py --sys-clk-freq 125e6
+  ./bench/usb3_resources.py --blocks link endpoint_in
 """
 
 import os

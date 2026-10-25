@@ -12,10 +12,10 @@ bandwidth benchmark runs (--example bench) and reconnects. Ctrl-C ends the test 
 
 Examples:
   # 5 minutes, Bulk loopback (64 x 1024 bytes) each period, one reconnect.
-  ./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 \\
+  ./bench/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 \\
       --bulk 64 --reconnect-every 150 --log soak.jsonl
   # 5 minutes, full duplex benchmark (data checked on both sides) 20s per period.
-  ./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 \\
+  ./bench/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 \\
       --period 30 --bench 20
 """
 

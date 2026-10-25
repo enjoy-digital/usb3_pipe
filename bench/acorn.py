@@ -167,7 +167,7 @@ class USB3SoC(SoCCore):
         if with_serdes_debug:
             self.usb3_serdes_debug = USB3SerDesDebug(usb3_serdes, sys_clk_freq,
                 ltssm_state = usb3_phy.ltssm_state)
-            # FPGA temperature/voltages (RX quality vs temperature, scripts/usb3_soak.py).
+            # FPGA temperature/voltages (RX quality vs temperature, bench/usb3_soak.py).
             self.xadc = S7SystemMonitor()
 
         # GTP LPM adaptation hold (debug, --lpm-hold): adapt only in Polling.RxEQ, or never.

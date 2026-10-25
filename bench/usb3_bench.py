@@ -10,10 +10,10 @@
 checker), with asynchronous libusb transfers (python-libusb1) queued to keep the link busy.
 
 Examples:
-  ./scripts/usb3_bench.py in                     # Device -> Host, data checked.
-  ./scripts/usb3_bench.py out                    # Host -> Device (errors: device CSRs, --csr-csv).
-  ./scripts/usb3_bench.py both --duration 10
-  ./scripts/usb3_bench.py in --transfer-size 4194304 --queue 16 --no-check
+  ./bench/usb3_bench.py in                     # Device -> Host, data checked.
+  ./bench/usb3_bench.py out                    # Host -> Device (errors: device CSRs, --csr-csv).
+  ./bench/usb3_bench.py both --duration 10
+  ./bench/usb3_bench.py in --transfer-size 4194304 --queue 16 --no-check
 """
 
 import os

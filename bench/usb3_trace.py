@@ -9,8 +9,8 @@
 """USB3 Device Core Header Packets trace (USB3DeviceCore.add_csr(with_trace=True)).
 
 Examples:
-  ./scripts/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv clear
-  ./scripts/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv dump
+  ./bench/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv clear
+  ./bench/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv dump
 """
 
 import argparse

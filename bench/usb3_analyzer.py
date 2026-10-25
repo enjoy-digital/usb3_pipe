@@ -10,16 +10,16 @@
 
 Captures (the PHY is retrained until the trigger fires):
   # U0 entry (datapath group: link commands, LMPs, packets).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state U0 --offset 256
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state U0 --offset 256
   # Polling.RxEQ -> Polling.Active (the partner's TSEQ: RX quality on a known pattern).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.RxEQ:Polling.Active
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.RxEQ:Polling.Active
   # A data word on the Link Layer RX (ex: SET_CONFIGURATION SETUP data, the PHY is not retrained).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --data 0x00090100 --no-retrain
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --data 0x00090100 --no-retrain
   # RX vs TX clocks phase over ~2ms (phase group).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
 
 Analysis of a capture (analyzer.vcd):
-  ./scripts/usb3_analyzer.py analyze analyzer.vcd
+  ./bench/usb3_analyzer.py analyze analyzer.vcd
 """
 
 import sys

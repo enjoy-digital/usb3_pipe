@@ -17,7 +17,7 @@ The LTSSM history is captured from U3 (history_freeze) to see where the U3 exit 
 Requires a litex_server connected to the SoC (USB3PHYDebug) and read access to /var/log/kern.log.
 
 Example (uvc/composite examples):
-  ./scripts/usb3_suspend.py --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
+  ./bench/usb3_suspend.py --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
 """
 
 import os

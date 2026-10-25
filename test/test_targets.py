@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Targets elaborations (no bitstream build): each target with each USB3 Device Core example it
+"""Targets (bench/) elaborations (no bitstream build): each target with each USB3 Device Core example it
 supports, and the Acorn debug/analyzer configurations.
 
 The software (BIOS) is not compiled (CPU examples: no RISC-V toolchain needed): the targets are run
@@ -25,7 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # Helpers ------------------------------------------------------------------------------------------
 
 RUN_TARGET = """
-import sys, runpy
+import os, sys, runpy
+sys.path.insert(0, os.path.dirname(os.path.abspath(sys.argv[1]))) # As when run directly (bench/).
 import litex.soc.integration.builder as builder
 class Builder(builder.Builder):
     def __init__(self, *args, **kwargs):
@@ -38,7 +39,7 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 
 def elaborate(target, output_dir, args=[]):
     """Elaborate target (gateware/software generation, no build) into output_dir, return csr.csv."""
-    cmd = [sys.executable, "-c", RUN_TARGET, f"{target}.py", "--output-dir", str(output_dir)] + args
+    cmd = [sys.executable, "-c", RUN_TARGET, f"bench/{target}.py", "--output-dir", str(output_dir)] + args
     p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert p.returncode == 0, p.stdout[-4000:]
     assert list((output_dir / "gateware").glob("*.v")), p.stdout[-4000:]

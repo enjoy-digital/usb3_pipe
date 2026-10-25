@@ -9,24 +9,24 @@
 """USB3 PHY Debug client (USB3PHYDebug CSRs, through litex_server).
 
 Examples:
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv status
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv history
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv retrain --wait 2
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv watch
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv status
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv history
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv retrain --wait 2
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv watch
 
 SerDes (--with-serdes-debug):
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rx-reset
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rx-check --count 12
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv drp-read 0xa8
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv drp-write 0xa9 0x2448
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rxcdr-cfg
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rxcdr-cfg 0x87fe206024481010
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv drp-dump drp.json
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv tx-inhibit-state Polling.Active
-  ./scripts/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv reconnect --wait 12
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rx-reset
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rx-check --count 12
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv drp-read 0xa8
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv drp-write 0xa9 0x2448
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rxcdr-cfg
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv rxcdr-cfg 0x87fe206024481010
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv drp-dump drp.json
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv tx-inhibit-state Polling.Active
+  ./bench/usb3_debug.py --csr-csv build/sqrl_acorn/csr.csv reconnect --wait 12
 
 Host (Linux, kern.log readable: adm group):
-  ./scripts/usb3_debug.py host
+  ./bench/usb3_debug.py host
 """
 
 import os

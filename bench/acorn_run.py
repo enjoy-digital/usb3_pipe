@@ -14,7 +14,7 @@ records for each attempt the PHY status/history and the host side view (new kern
 port states). Results are written to build/hw_runs/<timestamp>/.
 
 Example:
-  ./scripts/acorn_run.py --build-dir build/sqrl_acorn --attempts 20
+  ./bench/acorn_run.py --build-dir build/sqrl_acorn --attempts 20
 """
 
 import os
@@ -30,7 +30,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
 
 from litex import RemoteClient
 
