@@ -166,51 +166,40 @@ class USB3LTSSM(LiteXModule):
         rx_ts2_seen     = Signal()
         ts2_tx_after    = Signal() # current TS2 burst started after the 8 consecutive TS2 received
         rx_lb_seen      = Signal() # partner TS2 Loopback bit latched during training/recovery
-        self.lb_pending = lb_pending = Signal() # directed loopback via Recovery (TS2 Loopback bit)
+        lb_pending      = Signal() # directed loopback via Recovery (TS2 Loopback bit)
         loopback_master = Signal() # Loopback role
         hr_seen         = Signal() # partner TS2 Reset bit seen in HotReset.Active
         hr_tx_reset     = Signal() # TS2 Reset bit transmitted in HotReset.Active.
 
-        # 360ms Timer (tPollingLFPSTimeout, Table 7-12) --------------------------------------------
-        self._360_ms_timer = _360_ms_timer = WaitTimer(scaled(360e-3))
-
-        # 12ms Timer (tPollingActive/tRecoveryActive/tHotResetActive) ------------------------------
-        self._12_ms_timer = _12_ms_timer = WaitTimer(scaled(12e-3))
-
-        # 12ms Timer (tPollingConfigurationTimeout, started upon entry to Polling.Configuration) ---
-        self.t_polling_cfg = t_polling_cfg = WaitTimer(scaled(12e-3))
-
-        # 6ms Timer (tRecoveryConfigurationTimeout) ------------------------------------------------
-        self._6_ms_timer = _6_ms_timer = WaitTimer(scaled(6e-3))
-
-        # 2ms Timer (tPollingIdleTimeout) ----------------------------------------------------------
+        # Timers (Table 7-12 LTSSM timeouts, 7.2.4.2 Link Power Management timers) -----------------
+        # tPollingLFPSTimeout (360ms, Polling.LFPS).
+        self.t_polling_lfps = t_polling_lfps = WaitTimer(scaled(360e-3))
+        # tPollingActiveTimeout/tRecoveryActiveTimeout/tHotResetActiveTimeout (12ms): shared by
+        # Polling.Active, Recovery.Active and HotReset.Active (never consecutive states).
+        self.t_active = t_active = WaitTimer(scaled(12e-3))
+        # tPollingConfigurationTimeout (12ms, Polling.Configuration).
+        self.t_polling_config = t_polling_config = WaitTimer(scaled(12e-3))
+        # tRecoveryConfigurationTimeout (6ms, Recovery.Configuration).
+        self.t_recovery_config = t_recovery_config = WaitTimer(scaled(6e-3))
+        # tPollingIdleTimeout (2ms, Polling.Idle).
         self.t_polling_idle = t_polling_idle = WaitTimer(scaled(2e-3))
-
-        # 1ms Timer (tU0RecoveryTimeout) -----------------------------------------------------------
+        # tU0RecoveryTimeout (1ms without link activity in U0, 7.5.6.2).
         self.t_u0_recovery = t_u0_recovery = WaitTimer(scaled(1e-3))
-
-        # 2ms Timer (tRecoveryIdleTimeout) ---------------------------------------------------------
-        self.t_recov_idle = t_recov_idle = WaitTimer(scaled(2e-3))
-
-        # 2ms Timer (tHotResetExitTimeout) ---------------------------------------------------------
-        self.t_hotreset_exit = t_hotreset_exit = WaitTimer(scaled(2e-3))
-
-        # 6ms Timer (Ux_EXIT_TIMER, 7.2.4.2.1) -----------------------------------------------------
+        # tRecoveryIdleTimeout (2ms, Recovery.Idle).
+        self.t_recovery_idle = t_recovery_idle = WaitTimer(scaled(2e-3))
+        # tHotResetExitTimeout (2ms, HotReset.Exit).
+        self.t_hot_reset_exit = t_hot_reset_exit = WaitTimer(scaled(2e-3))
+        # Ux_EXIT_TIMER (6ms, 7.2.4.2.1).
         self.t_ux_exit = t_ux_exit = WaitTimer(scaled(6e-3))
-
-        # 4us Timer (PM_LC_TIMER) ------------------------------------------------------------------
+        # PM_LC_TIMER (4us, 7.2.4.2.3).
         self.t_pm_lc = t_pm_lc = WaitTimer(scaled(4e-6))
-
-        # 8us Timer (PM_ENTRY_TIMER) ---------------------------------------------------------------
+        # PM_ENTRY_TIMER (8us, 7.2.4.2.3).
         self.t_pm_entry = t_pm_entry = WaitTimer(scaled(8e-6))
-
-        # 12ms Timer (teSSInactiveQuietTimeout) ----------------------------------------------------
-        self.t_ss_quiet = t_ss_quiet = WaitTimer(scaled(12e-3))
-
-        # 100ms Timer (tU3WakeupRetryDelay) --------------------------------------------------------
+        # teSSInactiveQuietTimeout (12ms, eSS.Inactive).
+        self.t_ess_quiet = t_ess_quiet = WaitTimer(scaled(12e-3))
+        # tU3WakeupRetryDelay (100ms, 7.2.4.2.7).
         self.t_u3_retry = t_u3_retry = WaitTimer(scaled(100e-3))
-
-        # Transient RxDetect equivalent timer ------------------------------------------------------
+        # Transient Rx.Detect equivalent (Polling.ExitToRxDetect, Rx.Detect not modelled).
         self.t_rx_detect = t_rx_detect = WaitTimer(max(1, 64//timer_scale))
 
         # LFPS Exit Handshake (6.9.2, shared by U1/U2/Loopback exit and U3 wakeup) -----------------
@@ -224,7 +213,7 @@ class USB3LTSSM(LiteXModule):
         # preserved). The tNoLFPSResponse guard (2ms/2ms/10ms) is >= the responder's own burst +
         # detection latency.
         hs_mode      = Signal(2)
-        self.hs_run  = hs_run = Signal()
+        hs_run       = Signal()
         hs_send      = Signal() # burst ongoing
         hs_rx        = Signal() # partner burst seen
         hs_cnt       = Signal(32)
@@ -316,25 +305,25 @@ class USB3LTSSM(LiteXModule):
         ]
 
         # U1 DS Ping timeout counter (tU1PingTimeout 300ms, reset on Ping reception, 7.5.7.2) ------
-        self.u1_ping_cnt  = u1_ping_cnt  = Signal(32)
-        u1_ping_lim       = scaled(300e-3)
-        self.u1_ping_done = u1_ping_done = u1_ping_cnt >= u1_ping_lim
+        u1_ping_lim  = scaled(300e-3)
+        u1_ping_cnt  = Signal(32)
+        u1_ping_done = u1_ping_cnt >= u1_ping_lim
 
         # U1 UFP min residency (U1_MIN_RESIDENCY 3us, 7.2.4.2.7) -----------------------------------
-        self.u1_res_cnt        = u1_res_cnt        = Signal(32)
-        u1_res_lim             = scaled(3e-6)
-        self.u1_residency_done = u1_residency_done = u1_res_cnt >= u1_res_lim
+        u1_res_lim        = scaled(3e-6)
+        u1_res_cnt        = Signal(32)
+        u1_residency_done = u1_res_cnt >= u1_res_lim
 
         # U2 Inactivity Timeout counter (u2_timeout x 256us in U1, 10.6.2.4) -----------------------
-        self.u2_tick_lim     = scaled(256e-6)
-        self.u2_tick_cnt     = Signal(max=self.u2_tick_lim + 1)
-        self.u2_cnt          = Signal(8)
-        self.u2_timeout_done = u2_timeout_done = Signal()
+        u2_tick_lim     = scaled(256e-6)
+        u2_tick_cnt     = Signal(max=u2_tick_lim + 1)
+        u2_cnt          = Signal(8)
+        u2_timeout_done = Signal()
         self.comb += u2_timeout_done.eq((self.u2_timeout != 0x00) & (self.u2_timeout != 0xff) &
-            (self.u2_cnt == self.u2_timeout))
+            (u2_cnt == self.u2_timeout))
 
         # Hot Reset Active reset-done delay (US clears Reset bit after own reset) ------------------
-        self.hr_cnt = hr_cnt = Signal(16)
+        hr_cnt = Signal(16)
         # The Reset=1 TS2 window must outlast the partner's HotReset.Active entry lag (~2 cycles via
         # the TS2 plane at any scale), or the partner never latches hr_seen and both sides fall to
         # the 12ms timeout. 16 cycles gives an 8x margin over that lag at scale>=16; scale=1 keeps
@@ -347,10 +336,10 @@ class USB3LTSSM(LiteXModule):
         u3_entry_cnt      = Signal(2) # consecutive U3 entry PM_LC failures (7.2.4.2.4)
 
         # PM handshake registers (7.2.4.2) ---------------------------------------------------------
-        self.pm_kind     = pm_kind     = Signal(2) # requested Ux: 1/2/3
+        pm_kind          = Signal(2) # requested Ux: 1/2/3
         self.pm_sent_lgo = pm_sent_lgo = Signal()  # LGO sent, LAU/LXU pending (PM_LC_TIMER armed)
-        self.pm_acc_kind = pm_acc_kind = Signal(2) # partner request accepted (LAU sent)
-        pm_conc_kind = Signal(2) # UFP: DS request received while own LGO pending (7.2.4.2.5)
+        pm_acc_kind      = Signal(2) # partner request accepted (LAU sent)
+        pm_conc_kind     = Signal(2) # UFP: DS request received while own LGO pending (7.2.4.2.5)
         pm_lgo_fire  = Signal()
         pm_lau_fire  = Signal()
         pm_lxu_fire  = Signal()
@@ -415,8 +404,8 @@ class USB3LTSSM(LiteXModule):
         # is a handshake request as soon as it is detected (except Ping.LFPS, an upstream port
         # proceeds with the handshake even if the LFPS later turns out to be a Warm Reset). The
         # request is only raised while in a handshake-capable state (U1/U2/U3/Loopback) and is
-        # consumed by the handshake start. Wired in finalize() (needs the frozen FSM encoding).
-        self.rx_burst_ok = Signal() # level: partner exit/wakeup burst detected, waits for use
+        # consumed by the handshake start (see Partner exit/wakeup request below).
+        rx_burst_ok = Signal() # level: partner exit/wakeup burst detected, waits for use
 
         # Entry State ------------------------------------------------------------------------------
         fsm.act("Polling.Entry",
@@ -431,7 +420,7 @@ class USB3LTSSM(LiteXModule):
         )
 
         # LFPS State (7.5.4.3) ---------------------------------------------------------------------
-        polling_lfps = If(_360_ms_timer.done,
+        polling_lfps = If(t_polling_lfps.done,
             # 360ms timeout: Compliance for UFP (always enabled) and DS when directed
             # (compliance_enable), only if the Polling.LFPS handshake has never been completed
             # since power-on/Warm Reset (7.5.4.3.2: a later timeout is a training failure, not a
@@ -461,7 +450,7 @@ class USB3LTSSM(LiteXModule):
         )
         fsm.act("Polling.LFPS",
             self.lfps_tx_idle.eq(1),
-            _360_ms_timer.wait.eq(with_timers),
+            t_polling_lfps.wait.eq(with_timers),
             *([self.ssp_polling.eq(1), self.lfps_tx_polling.eq(self.ssp_fallback)] if ssp else
               [self.lfps_tx_polling.eq(1)]),
             polling_lfps,
@@ -479,7 +468,7 @@ class USB3LTSSM(LiteXModule):
 
         # Active State (7.5.4.5) -------------------------------------------------------------------
         fsm.act("Polling.Active",
-            _12_ms_timer.wait.eq(with_timers),
+            t_active.wait.eq(with_timers),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts1.eq(1),
 
@@ -488,7 +477,7 @@ class USB3LTSSM(LiteXModule):
             NextValue(rx_ts1_inv_seen, rx_ts1_inv_seen | self.ts_rx_ts1_inv),
             NextValue(rx_ts2_seen,     rx_ts2_seen     | self.ts_rx_ts2),
 
-            If(_12_ms_timer.done,
+            If(t_active.done,
                 NextState("Polling.ExitToRxDetect")
             ),
 
@@ -510,12 +499,12 @@ class USB3LTSSM(LiteXModule):
 
         # Configuration State (7.5.4.6) ------------------------------------------------------------
         fsm.act("Polling.Configuration",
-            t_polling_cfg.wait.eq(with_timers),
+            t_polling_config.wait.eq(with_timers),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
             NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
             NextValue(rx_lb_seen,  rx_lb_seen  | self.rx_ts2_loopback),
-            If(t_polling_cfg.done,
+            If(t_polling_config.done,
                 NextState("Polling.ExitToRxDetect")
             ),
             # 8 consecutive TS2 received and 16 TS2 sent after receiving the first of them
@@ -696,8 +685,8 @@ class USB3LTSSM(LiteXModule):
         # U1 State (7.5.7) -------------------------------------------------------------------------
         fsm.act("U1",
             self.lfps_tx_idle.eq(1),
-            NextValue(self.pm_sent_lgo, 0),
-            NextValue(self.pm_acc_kind, 0),
+            NextValue(pm_sent_lgo, 0),
+            NextValue(pm_acc_kind, 0),
             t_ux_exit.wait.eq(ux_armed),
             self.u1.eq(1),
             If(self.lfps_rx_reset,
@@ -717,7 +706,7 @@ class USB3LTSSM(LiteXModule):
             ).Elif(self.ds_port & u1_ping_done,
                 # tU1PingTimeout (300ms) without Ping -> Rx.Detect (7.5.7.2).
                 NextState("Polling.ExitToRxDetect")
-            ).Elif(~hs_run & self.rx_burst_ok,
+            ).Elif(~hs_run & rx_burst_ok,
                 # Responder: partner's single exit burst qualified (6.9.2). hs_rx is pre-latched:
                 # the qualified burst IS the partner request evidence.
                 *hs_start(mode=1, responder=True),
@@ -735,8 +724,8 @@ class USB3LTSSM(LiteXModule):
         # U2 State (7.5.8) -------------------------------------------------------------------------
         fsm.act("U2",
             self.lfps_tx_idle.eq(1),
-            NextValue(self.pm_sent_lgo, 0),
-            NextValue(self.pm_acc_kind, 0),
+            NextValue(pm_sent_lgo, 0),
+            NextValue(pm_acc_kind, 0),
             t_ux_exit.wait.eq(ux_armed),
             self.u2.eq(1),
             If(self.lfps_rx_reset,
@@ -747,7 +736,7 @@ class USB3LTSSM(LiteXModule):
                 *goto_recovery()
             ).Elif(hs_done_err,
                 NextState("eSS.Inactive")
-            ).Elif(~hs_run & self.rx_burst_ok,
+            ).Elif(~hs_run & rx_burst_ok,
                 # Responder: partner's single exit burst qualified (6.9.2), hs_rx pre-latched.
                 *hs_start(mode=2, responder=True),
                 # Ux_EXIT_TIMER is only started by the port initiating the exit (7.2.4.2.1).
@@ -762,8 +751,8 @@ class USB3LTSSM(LiteXModule):
         # U3 State (7.5.9) -------------------------------------------------------------------------
         fsm.act("U3",
             self.lfps_tx_idle.eq(1),
-            NextValue(self.pm_sent_lgo, 0),
-            NextValue(self.pm_acc_kind, 0),
+            NextValue(pm_sent_lgo, 0),
+            NextValue(pm_acc_kind, 0),
             self.u3.eq(1),
             t_u3_retry.wait.eq(u3_retry_wait),
             If(self.lfps_rx_reset,
@@ -790,7 +779,7 @@ class USB3LTSSM(LiteXModule):
             ).Elif(u3_wakeup_pending & ~hs_run & ~u3_retry_wait,
                 # Initiate/retry wakeup (Ux_EXIT_TIMER not applied to U3, 7.2.4.2.1).
                 *hs_start(mode=3)
-            ).Elif(~hs_run & self.rx_burst_ok,
+            ).Elif(~hs_run & rx_burst_ok,
                 # Respond to the partner wakeup (qualified single burst, hs_rx pre-latched).
                 *hs_start(mode=3, responder=True)
             ).Elif(t_u3_retry.done,
@@ -834,7 +823,7 @@ class USB3LTSSM(LiteXModule):
                 # Master exit directed: Loopback exit LFPS (timing of U2 exit, 7.5.11.2).
                 *hs_start(mode=2),
                 NextState("Loopback.Exit")
-            ).Elif(~loopback_master & self.rx_burst_ok,
+            ).Elif(~loopback_master & rx_burst_ok,
                 # Slave: exit on the master's qualified Loopback exit LFPS (7.5.11.2);
                 # hs_rx pre-latched from the qualified burst.
                 *hs_start(mode=2, responder=True),
@@ -857,10 +846,10 @@ class USB3LTSSM(LiteXModule):
 
         # Hot Reset Active State (7.5.12.2) --------------------------------------------------------
         fsm.act("HotReset.Active",
-            NextValue(self.pm_sent_lgo, 0),
-            NextValue(self.pm_acc_kind, 0),
+            NextValue(pm_sent_lgo, 0),
+            NextValue(pm_acc_kind, 0),
             self.hot_reset.eq(1),
-            _12_ms_timer.wait.eq(with_timers),
+            t_active.wait.eq(with_timers),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
             NextValue(hr_tx_reset, 1),
@@ -872,7 +861,7 @@ class USB3LTSSM(LiteXModule):
             If(hr_seen & ~self.rx_ts2_reset & ~hr_tx_reset,
                 # Both sides saw Reset=0 -> Exit (Simplification: single fall detection).
                 NextState("HotReset.Exit")
-            ).Elif(_12_ms_timer.done,
+            ).Elif(t_active.done,
                 # tHotResetActiveTimeout (12ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
             )
@@ -882,27 +871,29 @@ class USB3LTSSM(LiteXModule):
         fsm.act("HotReset.Exit",
             self.idle_handshake.eq(1), # Idle Symbols + handshake (7.5.4.10).
             self.hot_reset.eq(1),
-            t_hotreset_exit.wait.eq(with_timers),
+            t_hot_reset_exit.wait.eq(with_timers),
             If(self.rx_idle8,
                 # Idle handshake -> U0 (7.5.12.3).
                 NextState("U0")
-            ).Elif(t_hotreset_exit.done,
+            ).Elif(t_hot_reset_exit.done,
                 # tHotResetExitTimeout (2ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
             )
         )
 
         # TS2 Reset bit (7.4.2): set in HotReset.Active (until own reset done), and in
-        # Recovery.Configuration when the DS is directed to Hot Reset (7.5.10.4).
+        # Recovery.Configuration when the DS is directed to Hot Reset (7.5.10.4). Note: this first
+        # reference to Recovery.Configuration fixes its place in the state encoding (ltssm_state).
+        in_recovery_config = fsm.ongoing("Recovery.Configuration")
         self.comb += self.tx_ts2_reset.eq(hr_tx_reset |
-            (fsm.ongoing("Recovery.Configuration") & self.hot_reset_req & self.ds_port))
+            (in_recovery_config & self.hot_reset_req & self.ds_port))
 
         # Warm Reset burst State (6.9, DS originator / UFP responder) ------------------------------
         fsm.act("WarmReset",
             NextValue(polling_lfps_ok, 0),
             self.lfps_tx_idle.eq(1),
-            NextValue(self.pm_sent_lgo, 0),
-            NextValue(self.pm_acc_kind, 0),
+            NextValue(pm_sent_lgo, 0),
+            NextValue(pm_acc_kind, 0),
             NextValue(u3_entry_cnt, 0), # reset side effect: PM state cleared
             If(wr_done,
                 # Both sides retrain from Rx.Detect (transient) through Polling.
@@ -912,10 +903,10 @@ class USB3LTSSM(LiteXModule):
 
         # Recovery Active State (7.5.10.1) ---------------------------------------------------------
         fsm.act("Recovery.Active",
-            NextValue(self.pm_sent_lgo, 0),
-            NextValue(self.pm_acc_kind, 0),
+            NextValue(pm_sent_lgo, 0),
+            NextValue(pm_acc_kind, 0),
             t_ux_exit.wait.eq(ux_armed),
-            _12_ms_timer.wait.eq(with_timers),
+            t_active.wait.eq(with_timers),
             self.serdes_rx_align.eq(1), # Re-acquire word alignment on the incoming TS1s: the LFPS
                                         # exit burst shifts the RX word phase (Recovery is the only
                                         # TS-receiving path entered after a LFPS burst; the aligner
@@ -930,7 +921,7 @@ class USB3LTSSM(LiteXModule):
             If(t_ux_exit.done,
                 # Ux_EXIT_TIMER still running in Recovery -> eSS.Inactive (7.2.4.2.1).
                 NextState("eSS.Inactive")
-            ).Elif(_12_ms_timer.done,
+            ).Elif(t_active.done,
                 # tRecoveryActiveTimeout (12ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
             ),
@@ -943,7 +934,7 @@ class USB3LTSSM(LiteXModule):
         # Recovery Configuration State (7.5.10.2) --------------------------------------------------
         fsm.act("Recovery.Configuration",
             t_ux_exit.wait.eq(ux_armed),
-            _6_ms_timer.wait.eq(with_timers),
+            t_recovery_config.wait.eq(with_timers),
             self.serdes_rx_align.eq(1), # Keep alignment re-acquisition during the TS2 exchange.
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
@@ -951,7 +942,7 @@ class USB3LTSSM(LiteXModule):
             NextValue(rx_lb_seen,  rx_lb_seen  | self.rx_ts2_loopback),
             If(t_ux_exit.done,
                 NextState("eSS.Inactive")
-            ).Elif(_6_ms_timer.done,
+            ).Elif(t_recovery_config.done,
                 # tRecoveryConfigurationTimeout (6ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
             ),
@@ -970,7 +961,7 @@ class USB3LTSSM(LiteXModule):
             self.ts2_decode.eq(1), # Disable Scrambling bit of the received TS2 (7.5.10.5.1).
             self.idle_handshake.eq(1), # Idle Symbols + handshake (7.5.4.10).
             t_ux_exit.wait.eq(ux_armed),
-            t_recov_idle.wait.eq(with_timers),
+            t_recovery_idle.wait.eq(with_timers),
             If(t_ux_exit.done,
                 NextState("eSS.Inactive")
             ).Elif(self.directed_loopback & self.loopback_capable,
@@ -993,7 +984,7 @@ class USB3LTSSM(LiteXModule):
             ).Elif(self.rx_idle8,
                 # Idle handshake -> U0 (7.5.10.3).
                 NextState("U0")
-            ).Elif(t_recov_idle.done,
+            ).Elif(t_recovery_idle.done,
                 # tRecoveryIdleTimeout (2ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
             )
@@ -1005,8 +996,8 @@ class USB3LTSSM(LiteXModule):
             self.ess_inactive.eq(1),
             NextValue(ux_armed, 0),
             NextValue(u3_entry_cnt, 0), # the streak is consumed by going inactive
-            t_ss_quiet.wait.eq(with_timers),
-            If(t_ss_quiet.done,
+            t_ess_quiet.wait.eq(with_timers),
+            If(t_ess_quiet.done,
                 # 12ms quiet -> Rx.Detect (transient re-train).
                 NextState("Polling.ExitToRxDetect")
             )
@@ -1058,21 +1049,26 @@ class USB3LTSSM(LiteXModule):
             self.lfps_tx_wakeup_u3.eq(hs_run & hs_send & (hs_mode == 3)),
         ]
 
-    def finalize(self):
-        # Post-finalization wiring: FSM state/encoding only exist once the FSM is finalized.
-        LiteXModule.finalize(self)
-        fsm = self.fsm
+        # State-dependent logic --------------------------------------------------------------------
+        # (fsm.ongoing references after the states definitions: the state encoding is unchanged).
+        in_u1               = fsm.ongoing("U1")
+        in_u2               = fsm.ongoing("U2")
+        in_u3               = fsm.ongoing("U3")
+        in_loopback         = fsm.ongoing("Loopback")
+        in_hot_reset_active = fsm.ongoing("HotReset.Active")
+        in_recovery_idle    = fsm.ongoing("Recovery.Idle")
+        in_polling_config   = fsm.ongoing("Polling.Configuration")
+        in_polling_idle     = fsm.ongoing("Polling.Idle")
 
-        # Partner exit/wakeup request (see __init__): mode-aware (each state listens to its own
-        # burst class only), cleared by the handshake start or when leaving the handshake-capable
-        # states.
-        hs_capable = ((fsm.state == fsm.encoding["U1"]) | (fsm.state == fsm.encoding["U2"]) |
-                      (fsm.state == fsm.encoding["U3"]) | (fsm.state == fsm.encoding["Loopback"]))
-        rx_detect = Signal()
+        # Partner exit/wakeup request (see rx_burst_ok above): mode-aware (each state listens to its
+        # own burst class only), cleared by the handshake start or when leaving the
+        # handshake-capable states.
+        hs_capable = (in_u1 | in_u2 | in_u3 | in_loopback)
+        rx_detect  = Signal()
         self.comb += [
-            If(fsm.state == fsm.encoding["U1"],
+            If(in_u1,
                 rx_detect.eq(self.lfps_rx_exit_u1)
-            ).Elif(fsm.state == fsm.encoding["U3"],
+            ).Elif(in_u3,
                 rx_detect.eq(self.lfps_rx_wakeup_u3)
             ).Else(
                 # U2 responder and Loopback slave both listen to U2/Loopback exit bursts.
@@ -1090,77 +1086,75 @@ class USB3LTSSM(LiteXModule):
             ).Elif(~rx_detect,
                 rx_armed.eq(1)
             ),
-            If(self.hs_run | ~hs_capable,
-                self.rx_burst_ok.eq(0)
-            ).Elif(rx_detect & (rx_armed | (fsm.state == fsm.encoding["Loopback"])),
-                self.rx_burst_ok.eq(1)
+            If(hs_run | ~hs_capable,
+                rx_burst_ok.eq(0)
+            ).Elif(rx_detect & (rx_armed | in_loopback),
+                rx_burst_ok.eq(1)
             )
         ]
 
         # U1 DS Ping timeout counter (reset on Ping reception).
         self.sync += [
-            If((fsm.state == fsm.encoding["U1"]) & self.ds_port,
+            If(in_u1 & self.ds_port,
                 If(self.lfps_rx_ping,
-                    self.u1_ping_cnt.eq(0)
+                    u1_ping_cnt.eq(0)
                 ).Else(
-                    If(~self.u1_ping_done,
-                        self.u1_ping_cnt.eq(self.u1_ping_cnt + 1)
+                    If(~u1_ping_done,
+                        u1_ping_cnt.eq(u1_ping_cnt + 1)
                     )
                 )
             ).Else(
-                self.u1_ping_cnt.eq(0)
+                u1_ping_cnt.eq(0)
             )
         ]
 
         # U1 UFP min residency counter.
         self.sync += [
-            If((fsm.state == fsm.encoding["U1"]) & ~self.ds_port,
-                If(~self.u1_residency_done,
-                    self.u1_res_cnt.eq(self.u1_res_cnt + 1)
+            If(in_u1 & ~self.ds_port,
+                If(~u1_residency_done,
+                    u1_res_cnt.eq(u1_res_cnt + 1)
                 )
             ).Else(
-                self.u1_res_cnt.eq(0)
+                u1_res_cnt.eq(0)
             )
         ]
 
         # U2 Inactivity Timeout counter (reset on U1 entry).
         self.sync += [
-            If(fsm.state == fsm.encoding["U1"],
-                self.u2_tick_cnt.eq(self.u2_tick_cnt + 1),
-                If(self.u2_tick_cnt == (self.u2_tick_lim - 1),
-                    self.u2_tick_cnt.eq(0),
-                    If(~self.u2_timeout_done,
-                        self.u2_cnt.eq(self.u2_cnt + 1)
+            If(in_u1,
+                u2_tick_cnt.eq(u2_tick_cnt + 1),
+                If(u2_tick_cnt == (u2_tick_lim - 1),
+                    u2_tick_cnt.eq(0),
+                    If(~u2_timeout_done,
+                        u2_cnt.eq(u2_cnt + 1)
                     )
                 )
             ).Else(
-                self.u2_tick_cnt.eq(0),
-                self.u2_cnt.eq(0),
+                u2_tick_cnt.eq(0),
+                u2_cnt.eq(0),
             )
         ]
 
         # Hot Reset Active reset-done delay counter.
         self.sync += [
-            If(fsm.state == fsm.encoding["HotReset.Active"],
-                self.hr_cnt.eq(self.hr_cnt + 1)
+            If(in_hot_reset_active,
+                hr_cnt.eq(hr_cnt + 1)
             ).Else(
-                self.hr_cnt.eq(0)
+                hr_cnt.eq(0)
             )
         ]
 
         self.comb += [
-            self.lfps_tx_ping.eq((fsm.state == fsm.encoding["U1"]) &
-                                 ~self.ds_port & self.u1_residency_done),
+            # Ping.LFPS (UFP in U1, after U1_MIN_RESIDENCY).
+            self.lfps_tx_ping.eq(in_u1 & ~self.ds_port & u1_residency_done),
             # Loopback bit of the transmitted TS2 (7.5.4.9.1, 7.5.10.4.1): directed loopback master,
             # in Polling.Configuration or (directed from U0) in Recovery.Configuration/Idle.
             self.tx_ts2_loopback.eq(
-                (self.lb_pending &
-                    ((fsm.state == fsm.encoding["Recovery.Configuration"]) |
-                     (fsm.state == fsm.encoding["Recovery.Idle"]))) |
+                (lb_pending & (in_recovery_config | in_recovery_idle)) |
                 (self.directed_loopback & self.loopback_capable &
-                    ((fsm.state == fsm.encoding["Polling.Configuration"]) |
-                     (fsm.state == fsm.encoding["Polling.Idle"])))),
+                    (in_polling_config | in_polling_idle))),
         ]
+
 
 # SuperSpeedPlus Polling (7.5.4.3-7.5.4.6) ---------------------------------------------------------
 
