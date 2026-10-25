@@ -4,8 +4,9 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""SuperSpeedPlus Polling (usb3_pipe/ssp.py): SCD1/SCD2 and LBPM generation/decoding, SSP Polling
-negotiation between two ports (Gen 1x2/Gen 1x1 capability match, SuperSpeed partner fallback)."""
+"""SuperSpeedPlus Polling: SCD1/SCD2 and LBPM generation/decoding (usb3_pipe/lfps.py), SSP Polling
+negotiation between two ports (usb3_pipe/ltssm.py: Gen 1x2/Gen 1x1 capability match, SuperSpeed
+partner fallback)."""
 
 import random
 import unittest
@@ -14,7 +15,8 @@ from migen import *
 
 from litex.gen import *
 
-from usb3_pipe.ssp import *
+from usb3_pipe.lfps  import *
+from usb3_pipe.ltssm import SSPPolling
 
 SYS_CLK_FREQ = 133e6
 TIMER_SCALE  = 10

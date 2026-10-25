@@ -5,7 +5,12 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 Low Frequency Periodic Signaling (USB 3.2 6.9): Polling, Ping, U1/U2 exit, U3 wakeup and
-Warm Reset LFPS generation/detection.
+Warm Reset LFPS generation/detection and SuperSpeedPlus LFPS signaling (6.9.4/6.9.5):
+
+- SCDGenerator/SCDChecker   : Polling.LFPS binary representation (tRepeat 6-9us: 0, 11-14us: 1,
+                              Table 6-32), SCD1 (0010b) / SCD2 (1101b) transmitted LSb first.
+- LBPMGenerator/LBPMChecker : LFPS Based PWM Messages (tPWM 2.2us, 0: 1/3 LFPS, 1: 2/3 LFPS,
+                              delimiter: tPWM LFPS + tPWM EI, LSb first, Table 6-33).
 """
 
 # LFPS is the first signaling to happen during the initialization of the USB3.0 link.
@@ -564,3 +569,287 @@ class LFPSUnit(LiteXModule):
         # SerDes without tx_lfps: raw pattern only sent when non-zero (high half of the period).
         if hasattr(serdes, "tx_lfps"):
             self.comb += serdes.tx_lfps.eq(tx_lfps)
+
+# SuperSpeedPlus Constants/Helpers (6.9.4/6.9.5, Table 7-13) ---------------------------------------
+
+# SuperSpeedPlus LFPS signaling is on the Configuration Lane (6.13.12). Timings are divided by
+# timer_scale (sim acceleration, both partners must use the same scale).
+
+SCD1 = 0b0010 # Transmitted LSb first: 0, 1, 0, 0.
+SCD2 = 0b1101 # Transmitted LSb first: 1, 0, 1, 1.
+
+def scd_bits(scd):
+    """Transmission order (LSb first) of a SCD."""
+    return [(scd >> i) & 0x1 for i in range(4)]
+
+# PHY LBPM (Table 7-13).
+LBPM_PHY_CAPABILITY = 0b00
+LBPM_PHY_READY      = 0b01
+
+def lbpm_phy_capability(gen2=False, x2=False):
+    return LBPM_PHY_CAPABILITY | ((1 if gen2 else 0) << 2) | ((1 if x2 else 0) << 5)
+
+def lbpm_phy_ready(dfp=False, x2=False, retimers=0, rt_config=False):
+    return (LBPM_PHY_READY | (retimers << 2) |
+        ((1 if (x2 and dfp) else 0) << 6) | ((1 if rt_config else 0) << 7))
+
+def rounded_cycles(clk_freq, t, timer_scale=1, floor=2):
+    """Convert a time to clock cycles divided by timer_scale, rounded (with a minimal floor): used
+    by the SuperSpeedPlus LFPS signaling (scaled_cycles rounds up before the timer_scale division).
+    """
+    return max(floor, int(round(t*clk_freq/timer_scale)))
+
+# LFPS RX Front-End --------------------------------------------------------------------------------
+
+class LFPSRXFrontEnd(LiteXModule):
+    """Electrical idle resynchronization/deglitch (as the LFPS checkers) and burst/gap measurement:
+    burst_end pulses with burst (length), burst_start pulses with period (cycles since the previous
+    burst start), gap is the current electrical idle length."""
+    def __init__(self):
+        self.idle        = Signal()   # i
+        self.burst_start = Signal()   # o
+        self.burst_end   = Signal()   # o
+        self.burst       = Signal(32) # o
+        self.period      = Signal(32) # o
+        self.gap         = Signal(32) # o
+        self.active      = Signal()   # o: Burst ongoing.
+
+        # # #
+
+        self.idle_deglitcher = idle_deglitcher = LFPSIdleDeglitcher(self.idle)
+        idle = idle_deglitcher.o
+        idle_d       = Signal(reset=1)
+        burst_count  = Signal(32)
+        period_count = Signal(32)
+        self.sync += [
+            idle_d.eq(idle),
+            If(period_count != 2**32 - 1, period_count.eq(period_count + 1)),
+            If(idle, If(self.gap != 2**32 - 1, self.gap.eq(self.gap + 1))).Else(self.gap.eq(0)),
+            If(~idle, burst_count.eq(burst_count + 1)),
+            If(idle_d & ~idle,
+                self.period.eq(period_count),
+                period_count.eq(1),
+                burst_count.eq(1),
+            ),
+            If(~idle_d & idle,
+                self.burst.eq(burst_count),
+            ),
+        ]
+        self.comb += [
+            self.active.eq(~idle),
+            self.burst_start.eq(idle_d & ~idle),
+            self.burst_end.eq(~idle_d & idle),
+        ]
+
+# SCD Generator ------------------------------------------------------------------------------------
+
+class SCDGenerator(LiteXModule):
+    """Polling.LFPS bursts (tBurst 1us) with tRepeat encoding the bits of SCD1/SCD2 (7.5us: 0, 12.5us:
+    1) or non varying tRepeat (10us, mode 0). count increments after each complete SCD (4 bursts,
+    mode 1/2) or each burst (mode 0)."""
+    def __init__(self, sys_clk_freq, timer_scale=1):
+        self.mode    = Signal(2)  # i: 0: Polling.LFPS, 1: SCD1, 2: SCD2.
+        self.enable  = Signal()   # i
+        self.tx_lfps = Signal()   # o: LFPS burst (else electrical idle).
+        self.count   = Signal(16) # o
+
+        # # #
+
+        burst    = rounded_cycles(sys_clk_freq,  1.0e-6, timer_scale)
+        repeat_0 = rounded_cycles(sys_clk_freq,  7.5e-6, timer_scale)
+        repeat_1 = rounded_cycles(sys_clk_freq, 12.5e-6, timer_scale)
+        repeat_n = rounded_cycles(sys_clk_freq, 10.0e-6, timer_scale)
+
+        bit_index = Signal(2)
+        timer     = Signal(32)
+        bit       = Signal()
+        repeat    = Signal(32)
+        self.comb += [
+            Case(self.mode, {
+                1: bit.eq(Array(scd_bits(SCD1))[bit_index]),
+                2: bit.eq(Array(scd_bits(SCD2))[bit_index]),
+                "default": bit.eq(0),
+            }),
+            If(self.mode == 0,
+                repeat.eq(repeat_n)
+            ).Elif(bit,
+                repeat.eq(repeat_1)
+            ).Else(
+                repeat.eq(repeat_0)
+            ),
+            self.tx_lfps.eq(self.enable & (timer < burst)),
+        ]
+        self.sync += [
+            If(~self.enable,
+                timer.eq(0),
+                bit_index.eq(0),
+                self.count.eq(0),
+            ).Elif(timer == (repeat - 1),
+                timer.eq(0),
+                bit_index.eq(bit_index + 1),
+                If((self.mode == 0) | (bit_index == 3),
+                    self.count.eq(self.count + 1)
+                )
+            ).Else(
+                timer.eq(timer + 1)
+            )
+        ]
+
+# SCD Checker --------------------------------------------------------------------------------------
+
+class SCDChecker(LiteXModule):
+    """Polling.LFPS binary representation decoding (Table 6-32, burst start to burst start): scd1/scd2
+    pulse when the last 4 received bits are a SCD1/SCD2, polling pulses on each Polling.LFPS burst
+    (period 6-14us, valid burst 0.6-1.4us), plain pulses on bursts with a non-SCD period (guard band)."""
+    def __init__(self, frontend, sys_clk_freq, timer_scale=1):
+        self.scd1    = Signal() # o
+        self.scd2    = Signal() # o
+        self.polling = Signal() # o
+        self.plain   = Signal() # o
+
+        # # #
+
+        c = lambda t: rounded_cycles(sys_clk_freq, t, timer_scale)
+        bits  = Signal(4)
+        valid = Signal(3)
+        b0    = Signal()
+        b1    = Signal()
+        self.comb += [
+            b0.eq((frontend.period >= c(6e-6))  & (frontend.period <= c(9e-6))),
+            b1.eq((frontend.period >= c(11e-6)) & (frontend.period <= c(14e-6))),
+        ]
+        start_d = Signal()
+        self.sync += [
+            start_d.eq(frontend.burst_start),
+            self.scd1.eq(0),
+            self.scd2.eq(0),
+            self.polling.eq(0),
+            self.plain.eq(0),
+            If(start_d,
+                self.polling.eq((frontend.period >= c(6e-6)) & (frontend.period <= c(14e-6))),
+                If(b0 | b1,
+                    bits.eq(Cat(bits[1:], b1)),
+                    If(valid != 4, valid.eq(valid + 1)),
+                    If(valid >= 3,
+                        # First received bit in bits[0] (LSb first).
+                        self.scd1.eq(Cat(bits[1:], b1) == SCD1),
+                        self.scd2.eq(Cat(bits[1:], b1) == SCD2),
+                    )
+                ).Else(
+                    valid.eq(0),
+                    self.plain.eq((frontend.period >= c(6e-6)) & (frontend.period <= c(14e-6))),
+                )
+            )
+        ]
+
+# LBPM Generator -----------------------------------------------------------------------------------
+
+class LBPMGenerator(LiteXModule):
+    """Continuous LBPM transmission of data (sampled at each LBPM start): delimiter, 8 bits (LSb
+    first), delimiter between consecutive LBPMs (6.9.5.2). sent pulses at the end of each LBPM."""
+    def __init__(self, sys_clk_freq, timer_scale=1):
+        self.enable  = Signal()  # i
+        self.data    = Signal(8) # i
+        self.tx_lfps = Signal()  # o
+        self.sent    = Signal()  # o
+        self.current = Signal(8) # o: LBPM being sent.
+
+        # # #
+
+        t_pwm = rounded_cycles(sys_clk_freq, 2.2e-6, timer_scale, floor=6)
+        t_0   = t_pwm//3
+        t_1   = (2*t_pwm)//3
+
+        timer = Signal(32)
+        index = Signal(4) # 0: delimiter, 1-8: bits.
+        phase = Signal()  # Delimiter: 0 LFPS tPWM, 1 EI tPWM.
+        bit   = Signal()
+        self.comb += bit.eq(Array([self.current[i] for i in range(8)] + [0]*8)[index - 1])
+        self.comb += [
+            If(~self.enable,
+                self.tx_lfps.eq(0)
+            ).Elif(index == 0,
+                self.tx_lfps.eq(~phase)
+            ).Else(
+                self.tx_lfps.eq(timer < Mux(bit, t_1, t_0))
+            )
+        ]
+        self.sync += [
+            self.sent.eq(0),
+            If(~self.enable,
+                timer.eq(0),
+                index.eq(0),
+                phase.eq(0),
+                self.current.eq(self.data),
+            ).Elif(timer == (t_pwm - 1),
+                timer.eq(0),
+                If(index == 0,
+                    phase.eq(~phase),
+                    If(phase,
+                        index.eq(1)
+                    )
+                ).Elif(index == 8,
+                    index.eq(0),
+                    self.sent.eq(1),
+                    self.current.eq(self.data),
+                ).Else(
+                    index.eq(index + 1)
+                )
+            ).Else(
+                timer.eq(timer + 1)
+            )
+        ]
+
+# LBPM Checker -------------------------------------------------------------------------------------
+
+class LBPMChecker(LiteXModule):
+    """LBPM reception (receive windows of Table 6-33): bursts of 0.45-0.85us: 0, 1.28-1.85us: 1, a
+    delimiter (>= 1.9us burst) starts/ends the LBPMs. received pulses with data after 8 bits followed
+    by a delimiter."""
+    def __init__(self, frontend, sys_clk_freq, timer_scale=1):
+        self.received = Signal()  # o
+        self.data     = Signal(8) # o
+
+        # # #
+
+        t_pwm = rounded_cycles(sys_clk_freq, 2.2e-6, timer_scale, floor=6)
+        lo0   = max(1, int(t_pwm*0.45/2.2))
+        hi0   = int(t_pwm*0.85/2.2) + 1
+        lo1   = int(t_pwm*1.28/2.2)
+        hi1   = int(t_pwm*1.85/2.2) + 1
+        delim = int(t_pwm*1.9/2.2)
+
+        shift   = Signal(8)
+        count   = Signal(4)
+        started = Signal()
+        is0     = Signal()
+        is1     = Signal()
+        isd     = Signal()
+        self.comb += [
+            is0.eq((frontend.burst >= lo0) & (frontend.burst <= hi0)),
+            is1.eq((frontend.burst >= lo1) & (frontend.burst <= hi1)),
+            isd.eq(frontend.burst >= delim),
+        ]
+        end_d = Signal()
+        self.sync += [
+            end_d.eq(frontend.burst_end),
+            self.received.eq(0),
+            If(frontend.gap > 3*t_pwm,
+                started.eq(0)
+            ),
+            If(end_d,
+                If(isd,
+                    If(started & (count == 8),
+                        self.received.eq(1),
+                        self.data.eq(shift),
+                    ),
+                    started.eq(1),
+                    count.eq(0),
+                ).Elif(started & (is0 | is1) & (count != 8),
+                    shift.eq(Cat(shift[1:], is1)),
+                    count.eq(count + 1),
+                ).Else(
+                    started.eq(0)
+                )
+            )
+        ]

@@ -8,7 +8,7 @@
 
 Two Gen 1 lanes (one USB3PIPE per lane: 8b/10b, SKP, word alignment, TS, scrambling) controlled by a
 single LTSSM, Lane 0 is the Configuration Lane:
-- SuperSpeedPlus Polling (SCD1/SCD2, LBPM PHY Capability/Ready, usb3_pipe/ssp.py) on Lane 0 before
+- SuperSpeedPlus Polling (SCD1/SCD2, LBPM PHY Capability/Ready, SSPPolling) on Lane 0 before
   Polling.RxEQ (7.5.4.3-7.5.4.6), LFPS on Lane 0 only (6.13.12), Lane 1 in electrical idle.
 - Ordered Sets (TSEQ/TS1/TS2/SKP) transmitted simultaneously on both lanes (6.13.6), TS1/TS2
   requirements satisfied on both lanes (rx_ts1/rx_ts2 reported when seen on both lanes).
@@ -35,11 +35,10 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common     import COM
 from usb3_pipe.core       import USB3PIPE
-from usb3_pipe.ltssm      import USB3LTSSM
+from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.phy        import connect_ltssm_pipe, USB3PHY_STATUS, USB3PHY_LINK_CTRL
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, link_layout
-from usb3_pipe.ssp        import SSPPolling
 
 # Helpers ------------------------------------------------------------------------------------------
 

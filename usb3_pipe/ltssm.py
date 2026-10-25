@@ -5,7 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 Link Training and Status State Machine (USB 3.2 7.5): Polling, U0, Recovery, U1/U2/U3,
-Hot/Warm Reset, Compliance, Loopback, eSS.Inactive, PM handshake and timers.
+Hot/Warm Reset, Compliance, Loopback, eSS.Inactive, PM handshake and timers, and the SuperSpeedPlus
+Polling substates (SSPPolling, 7.5.4.3-7.5.4.6, see doc/gen2-x2-roadmap.md).
 """
 
 from migen import *
@@ -16,6 +17,9 @@ from litex.gen import *
 from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
     exit_burst_cycles,
     exit_u1_min_cycles, exit_u2_min_cycles, exit_u3_min_cycles)
+from usb3_pipe.lfps import (LFPSRXFrontEnd, SCDGenerator, SCDChecker, LBPMGenerator, LBPMChecker,
+    LBPM_PHY_CAPABILITY, LBPM_PHY_READY, lbpm_phy_capability,
+    lfps_clk_half_period_cycles, rounded_cycles)
 
 # Link Training and Status State Machine -----------------------------------------------------------
 
@@ -138,7 +142,7 @@ class USB3LTSSM(LiteXModule):
         self.rx_idle8        = Signal(reset=1) # i: Idle handshake done (8 received + 16 sent),
                                                #    reset=1: short path for a standalone LTSSM.
 
-        # SuperSpeedPlus Polling (ssp=True, usb3_pipe/ssp.py, 7.5.4.3-7.5.4.6) ---------------------
+        # SuperSpeedPlus Polling (ssp=True, SSPPolling below, 7.5.4.3-7.5.4.6) ---------------------
         # In Polling.LFPS, ssp_polling runs the SSPPolling substates (SCD1/SCD2, LBPM PortMatch/
         # PortConfig) instead of the SuperSpeed Polling.LFPS handshake: ssp_done exits to
         # Polling.RxEQ, ssp_fallback (SuperSpeed partner) continues with the SuperSpeed handshake.
@@ -1216,3 +1220,221 @@ class USB3LTSSM(LiteXModule):
                      (fsm.state == fsm.encoding["Polling.Idle"])))),
         ]
 
+# SuperSpeedPlus Polling (7.5.4.3-7.5.4.6) ---------------------------------------------------------
+
+class SSPPolling(LiteXModule):
+    """SuperSpeedPlus Polling substates (7.5.4.3-7.5.4.6) on the Configuration Lane, Gen 1 speeds.
+
+    start (level, LTSSM in Polling.LFPS) runs: Polling.LFPS (SCD1 transmitted, 2 SCD1 sent after a SCD1/
+    SCD2 is received) -> Polling.LFPSPlus (SCD2, 2 SCD2 sent after a SCD2 is received, end of SCD) ->
+    Polling.PortMatch (PHY Capability LBPMs, the port with the higher capability adjusts to the
+    partner's, 4 matched LBPMs sent after 2 consecutive matched received) -> Polling.PortConfig (PHY
+    Ready LBPMs, 4 sent after 2 consecutive identical received, the DFP PHY Ready bit 7 de-asserted)
+    -> done (level until start is released), x2 = negotiated Gen 1x2 (Table 7-14).
+
+    16 consecutive Polling.LFPS bursts received without SCD (SuperSpeed partner, 7.5.4.3.1) after
+    4 SCD1 sent: ss_fallback (level until start is released), the LTSSM continues with the SuperSpeed
+    Polling.LFPS handshake. tPollingLBPMLFPSTimeout (12ms) in PortMatch/PortConfig: fail.
+
+    Not implemented: tPollingSCDLFPSTimeout, re-timers presence announcement/RT Config, Gen 2,
+    PortMatch re-entry/capability fallback after a training failure (Table 7-15).
+    """
+    def __init__(self, sys_clk_freq, timer_scale=1, x2_capable=True):
+        self.start       = Signal() # i
+        self.ds_port     = Signal() # i
+        self.x2_capable  = Signal(reset=int(x2_capable)) # i
+        self.idle        = Signal() # i: RX electrical idle (Configuration Lane).
+        self.tx_lfps     = Signal() # o: LFPS burst (else electrical idle).
+        self.tx_active   = Signal() # o: SSP LFPS transmission (tx_lfps drives the transmitter).
+        self.done        = Signal() # o
+        self.x2          = Signal() # o
+        self.ss_fallback = Signal() # o
+        self.fail        = Signal() # o
+        self.state       = Signal(4) # o: (debug).
+
+        # # #
+
+        self.frontend = frontend = LFPSRXFrontEnd()
+        self.scd_gen  = scd_gen  = SCDGenerator(sys_clk_freq, timer_scale)
+        self.scd_chk  = scd_chk  = SCDChecker(frontend, sys_clk_freq, timer_scale)
+        self.lbpm_gen = lbpm_gen = LBPMGenerator(sys_clk_freq, timer_scale)
+        self.lbpm_chk = lbpm_chk = LBPMChecker(frontend, sys_clk_freq, timer_scale)
+        self.comb += frontend.idle.eq(self.idle)
+
+        # Timeouts.
+        lbpm_timeout = rounded_cycles(sys_clk_freq, 12e-3, timer_scale)
+        scd_end      = (rounded_cycles(sys_clk_freq,  1e-6, timer_scale) +
+                        2*rounded_cycles(sys_clk_freq, 14e-6, timer_scale))
+        timer = Signal(32)
+
+        # Received LBPM tracking (consecutive identical/matched).
+        rx_last      = Signal(8)
+        rx_count     = Signal(2)
+        tx_count     = Signal(3)
+        scd_rx       = Signal()
+        scd_sent_ref = Signal(16)
+        plain_count  = Signal(5)
+        own_cap      = Signal(8)
+        tx_cap       = Signal(8)
+        partner_x2   = Signal()
+        self.comb += own_cap.eq(lbpm_phy_capability(x2=False) | (self.x2_capable << 5))
+
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            NextValue(tx_cap,      own_cap),
+            NextValue(scd_rx,      0),
+            NextValue(plain_count, 0),
+            NextValue(timer,       0),
+            NextValue(self.x2,     0),
+            If(self.start,
+                NextState("POLLING-LFPS")
+            )
+        )
+        fsm.act("POLLING-LFPS",
+            self.tx_active.eq(1),
+            scd_gen.enable.eq(1),
+            scd_gen.mode.eq(1),
+            self.tx_lfps.eq(scd_gen.tx_lfps),
+            If((scd_chk.scd1 | scd_chk.scd2) & ~scd_rx,
+                NextValue(scd_rx, 1),
+                NextValue(scd_sent_ref, scd_gen.count),
+            ),
+            If(scd_chk.plain,
+                If(plain_count != 16, NextValue(plain_count, plain_count + 1))
+            ),
+            If(scd_rx & (scd_gen.count >= (scd_sent_ref + 2)),
+                NextValue(scd_rx, 0),
+                NextState("POLLING-LFPSPLUS")
+            ).Elif(~scd_rx & (plain_count >= 16) & (scd_gen.count >= 4),
+                NextState("SS-FALLBACK")
+            ),
+            If(~self.start, NextState("IDLE"))
+        )
+        fsm.act("POLLING-LFPSPLUS",
+            self.tx_active.eq(1),
+            scd_gen.enable.eq(1),
+            scd_gen.mode.eq(2),
+            self.tx_lfps.eq(scd_gen.tx_lfps),
+            If(scd_chk.scd2 & ~scd_rx,
+                NextValue(scd_rx, 1),
+                NextValue(scd_sent_ref, scd_gen.count),
+            ),
+            If(scd_rx & (scd_gen.count >= (scd_sent_ref + 2)),
+                NextValue(timer, 0),
+                NextState("SCD-END")
+            ),
+            If(~self.start, NextState("IDLE"))
+        )
+        fsm.act("SCD-END",
+            # End of SCD (Figure 6-36 (c)/(d)): an extra tBurst followed by EI of 2x max tRepeat.
+            self.tx_active.eq(1),
+            self.tx_lfps.eq(timer < rounded_cycles(sys_clk_freq, 1e-6, timer_scale)),
+            NextValue(timer, timer + 1),
+            If(timer == scd_end,
+                NextValue(timer, 0),
+                NextValue(rx_count, 0),
+                NextValue(tx_count, 0),
+                NextState("POLLING-PORTMATCH")
+            ),
+            If(~self.start, NextState("IDLE"))
+        )
+        rx_matched = Signal()
+        self.comb += rx_matched.eq(
+            ((lbpm_chk.data[0:2] == LBPM_PHY_CAPABILITY) & (lbpm_chk.data == tx_cap)) |
+            (lbpm_chk.data[0:2] == LBPM_PHY_READY))
+        fsm.act("POLLING-PORTMATCH",
+            self.tx_active.eq(1),
+            lbpm_gen.enable.eq(1),
+            self.tx_lfps.eq(lbpm_gen.tx_lfps),
+            NextValue(timer, timer + 1),
+            If(lbpm_chk.received,
+                If(lbpm_chk.data[0:2] == LBPM_PHY_CAPABILITY,
+                    # Highest common capability (Gen 1: x2 when both are x2 capable, Table 7-14).
+                    NextValue(tx_cap, lbpm_chk.data & tx_cap),
+                    NextValue(partner_x2, lbpm_chk.data[5]),
+                ),
+                If(rx_matched,
+                    If(rx_count != 2, NextValue(rx_count, rx_count + 1))
+                ).Else(
+                    NextValue(rx_count, 0),
+                    NextValue(tx_count, 0),
+                )
+            ),
+            If(lbpm_gen.sent,
+                If((lbpm_gen.current == tx_cap) & (rx_count == 2),
+                    NextValue(tx_count, tx_count + 1)
+                ).Else(
+                    NextValue(tx_count, 0)
+                )
+            ),
+            If(tx_count == 4,
+                NextValue(self.x2, tx_cap[5]),
+                NextValue(rx_count, 0),
+                NextValue(tx_count, 0),
+                NextState("POLLING-PORTCONFIG")
+            ),
+            If(timer == lbpm_timeout, NextState("FAIL")),
+            If(~self.start, NextState("IDLE"))
+        )
+        tx_ready = Signal(8)
+        self.comb += tx_ready.eq(LBPM_PHY_READY | ((self.x2 & self.ds_port) << 6))
+        rx_ready_ok = Signal()
+        self.comb += rx_ready_ok.eq(
+            (lbpm_chk.data[0:2] == LBPM_PHY_READY) &
+            (lbpm_chk.data == rx_last) &
+            ~lbpm_chk.data[7]) # DFP Config Done (bit 7 de-asserted, x2) / reserved (UFP).
+        fsm.act("POLLING-PORTCONFIG",
+            self.tx_active.eq(1),
+            lbpm_gen.enable.eq(1),
+            self.tx_lfps.eq(lbpm_gen.tx_lfps),
+            NextValue(timer, timer + 1),
+            If(lbpm_chk.received,
+                NextValue(rx_last, lbpm_chk.data),
+                If(rx_ready_ok,
+                    If(rx_count != 2, NextValue(rx_count, rx_count + 1))
+                ).Elif(lbpm_chk.data[0:2] == LBPM_PHY_READY,
+                    NextValue(rx_count, 1),
+                    NextValue(tx_count, 0),
+                ).Else(
+                    NextValue(rx_count, 0),
+                    NextValue(tx_count, 0),
+                )
+            ),
+            If(lbpm_gen.sent & (lbpm_gen.current == tx_ready),
+                If(rx_count == 2,
+                    NextValue(tx_count, tx_count + 1)
+                )
+            ),
+            If(tx_count == 4,
+                NextState("DONE")
+            ),
+            If(timer == lbpm_timeout, NextState("FAIL")),
+            If(~self.start, NextState("IDLE"))
+        )
+        self.comb += lbpm_gen.data.eq(Mux(fsm.ongoing("POLLING-PORTCONFIG"), tx_ready, tx_cap))
+        fsm.act("DONE",
+            self.done.eq(1),
+            If(~self.start, NextState("IDLE"))
+        )
+        fsm.act("SS-FALLBACK",
+            self.ss_fallback.eq(1),
+            If(~self.start, NextState("IDLE"))
+        )
+        fsm.act("FAIL",
+            self.fail.eq(1),
+            If(~self.start, NextState("IDLE"))
+        )
+
+        # LFPS clock pattern (for transceivers sending the LFPS as a data pattern).
+        self.tx_pattern = Signal(20) # o
+        lfps_clk = Signal()
+        lfps_div = Signal(8)
+        half     = lfps_clk_half_period_cycles(sys_clk_freq, 25e6)
+        self.sync += [
+            lfps_div.eq(lfps_div + 1),
+            If(lfps_div == (half - 1),
+                lfps_div.eq(0),
+                lfps_clk.eq(~lfps_clk)
+            )
+        ]
+        self.comb += self.tx_pattern.eq(Replicate(lfps_clk, 20))
