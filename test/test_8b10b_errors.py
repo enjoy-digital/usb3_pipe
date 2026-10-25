@@ -15,7 +15,7 @@ from litex.soc.interconnect import stream
 from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import K
-from usb3_pipe.serdes import RXErrorSubstitution
+from usb3_pipe.datapath import RXErrorSubstitution
 
 K28_4 = K(28, 4)
 
@@ -94,7 +94,7 @@ def substitute(codes):
 
 class Test8b10bErrors(unittest.TestCase):
     def test_encoder_model_matches_litex_encoder(self):
-        from usb3_pipe.serdes import encode_8b10b
+        from usb3_pipe.coding import encode_8b10b
         rng     = random.Random(0)
         symbols = random_symbols(2000, rng)
         codes   = encode(symbols)

@@ -4,14 +4,17 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+import random
 import unittest
 
 from migen import *
 
-from usb3_pipe.common import COM, SKP
+from usb3_pipe.common import COM, SKP, gen2_skp_lfsr_symbols
 from usb3_pipe.scrambling import Scrambler, Descrambler
+from usb3_pipe.scrambling import GEN2_LFSR_SEED, gen2_lfsr_advance, Gen2Scrambler
 
 from test.common import ScramblerModel, symbols_to_words
+from test.model.gen2 import figure_6_12_step, Gen2ScramblerModel
 
 scrambler_ref = [
     0x14c017ff, 0x8202e7b2, 0xa6286e72, 0x8dbf6dbe,
@@ -422,3 +425,67 @@ class TestScrambling(unittest.TestCase):
 
         dut = Descrambler(reset=0xffff)
         run_simulation(dut, [generator(dut), checker(dut)])
+
+# Gen 2 (6.3.2.3) ----------------------------------------------------------------------------------
+
+class TestGen2Scrambling(unittest.TestCase):
+    def test_lfsr_figure_6_12(self):
+        # The polynomial/taps used by the hardware and gen2_lfsr_advance are the Figure 6-12 LFSR.
+        rng = random.Random(0)
+        for _ in range(100):
+            lfsr  = rng.getrandbits(23)
+            masks = gen2_lfsr_advance([1 << n for n in range(23)])
+            hw    = sum((bin(lfsr & m).count("1") & 0x1) << i for i, m in enumerate(masks))
+            out, ref = figure_6_12_step(lfsr)
+            self.assertEqual(hw,  ref)
+            self.assertEqual(out, (lfsr >> 22) & 0x1)
+        # Maximal length: 2^23 - 1 period (primitive polynomial), sampled: no return before.
+        lfsr = GEN2_LFSR_SEED
+        for _ in range(4096):
+            _, lfsr = figure_6_12_step(lfsr)
+            self.assertNotEqual(lfsr, GEN2_LFSR_SEED)
+
+    def test_skp_lfsr_symbols(self):
+        # Table 6-13: 4N+1 = {~LFSR[22], LFSR[22:16]} (40h-FFh), LFSR[15:8], LFSR[7:0].
+        self.assertEqual(gen2_skp_lfsr_symbols(0x400000), [0x40, 0x00, 0x00])
+        self.assertEqual(gen2_skp_lfsr_symbols(0x000000), [0x80, 0x00, 0x00])
+        self.assertEqual(gen2_skp_lfsr_symbols(GEN2_LFSR_SEED), [0x80 | 0x1d, 0xbf, 0xbc])
+        for lfsr in range(0, 2**23, 4099):
+            self.assertTrue(0x40 <= gen2_skp_lfsr_symbols(lfsr)[0] <= 0xff)
+
+    def test_scrambler_vs_model(self):
+        rng   = random.Random(0)
+        dut   = Gen2Scrambler(nbytes=4)
+        model = Gen2ScramblerModel()
+        def generator(dut):
+            for _ in range(200):
+                data     = [rng.randrange(256) for _ in range(4)]
+                advance  = [rng.random() < 0.9 for _ in range(4)]
+                scramble = [rng.random() < 0.8 for _ in range(4)]
+                yield dut.ce.eq(1)
+                yield dut.i.eq(int.from_bytes(bytes(data), "little"))
+                yield dut.advance.eq(sum(a << i for i, a in enumerate(advance)))
+                yield dut.scramble.eq(sum(s << i for i, s in enumerate(scramble)))
+                yield
+                out = (yield dut.o)
+                ref = [model.byte(d, a, s) for d, a, s in zip(data, advance, scramble)]
+                self.assertEqual(out, int.from_bytes(bytes(ref), "little"))
+        run_simulation(dut, generator(dut))
+
+    def test_scrambler_init(self):
+        # init: LFSR re-initialized to the seed (SYNC Ordered Set).
+        dut = Gen2Scrambler(nbytes=4)
+        def generator(dut):
+            yield dut.ce.eq(1)
+            yield dut.advance.eq(0b1111)
+            yield dut.scramble.eq(0b1111)
+            yield
+            first = (yield dut.o)
+            for _ in range(10):
+                yield
+            yield dut.init.eq(1)
+            yield
+            yield dut.init.eq(0)
+            yield
+            self.assertEqual((yield dut.o), first)
+        run_simulation(dut, generator(dut))

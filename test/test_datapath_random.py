@@ -18,7 +18,7 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import COM, SKP, SDP, SHP, END, EPF, SLC, TS1, TS2
 from usb3_pipe.core import USB3PIPE
 from usb3_pipe.scrambling import Scrambler, Descrambler
-from usb3_pipe.serdes import RXWordAligner, RXSKPRemover, TXSKPInserter, TXDatapath, RXDatapath
+from usb3_pipe.datapath import RXWordAligner, RXSKPRemover, TXSKPInserter, TXDatapath, RXDatapath
 
 from test.common import (ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words,
     strip_skp, stream_driver, swap_word)

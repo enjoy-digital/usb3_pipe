@@ -4,7 +4,8 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Gen 1 scrambling (USB 3.2 6.3.1.3, Appendix B): symbol level LFSR, Scrambler/Descrambler.
+"""USB3 scrambling: Gen 1 (USB 3.2 6.3.1.3, Appendix B) symbol level LFSR, Scrambler/Descrambler and
+Gen 2 (6.3.2.3) LFSR/Gen2Scrambler.
 """
 
 from migen import *
@@ -142,3 +143,69 @@ class Descrambler(LiteXModule):
             sink.connect(scrambler.sink),
             scrambler.source.connect(source)
         ]
+
+# Gen 2 LFSR helpers (6.3.2.3) ---------------------------------------------------------------------
+
+# G(X) = X^23 + X^21 + X^16 + X^8 + X^5 + X^2 + 1, seed 1DBFBCh. The LFSR is the Galois structure of
+# Figure 6-12: D0 <- D22, D2/D5/D8/D16/D21 <- D(n-1) ^ D22, Data Out = Data In ^ D22.
+GEN2_LFSR_SEED   = 0x1dbfbc
+GEN2_LFSR_SEED_1 = 0x0607bb   # Lane 1 (Gen 2x2, 6.13.5).
+GEN2_LFSR_TAPS   = (1 << 21) | (1 << 16) | (1 << 8) | (1 << 5) | (1 << 2) | (1 << 0)
+
+def gen2_lfsr_advance(state):
+    """Advance the Gen 2 LFSR by one bit (state: list of 23 masks over a reference state)."""
+    msb = state[22]
+    new = [0] + state[:22]
+    for i in range(23):
+        if (GEN2_LFSR_TAPS >> i) & 0x1:
+            new[i] ^= msb
+    return new
+
+# Gen 2 Scrambler (6.3.2.3) ------------------------------------------------------------------------
+
+class Gen2Scrambler(LiteXModule):
+    """Gen 2 scrambler on nbytes bytes per cycle (byte 0 first).
+
+    Per byte: advance[i] (the LFSR advances 8 bits) and scramble[i] (the byte is XORed with the LFSR
+    output, only meaningful when advancing). init re-initializes the LFSR to the seed (SYNC Ordered Set).
+    """
+    def __init__(self, nbytes=4, seed=GEN2_LFSR_SEED):
+        self.ce       = Signal()          # i
+        self.init     = Signal()          # i
+        self.advance  = Signal(nbytes)    # i
+        self.scramble = Signal(nbytes)    # i
+        self.i        = Signal(8*nbytes)  # i
+        self.o        = Signal(8*nbytes)  # o
+        self.state    = Signal(23)        # o: Current LFSR state (SKP Ordered Set LFSR Symbols).
+
+        # # #
+
+        cur   = Signal(23, reset=seed)
+        state = cur
+        self.comb += self.state.eq(cur)
+        for b in range(nbytes):
+            masks = [1 << n for n in range(23)]
+            key   = Signal(8)
+            for n in range(8):
+                self.comb += key[n].eq(lfsr_xor(state, masks[22]))
+                masks = gen2_lfsr_advance(masks)
+            self.comb += If(self.advance[b] & self.scramble[b],
+                self.o[8*b:8*(b+1)].eq(self.i[8*b:8*(b+1)] ^ key)
+            ).Else(
+                self.o[8*b:8*(b+1)].eq(self.i[8*b:8*(b+1)])
+            )
+            new = Signal(23)
+            self.comb += If(self.advance[b],
+                new.eq(Cat(*[lfsr_xor(state, mask) for mask in masks]))
+            ).Else(
+                new.eq(state)
+            )
+            state = new
+        self.sync += [
+            If(self.init,
+                cur.eq(seed)
+            ).Elif(self.ce,
+                cur.eq(state)
+            )
+        ]
+

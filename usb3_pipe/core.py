@@ -18,7 +18,7 @@ from usb3_pipe.common import *
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
-from usb3_pipe.serdes import RXWordAligner
+from usb3_pipe.datapath import RXWordAligner
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -80,13 +80,15 @@ class USB3PIPE(LiteXModule):
     - RX words alignment.
     - TX scrambling/RX descrambling.
 
-    Gen 1x2 lanes (usb3_pipe/x2.py): lfsr_seed is the lane scrambler seed (FFFFh Lane 0, 8000h
+    Gen 1x2 lanes (USB3PHY lanes=2): lfsr_seed is the lane scrambler seed (FFFFh Lane 0, 8000h
     Lane 1, 6.13.5) and with x2_lane the descrambled lane stream is output as is on source (no
     framing alignment and no rx_ready gating: the lanes are deskewed on the Training Sequences, the
-    framing alignment/gating is done after the lanes destriping).
+    framing alignment/gating is done after the lanes destriping). With ssp (Configuration Lane), the
+    SuperSpeedPlus Polling LFPS (lfps_tx_ssp/lfps_tx_ssp_lfps, from SSPPolling) has priority on the
+    LFPS/electrical idle TX controls.
     """
     def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True, timer_scale=1,
-        lfsr_seed=LFSR_SEED_LANE0, x2_lane=False):
+        lfsr_seed=LFSR_SEED_LANE0, x2_lane=False, ssp=False):
         assert sys_clk_freq >= 125e6
 
         # Endpoints --------------------------------------------------------------------------------
@@ -124,6 +126,10 @@ class USB3PIPE(LiteXModule):
         self.lfps_rx_exit_u2    = Signal()   # o
         self.lfps_rx_wakeup_u3  = Signal()   # o
         self.lfps_rx_reset      = Signal()   # o
+
+        if ssp:
+            self.lfps_tx_ssp      = Signal() # i: SuperSpeedPlus Polling LFPS transmission.
+            self.lfps_tx_ssp_lfps = Signal() # i: SuperSpeedPlus Polling LFPS burst.
 
         self.ts_rx_ts1          = Signal()   # o
         self.ts_rx_ts1_inv      = Signal()   # o
@@ -166,7 +172,8 @@ class USB3PIPE(LiteXModule):
         # LFPS -------------------------------------------------------------------------------------
         self.lfps = lfps = LFPSUnit(serdes,
             sys_clk_freq = sys_clk_freq,
-            timer_scale  = timer_scale)
+            timer_scale  = timer_scale,
+            with_ssp     = ssp)
         self.comb += [
             # LFPS Control.
             lfps.tx_polling.eq(self.lfps_tx_polling),
@@ -186,6 +193,11 @@ class USB3PIPE(LiteXModule):
             self.lfps_rx_wakeup_u3.eq(lfps.rx_wakeup_u3),
             self.lfps_rx_reset.eq(    lfps.rx_reset),
         ]
+        if ssp:
+            self.comb += [
+                lfps.tx_ssp.eq(     self.lfps_tx_ssp),
+                lfps.tx_ssp_lfps.eq(self.lfps_tx_ssp_lfps),
+            ]
 
         # TS ---------------------------------------------------------------------------------------
         self.ts = ts = TSUnit(serdes=serdes)

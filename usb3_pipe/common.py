@@ -4,7 +4,9 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 PHY common definitions: symbols (6.3.5), Ordered Sets (TS1/TS2/TSEQ), Link Configuration.
+"""USB3 PHY common definitions: Gen 1 symbols (6.3.5), Ordered Sets (TS1/TS2/TSEQ), Link
+Configuration and Gen 2 Block Headers (6.3.2.2), Symbols/Ordered Sets identifiers and payloads
+(6.4.1.2, 6.4.3.3).
 """
 
 from migen import *
@@ -133,3 +135,51 @@ class EndiannessSwap(LiteXModule):
         for i in range(n):
             self.comb += source.data[8*i:8*(i+1)].eq(sink.data[8*(n-1-i):8*(n-1-i+1)])
             self.comb += source.ctrl[i].eq(sink.ctrl[n-1-i])
+
+# Gen 2 Block Headers (6.3.2.2) --------------------------------------------------------------------
+
+BLOCK_HEADER_DATA    = 0b0011
+BLOCK_HEADER_CONTROL = 0b1100
+
+# Gen 2 Symbols/Ordered Sets identifiers (Table 6-2, Tables 6-7 to 6-11, 6-13) ---------------------
+
+GEN2_SKP    = 0xcc
+GEN2_SKPEND = 0x33
+GEN2_SDS    = 0xe1
+GEN2_TS1    = 0x1e
+GEN2_TS2    = 0x2d
+GEN2_TSEQ   = 0x87
+
+GEN2_SKP_TX_SYMBOLS = 20 # SKP Symbols in a transmitted SKP Ordered Set (24 Symbols, 6.4.3.3).
+
+# Gen 2 Ordered Sets payloads (16 Symbols, Symbol 0 first) -----------------------------------------
+
+def gen2_ts_payload(identifier, link_config=0):
+    """TS1/TS2 (Tables 6-7/6-8) or TSEQ (Table 6-9) payload, Symbols 14/15 = identifier."""
+    payload = [identifier]*16
+    payload[4] = 0x00
+    payload[5] = link_config if identifier in [GEN2_TS1, GEN2_TS2] else 0x00
+    return payload
+
+def gen2_sync_payload():
+    """SYNC Ordered Set (Table 6-10)."""
+    return [0x00, 0xff]*8
+
+def gen2_sds_payload():
+    """SDS Ordered Set (Table 6-11)."""
+    return [GEN2_SDS]*4 + [0x55]*12
+
+def gen2_skp_lfsr_symbols(lfsr):
+    """SKP Ordered Set LFSR Symbols (Table 6-13): Bit[7] = ~LFSR[22], Bit[6:0] = LFSR[22:16],
+    LFSR[15:8], LFSR[7:0]."""
+    return [(((~lfsr >> 22) & 0x1) << 7) | ((lfsr >> 16) & 0x7f), (lfsr >> 8) & 0xff, lfsr & 0xff]
+
+def gen2_skp_payload(lfsr, n_skp=GEN2_SKP_TX_SYMBOLS):
+    """SKP Ordered Set (Table 6-13): n_skp SKP (multiple of 4), SKPEND, LFSR state."""
+    assert n_skp % 4 == 0
+    return [GEN2_SKP]*n_skp + [GEN2_SKPEND] + gen2_skp_lfsr_symbols(lfsr)
+
+def symbols_to_int(symbols):
+    return sum(s << (8*i) for i, s in enumerate(symbols))
+
+GEN2_SYNC_BITS = BLOCK_HEADER_CONTROL | (symbols_to_int(gen2_sync_payload()) << 4) # 132-bit.
