@@ -10,16 +10,16 @@
 
 Captures (the PHY is retrained until the trigger fires):
   # U0 entry (datapath group: link commands, LMPs, packets).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state U0 --offset 256
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state U0 --offset 256
   # Polling.RxEQ -> Polling.Active (the partner's TSEQ: RX quality on a known pattern).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.RxEQ:Polling.Active
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.RxEQ:Polling.Active
   # A data word on the Link Layer RX (ex: SET_CONFIGURATION SETUP data, the PHY is not retrained).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --data 0x00090100 --no-retrain
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --data 0x00090100 --no-retrain
   # RX vs TX clocks phase over ~2ms (phase group).
-  ./scripts/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
+  ./bench/usb3_analyzer.py --csr-csv build/sqrl_acorn/csr.csv capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
 
 Analysis of a capture (analyzer.vcd):
-  ./scripts/usb3_analyzer.py analyze analyzer.vcd
+  ./bench/usb3_analyzer.py analyze analyzer.vcd
 """
 
 import sys
@@ -27,10 +27,7 @@ import time
 import argparse
 import collections
 
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import add_remote_args, open_remote # First: repository root on the path.
 
 from usb3_pipe.gen import get_ltssm_states
 
@@ -206,13 +203,11 @@ def analyze(filename, ns_per_sample=8, ppm_window=32):
 # Capture ------------------------------------------------------------------------------------------
 
 def capture(args):
-    from litex import RemoteClient
     from litescope import LiteScopeAnalyzerDriver
     from usb3_debug import USB3DebugClient
 
     states = get_ltssm_states()
-    bus    = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
-    bus.open()
+    bus    = open_remote(args)
     dbg      = USB3DebugClient(bus)
     analyzer = LiteScopeAnalyzerDriver(bus.regs, "analyzer", config_csv=args.analyzer_csv)
     analyzer.configure_group(0)
@@ -254,10 +249,8 @@ def capture(args):
 
 def main():
     parser = argparse.ArgumentParser(description="USB3 LiteScope capture/analysis.")
-    parser.add_argument("--csr-csv",      default="build/sqrl_acorn/csr.csv",      help="CSR configuration file.")
+    add_remote_args(parser)
     parser.add_argument("--analyzer-csv", default="build/sqrl_acorn/analyzer.csv", help="Analyzer configuration file.")
-    parser.add_argument("--host",         default="localhost",                     help="litex_server host.")
-    parser.add_argument("--port",         default=1234, type=int,                  help="litex_server port.")
     parser.add_argument("--state",        default=None,                            help="Trigger on LTSSM state entry (STATE) or transition (FROM:TO).")
     parser.add_argument("--data",         default=None,                            help="Trigger on a Link Layer RX data word (hex, x: don't care nibble).")
     parser.add_argument("--offset",       default=16,   type=int,                  help="Trigger offset (samples).")

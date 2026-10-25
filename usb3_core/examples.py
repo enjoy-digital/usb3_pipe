@@ -4,10 +4,11 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Device Core example designs, shared by the targets (acorn.py, kc705.py, alibaba_xcku3p.py).
+"""USB3 Device Core example designs, shared by the targets (bench/acorn.py, bench/kc705.py,
+bench/alibaba_xcku3p.py).
 
-- loopback     : Vendor Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1) (scripts/usb3_bulk.py).
-- bench        : Vendor Bulk IN counter source, Bulk OUT counter checker (scripts/usb3_bench.py).
+- loopback     : Vendor Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1) (bench/usb3_bulk.py).
+- bench        : Vendor Bulk IN counter source, Bulk OUT counter checker (bench/usb3_bench.py).
 - cdc_uartbone : CDC-ACM serial port carrying UARTBone (litex_server --uart --uart-port
                  /dev/ttyACMx).
 - console      : CDC-ACM SoC console, BIOS (litex_term /dev/ttyACMx), requires a CPU.
@@ -159,7 +160,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
             with_lpm = with_lpm)
         usb3_core.add_csr()
 
-        # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (scripts/usb3_bulk.py).
+        # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (bench/usb3_bulk.py).
         if example == "loopback":
             usb3_loopback = stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True)
             soc.usb3_loopback = usb3_loopback
@@ -169,7 +170,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
             ]
 
         # Bandwidth benchmark: EP1 IN counter source, EP2 OUT counter checker
-        # (scripts/usb3_bench.py).
+        # (bench/usb3_bench.py).
         if example == "bench":
             soc.usb3_bench = usb3_bench = USB3Bench()
             soc.comb += [

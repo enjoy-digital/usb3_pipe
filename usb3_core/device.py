@@ -79,8 +79,8 @@ class USB3DeviceCore(LiteXModule):
         self.u2_enable  = ep0.u2_enable
 
     def add_csr(self, with_trace=False, trace_depth=512):
-        """Status/statistics CSRs (scripts/usb3_debug.py), optional Header Packets trace
-        (scripts/usb3_trace.py)."""
+        """Status/statistics CSRs (bench/usb3_debug.py), optional Header Packets trace
+        (bench/usb3_trace.py)."""
         if with_trace:
             self.trace = USB3CoreTrace(self.link, depth=trace_depth)
         self._status = CSRStatus(fields=[

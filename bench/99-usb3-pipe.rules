@@ -1,2 +1,2 @@
-# USB3-PIPE test device (usb3_core descriptors: 1d50:605a), user access (scripts/usb3_bulk.py).
+# USB3-PIPE test device (usb3_core descriptors: 1d50:605a), user access (bench/usb3_bulk.py).
 SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="605a", MODE="0660", GROUP="plugdev", TAG+="uaccess"

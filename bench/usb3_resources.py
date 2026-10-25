@@ -13,17 +13,16 @@ interface signals as ports, sys clock constrained, ports considered registered a
 report its LUTs/FFs/BRAMs and its timing (WNS at the target frequency).
 
 Example:
-  ./scripts/usb3_resources.py --sys-clk-freq 125e6
-  ./scripts/usb3_resources.py --blocks link endpoint_in
+  ./bench/usb3_resources.py --sys-clk-freq 125e6
+  ./bench/usb3_resources.py --blocks link endpoint_in
 """
 
 import os
 import re
-import sys
 import argparse
 import subprocess
 
-from pathlib import Path
+import common # Repository root on the path.
 
 from migen import *
 
@@ -31,8 +30,6 @@ from litex.gen import *
 from litex.gen.fhdl.verilog import convert
 
 from litex.soc.interconnect import stream
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from usb3_core.host_model  import PHYStandIn
 from usb3_core.crc         import CRC16, CRC32

@@ -10,10 +10,10 @@
 checker), with asynchronous libusb transfers (python-libusb1) queued to keep the link busy.
 
 Examples:
-  ./scripts/usb3_bench.py in                     # Device -> Host, data checked.
-  ./scripts/usb3_bench.py out                    # Host -> Device (errors: device CSRs, --csr-csv).
-  ./scripts/usb3_bench.py both --duration 10
-  ./scripts/usb3_bench.py in --transfer-size 4194304 --queue 16 --no-check
+  ./bench/usb3_bench.py in                     # Device -> Host, data checked.
+  ./bench/usb3_bench.py out                    # Host -> Device (errors: device CSRs, --csr-csv).
+  ./bench/usb3_bench.py both --duration 10
+  ./bench/usb3_bench.py in --transfer-size 4194304 --queue 16 --no-check
 """
 
 import os
@@ -23,6 +23,8 @@ import argparse
 
 import numpy as np
 import usb1
+
+from common import add_remote_args, open_remote
 
 USB3_VID = 0x1d50
 USB3_PID = 0x605a
@@ -112,8 +114,7 @@ def main():
     parser.add_argument("--transfer-size", default=1 << 20, type=int,   help="Transfer size (bytes, multiple of 1024).")
     parser.add_argument("--queue",         default=None,    type=int,   help="Queued transfers per direction (default: 8, 4 with both: Linux usbfs_memory_mb limit, 16MB by default).")
     parser.add_argument("--no-check",      action="store_true",         help="Disable the IN data check.")
-    parser.add_argument("--csr-csv",       default=None,                help="CSR file: read the device OUT checker (litex_server).")
-    parser.add_argument("--port",          default=1234,    type=int,   help="litex_server port (with --csr-csv).")
+    add_remote_args(parser, csr_csv=None, csr_csv_help="CSR file: read the device OUT checker (litex_server).")
     args = parser.parse_args()
     if args.queue is None:
         args.queue = 4 if args.direction == "both" else 8
@@ -128,9 +129,7 @@ def main():
 
     bus = None
     if args.csr_csv:
-        from litex import RemoteClient
-        bus = RemoteClient(csr_csv=args.csr_csv, port=args.port)
-        bus.open()
+        bus = open_remote(args)
         bus.regs.usb3_bench_control.write(0b11) # Source enabled, counters cleared.
 
     bench = Bench(handle, args.direction, args.transfer_size, args.queue, check=not args.no_check)

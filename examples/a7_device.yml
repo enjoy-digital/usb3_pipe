@@ -1,5 +1,6 @@
 # USB3-PIPE standalone core: Artix7 (GTP) USB3.0 device.
-# Similar to the SQRL Acorn CLE-215(+) target (acorn.py): transceiver refclk from the 125MHz clk.
+# Similar to the SQRL Acorn CLE-215(+) target (bench/acorn.py): transceiver refclk from the 125MHz
+# clk.
 {
     "phy"          : "A7USB3SerDes",
     "device"       : "xc7a200t-fbg484-3",

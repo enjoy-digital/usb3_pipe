@@ -1,24 +1,24 @@
 # Examples
 
 Example designs (`usb3_core/examples.py`: `loopback`, `bench`, `cdc_uartbone`, `console`, `uvc`,
-`uvc_iso`, `msc`, `msc_dram`, `composite`) and their host tools, on `acorn.py` (LiteX Acorn
+`uvc_iso`, `msc`, `msc_dram`, `composite`) and their host tools, on `bench/acorn.py` (LiteX Acorn
 Baseboard, Acorn CLE-215+, SFP2USB). Build and load (JTAG, SRAM) with:
 
 ```sh
-$ ./acorn.py --build --load --with-jtagbone --example <name> [--cpu-type vexriscv] [--with-lpm]
+$ ./bench/acorn.py --build --load --with-jtagbone --example <name> [--cpu-type vexriscv] [--with-lpm]
 ```
 
 The results below were measured on a Linux host (xHCI controller). The device is `1d50:605a` (see
-`scripts/99-usb3-pipe.rules` for user access to the vendor class examples).
+`bench/99-usb3-pipe.rules` for user access to the vendor class examples).
 
 ## `loopback`: Bulk OUT -> Bulk IN
 
 Vendor class interface, Bulk OUT (EP2) data looped back to Bulk IN (EP1) through a FIFO.
 
 ```sh
-$ ./scripts/usb3_bulk.py loopback --size 1024 --count 1000
+$ ./bench/usb3_bulk.py loopback --size 1024 --count 1000
 1000 packets, 1024000 bytes, 0 errors
-$ ./scripts/usb3_bulk.py loopback --size 1024 --count 2000 --random-sizes
+$ ./bench/usb3_bulk.py loopback --size 1024 --count 2000 --random-sizes
 ```
 
 ## `bench`: bandwidth
@@ -26,10 +26,10 @@ $ ./scripts/usb3_bulk.py loopback --size 1024 --count 2000 --random-sizes
 Bulk IN (EP1) counter source, Bulk OUT (EP2) counter checker (CSRs), asynchronous libusb transfers:
 
 ```sh
-$ ./scripts/usb3_bench.py in --no-check                      # IN  446 MB/s
-$ ./scripts/usb3_bench.py out --csr-csv build/sqrl_acorn/csr.csv  # OUT 449 MB/s, device checker 0 errors
-$ ./scripts/usb3_bench.py both --csr-csv build/sqrl_acorn/csr.csv # IN 376 + OUT 400 MB/s
-$ ./scripts/usb3_soak.py --bench 20 --duration 300 --csr-csv build/sqrl_acorn/csr.csv
+$ ./bench/usb3_bench.py in --no-check                      # IN  446 MB/s
+$ ./bench/usb3_bench.py out --csr-csv build/sqrl_acorn/csr.csv  # OUT 449 MB/s, device checker 0 errors
+$ ./bench/usb3_bench.py both --csr-csv build/sqrl_acorn/csr.csv # IN 376 + OUT 400 MB/s
+$ ./bench/usb3_soak.py --bench 20 --duration 300 --csr-csv build/sqrl_acorn/csr.csv
 ```
 
 ## `--with-lpm`: U1/U2 Link Power Management
@@ -40,7 +40,7 @@ accepts the host U1/U2 entries when idle (see [usb3-core.md](usb3-core.md)). Off
 rejected, hosts disable LPM); validated in simulation (`./sim.py --host-lpm`), not on hardware yet.
 
 ```sh
-$ ./acorn.py --build --load --with-jtagbone --example loopback --with-lpm
+$ ./bench/acorn.py --build --load --with-jtagbone --example loopback --with-lpm
 ```
 
 ## `cdc_uartbone`: SoC bus over USB3
@@ -122,7 +122,7 @@ Mount it (`udisksctl mount -b /dev/sdX` or the desktop), READ(10) ~186 MB/s, WRI
 512MB disk in the Acorn DDR3 (upper half of the 1GB DRAM, LiteDRAM DMAs: `USB3MSCDRAM`):
 
 ```sh
-$ ./acorn.py --build --load --example msc_dram   # Enables the DDR3 and a VexRiscv CPU.
+$ ./bench/acorn.py --build --load --example msc_dram   # Enables the DDR3 and a VexRiscv CPU.
 ```
 
 Build (Vivado 2024.1, xc7a200t-3, sys 125MHz, DDR3 500MT/s): timing met (sys WNS +0.36ns), 11.7K LUTs,
@@ -150,12 +150,14 @@ ffplay/VLC while using `litex_term /dev/ttyACM0`.
 
 ## Other targets
 
-`kc705.py` (KC705, Kintex7 GTX, `--connector sfp|sma`) and `alibaba_xcku3p.py` (Alibaba Cloud
-XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`) share the example designs (`--example`, `--cpu-type`)
-and are build-tested, hardware validation in progress (results above are from the Acorn):
+`bench/kc705.py` (KC705, Kintex7 GTX, `--connector sfp|sma`) and `bench/alibaba_xcku3p.py` (Alibaba
+Cloud XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`) share the SoC (`bench/usb3_soc.py`: example
+designs and common options `--example`, `--cpu-type`, `--with-lpm`, `--with-serdes-debug`,
+`--with-analyzer`) and are build-tested, hardware validation in progress (results above are from the
+Acorn):
 
 | Target | Build directory | Not available |
 |---|---|---|
-| `acorn.py` | `build/sqrl_acorn` | |
-| `kc705.py` | `build/xilinx_kc705` | `msc_dram` (no DRAM controller), `--with-lpm` |
-| `alibaba_xcku3p.py` | `build/alibaba_xcku3p` | `msc_dram` (no DRAM controller), `--with-lpm`, UARTBone (JTAGBone only) |
+| `bench/acorn.py` | `build/sqrl_acorn` | |
+| `bench/kc705.py` | `build/xilinx_kc705` | `msc_dram` (no DRAM controller) |
+| `bench/alibaba_xcku3p.py` | `build/alibaba_xcku3p` | `msc_dram` (no DRAM controller), UARTBone (JTAGBone only) |

@@ -8,14 +8,14 @@
 
 """USB3 Bulk loopback test (acorn.py: EP2 OUT -> FIFO -> EP1 IN), through libusb (pyusb).
 
-The device must be accessible to the user (udev rule: scripts/99-usb3-pipe.rules):
-  sudo cp scripts/99-usb3-pipe.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
-  (then re-enumerate the device, ex: ./scripts/usb3_debug.py reconnect)
+The device must be accessible to the user (udev rule: bench/99-usb3-pipe.rules):
+  sudo cp bench/99-usb3-pipe.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules
+  (then re-enumerate the device, ex: ./bench/usb3_debug.py reconnect)
 
 Examples:
-  ./scripts/usb3_bulk.py info
-  ./scripts/usb3_bulk.py loopback --size 1024 --count 1000
-  ./scripts/usb3_bulk.py loopback --size 64 --count 1000 --random-sizes
+  ./bench/usb3_bulk.py info
+  ./bench/usb3_bulk.py loopback --size 1024 --count 1000
+  ./bench/usb3_bulk.py loopback --size 64 --count 1000 --random-sizes
 """
 
 import sys
@@ -43,7 +43,7 @@ def open_device(vid=USB3_VID, pid=USB3_PID):
             dev.set_configuration()
     except usb.core.USBError as e:
         if e.errno == 13:
-            raise SystemExit("Access denied: install scripts/99-usb3-pipe.rules (see --help).")
+            raise SystemExit("Access denied: install bench/99-usb3-pipe.rules (see --help).")
         dev.set_configuration()
     usb.util.claim_interface(dev, 0)
     return dev

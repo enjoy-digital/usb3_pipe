@@ -548,7 +548,7 @@ def parse_sim_output(output, script):
 
 # PHY Stand-in -------------------------------------------------------------------------------------
 # USB3PHY Link interface stand-in: USB3 Device Core directly connected to a host model (no PHY) in a
-# Migen simulation (see test/model/host.py) or in a standalone elaboration (scripts/usb3_resources.py).
+# Migen simulation (see test/model/host.py) or in a standalone elaboration (bench/usb3_resources.py).
 
 class PHYStandIn:
     """USB3PHY Link interface stand-in."""

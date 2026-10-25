@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Device Core Header Packets trace (debug, scripts/usb3_trace.py).
+"""USB3 Device Core Header Packets trace (debug, bench/usb3_trace.py).
 
 Records the received (accepted by the Link Layer) and transmitted Header Packets of the Protocol
 Layer (TPs/DPHs, ITPs excluded; LMPs are handled in the Link Layer and not recorded) in a memory
