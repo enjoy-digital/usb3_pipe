@@ -333,7 +333,7 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
         ltssm.rx_ready,
         ltssm.tx_ready,
         ltssm.idle_handshake,
-        ltssm.rx_idle8,
+        ltssm.idle_handshake_done,
         ltssm.ts2_decode,
     ]
     groups = {

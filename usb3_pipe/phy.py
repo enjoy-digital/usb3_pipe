@@ -15,7 +15,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import COM
+from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE
 from usb3_pipe.core       import USB3PIPE
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
@@ -24,54 +24,21 @@ from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, link_la
 # LTSSM <-> PIPE -----------------------------------------------------------------------------------
 
 def connect_ltssm_pipe(ltssm, pipe, with_rx_ts_status=True):
-    """LTSSM <-> PIPE wiring (LFPS/TS face).
+    """LTSSM <-> PIPE wiring (LTSSM_PIPE_INTERFACE).
 
     with_rx_ts_status: TS1/TS2 received and Idle Symbol handshake status from this PIPE (else
     combined over the lanes by the caller).
     """
-    return [
-        # LTSSM -> PIPE
-        pipe.lfps_tx_polling.eq(ltssm.lfps_tx_polling),
-        pipe.lfps_tx_idle.eq(ltssm.lfps_tx_idle),
-        pipe.lfps_tx_ping.eq(ltssm.lfps_tx_ping),
-        pipe.lfps_tx_exit_u1.eq(ltssm.lfps_tx_exit_u1),
-        pipe.lfps_tx_exit_u2.eq(ltssm.lfps_tx_exit_u2),
-        pipe.lfps_tx_wakeup_u3.eq(ltssm.lfps_tx_wakeup_u3),
-        pipe.lfps_tx_reset.eq(ltssm.lfps_tx_reset),
-        pipe.ts_tx_enable.eq(ltssm.ts_tx_enable),
-        pipe.ts_tx_tseq.eq(ltssm.ts_tx_tseq),
-        pipe.ts_tx_ts1.eq(ltssm.ts_tx_ts1),
-        pipe.ts_tx_ts2.eq(ltssm.ts_tx_ts2),
-        pipe.ts_tx_ts2_reset.eq(ltssm.tx_ts2_reset),
-        pipe.ts_tx_ts2_loopback.eq(ltssm.tx_ts2_loopback),
-        pipe.ts2_decode.eq(ltssm.ts2_decode),
-
-        pipe.serdes_rx_align.eq(ltssm.serdes_rx_align),
-        pipe.serdes_rx_polarity.eq(ltssm.serdes_rx_polarity),
-
-        pipe.rx_ready.eq(ltssm.rx_ready),
-        pipe.tx_ready.eq(ltssm.tx_ready),
-        pipe.idle_handshake.eq(ltssm.idle_handshake),
-
-        # PIPE -> LTSSM
-        ltssm.lfps_rx_polling.eq(pipe.lfps_rx_polling),
-        ltssm.lfps_tx_count.eq(pipe.lfps_tx_count),
-        ltssm.lfps_rx_ping.eq(pipe.lfps_rx_ping),
-        ltssm.lfps_rx_exit_u1.eq(pipe.lfps_rx_exit_u1),
-        ltssm.lfps_rx_exit_u2.eq(pipe.lfps_rx_exit_u2),
-        ltssm.lfps_rx_wakeup_u3.eq(pipe.lfps_rx_wakeup_u3),
-        ltssm.lfps_rx_reset.eq(pipe.lfps_rx_reset),
-
-        *([
-        ltssm.ts_rx_ts1.eq(pipe.ts_rx_ts1),
-        ltssm.ts_rx_ts1_inv.eq(pipe.ts_rx_ts1_inv),
-        ltssm.ts_rx_ts2.eq(pipe.ts_rx_ts2),
-        ] if with_rx_ts_status else []),
-        ltssm.rx_ts2_reset.eq(pipe.ts_rx_ts2_reset),
-        ltssm.rx_ts2_loopback.eq(pipe.ts_rx_ts2_loopback),
-        ltssm.ts_tx_done.eq(pipe.ts_tx_done),
-        *([ltssm.rx_idle8.eq(pipe.idle_done)] if with_rx_ts_status else []),
-    ]
+    rx_ts_status = ["ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2", "idle_handshake_done"]
+    statements   = []
+    for name, width, direction in LTSSM_PIPE_INTERFACE:
+        if (name in rx_ts_status) and (not with_rx_ts_status):
+            continue
+        if direction == "o":
+            statements.append(getattr(pipe, name).eq(getattr(ltssm, name)))
+        else:
+            statements.append(getattr(ltssm, name).eq(getattr(pipe, name)))
+    return statements
 
 # Lanes Event --------------------------------------------------------------------------------------
 
@@ -227,13 +194,10 @@ class USB3PHY(LiteXModule):
         self.comb += connect_ltssm_pipe(ltssm, pipes[0], with_rx_ts_status=False)
 
         # Lane 1: same TX/RX controls, no LFPS (6.13.12): electrical idle while Lane 0 sends LFPS.
-        for name in ["lfps_tx_idle", "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1",
-            "ts_tx_ts2", "serdes_rx_align", "rx_ready", "tx_ready", "idle_handshake", "ts2_decode"]:
+        for name in ["lfps_tx_idle", "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1", "ts_tx_ts2",
+            "ts_tx_ts2_reset", "ts_tx_ts2_loopback", "ts2_decode", "idle_handshake",
+            "serdes_rx_align", "rx_ready", "tx_ready"]:
             self.comb += getattr(pipes[1], name).eq(getattr(ltssm, name))
-        self.comb += [
-            pipes[1].ts_tx_ts2_reset.eq(ltssm.tx_ts2_reset),
-            pipes[1].ts_tx_ts2_loopback.eq(ltssm.tx_ts2_loopback),
-        ]
 
         # Lane 1 polarity (6.13.7): inverted when TS1 are received inverted on Lane 1.
         lane1_polarity = Signal()
@@ -251,7 +215,8 @@ class USB3PHY(LiteXModule):
             ltssm.ts_rx_ts1.eq(both_ts1.o),
             ltssm.ts_rx_ts1_inv.eq(both_ts1_inv.o),
             ltssm.ts_rx_ts2.eq(both_ts2.o),
-            ltssm.rx_idle8.eq(pipes[0].idle_done & pipes[1].idle_done),
+            ltssm.idle_handshake_done.eq(
+                pipes[0].idle_handshake_done & pipes[1].idle_handshake_done),
         ]
 
         # SuperSpeedPlus Polling (Lane 0) ----------------------------------------------------------

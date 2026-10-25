@@ -107,7 +107,7 @@ class TestTS2LinkConfig(unittest.TestCase):
         dut = USB3PHY(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         def probe():
-            return ((yield dut.ltssm.rx_ts2_reset), (yield dut.ltssm.rx_ts2_loopback))
+            return ((yield dut.ltssm.ts_rx_ts2_reset), (yield dut.ltssm.ts_rx_ts2_loopback))
         def generator(dut):
             dut.rx_reset = yield from drive_rx(gt, rx_words((TS2, RESET, 8)), probe)
             dut.rx_loopback = yield from drive_rx(gt, rx_words((TS2, LOOPBACK, 8)), probe)
@@ -120,7 +120,7 @@ class TestTS2LinkConfig(unittest.TestCase):
         comb = dut.get_fragment().comb
         for name in ["reset", "loopback"]:
             pipe_input   = getattr(dut.pipe,  "ts_tx_ts2_" + name)
-            ltssm_output = getattr(dut.ltssm, "tx_ts2_" + name)
+            ltssm_output = getattr(dut.ltssm, "ts_tx_ts2_" + name)
             self.assertTrue(any(getattr(s, "l", None) is pipe_input and s.r is ltssm_output
                 for s in comb), name)
 
