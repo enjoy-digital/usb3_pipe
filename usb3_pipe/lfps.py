@@ -4,8 +4,8 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Low Frequency Periodic Signaling (USB 3.2 6.9): Polling, Ping, U1/U2 exit, U3 wakeup and Warm
-Reset LFPS generation/detection.
+"""USB3 Low Frequency Periodic Signaling (USB 3.2 6.9): Polling, Ping, U1/U2 exit, U3 wakeup and
+Warm Reset LFPS generation/detection.
 """
 
 # LFPS is the first signaling to happen during the initialization of the USB3.0 link.
@@ -78,7 +78,7 @@ def scaled_cycles(clk_freq, t, timer_scale=1, floor=1):
     seen through the 2-cycles idle deglitcher of the checkers."""
     return max(floor, time_to_cycles(clk_freq, t)//timer_scale)
 
-# Single-burst handshake timing contract (USB 3.2 Rev 1.1 Table 6-31, section 6.9) -------------
+# Single-burst handshake timing contract (USB 3.2 Rev 1.1 Table 6-31, section 6.9) -----------------
 # Shared by the LFPS checkers below (detection min_cycles) and the LTSSM exit-handshake
 # generator (burst length, ltssm.py) so both derive from the same source and scale the
 # same way: at any timer_scale the initiator's burst must outlast the partner's detection
@@ -151,6 +151,34 @@ U2ExitLFPSBurst   = LFPSTiming(t_typ=100e-6, t_min=80e-6,   t_max=2e-3)
 # U3 Wakeup: single burst, 80us min (10ms max). Held ~1ms (typ).
 U3WakeupLFPSBurst = LFPSTiming(t_typ=1e-3,   t_min=80e-6,   t_max=10e-3)
 
+# LFPS Idle Deglitcher -----------------------------------------------------------------------------
+
+class LFPSIdleDeglitcher(LiteXModule):
+    """LFPS Idle Deglitcher
+
+    Resynchronizes the RX electrical idle signal of the transceiver to sys_clk and deglitches it:
+    the output only changes after 2 consecutive identical samples.
+    """
+    def __init__(self, idle):
+        self.o = Signal(reset=1) # o
+
+        # # #
+
+        # Resynchronization.
+        idle_resync = Signal()
+        self.specials += MultiReg(idle, idle_resync)
+
+        # Deglitch.
+        idle_reg = Signal(2, reset=0b11)
+        self.sync += [
+            idle_reg.eq(Cat(idle_reg[1], idle_resync)),
+            If(idle_reg == 0b00,
+                self.o.eq(0)
+            ).Elif(idle_reg == 0b11,
+                self.o.eq(1)
+            )
+        ]
+
 # LFPS Checker -------------------------------------------------------------------------------------
 
 class LFPSChecker(LiteXModule):
@@ -171,21 +199,9 @@ class LFPSChecker(LiteXModule):
 
         # # #
 
-        # Idle Resynchronization -------------------------------------------------------------------
-        idle_resync        = Signal()
-        self.specials += MultiReg(self.idle, idle_resync)
-
-        # Idle Deglitch ----------------------------------------------------------------------------
-        idle_reg = Signal(2, reset=0b11)
-        idle     = Signal(reset=1)
-        self.sync += [
-            idle_reg.eq(Cat(idle_reg[1], idle_resync)),
-            If(idle_reg == 0b00,
-                idle.eq(0)
-            ).Elif(idle_reg == 0b11,
-                idle.eq(1)
-            )
-        ]
+        # Idle Resynchronization/Deglitch ----------------------------------------------------------
+        self.idle_deglitcher = idle_deglitcher = LFPSIdleDeglitcher(self.idle)
+        idle = idle_deglitcher.o
 
         # Polling LFPS Detection -------------------------------------------------------------------
         # Deterministic burst+gap cadence measurement (USB 3.2 Table 6-30): a Polling.LFPS pattern
@@ -256,23 +272,11 @@ class LFPSBurstChecker(LiteXModule):
 
         # # #
 
-        # Idle Resynchronization -------------------------------------------------------------------
-        idle_resync        = Signal()
-        self.specials += MultiReg(self.idle, idle_resync)
+        # Idle Resynchronization/Deglitch ----------------------------------------------------------
+        self.idle_deglitcher = idle_deglitcher = LFPSIdleDeglitcher(self.idle)
+        idle = idle_deglitcher.o
 
-        # Idle Deglitch (same structure as LFPSChecker) ---------------------------------------------
-        idle_reg = Signal(2, reset=0b11)
-        idle     = Signal(reset=1)
-        self.sync += [
-            idle_reg.eq(Cat(idle_reg[1], idle_resync)),
-            If(idle_reg == 0b00,
-                idle.eq(0)
-            ).Elif(idle_reg == 0b11,
-                idle.eq(1)
-            )
-        ]
-
-        # Burst Duration Measurement ----------------------------------------------------------------
+        # Burst Duration Measurement ---------------------------------------------------------------
         count = Signal(32)
         self.sync += [
             self.ping.eq(0),
@@ -359,11 +363,13 @@ class LFPSGenerator(LiteXModule):
 
         # Build-time Quantization/Range Checks -----------------------------------------------------
         # (only meaningful for timer_scale=1, i.e. specification exact cycle counts)
-        repeat_cycles = scaled_cycles(sys_clk_freq, lfps_pattern.repeat.t_typ, timer_scale)
-        burst_cycles  = scaled_cycles(sys_clk_freq, lfps_pattern.burst.t_typ,  timer_scale, floor=2)
+        burst         = lfps_pattern.burst
+        repeat        = lfps_pattern.repeat
+        repeat_cycles = scaled_cycles(sys_clk_freq, repeat.t_typ, timer_scale)
+        burst_cycles  = scaled_cycles(sys_clk_freq, burst.t_typ,  timer_scale, floor=2)
         if timer_scale == 1:
-            assert (lfps_pattern.burst.t_min  <= (burst_cycles/sys_clk_freq)  <= lfps_pattern.burst.t_max)
-            assert (lfps_pattern.repeat.t_min <= (repeat_cycles/sys_clk_freq) <= lfps_pattern.repeat.t_max)
+            assert (burst.t_min  <= (burst_cycles/sys_clk_freq)  <= burst.t_max)
+            assert (repeat.t_min <= (repeat_cycles/sys_clk_freq) <= repeat.t_max)
 
         # Burst Generator --------------------------------------------------------------------------
         burst_generator = LFPSBurstGenerator(sys_clk_freq=sys_clk_freq, lfps_clk_freq=lfps_clk_freq)
@@ -371,7 +377,7 @@ class LFPSGenerator(LiteXModule):
         self.submodules += burst_generator
 
         # Burst Generation -------------------------------------------------------------------------
-        burst_repeat_count = Signal(32)
+        burst_repeat_count = Signal(max=repeat_cycles + 1)
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
             self.tx_idle.eq(0),
@@ -425,7 +431,7 @@ class LFPSUnit(LiteXModule):
     relations are preserved.
     """
     def __init__(self, serdes, sys_clk_freq, lfps_clk_freq=25e6, timer_scale=1):
-        # Control -----------------------------------------------------------------------------------
+        # Control ----------------------------------------------------------------------------------
         self.tx_idle      = Signal()   # i
         self.tx_polling   = Signal()   # i
         self.tx_ping      = Signal()   # i
@@ -434,7 +440,7 @@ class LFPSUnit(LiteXModule):
         self.tx_wakeup_u3 = Signal()   # i
         self.tx_reset     = Signal()   # i
 
-        # Status ------------------------------------------------------------------------------------
+        # Status -----------------------------------------------------------------------------------
         self.rx_polling   = Signal()   # o
         self.rx_ping      = Signal()   # o (pulse)
         self.rx_exit_u1   = Signal()   # o (level, burst ongoing)
@@ -445,35 +451,41 @@ class LFPSUnit(LiteXModule):
 
         # # #
 
-        # LFPS Clock (free running, unscaled: LFPS bitrate is not affected by timer_scale) ----------
+        # LFPS Clock (free running, unscaled: LFPS bitrate is not affected by timer_scale) ---------
         lfps_clk       = Signal()
         lfps_clk_timer = WaitTimer(lfps_clk_half_period_cycles(sys_clk_freq, lfps_clk_freq) - 1)
         self.submodules += lfps_clk_timer
-        self.comb += lfps_clk_timer.wait.eq(~lfps_clk_timer.done) # free-running (else pattern stuck 0)
+        self.comb += lfps_clk_timer.wait.eq(~lfps_clk_timer.done) # Free-running.
         self.sync += If(lfps_clk_timer.done, lfps_clk.eq(~lfps_clk))
         lfps_pattern = Replicate(lfps_clk, 20)
 
-        # Polling (burst + repeat, softened scale to survive the idle deglitcher) --------------------
+        # Polling (burst + repeat, softened scale to survive the idle deglitcher) ------------------
         # Bursts measured through the SerDes electrical idle filter (stretched by rx_idle_stretch).
         rx_idle_stretch = getattr(serdes, "rx_idle_stretch", 0)
         polling_scale   = polling_scale_of(timer_scale)
-        self.polling_checker = polling_checker = LFPSChecker(PollingLFPS, sys_clk_freq, polling_scale,
+        self.polling_checker = polling_checker = LFPSChecker(PollingLFPS,
+            sys_clk_freq   = sys_clk_freq,
+            timer_scale    = polling_scale,
             stretch_cycles = rx_idle_stretch)
         self.comb += polling_checker.idle.eq(serdes.rx_idle)
         self.comb += self.rx_polling.eq(polling_checker.detect)
 
-        self.polling_generator = polling_generator = LFPSGenerator(PollingLFPS, sys_clk_freq, lfps_clk_freq, polling_scale)
+        self.polling_generator = polling_generator = LFPSGenerator(PollingLFPS,
+            sys_clk_freq  = sys_clk_freq,
+            lfps_clk_freq = lfps_clk_freq,
+            timer_scale   = polling_scale)
         self.comb += self.tx_count.eq(polling_generator.count)
 
-        # RX burst classification (Table 6-30, 6.9.2 implementation note) ---------------------------
+        # RX burst classification (Table 6-30, 6.9.2 implementation note) --------------------------
         # Bursts are measured through the SerDes electrical idle filter, which stretches them by
         # rx_idle_stretch cycles. A burst ending before the 300ns U1 exit detection is a Ping.LFPS
         # (min tBurst 40ns, shorter glitches are rejected); a burst reaching 300ns is a U1 exit.
         u1_exit_min_cycles = exit_u1_min_cycles(sys_clk_freq, timer_scale) + rx_idle_stretch
-        ping_min_cycles    = max(1, scaled_cycles(sys_clk_freq, PingLFPSBurst.t_min, timer_scale) + rx_idle_stretch)
+        ping_min_cycles    = scaled_cycles(sys_clk_freq, PingLFPSBurst.t_min, timer_scale)
+        ping_min_cycles    = max(1, ping_min_cycles + rx_idle_stretch)
         ping_max_cycles    = u1_exit_min_cycles - 1
 
-        # Ping (burst + repeat generator, burst-length classified checker) ---------------------------
+        # Ping (burst + repeat generator, burst-length classified checker) -------------------------
         self.ping_checker = ping_checker = LFPSBurstChecker(
             max_cycles      = ping_max_cycles,
             ping_min_cycles = ping_min_cycles)
@@ -481,16 +493,19 @@ class LFPSUnit(LiteXModule):
             ping_checker.idle.eq(serdes.rx_idle),
             self.rx_ping.eq(ping_checker.ping),
         ]
-        self.ping_generator = ping_generator = LFPSGenerator(PingLFPS, sys_clk_freq, lfps_clk_freq, timer_scale)
+        self.ping_generator = ping_generator = LFPSGenerator(PingLFPS,
+            sys_clk_freq  = sys_clk_freq,
+            lfps_clk_freq = lfps_clk_freq,
+            timer_scale   = timer_scale)
 
-        # U1 Exit (detection window: above Ping max, 300ns min per Table 6-30 note 7) ----------------
+        # U1 Exit (detection window: above Ping max, 300ns min per Table 6-30 note 7) --------------
         self.exit_u1_checker = exit_u1_checker = LFPSBurstChecker(min_cycles=u1_exit_min_cycles)
         self.comb += [
             exit_u1_checker.idle.eq(serdes.rx_idle),
             self.rx_exit_u1.eq(exit_u1_checker.detect),
         ]
 
-        # U2/Loopback Exit ---------------------------------------------------------------------------
+        # U2/Loopback Exit -------------------------------------------------------------------------
         self.exit_u2_checker = exit_u2_checker = LFPSBurstChecker(
             min_cycles=exit_u2_min_cycles(sys_clk_freq, timer_scale))
         self.comb += [
@@ -498,7 +513,7 @@ class LFPSUnit(LiteXModule):
             self.rx_exit_u2.eq(exit_u2_checker.detect),
         ]
 
-        # U3 Wakeup ----------------------------------------------------------------------------------
+        # U3 Wakeup --------------------------------------------------------------------------------
         self.wakeup_u3_checker = wakeup_u3_checker = LFPSBurstChecker(
             min_cycles=exit_u3_min_cycles(sys_clk_freq, timer_scale))
         self.comb += [
@@ -506,10 +521,10 @@ class LFPSUnit(LiteXModule):
             self.rx_wakeup_u3.eq(wakeup_u3_checker.detect),
         ]
 
-        # Warm Reset ---------------------------------------------------------------------------------
-        # A non electrical idle line is also seen with SuperSpeed data (U0, Recovery...): the LFPS is
-        # differentiated from data by the RX decode errors it produces (see RXErrorMonitor). SerDes
-        # without rx_errors fall back to the electrical idle detection only.
+        # Warm Reset -------------------------------------------------------------------------------
+        # A non electrical idle line is also seen with SuperSpeed data (U0, Recovery...): the LFPS
+        # is differentiated from data by the RX decode errors it produces (see RXErrorMonitor).
+        # SerDes without rx_errors fall back to the electrical idle detection only.
         rx_errors = getattr(serdes, "rx_errors", None)
         self.reset_checker = reset_checker = LFPSBurstChecker(
             min_cycles=scaled_cycles(sys_clk_freq, ResetDetectDelay, timer_scale))
@@ -518,30 +533,19 @@ class LFPSUnit(LiteXModule):
             self.rx_reset.eq(reset_checker.detect),
         ]
 
-        # Burst+repeat generators arming (single-burst patterns are driven raw by the LTSSM) --------
+        # Burst+repeat generators arming (single-burst patterns are driven raw by the LTSSM) -------
         self.comb += [
             polling_generator.generate.eq(self.tx_polling),
             ping_generator.generate.eq(self.tx_ping),
         ]
 
-        # TX mux (priority: Warm Reset > U3 Wakeup > U2/Loopback Exit > U1 Exit > Ping > Polling) ----
+        # TX mux (priority: Warm Reset/U3 Wakeup/U2-Loopback Exit/U1 Exit > Ping > Polling) --------
         # LFPS is a square wave (6.9.1, Table 6-29): during a burst, the raw tx_pattern (all ones /
         # all zeros 20-bit words) is transmitted instead of the 8b/10b encoded data (tx_lfps).
+        # Single-burst patterns (driven raw by the LTSSM) all send the free running LFPS clock.
         tx_lfps = Signal()
         self.comb += [
-            If(self.tx_reset,
-                serdes.tx_idle.eq(0),
-                tx_lfps.eq(1),
-                serdes.tx_pattern.eq(lfps_pattern),
-            ).Elif(self.tx_wakeup_u3,
-                serdes.tx_idle.eq(0),
-                tx_lfps.eq(1),
-                serdes.tx_pattern.eq(lfps_pattern),
-            ).Elif(self.tx_exit_u2,
-                serdes.tx_idle.eq(0),
-                tx_lfps.eq(1),
-                serdes.tx_pattern.eq(lfps_pattern),
-            ).Elif(self.tx_exit_u1,
+            If(self.tx_reset | self.tx_wakeup_u3 | self.tx_exit_u2 | self.tx_exit_u1,
                 serdes.tx_idle.eq(0),
                 tx_lfps.eq(1),
                 serdes.tx_pattern.eq(lfps_pattern),
