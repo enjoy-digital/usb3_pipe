@@ -66,8 +66,8 @@ EVENT_TYPES = {name: code for code, name in EVENT_NAMES.items()}
 
 # CSRs ---------------------------------------------------------------------------------------------
 
-CSR_TIMESTAMP       = "agentlab_timestamp"       # 64-bit, read.
-CSR_TIMESTAMP_LATCH = "agentlab_timestamp_latch" # Optional: written before reading the timestamp.
+CSR_TIMESTAMP       = "agentlab_timestamp_value" # 64-bit, read (after the latch).
+CSR_TIMESTAMP_LATCH = "agentlab_timestamp_latch" # Written (1) before reading the timestamp.
 CSR_MARKER          = "agentlab_marker"          # Write: emits a marker event (value = written).
 CSR_POWER_OUT       = "agentlab_power_out"       # Bit per power switch (1: on).
 CSR_POWER_STATUS    = "agentlab_power_status"    # Optional: bit per power switch (sense).
