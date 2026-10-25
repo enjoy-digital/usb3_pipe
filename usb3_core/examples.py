@@ -25,10 +25,10 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
-from usb3_core.descriptors import bulk_descriptors, cdc_acm_interfaces, add_cdc_acm_requests
-from usb3_core.descriptors import USB3Descriptors, DEVICE_CLASS_IAD
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
+from usb3_core.descriptors import bulk_descriptors, USB3Descriptors, DEVICE_CLASS_IAD
 from usb3_core.cdc_acm     import USB3CDCACM, USB3CDCACMFunction
+from usb3_core.cdc_acm     import cdc_acm_interfaces, add_cdc_acm_requests
 from usb3_core.bench       import USB3Bench
 from usb3_core.uvc         import USB3UVC, USB3UVCFunction, uvc_interfaces, UVC_MODES
 from usb3_core.msc         import USB3MSC, USB3MSCDRAM, msc_fat_image

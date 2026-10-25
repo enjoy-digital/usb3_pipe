@@ -30,7 +30,7 @@ from usb3_pipe.phy    import USB3PHY
 from usb3_core.host_model import USB3HostModel, enumeration_script
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors
 
 # IOs ----------------------------------------------------------------------------------------------

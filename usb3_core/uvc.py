@@ -37,7 +37,8 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3IsoIN
+from usb3_core.bulk        import USB3BulkIN
+from usb3_core.iso         import USB3IsoIN
 from usb3_core.descriptors import *
 
 # Constants ----------------------------------------------------------------------------------------
