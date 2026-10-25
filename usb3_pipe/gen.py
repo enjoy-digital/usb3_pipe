@@ -357,7 +357,7 @@ class USB3PIPECore(SoCMini):
     def add_usb_core(self, platform, config, phy, sys_clk_freq):
         # Imported here: the PHY package does not depend on the USB3 Device Core (usb3_core).
         from usb3_core.device      import USB3DeviceCore
-        from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+        from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
         from usb3_core.descriptors import bulk_descriptors
 
         # USB3 Device Core -------------------------------------------------------------------------

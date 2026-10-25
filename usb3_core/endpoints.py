@@ -65,15 +65,3 @@ class USB3Endpoint(LiteXModule):
     def dp_addressed(self):
         h = self.hdr
         return (h.type == TYPE_DP) & (h.ept == self.ept) & (h.setup == 0)
-
-# Compatibility ------------------------------------------------------------------------------------
-
-def __getattr__(name):
-    """Endpoints moved to bulk.py/iso.py, still importable from endpoints.py (lazy import)."""
-    if name in ["USB3BulkIN", "USB3BulkOUT"]:
-        from usb3_core import bulk
-        return getattr(bulk, name)
-    if name in ["USB3IsoIN"]:
-        from usb3_core import iso
-        return getattr(iso, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
