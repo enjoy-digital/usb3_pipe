@@ -125,7 +125,6 @@ class USB3PIPE(LiteXModule):
         self.lfps_rx_wakeup_u3  = Signal()   # o
         self.lfps_rx_reset      = Signal()   # o
 
-        self.ts_rx_enable       = Signal()   # i
         self.ts_rx_ts1          = Signal()   # o
         self.ts_rx_ts1_inv      = Signal()   # o
         self.ts_rx_ts2          = Signal()   # o
@@ -190,7 +189,6 @@ class USB3PIPE(LiteXModule):
         self.ts = ts = TSUnit(serdes=serdes)
         self.comb += [
             # TS Control.
-            ts.rx_enable.eq(self.ts_rx_enable),
             ts.tx_enable.eq(self.ts_tx_enable),
             ts.tx_tseq.eq(  self.ts_tx_tseq),
             ts.tx_ts1.eq(   self.ts_tx_ts1),

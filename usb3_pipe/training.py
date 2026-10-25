@@ -15,6 +15,16 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common import Symbol, TSEQ, TS1, TS1_INV, TS2
 
+# Helpers ------------------------------------------------------------------------------------------
+
+def ordered_set_words(ordered_set):
+    """Ordered Set as 32-bit words (first symbol on bits 0-7), used as memory init."""
+    data = ordered_set.to_bytes()
+    return [int.from_bytes(data[4*i:4*(i+1)], "little") for i in range(len(data)//4)]
+
+# TSEQ Ordered Sets transmitted in Polling.RxEQ (7.5.4.7).
+TSEQ_COUNT = 65536
+
 # Training Sequence Checker ------------------------------------------------------------------------
 
 class TSChecker(LiteXModule):
@@ -41,12 +51,11 @@ class TSChecker(LiteXModule):
         self.comb += self.sink.ready.eq(1)
 
         # Memory -----------------------------------------------------------------------------------
-        mem_depth = len(ordered_set.to_bytes())//4
-        mem_init  = [int.from_bytes(ordered_set.to_bytes()[4*i:4*(i+1)], "little") for i in range(mem_depth)]
+        mem_init  = ordered_set_words(ordered_set)
+        mem_depth = len(mem_init)
         mem       = Memory(32, mem_depth, mem_init)
         port      = mem.get_port(async_read=True)
         self.specials += mem, port
-
 
         # Ctrl check -------------------------------------------------------------------------------
         ctrl_init = []
@@ -59,10 +68,12 @@ class TSChecker(LiteXModule):
         self.comb += ctrl_expected.eq(Array(ctrl_init)[port.adr])
 
         # Data check -------------------------------------------------------------------------------
-        # The Link Functionality Symbol (Symbol 5, Table 6-4/6-5) of TS1/TS2 is variable and excluded
-        # from the check.
-        has_link_config = ordered_set.name in ["TS1", "TS1_INV", "TS2"]
-        mask_init = [0xffff00ff if (has_link_config and i == 1) else 0xffffffff for i in range(mem_depth)]
+        # The Link Functionality Symbol (Symbol 5, Table 6-4/6-5) of TS1/TS2 is variable and
+        # excluded from the check.
+        has_link_config = ordered_set.has_link_config
+        mask_init = [0xffffffff]*mem_depth
+        if has_link_config:
+            mask_init[1] = 0xffff00ff
         mask      = Signal(32)
         self.comb += mask.eq(Array(mask_init)[port.adr])
         error = Signal()
@@ -81,10 +92,10 @@ class TSChecker(LiteXModule):
         ]
 
         # Link Config (Table 6-6) ------------------------------------------------------------------
-        # Bit 0 and bit 2 set simultaneously: all training control bits shall be ignored (6.4.1.1.2).
-        # Captured on the Link Functionality word and only reported once the whole Ordered Set has
-        # been received without error: TS1/TS2 share the same first symbols, so a TS1 (or corrupted
-        # TS) must not change the reported TS2 config.
+        # Bit 0 and bit 2 set simultaneously: all training control bits shall be ignored
+        # (6.4.1.1.2). Captured on the Link Functionality word and only reported once the whole
+        # Ordered Set has been received without error: TS1/TS2 share the same first symbols, so a
+        # TS1 (or corrupted TS) must not change the reported TS2 config.
         link_config   = Signal(8)
         link_config_r = Signal(8, reset_less=True)
         self.comb += link_config.eq(self.sink.data[8:16])
@@ -146,9 +157,9 @@ class TSGenerator(LiteXModule):
     Generic Training Sequence Ordered Set generator.
 
     This module generates a specific Training Sequence Ordered Set to the TX stream. For each start,
-    N consecutive Ordered Sets are generated (N configured by n_ordered_sets). Done signal is assert
-    on the last cycle of the generation. Training config can also be transmitted for TS1/TS2 Ordered
-    Sets.
+    N consecutive Ordered Sets are generated (N configured by n_ordered_sets). Done signal is
+    asserted on the last cycle of the generation. Training config can also be transmitted for
+    TS1/TS2 Ordered Sets.
     """
     def __init__(self, ordered_set, n_ordered_sets=1):
         self.start  = Signal() # i (Level)
@@ -156,18 +167,19 @@ class TSGenerator(LiteXModule):
         self.done   = Signal() # o (Pulse)
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
-        if ordered_set.name in ["TS1", "TS2"]:
+        has_link_config = ordered_set.has_link_config
+        if has_link_config:
             self.reset      = Signal()        # i (Level)
             self.loopback   = Signal()        # i (Level)
             self.scrambling = Signal(reset=1) # i (Level)
 
         # # #
 
-        run         = Signal()
+        run = Signal()
 
-        # Memory --------------------------------------------------------------------------------
-        mem_depth = len(ordered_set.to_bytes())//4
-        mem_init  = [int.from_bytes(ordered_set.to_bytes()[4*i:4*(i+1)], "little") for i in range(mem_depth)]
+        # Memory -----------------------------------------------------------------------------------
+        mem_init  = ordered_set_words(ordered_set)
+        mem_depth = len(mem_init)
         mem       = Memory(32, mem_depth, mem_init)
         port      = mem.get_port(async_read=True)
         self.specials += mem, port
@@ -189,7 +201,7 @@ class TSGenerator(LiteXModule):
 
         # Link Config ------------------------------------------------------------------------------
         link_config = Signal(8)
-        if ordered_set.name in ["TS1", "TS2"]:
+        if has_link_config:
             self.comb += [
                 link_config[0].eq(self.reset),
                 link_config[2].eq(self.loopback),
@@ -197,7 +209,7 @@ class TSGenerator(LiteXModule):
             ]
 
         # Data generation --------------------------------------------------------------------------
-        if ordered_set.name in ["TS1", "TS2"]:
+        if has_link_config:
             first_ctrl = 0b1111
         else:
             first_ctrl = 0b0001
@@ -210,11 +222,11 @@ class TSGenerator(LiteXModule):
             ),
             self.source.data.eq(port.dat_r)
         ]
-        if ordered_set.name in ["TS1", "TS2"]:
+        if has_link_config:
             self.comb += If(port.adr == 1, self.source.data[8:16].eq(link_config))
 
         # Count ------------------------------------------------------------------------------------
-        count = Signal(max=mem_depth*n_ordered_sets)
+        count      = Signal(max=mem_depth*n_ordered_sets)
         count_done = (count == (mem_depth*n_ordered_sets - 1))
         self.sync += [
             If(run,
@@ -236,6 +248,7 @@ class TSGenerator(LiteXModule):
                 count.eq(0)
             )
         ]
+
         # Delimiters -------------------------------------------------------------------------------
         self.comb += [
             self.source.first.eq(count == 0),
@@ -254,36 +267,35 @@ class TSUnit(LiteXModule):
     control/status signals.
 
     The detection is always enabled: TS1 must also be detected in U0 (partner entering Recovery,
-    7.5.6.2), rx_enable is informative (LTSSM states expecting Training Sequences).
+    7.5.6.2).
     """
     def __init__(self, serdes):
-        self.rx_enable       = Signal() # i (Level, informative)
-        self.rx_ts1          = Signal() # o (Pulse)
-        self.rx_ts1_inv      = Signal() # o (Pulse)
-        self.rx_ts2          = Signal() # o (Pulse)
-        self.rx_ts2_reset    = Signal() # o (Level)
-        self.rx_ts2_loopback = Signal() # o (Level)
+        self.rx_ts1            = Signal()        # o (Pulse)
+        self.rx_ts1_inv        = Signal()        # o (Pulse)
+        self.rx_ts2            = Signal()        # o (Pulse)
+        self.rx_ts2_reset      = Signal()        # o (Level)
+        self.rx_ts2_loopback   = Signal()        # o (Level)
         self.rx_ts2_scrambling = Signal(reset=1) # o (Level)
 
-        self.tx_enable       = Signal() # i (Level)
-        self.tx_tseq         = Signal() # i (Level)
-        self.tx_ts1          = Signal() # i (Level)
-        self.tx_ts2          = Signal() # i (Level)
-        self.tx_ts2_reset    = Signal() # i (Level)
-        self.tx_ts2_loopback = Signal() # i (Level)
+        self.tx_enable         = Signal()        # i (Level)
+        self.tx_tseq           = Signal()        # i (Level)
+        self.tx_ts1            = Signal()        # i (Level)
+        self.tx_ts2            = Signal()        # i (Level)
+        self.tx_ts2_reset      = Signal()        # i (Level)
+        self.tx_ts2_loopback   = Signal()        # i (Level)
         self.tx_ts2_scrambling = Signal(reset=1) # i (Level)
-        self.tx_done         = Signal() # o (Pulse)
+        self.tx_done           = Signal()        # o (Pulse)
 
         # # #
 
         # Ordered Set Checkers ---------------------------------------------------------------------
-        self.ts1_checker       =  ts1_checker       = TSChecker(ordered_set=TS1,     n_ordered_sets=8)
-        self.ts1_inv_checker   =  ts1_inv_checker   = TSChecker(ordered_set=TS1_INV, n_ordered_sets=8)
-        self.ts2_checker       =  ts2_checker       = TSChecker(ordered_set=TS2,     n_ordered_sets=8)
+        self.ts1_checker     = ts1_checker     = TSChecker(ordered_set=TS1,     n_ordered_sets=8)
+        self.ts1_inv_checker = ts1_inv_checker = TSChecker(ordered_set=TS1_INV, n_ordered_sets=8)
+        self.ts2_checker     = ts2_checker     = TSChecker(ordered_set=TS2,     n_ordered_sets=8)
         self.comb += [
-            serdes.source.connect(ts1_checker.sink,       omit={"ready"}),
-            serdes.source.connect(ts1_inv_checker.sink,   omit={"ready"}),
-            serdes.source.connect(ts2_checker.sink,       omit={"ready"}),
+            serdes.source.connect(ts1_checker.sink,     omit={"ready"}),
+            serdes.source.connect(ts1_inv_checker.sink, omit={"ready"}),
+            serdes.source.connect(ts2_checker.sink,     omit={"ready"}),
             self.rx_ts1.eq(ts1_checker.detected),
             self.rx_ts1_inv.eq(ts1_inv_checker.detected),
             self.rx_ts2.eq(ts2_checker.detected),
@@ -294,14 +306,14 @@ class TSUnit(LiteXModule):
         ]
 
         # Ordered Set Generators -------------------------------------------------------------------
-        # Note: No arbitration between generators. Only one of tx_tseq/tx_ts1/tx_ts2 must be asserted
-        # at a time, otherwise multiple sources will connect to serdes.sink simultaneously.
-        self.tseq_generator = tseq_generator = TSGenerator(ordered_set=TSEQ, n_ordered_sets=65536)
-        self.ts1_generator  =  ts1_generator = TSGenerator(ordered_set=TS1,  n_ordered_sets=16)
-        self.ts2_generator  =  ts2_generator = TSGenerator(ordered_set=TS2,  n_ordered_sets=16)
-        # Generations are aborted when no longer requested (tx_enable deasserted or other TS requested
-        # by the LTSSM): an interrupted burst restarts on an Ordered Set boundary (with COM, 6.4.1.1)
-        # and with a full burst.
+        # Note: No arbitration between generators. Only one of tx_tseq/tx_ts1/tx_ts2 must be
+        # asserted at a time, otherwise multiple sources will connect to serdes.sink simultaneously.
+        self.tseq_generator = tseq_generator = TSGenerator(TSEQ, n_ordered_sets=TSEQ_COUNT)
+        self.ts1_generator  = ts1_generator  = TSGenerator(TS1,  n_ordered_sets=16)
+        self.ts2_generator  = ts2_generator  = TSGenerator(TS2,  n_ordered_sets=16)
+        # Generations are aborted when no longer requested (tx_enable deasserted or other TS
+        # requested by the LTSSM): an interrupted burst restarts on an Ordered Set boundary (with
+        # COM, 6.4.1.1) and with a full burst.
         self.comb += [
             tseq_generator.abort.eq(~(self.tx_enable & self.tx_tseq)),
             ts1_generator.abort.eq( ~(self.tx_enable & self.tx_ts1)),

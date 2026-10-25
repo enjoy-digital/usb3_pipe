@@ -50,17 +50,16 @@ def lfps_clk_half_period_cycles(sys_clk_freq, lfps_clk_freq):
     return half_period_cycles
 
 class LFPSTiming:
-    """LPFS timings with typical, minimum and maximum timing values."""
+    """LFPS timings with typical, minimum and maximum timing values."""
     def __init__(self, t_typ=None, t_min=None, t_max=None):
+        assert t_min is not None
+        assert t_max is not None
         self.t_typ = t_typ
         self.t_min = t_min
         self.t_max = t_max
-        assert t_min is not None
-        assert t_max is not None
-        self.range = (t_min, t_max)
 
 class LFPS:
-    """LPFS patterns with burst and repeat timings."""
+    """LFPS patterns with burst and repeat timings."""
     def __init__(self, burst, repeat=None, cycles=None):
         self.burst  = burst
         self.repeat = repeat
@@ -195,11 +194,13 @@ class LFPSChecker(LiteXModule):
         # burst (<= 2 periods, versus the original phase-drift lock that depended on reset
         # alignment and could miss the 1-cycle lock window forever). Single stray bursts (Ping,
         # Exit, Warm Reset) or continuous traffic never qualify (burst or gap out of window).
-        ps   = timer_scale
-        bmin = scaled_cycles(sys_clk_freq, lfps_pattern.burst.t_min, ps, floor=2)
-        bmax = scaled_cycles(sys_clk_freq, lfps_pattern.burst.t_max, ps) + stretch_cycles
-        gmin = max(2, scaled_cycles(sys_clk_freq, lfps_pattern.repeat.t_min - lfps_pattern.burst.t_max, ps, floor=2) - stretch_cycles)
-        gmax = scaled_cycles(sys_clk_freq, lfps_pattern.repeat.t_max - lfps_pattern.burst.t_min, ps)
+        burst  = lfps_pattern.burst
+        repeat = lfps_pattern.repeat
+        bmin = scaled_cycles(sys_clk_freq, burst.t_min, timer_scale, floor=2)
+        bmax = scaled_cycles(sys_clk_freq, burst.t_max, timer_scale) + stretch_cycles
+        gmin = scaled_cycles(sys_clk_freq, repeat.t_min - burst.t_max, timer_scale, floor=2)
+        gmin = max(2, gmin - stretch_cycles)
+        gmax = scaled_cycles(sys_clk_freq, repeat.t_max - burst.t_min, timer_scale)
 
         count    = Signal(32)
         burst_ok = Signal()
@@ -248,7 +249,7 @@ class LFPSBurstChecker(LiteXModule):
     - ping:   1 cycle pulse when a burst ends with a duration in [ping_min_cycles, max_cycles]
       (Ping.LFPS classification: burst shorter than the U1 exit 300ns detection window).
     """
-    def __init__(self, sys_clk_freq, min_cycles=0, max_cycles=0, ping_min_cycles=1):
+    def __init__(self, min_cycles=0, max_cycles=0, ping_min_cycles=1):
         self.idle   = Signal() # i (1 = electrical idle, no burst)
         self.detect = Signal() # o (level)
         self.ping   = Signal() # o (pulse)
@@ -473,7 +474,7 @@ class LFPSUnit(LiteXModule):
         ping_max_cycles    = u1_exit_min_cycles - 1
 
         # Ping (burst + repeat generator, burst-length classified checker) ---------------------------
-        self.ping_checker = ping_checker = LFPSBurstChecker(sys_clk_freq,
+        self.ping_checker = ping_checker = LFPSBurstChecker(
             max_cycles      = ping_max_cycles,
             ping_min_cycles = ping_min_cycles)
         self.comb += [
@@ -483,14 +484,14 @@ class LFPSUnit(LiteXModule):
         self.ping_generator = ping_generator = LFPSGenerator(PingLFPS, sys_clk_freq, lfps_clk_freq, timer_scale)
 
         # U1 Exit (detection window: above Ping max, 300ns min per Table 6-30 note 7) ----------------
-        self.exit_u1_checker = exit_u1_checker = LFPSBurstChecker(sys_clk_freq, min_cycles=u1_exit_min_cycles)
+        self.exit_u1_checker = exit_u1_checker = LFPSBurstChecker(min_cycles=u1_exit_min_cycles)
         self.comb += [
             exit_u1_checker.idle.eq(serdes.rx_idle),
             self.rx_exit_u1.eq(exit_u1_checker.detect),
         ]
 
         # U2/Loopback Exit ---------------------------------------------------------------------------
-        self.exit_u2_checker = exit_u2_checker = LFPSBurstChecker(sys_clk_freq,
+        self.exit_u2_checker = exit_u2_checker = LFPSBurstChecker(
             min_cycles=exit_u2_min_cycles(sys_clk_freq, timer_scale))
         self.comb += [
             exit_u2_checker.idle.eq(serdes.rx_idle),
@@ -498,7 +499,7 @@ class LFPSUnit(LiteXModule):
         ]
 
         # U3 Wakeup ----------------------------------------------------------------------------------
-        self.wakeup_u3_checker = wakeup_u3_checker = LFPSBurstChecker(sys_clk_freq,
+        self.wakeup_u3_checker = wakeup_u3_checker = LFPSBurstChecker(
             min_cycles=exit_u3_min_cycles(sys_clk_freq, timer_scale))
         self.comb += [
             wakeup_u3_checker.idle.eq(serdes.rx_idle),
@@ -510,7 +511,7 @@ class LFPSUnit(LiteXModule):
         # differentiated from data by the RX decode errors it produces (see RXErrorMonitor). SerDes
         # without rx_errors fall back to the electrical idle detection only.
         rx_errors = getattr(serdes, "rx_errors", None)
-        self.reset_checker = reset_checker = LFPSBurstChecker(sys_clk_freq,
+        self.reset_checker = reset_checker = LFPSBurstChecker(
             min_cycles=scaled_cycles(sys_clk_freq, ResetDetectDelay, timer_scale))
         self.comb += [
             reset_checker.idle.eq(serdes.rx_idle | ((~rx_errors) if rx_errors is not None else 0)),

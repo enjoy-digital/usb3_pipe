@@ -99,7 +99,6 @@ class TestUSB3PIPE(unittest.TestCase):
         ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
 
         def generator(dut):
-            yield dut.ts_rx_enable.eq(1)
             yield serdes.source.valid.eq(1)
             for _ in range(8):
                 for j, word in enumerate(ts1_words):

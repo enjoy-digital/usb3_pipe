@@ -38,8 +38,7 @@ from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
 @ResetInserter()
 class USB3LTSSM(LiteXModule):
     """Link Training and Status State Machine (7.5)."""
-    def __init__(self, sys_clk_freq, with_timers=True, timer_scale=1, u2_inactivity_timeout=1e-3,
-        ssp=False):
+    def __init__(self, sys_clk_freq, with_timers=True, timer_scale=1, ssp=False):
         # Status -----------------------------------------------------------------------------------
         self.u0                 = Signal()
         self.recovery           = Signal()
@@ -79,7 +78,6 @@ class USB3LTSSM(LiteXModule):
         self.lfps_rx_reset     = Signal()   # i
 
         # TS control/status ------------------------------------------------------------------------
-        self.ts_rx_enable = Signal()  # o
         self.ts_tx_enable = Signal()  # o
         self.ts_tx_tseq   = Signal()  # o
         self.ts_tx_ts1    = Signal()  # o
@@ -127,10 +125,8 @@ class USB3LTSSM(LiteXModule):
         self.wakeup_u3_req     = Signal()        # i: initiate U3 wakeup (DS, or UFP remote wakeup)
 
         # U2 inactivity (PORT_U2_TIMEOUT LMP, 0 = disabled, 7.5.7.2) -------------------------------
-        self.u2_inactivity_enable = Signal(reset=0) # i
-        self.u2_timeout           = Signal(8)       # i: U2 Inactivity Timeout (LMP 8.4.3, Table
-                                                    #    10-17: 256us units, 00h/FFh: disabled),
-                                                    #    U1 -> U2 on timeout (10.6.2.4).
+        self.u2_timeout = Signal(8) # i: U2 Inactivity Timeout (LMP 8.4.3, Table 10-17: 256us units,
+                                    #    00h/FFh: disabled), U1 -> U2 on timeout (10.6.2.4).
 
         # TS2 bit-plane (Link Functionality, connected to the TS unit by USB3PHY) ------------------
         self.rx_ts2_reset    = Signal() # i: partner TS2 Reset=1 seen (Hot Reset)
@@ -204,9 +200,6 @@ class USB3LTSSM(LiteXModule):
 
         # 8us Timer (PM_ENTRY_TIMER) ---------------------------------------------------------------
         self.t_pm_entry = t_pm_entry = WaitTimer(scaled(8e-6))
-
-        # 1ms Timer (default PORT_U2_TIMEOUT value) ------------------------------------------------
-        self.t_u2_inact = t_u2_inact = WaitTimer(scaled(u2_inactivity_timeout))
 
         # 12ms Timer (teSSInactiveQuietTimeout) ----------------------------------------------------
         self.t_ss_quiet = t_ss_quiet = WaitTimer(scaled(12e-3))
@@ -355,7 +348,7 @@ class USB3LTSSM(LiteXModule):
         self.pm_sent_lgo = pm_sent_lgo = Signal()  # LGO sent, LAU/LXU pending (PM_LC_TIMER armed)
         self.pm_acc_kind = pm_acc_kind = Signal(2) # partner request accepted (LAU sent)
         pm_conc_kind = Signal(2) # UFP: DS request received while own LGO pending (7.2.4.2.5)
-        pm_lgo_fire  = Signal(2)
+        pm_lgo_fire  = Signal()
         pm_lau_fire  = Signal()
         pm_lxu_fire  = Signal()
         pm_lpma_fire = Signal()
@@ -428,7 +421,6 @@ class USB3LTSSM(LiteXModule):
         # RxEQ State (7.5.4.4) ---------------------------------------------------------------------
         fsm.act("Polling.RxEQ",
             self.serdes_rx_align.eq(1),
-            self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_tseq.eq(1),
             If(self.ts_tx_done,
@@ -439,7 +431,6 @@ class USB3LTSSM(LiteXModule):
         # Active State (7.5.4.5) -------------------------------------------------------------------
         fsm.act("Polling.Active",
             _12_ms_timer.wait.eq(with_timers),
-            self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts1.eq(1),
 
@@ -471,7 +462,6 @@ class USB3LTSSM(LiteXModule):
         # Configuration State (7.5.4.6) ------------------------------------------------------------
         fsm.act("Polling.Configuration",
             t_polling_cfg.wait.eq(with_timers),
-            self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
             NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
@@ -710,7 +700,6 @@ class USB3LTSSM(LiteXModule):
             NextValue(self.pm_acc_kind, 0),
             t_ux_exit.wait.eq(ux_armed),
             self.u1.eq(1),
-            t_u2_inact.wait.eq(with_timers & self.u2_inactivity_enable),
             If(self.lfps_rx_reset,
                 NextValue(wr_run,  1),
                 NextValue(wr_orig, 0),
@@ -728,7 +717,7 @@ class USB3LTSSM(LiteXModule):
             ).Elif(hs_done_err,
                 # tNoLFPSResponseTimeout (2ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
-            ).Elif((t_u2_inact.done & self.u2_inactivity_enable) | (with_timers & u2_timeout_done),
+            ).Elif(with_timers & u2_timeout_done,
                 # PORT_U2_TIMEOUT: U1 -> U2 direct degradation (7.2.4.2.3).
                 NextState("U2")
             ).Elif(self.ds_port & u1_ping_done,
@@ -920,7 +909,6 @@ class USB3LTSSM(LiteXModule):
             NextValue(self.pm_acc_kind, 0),
             self.hot_reset.eq(1),
             _12_ms_timer.wait.eq(with_timers),
-            self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
             NextValue(hr_tx_reset, 1),
@@ -980,7 +968,6 @@ class USB3LTSSM(LiteXModule):
                                         # exit burst shifts the RX word phase (Recovery is the only
                                         # TS-receiving path entered after a LFPS burst; the aligner
                                         # re-latches on the K->D boundary of each TS1 set).
-            self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts1.eq(1),
 
@@ -1006,7 +993,6 @@ class USB3LTSSM(LiteXModule):
             t_ux_exit.wait.eq(ux_armed),
             _6_ms_timer.wait.eq(with_timers),
             self.serdes_rx_align.eq(1), # Keep alignment re-acquisition during the TS2 exchange.
-            self.ts_rx_enable.eq(1),
             self.ts_tx_enable.eq(1),
             self.ts_tx_ts2.eq(1),
             NextValue(rx_ts2_seen, rx_ts2_seen | self.ts_rx_ts2),
@@ -1110,9 +1096,9 @@ class USB3LTSSM(LiteXModule):
 
         # PM handshake pulses.
         self.comb += [
-            self.tx_lgo_u1.eq(pm_lgo_fire[0] & (pm_kind == 1)),
-            self.tx_lgo_u2.eq(pm_lgo_fire[0] & (pm_kind == 2)),
-            self.tx_lgo_u3.eq(pm_lgo_fire[0] & (pm_kind == 3)),
+            self.tx_lgo_u1.eq(pm_lgo_fire & (pm_kind == 1)),
+            self.tx_lgo_u2.eq(pm_lgo_fire & (pm_kind == 2)),
+            self.tx_lgo_u3.eq(pm_lgo_fire & (pm_kind == 3)),
             self.tx_lau.eq(pm_lau_fire),
             self.tx_lxu.eq(pm_lxu_fire),
             self.tx_lpma.eq(pm_lpma_fire),

@@ -729,14 +729,13 @@ class TestLTSSMU3WakeupRetry(PMTestCase):
 
 class TestLTSSMU1Timers(PMTestCase):
     def test_u1_to_u2_on_inactivity_timeout(self):
-        # PORT_U2_TIMEOUT expiry in U1 -> U2 directly (7.2.4.2.3, 7.5.7.2).
-        u2_timeout = 100e-6
+        # PORT_U2_TIMEOUT expiry in U1 -> U2 directly (7.2.4.2.3, 7.5.7.2), U2 exit afterwards.
         for enable in [0, 1]:
             with self.subTest(enable=enable):
-                inact = scaled(u2_timeout, PM_CLK_FREQ)
+                inact = scaled(256e-6, PM_CLK_FREQ)
                 def generator(dut):
                     yield from self.go_u0(dut, ds_port=0)
-                    yield dut.u2_inactivity_enable.eq(enable)
+                    yield dut.u2_timeout.eq(1 if enable else 0)
                     yield from self.enter_ux_as_acceptor(dut, 1)
                     for _ in range(inact - 2):
                         self.assertEqual((yield dut.u1), 1)
@@ -753,7 +752,7 @@ class TestLTSSMU1Timers(PMTestCase):
                             self.assertEqual((yield dut.u1), 1)
                             yield
 
-                dut = self.make_dut(with_timers=True, u2_inactivity_timeout=u2_timeout)
+                dut = self.make_dut(with_timers=True)
                 run_simulation(dut, generator(dut))
 
     def test_u1_to_u2_on_u2_timeout(self):

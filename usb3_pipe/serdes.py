@@ -122,7 +122,7 @@ class RXWordAligner(LiteXModule):
     Align RX Words by analyzing the location of the alignment markers (COM by default, configurable
     K-codes, or any K-code with check_ctrl_only) in the RX stream.
     """
-    def __init__(self, check_ctrl_only=False, markers=[COM]):
+    def __init__(self, check_ctrl_only=False, markers=(COM,)):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -283,7 +283,7 @@ class RXErrorSubstitution(LiteXModule):
 
     Substitutes received 8b/10b decode errors and disparity errors with K28.4 symbols (6.3.1.4).
     """
-    def __init__(self, serdes, clock_domain, enable=True):
+    def __init__(self, serdes, clock_domain):
         self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
         self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
 
@@ -294,14 +294,13 @@ class RXErrorSubstitution(LiteXModule):
         if clock_domain != "sys":
             checker = ClockDomainsRenamer(clock_domain)(checker)
         self.checker = checker
-        if enable:
-            for i in range(2):
-                self.comb += [
-                    If(serdes.decoders[i].invalid | checker.invalid[i] | checker.disparity_error[i],
-                        self.source.ctrl[i].eq(1),
-                        self.source.data[8*i:8*(i+1)].eq(K(28, 4)),
-                    )
-                ]
+        for i in range(len(serdes.decoders)):
+            self.comb += [
+                If(serdes.decoders[i].invalid | checker.invalid[i] | checker.disparity_error[i],
+                    self.source.ctrl[i].eq(1),
+                    self.source.data[8*i:8*(i+1)].eq(K(28, 4)),
+                )
+            ]
 
 # RX Error Monitor ---------------------------------------------------------------------------------
 

@@ -110,7 +110,7 @@ class USB3X2PHY(LiteXModule):
         self.comb += [s for s in connect_ltssm_pipe(ltssm, pipes[0]) if id(s.l) not in combined]
 
         # Lane 1: same TX/RX controls, no LFPS (6.13.12): electrical idle while Lane 0 sends LFPS.
-        for name in ["lfps_tx_idle", "ts_rx_enable", "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1",
+        for name in ["lfps_tx_idle", "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1",
             "ts_tx_ts2", "serdes_rx_align", "rx_ready", "tx_ready", "idle_handshake", "ts2_decode"]:
             self.comb += getattr(pipes[1], name).eq(getattr(ltssm, name))
         self.comb += [
