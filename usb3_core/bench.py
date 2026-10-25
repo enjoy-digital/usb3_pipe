@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Bulk bandwidth benchmark (scripts/usb3_bench.py).
+"""USB3 Bulk bandwidth benchmark (bench/usb3_bench.py).
 
 - Source (Bulk IN) : 32-bit incrementing counter words at full rate (max size packets).
 - Sink   (Bulk OUT): checks the 32-bit incrementing counter words (resynchronized on errors).
