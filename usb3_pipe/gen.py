@@ -41,10 +41,6 @@ from usb3_pipe.serdes import A7USB3SerDes, K7USB3SerDes, USPUSB3SerDes
 from usb3_pipe.ltssm  import USB3LTSSM
 from usb3_pipe.phy    import USB3PHY, USB3PHY_STATUS, USB3PHY_LINK_CTRL
 
-from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
-from usb3_core.descriptors import bulk_descriptors
-
 # Configuration ------------------------------------------------------------------------------------
 
 # Supported PHYs: SerDes class, default device (family), platform class, OOB clock PLL class.
@@ -359,6 +355,11 @@ class USB3PIPECore(SoCMini):
                     self.comb += platform.request(name).eq(getattr(phy, name))
 
     def add_usb_core(self, platform, config, phy, sys_clk_freq):
+        # Imported here: the PHY package does not depend on the USB3 Device Core (usb3_core).
+        from usb3_core.device      import USB3DeviceCore
+        from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+        from usb3_core.descriptors import bulk_descriptors
+
         # USB3 Device Core -------------------------------------------------------------------------
         max_burst   = config["usb_max_burst"]
         descriptors = bulk_descriptors(
