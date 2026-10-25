@@ -85,7 +85,7 @@ class USB3SoC(SoCCore):
     def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
         example="loopback", cpu_type=None,
         with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
-        rxcdr_cfg=None, gtp_params={}, lpm_hold="none"):
+        rxcdr_cfg=None, gtp_params={}, lpm_hold="none", with_lpm=False):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -150,7 +150,7 @@ class USB3SoC(SoCCore):
 
         # USB3 Core (Example design) -------------------------------------------------------------
         if with_core:
-            add_usb3_example(self, usb3_phy, sys_clk_freq, example=example)
+            add_usb3_example(self, usb3_phy, sys_clk_freq, example=example, with_lpm=with_lpm)
         else:
             self.comb += usb3_phy.source.ready.eq(1)
 
@@ -229,6 +229,7 @@ def main():
     parser.add_argument("--no-uartbone",       action="store_true", help="Disable UARTBone.")
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
     parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=USB3_EXAMPLES)
+    parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
     parser.add_argument("--cpu-type",          default=None,        help="CPU (console example, ex: vexriscv).")
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
@@ -262,7 +263,8 @@ def main():
         analyzer_csv      = os.path.join(output_dir, "analyzer.csv"),
         rxcdr_cfg         = None if args.rxcdr_cfg is None else int(args.rxcdr_cfg, 0),
         gtp_params        = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)},
-        lpm_hold          = args.lpm_hold)
+        lpm_hold          = args.lpm_hold,
+        with_lpm          = args.with_lpm)
     builder = Builder(soc, output_dir=output_dir, csr_csv=os.path.join(output_dir, "csr.csv"))
     builder.build(run=args.build, vivado_place_directive=args.vivado_place_directive)
 

@@ -11,14 +11,19 @@
   (LGOOD_n/LCRD_x), LBAD/LRTY retries, Header Sequence Number/Rx Header Buffer Credit
   Advertisements on each U0 entry (link state kept across Recovery).
 - Timers: PENDING_HP_TIMER, CREDIT_HP_TIMER (Recovery on timeout), U0 LUP keep-alive.
-- LMPs (8.4): Port Capability/Configuration (Response), Set Link Function (Force_LinkPM_Accept).
+- LMPs (8.4): Port Capability/Configuration (Response), Set Link Function (Force_LinkPM_Accept),
+  U2 Inactivity Timeout.
 - Link Power Management (7.2.4.2): partner LGO_Ux forwarded to the LTSSM (U3 always, U1/U2 when
-  enabled or forced), rejected with LXU otherwise. LAU/LXU sent when requested by the LTSSM.
+  forced or when enabled and idle: no pending packets/Link Commands, all received packets
+  acknowledged and credited, all transmitted packets acknowledged and credited, upper layers not
+  busy), rejected with LXU otherwise. LAU/LXU sent when requested by the LTSSM, partner LPMA
+  forwarded for accepted U1/U2 entries. U1/U2 exit requested when packets are pending (exit through
+  Recovery, Advertisements on U0 re-entry).
 - TX: framer (Link Commands, Header Packets, Data Packet Payloads with CRC-32/END framing).
 
 The PHY is only accessed through its Link interface (see usb3_pipe.phy.USB3PHY): sink/source data/
-ctrl words, u0/polling_idle/hot_reset status, lgo_u1/lgo_u2/lgo_u3/tx_lau/tx_lxu PM handshake,
-directed_recovery and link_activity.
+ctrl words, u0/u1/u2/polling_idle/hot_reset status, lgo_u1/lgo_u2/lgo_u3/tx_lau/tx_lxu/lpma PM
+handshake, exit_u1_req/exit_u2_req, u2_timeout, directed_recovery and link_activity.
 """
 
 from migen import *
@@ -54,7 +59,8 @@ class USB3LinkLayer(LiteXModule):
         self.tx_dpp      = stream.Endpoint(dpp_layout())                                   # i
 
         # Control/Status.
-        self.u1_u2_enable = Signal() # i: Accept the partner's LGO_U1/LGO_U2 (else LXU).
+        self.lpm_enable   = Signal() # i: Accept the partner's LGO_U1/LGO_U2 when idle (else LXU).
+        self.pm_busy      = Signal() # i: Upper layers busy (ex: ACK TP expected): LGO_U1/LGO_U2 rejected.
         self.ready        = Signal() # o: U0 and link initialized (Advertisement received).
         self.reset        = Signal() # o: Link reset (Polling/Hot Reset): Protocol Layer reset.
 
@@ -300,6 +306,8 @@ class USB3LinkLayer(LiteXModule):
         portcap_pending = Signal(reset=1)
         portcfg_pending = Signal()
         force_pm_accept = Signal()
+        pm_accepted     = Signal()  # LGO_U1/LGO_U2 accepted: no new Header Packets until the next U0 entry.
+        u2_timeout      = Signal(8) # U2 Inactivity Timeout (LMP).
 
         self.comb += self.ready.eq(u0 & adv_received & ~pm_block)
 
@@ -334,21 +342,58 @@ class USB3LinkLayer(LiteXModule):
         lc_lrty  = Signal()
         lc_lbad  = Signal()
         lc_lgo   = Signal()
+        lc_lpma  = Signal()
         self.comb += [
             lc_lgood.eq(lc_check & ((lc_info & 0x7f8) == LCMD_LGOOD)),
             lc_lcrd.eq( lc_check & ((lc_info & 0x7fc) == LCMD_LCRD)),
             lc_lrty.eq( lc_check & ( lc_info          == LCMD_LRTY)),
             lc_lbad.eq( lc_check & ( lc_info          == LCMD_LBAD)),
             lc_lgo.eq(  lc_check & ((lc_info & 0x7fc) == LCMD_LGO_U) & (lc_info[0:2] != 0)),
+            lc_lpma.eq( lc_check & ( lc_info          == LCMD_LPMA)),
         ]
 
-        # LGO_Ux forwarded to the LTSSM (it requests LAU/LXU).
+        # Link Power Management (7.2.4.2) ----------------------------------------------------------
+        # LGO_U1/LGO_U2 accepted (7.2.4.2.2) when forced (Force_LinkPM_Accept) or when enabled and:
+        # a. LGOOD_n and LCRD_x sent for all the received Header Packets (Rx Header Buffers empty).
+        # b. LGOOD_n and LCRD_x received for all the transmitted Header Packets.
+        # c. No pending packets for transmission (Link Layer LMPs, Protocol Layer Header Packets).
+        # d. Not rejected by the upper layers (pm_busy: ex ACK TP expected for a sent DP).
+        # LGO_U3 always accepted (7.2.4.2.4). Forwarded to the LTSSM (it requests LAU), else LXU.
+        lpm_idle = Signal()
+        self.comb += lpm_idle.eq(adv_received &
+            (lgood_seq == rx_seq) & (lcrd_pending == 0) & ~rx_buffer.source.valid &
+            ~lbad_wait & ~lbad_pending &
+            (ack_seq == tx_seq) & (send_seq == tx_seq) & (remote_credits == LINK_HP_BUFFERS) &
+            ~lrty_pending &
+            ~portcap_pending & ~portcfg_pending & ~self.tx_hp.valid &
+            ~lau_pending & ~lxu_pending & ~pm_accepted & ~self.pm_busy)
+        lgo_u12 = Signal()
         lgo_fwd = Signal()
-        self.comb += lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | self.u1_u2_enable | force_pm_accept))
+        self.comb += [
+            lgo_u12.eq(lc_lgo & (lc_info[0:2] != 3)),
+            lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | force_pm_accept | (self.lpm_enable & lpm_idle))),
+        ]
         self.sync += [
             phy.lgo_u1.eq(lgo_fwd & (lc_info[0:2] == 1)),
             phy.lgo_u2.eq(lgo_fwd & (lc_info[0:2] == 2)),
             phy.lgo_u3.eq(lgo_fwd & (lc_info[0:2] == 3)),
+            # LPMA of an accepted U1/U2 entry: Ux entered without waiting for PM_ENTRY_TIMER.
+            phy.lpma.eq(lc_lpma & pm_accepted),
+            If(lgo_fwd & lgo_u12,
+                pm_accepted.eq(1)
+            ).Elif(~u0 | phy.tx_lxu,
+                pm_accepted.eq(0)
+            ),
+        ]
+
+        # U1/U2 exit when packets are to be transmitted (ex: ERDY, 7.2.4.2.7). The LTSSM waits for
+        # U1_MIN_RESIDENCY before initiating the U1 exit.
+        tx_pending = Signal()
+        self.comb += [
+            tx_pending.eq(self.tx_hp.valid | (send_seq != tx_seq) | portcap_pending | portcfg_pending),
+            phy.exit_u1_req.eq(phy.u1 & tx_pending),
+            phy.exit_u2_req.eq(phy.u2 & tx_pending),
+            phy.u2_timeout.eq(u2_timeout),
         ]
 
         # TX Header Buffers ------------------------------------------------------------------------
@@ -377,7 +422,7 @@ class USB3LinkLayer(LiteXModule):
             ).Else(
                 lmp_push_dw0.eq(PORT_CFG_RESP_DW0),
             ),
-            self.tx_hp.ready.eq(self.ready & ~tx_full & ~lmp_push),
+            self.tx_hp.ready.eq(self.ready & ~tx_full & ~lmp_push & ~pm_accepted),
             If(lmp_push,
                 tx_push.eq(1),
                 tx_push_dws.eq(Cat(lmp_push_dw0, lmp_push_dw1, C(0, 32))),
@@ -620,6 +665,7 @@ class USB3LinkLayer(LiteXModule):
             If(lmp_pop,
                 If(lmp_sub == LMP_SUB_PORT_CFG,      portcfg_pending.eq(1)),
                 If(lmp_sub == LMP_SUB_SET_LINK_FUNC, force_pm_accept.eq(rx_buffer.source.dw0[10])),
+                If(lmp_sub == LMP_SUB_U2_INACT,      u2_timeout.eq(rx_buffer.source.dw0[9:17])),
             ),
 
             # Link Power Management.
@@ -694,5 +740,6 @@ class USB3LinkLayer(LiteXModule):
                 portcap_pending.eq(1),
                 portcfg_pending.eq(0),
                 force_pm_accept.eq(0),
+                u2_timeout.eq(0),
             ),
         ]

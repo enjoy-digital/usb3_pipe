@@ -26,6 +26,8 @@ from usb3_core.endpoints import HeaderFields
 
 class USB3ProtocolLayer(LiteXModule):
     def __init__(self, link, endpoints, dev_addr):
+        self.pm_busy = Signal() # o: Pending Header Packets/DPPs or busy endpoints (U1/U2 entry rejected).
+
         # # #
 
         # Received Header Packets (registered: timings).
@@ -142,3 +144,10 @@ class USB3ProtocolLayer(LiteXModule):
             ),
             jobs.source.ready.eq(tx_dpp.sink.valid & tx_dpp.sink.ready & tx_dpp.sink.last),
         ]
+
+        # Link Power Management --------------------------------------------------------------------
+        # Busy (U1/U2 entry rejected, 7.2.4.2.2): received Header Packets being processed, Header
+        # Packets/DPPs to transmit, endpoints busy (ex: ACK TP expected for a sent DP).
+        self.comb += self.pm_busy.eq(rx_hp.valid | status.source.valid | resp.source.valid |
+            tx_hp.source.valid | jobs.source.valid | tx_dpp.source.valid |
+            Reduce("OR", [ep.tx_hp.valid | ep.pm_busy for ep in endpoints]))

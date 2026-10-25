@@ -31,10 +31,12 @@ class TestSimHost(unittest.TestCase):
         out = p.stdout or ""
         self.assertEqual(p.returncode, 0, out[-4000:])
         self.assertIn("HOST script done", out, out[-4000:])
+        self.output = out
         return parse_sim_output(out, enumeration_script(
             skp        = "--no-host-skp" not in args,
             status_gap = int(args[args.index("--host-status-gap") + 1]) if "--host-status-gap" in args else 64,
-            pm         = "--host-pm" in args))
+            pm         = "--host-pm" in args,
+            lpm        = "--host-lpm" in args))
 
     def check_enumeration(self, sections):
         check_core_enumeration(self, sections)
@@ -65,6 +67,25 @@ class TestSimHost(unittest.TestCase):
             self.assertNotIn(LAU(), lcs, name)
         packets = sections["get_device_descriptor_after_pm"]
         self.assertEqual(dpps(packets), [bulk_descriptors().device()])
+
+    def test_lpm_u1_u2(self):
+        # Device Core with LPM: SET_FEATURE(U1_ENABLE/U2_ENABLE) reported by GET_STATUS, LGO_U1/LGO_U2
+        # accepted (LAU), U1/U2 entered by both LTSSMs, Host initiated exit (LFPS handshake, Recovery),
+        # Advertisements on U0 re-entry, then control transfers.
+        sections = self.run_sim("--host-lpm")
+        self.check_enumeration(sections)
+        self.assertEqual(dpps(sections["get_status"]), [[0x0c, 0x00]])
+        for n in [1, 2]:
+            lcs = [p[1] for p in sections[f"u{n}"] if p[0] == "LC"]
+            self.assertIn(LAU(), lcs)
+            self.assertNotIn(LXU(), lcs)
+            for name in ["HOST", "DEV "]:
+                self.assertIn(f"{name} entering U{n} state", self.output)
+            lcs = [p[1] for p in sections[f"u{n}_u0"] if p[0] == "LC"]
+            self.assertEqual(lcs[1:5], [LCRD(x) for x in range(4)], lcs)
+            self.assertEqual(lcs[0] & ~0x7, LGOOD(0))
+            packets = sections[f"get_device_descriptor_after_u{n}"]
+            self.assertEqual(dpps(packets), [bulk_descriptors().device()])
 
 if __name__ == "__main__":
     unittest.main()

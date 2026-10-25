@@ -36,7 +36,8 @@ What a USB3 Link Layer needs from the PHY (the USB3 Device Core only uses this i
 | `sink` (data 32, ctrl 4) | Link -> PHY | TX symbols (first symbol on `data[31:24]`), Logical Idle sent when `sink.valid` is low, `sink.ready` low during SKP insertions. |
 | `source` (data 32, ctrl 4) | PHY -> Link | RX symbols, framing words aligned, no back-pressure. |
 | `u0`, `recovery`, `rx_ready`, `tx_ready`, `u1/u2/u3`, `polling_idle`, `hot_reset`, ... | PHY -> Link | LTSSM status (`USB3PHY_STATUS`). |
-| `lgo_u1/2/3`, `lau`, `lxu`, `req_u*`, `tx_lgo_u*`, `tx_lau`, `tx_lxu`, `tx_lpma` | both | PM handshake (LGO_Ux decoded by the Link Layer, decision by the LTSSM). |
+| `lgo_u1/2/3`, `lau`, `lxu`, `lpma`, `req_u*`, `tx_lgo_u*`, `tx_lau`, `tx_lxu`, `tx_lpma` | both | PM handshake (LGO_Ux/LAU/LXU/LPMA decoded by the Link Layer, decision by the LTSSM). |
+| `u2_timeout` (8) | Link -> PHY | U2 Inactivity Timeout (LMP value, 256us units, 00h/FFh: disabled): U1 -> U2 on timeout. |
 | `directed_recovery`, `hot_reset_req`, `warm_reset_req`, `exit_u1/u2_req`, `wakeup_u3_req`, `link_activity` | Link -> PHY | Directed transitions, U0 Recovery timeout activity (`USB3PHY_LINK_CTRL`). |
 
 ## Usage
@@ -64,6 +65,7 @@ packets checked against captures of an xHCI host), the Device the USB3 Device Co
 ```sh
 $ ./sim.py                       # Link training, enumeration, Bulk transfers.
 $ ./sim.py --no-core --ppm 300   # PRBS Link-Layer stand-ins, clock offset.
+$ ./sim.py --host-lpm            # + U1/U2 entries/exits (Device Core with LPM).
 $ ./sim.py --trace               # VCD (build/sim/gateware/sim.vcd).
 $ pytest test                    # Unit/system tests (pytest -m slow: long simulations).
 ```
@@ -71,6 +73,7 @@ $ pytest test                    # Unit/system tests (pytest -m slow: long simul
 ## Limitations
 
 - Gen 1x1 only (Gen 2/x2: [gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
-- U1/U2 entry is implemented in the LTSSM but rejected by the USB3 Device Core (LXU).
+- U1/U2 are rejected by the USB3 Device Core by default (LXU), accepted with `with_lpm` (simulation
+  validated only).
 - The Acorn has no transceiver reference clock without a PCIe host: the 200MHz oscillator is routed
   through the fabric ([debugging-guide.md](debugging-guide.md)).

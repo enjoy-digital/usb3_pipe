@@ -340,6 +340,28 @@ class TestLTSSMPMAcceptor(PMTestCase):
                 dut = self.make_dut()
                 run_simulation(dut, generator(dut))
 
+    def test_lgo_lau_enters_ux_on_lpma(self):
+        # LGO_Ux received -> LAU sent, Ux entered on LPMA reception, before the PM_ENTRY_TIMER
+        # timeout (7.2.4.2.3).
+        sys_clk_freq = int(20e6)
+        pm_entry     = scaled(8e-6, sys_clk_freq)
+        for kind in [1, 2]:
+            with self.subTest(kind=kind):
+                def generator(dut):
+                    yield from self.go_u0(dut, ds_port=0)
+                    yield from self.pulse(self.lgo_in(dut, kind))
+                    self.assertTrue((yield from self.wait_for(dut, dut.tx_lau, timeout=8)))
+                    for _ in range(8):
+                        yield
+                    self.assertEqual((yield dut.u0), 1)
+                    yield from self.pulse(dut.lpma)
+                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind), timeout=4)))
+                    self.assertEqual((yield dut.recovery), 0)
+
+                dut = self.make_dut(sys_clk_freq=sys_clk_freq, with_timers=True)
+                self.assertGreater(pm_entry, 64)
+                run_simulation(dut, generator(dut))
+
     def test_lgo_ignored_while_acceptor_pending(self):
         # A second LGO while PM_ENTRY_TIMER runs does not produce a second LAU nor change Ux.
         def generator(dut):
@@ -474,6 +496,29 @@ class TestLTSSMUxExit(PMTestCase):
                     yield self.lfps_rx(dut, kind).eq(0)
                     self.assertTrue((yield from self.wait_for(dut, dut.recovery, timeout=4*burst)))
                     yield from self.recover_to_u0(dut)
+
+                dut = self.make_exit_dut()
+                run_simulation(dut, generator(dut))
+
+    def test_partner_u0_transmission_not_exit_request(self):
+        # Ux entered while the partner is still seen transmitting (burst checkers measuring its U0
+        # transmission, ex: U1/U2 entered on LPMA reception): not an exit request, a burst started
+        # after the partner's electrical idle is.
+        for kind in [1, 2, 3]:
+            with self.subTest(kind=kind):
+                def generator(dut):
+                    yield from self.go_u0(dut, ds_port=0)
+                    yield self.lfps_rx(dut, kind).eq(1)
+                    yield from self.enter_ux_as_acceptor(dut, kind)
+                    for _ in range(32):
+                        self.assertEqual((yield self.ux_signal(dut, kind)), 1)
+                        self.assertEqual((yield self.lfps_tx(dut, kind)), 0)
+                        yield
+                    yield self.lfps_rx(dut, kind).eq(0)
+                    for _ in range(4):
+                        yield
+                    yield from self.partner_burst(dut, self.lfps_rx(dut, kind), 4)
+                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind), timeout=8)))
 
                 dut = self.make_exit_dut()
                 run_simulation(dut, generator(dut))
@@ -709,6 +754,29 @@ class TestLTSSMU1Timers(PMTestCase):
                             yield
 
                 dut = self.make_dut(with_timers=True, u2_inactivity_timeout=u2_timeout)
+                run_simulation(dut, generator(dut))
+
+    def test_u1_to_u2_on_u2_timeout(self):
+        # U2 Inactivity Timeout (U2 Inactivity Timeout LMP value, 256us units, 00h/FFh: disabled)
+        # expiry in U1 -> U2 directly (10.6.2.4, Table 10-17).
+        tick = scaled(256e-6, PM_CLK_FREQ)
+        for u2_timeout in [0x00, 0x02, 0xff]:
+            with self.subTest(u2_timeout=u2_timeout):
+                def generator(dut):
+                    yield from self.go_u0(dut, ds_port=0)
+                    yield dut.u2_timeout.eq(u2_timeout)
+                    yield from self.enter_ux_as_acceptor(dut, 1)
+                    for _ in range(2*tick - 4):
+                        self.assertEqual((yield dut.u1), 1)
+                        yield
+                    if u2_timeout == 0x02:
+                        self.assertTrue((yield from self.wait_for(dut, dut.u2, timeout=8)))
+                    else:
+                        for _ in range(4*tick):
+                            self.assertEqual((yield dut.u1), 1)
+                            yield
+
+                dut = self.make_dut(with_timers=True)
                 run_simulation(dut, generator(dut))
 
     def test_ds_u1_ping_timeout_rx_detect(self):

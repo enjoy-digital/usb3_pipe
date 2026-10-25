@@ -192,16 +192,29 @@ OP_SKP  = 2 # Request a SKP Ordered Set insertion (SerDes model).
 OP_MARK = 3 # Display a step marker.
 OP_END  = 4 # End of script.
 OP_IDLE = 5 # Logical Idle for data cycles.
+OP_PM   = 6 # Pulse the Host LTSSM PM controls (data: PM_* flags).
+OP_U0   = 7 # Wait the Host LTSSM U0 (re-)entry.
+
+# Host LTSSM PM controls (OP_PM).
+PM_REQ_U1  = 0b00001
+PM_REQ_U2  = 0b00010
+PM_LAU     = 0b00100
+PM_EXIT_U1 = 0b01000
+PM_EXIT_U2 = 0b10000
 
 class USB3HostModel(LiteXModule):
     """Scripted USB3 Host Link/Protocol Layer model.
 
     The script is a list of (op, data, ctrl, mask, first, last) steps, see the scripts builders. The
     received words are displayed ("HOST_RX <data> <ctrl>") while the script runs, the received
-    packets are then checked by the test from the simulation output.
+    packets are then checked by the test from the simulation output. Link Power Management: the
+    Host LTSSM PM controls are pulsed by the script (pm: OP_PM), which waits for its U0 re-entry
+    (u0: OP_U0).
     """
     def __init__(self, script, wait_timeout=2**16):
         self.enable   = Signal() # i: Run the script (ex: LTSSM in U0), restarts it when deasserted.
+        self.u0       = Signal() # i: Host LTSSM in U0.
+        self.pm       = Signal(5) # o: Host LTSSM PM controls (PM_* flags, pulses).
         self.sink     = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source   = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.skp      = Signal() # o: SKP Ordered Set insertion request (SerDes model).
@@ -263,6 +276,12 @@ class USB3HostModel(LiteXModule):
             OP_SKP: [
                 self.skp.eq(run),
             ],
+            OP_PM: [
+                If(run, self.pm.eq(fields["data"])),
+            ],
+            OP_U0: [
+                timer.wait.eq(run),
+            ],
             OP_END: [
                 self.done.eq(1),
             ],
@@ -284,6 +303,15 @@ class USB3HostModel(LiteXModule):
                     )
                 ],
                 OP_SKP:  step.eq(step + 1),
+                OP_PM:   step.eq(step + 1),
+                OP_U0: [
+                    If(self.u0,
+                        step.eq(step + 1)
+                    ).Elif(timer.done,
+                        self.error.eq(1),
+                        Display("HOST_TIMEOUT step %d", step)
+                    )
+                ],
                 OP_MARK: [
                     Display("HOST_MARK %d", fields["data"]),
                     step.eq(step + 1)
@@ -309,6 +337,7 @@ class HostScript:
         self.offset    = 0 # Packets offset in the words (symbols, SKP Ordered Sets accounting).
         self.tx_seq    = 0 # Host Header Sequence Number.
         self.rx_seq    = 0 # Device Header Sequence Number (expected).
+        self.lcrd      = 0 # Rx Header Buffer Credit index (LCRD_x returned to the device).
         self.marks     = []
 
     def send(self, words):
@@ -329,8 +358,9 @@ class HostScript:
         # Wait a device Header Packet and acknowledge it (LGOOD_n + LCRD_x, 7.2.4).
         self.wait(0xfbfbfbf7, ctrl=0b1111)
         self.send(link_command(LGOOD(self.rx_seq)))
-        self.send(link_command(LCRD(self.rx_seq % 4)))
+        self.send(link_command(LCRD(self.lcrd)))
         self.rx_seq = (self.rx_seq + 1) % 8
+        self.lcrd   = (self.lcrd + 1) % 4
 
     def idle(self, cycles):
         self.steps.append((OP_IDLE, cycles, 0, 0, 0, 0))
@@ -410,6 +440,31 @@ class HostScript:
         self.send(link_command(LGO_U(n)))
         self.wait(*link_command(response)[1])
 
+    def pm(self, flags):
+        self.steps.append((OP_PM, flags, 0, 0, 0, 0))
+
+    # U1/U2 entry (Host LTSSM: LGO_Ux sent, LAU received: LPMA sent and Ux entered, 7.2.4.2.3), Ux
+    # residency, Host initiated exit (LFPS handshake, Recovery, 7.2.4.2.7) and U0 re-entry
+    # Advertisements (7.2.4.1.1).
+    def ux(self, n, name, residency=4096):
+        self.mark(name)
+        self.pm({1: PM_REQ_U1, 2: PM_REQ_U2}[n])
+        self.send(link_command(LGO_U(n)))
+        self.wait(*link_command(LAU())[1])
+        self.send(link_command(LPMA()))
+        self.idle(16)
+        self.pm(PM_LAU)
+        self.idle(residency)
+        self.pm({1: PM_EXIT_U1, 2: PM_EXIT_U2}[n])
+        self.idle(16)
+        self.steps.append((OP_U0, 0, 0, 0, 0, 0))
+        self.mark(name + "_u0")
+        self.send(link_command(LGOOD((self.rx_seq - 1) % 8)))
+        for x in range(4):
+            self.send(link_command(LCRD(x)))
+        self.lcrd = 0
+        self.idle(64)
+
     def end(self):
         self.mark("end")
         self.steps.append((OP_END, 0, 0, 0, 0, 0))
@@ -417,7 +472,7 @@ class HostScript:
 def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
-def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False):
+def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
     s = HostScript()
     s.link_init()
@@ -444,6 +499,15 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
         s.lgo(1, LXU(), "lgo_u1")
         s.lgo(2, LXU(), "lgo_u2")
         s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor_after_pm", latency)
+    if lpm:
+        # U1/U2 enabled (SET_FEATURE(U1_ENABLE/U2_ENABLE), GET_STATUS), U1 and U2 entries accepted by
+        # the device (LAU) and exits, then control transfers.
+        s.control_write(setup_packet(0x00, 0x03, 48, 0, 0), "set_u1_enable")
+        s.control_write(setup_packet(0x00, 0x03, 49, 0, 0), "set_u2_enable")
+        s.control_read(setup_packet(0x80, 0x00, 0, 0, 2), "get_status", latency)
+        for n in [1, 2]:
+            s.ux(n, f"u{n}")
+            s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), f"get_device_descriptor_after_u{n}", latency)
     s.end()
     return s
 
@@ -483,9 +547,11 @@ class PHYStandIn:
     def __init__(self):
         self.source = stream.Endpoint(phy_layout())
         self.sink   = stream.Endpoint(phy_layout())
-        for name in ["u0", "polling_idle", "hot_reset", "recovery", "lgo_u1", "lgo_u2", "lgo_u3",
-            "tx_lau", "tx_lxu", "directed_recovery", "link_activity"]:
+        for name in ["u0", "u1", "u2", "polling_idle", "hot_reset", "recovery", "lgo_u1", "lgo_u2",
+            "lgo_u3", "lpma", "tx_lau", "tx_lxu", "exit_u1_req", "exit_u2_req", "directed_recovery",
+            "link_activity"]:
             setattr(self, name, Signal(name=name))
+        self.u2_timeout = Signal(8, name="u2_timeout")
 
 def play_script(dut, script, max_cycles=200000, tx_ready_rate=1.0, seed=0):
     """Play a HostScript against the DUT, returns the simulation output (HOST_MARK/HOST_RX lines)."""

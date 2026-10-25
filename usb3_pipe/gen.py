@@ -161,6 +161,7 @@ _LINK_CTRL_DESCRIPTIONS = {
     "lgo_u3"            : "Partner LGO_U3 received (pulse).",
     "lau"               : "Our LGO_Ux accepted: LAU received (pulse).",
     "lxu"               : "Our LGO_Ux rejected: LXU received (pulse).",
+    "lpma"              : "Partner LPMA received (pulse, accepted U1/U2 entered without PM_ENTRY_TIMER).",
     "req_u1"            : "Request entry to U1.",
     "req_u2"            : "Request entry to U2.",
     "req_u3"            : "Request entry to U3 (host only).",

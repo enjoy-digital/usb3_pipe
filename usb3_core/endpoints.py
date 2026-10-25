@@ -126,6 +126,7 @@ class USB3Endpoint(LiteXModule):
         self.rx_dpp_done = Signal() # i
         self.rx_dpp_ok   = Signal() # i
         self.landed      = Signal() # o: rx DPP landed in a slot (with rx_dpp_done).
+        self.pm_busy     = Signal() # o: U1/U2 entry rejected (ex: ACK TP expected, 7.2.4.2.2).
 
         # Control.
         self.reset_seq   = Signal() # i: Sequence Numbers reset (SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
@@ -258,6 +259,9 @@ class USB3BulkIN(USB3Endpoint):
 
         # DPP jobs (slots of the DPHs pushed, in order).
         self.jobs = jobs = stream.SyncFIFO([("slot", pbits - 1)], 2*n)
+
+        # Sent packets not acknowledged by the host (ACK TP expected): U1/U2 entry rejected.
+        self.comb += self.pm_busy.eq(inflight != 0)
 
         nrdy_pending = Signal()
         erdy_pending = Signal()

@@ -16,6 +16,11 @@ Example:
         USB3BulkOUT(ept=2, max_burst=8),
     ])
     # usb3.endpoints[0].sink: Device -> Host packets, usb3.endpoints[1].source: Host -> Device packets.
+
+with_lpm: U1/U2 Link Power Management (USB 3.2 7.2.4.2): non-zero U1/U2 exit latencies advertised in
+the BOS, LGO_U1/LGO_U2 accepted by the Link Layer when idle (else rejected with LXU), U1/U2 exited
+when packets are to be transmitted. Device initiated U1/U2 entry is not supported (U1/U2 Enable only
+tracked/reported). Without, LGO_U1/LGO_U2 are rejected (U1/U2 not used by the host).
 """
 
 from migen import *
@@ -32,13 +37,19 @@ from usb3_core.trace     import USB3CoreTrace
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
-    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1, with_ep0_handler=False):
+    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1, with_ep0_handler=False,
+        with_lpm=False):
         self.endpoints = endpoints
 
         # # #
 
+        # Link Power Management: U1/U2 exit latencies in the BOS.
+        if with_lpm:
+            descriptors.enable_lpm()
+
         # Link Layer.
         self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
+        self.comb += link.lpm_enable.eq(with_lpm)
 
         # Control Endpoint.
         self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors, with_handler=with_ep0_handler))
@@ -52,11 +63,16 @@ class USB3DeviceCore(LiteXModule):
 
         # Protocol Layer.
         self.protocol = ResetInserter()(USB3ProtocolLayer(link, [ep0] + endpoints, ep0.dev_addr))
-        self.comb += self.protocol.reset.eq(link.reset)
+        self.comb += [
+            self.protocol.reset.eq(link.reset),
+            link.pm_busy.eq(self.protocol.pm_busy),
+        ]
 
         # Status.
         self.ready      = link.ready
         self.configured = ep0.configured
+        self.u1_enable  = ep0.u1_enable
+        self.u2_enable  = ep0.u2_enable
 
     def add_csr(self, with_trace=False, trace_depth=512):
         """Status/statistics CSRs (scripts/usb3_debug.py), optional Header Packets trace

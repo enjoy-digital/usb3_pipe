@@ -99,6 +99,8 @@ class USB3LTSSM(LiteXModule):
         self.lgo_u3 = Signal() # i: partner LGO_U3 decoded (pulse)
         self.lau    = Signal() # i: our LGO_Ux accepted (LAU received)
         self.lxu    = Signal() # i: our LGO_Ux rejected (LXU received) -> stay in U0
+        self.lpma   = Signal() # i: partner LPMA received (pulse): accepted Ux entered without
+                               #    waiting for the PM_ENTRY_TIMER timeout (7.2.4.2.3)
         self.req_u1 = Signal() # i: upper layer wants U1
         self.req_u2 = Signal() # i: upper layer wants U2
         self.req_u3 = Signal() # i: upper layer wants U3 (DS only)
@@ -125,6 +127,9 @@ class USB3LTSSM(LiteXModule):
 
         # U2 inactivity (PORT_U2_TIMEOUT LMP, 0 = disabled, 7.5.7.2) --------------------------------
         self.u2_inactivity_enable = Signal(reset=0) # i
+        self.u2_timeout           = Signal(8)       # i: U2 Inactivity Timeout (U2 Inactivity Timeout
+                                                    #    LMP 8.4.3, Table 10-17: 256us units, 00h/FFh:
+                                                    #    disabled), U1 -> U2 on timeout (10.6.2.4).
 
         # TS2 bit-plane (Link Functionality, connected to the TS unit by USB3PHY) -------------------
         self.rx_ts2_reset    = Signal() # i: partner TS2 Reset=1 seen (Hot Reset)
@@ -316,6 +321,14 @@ class USB3LTSSM(LiteXModule):
         self.u1_res_cnt = u1_res_cnt = Signal(32)
         u1_res_lim    = scaled(3e-6)
         self.u1_residency_done = u1_residency_done = u1_res_cnt >= u1_res_lim
+
+        # U2 Inactivity Timeout counter (u2_timeout x 256us in U1, 10.6.2.4) -------------------------
+        self.u2_tick_lim     = scaled(256e-6)
+        self.u2_tick_cnt     = Signal(max=self.u2_tick_lim + 1)
+        self.u2_cnt          = Signal(8)
+        self.u2_timeout_done = u2_timeout_done = Signal()
+        self.comb += u2_timeout_done.eq((self.u2_timeout != 0x00) & (self.u2_timeout != 0xff) &
+            (self.u2_cnt == self.u2_timeout))
 
         # Hot Reset Active reset-done delay (sandbox: US clears Reset bit after own reset) -----------
         self.hr_cnt = hr_cnt = Signal(16)
@@ -665,9 +678,9 @@ class USB3LTSSM(LiteXModule):
                     )
                 )
             ).Elif(pm_acc_kind != 0,
-                # Acceptor resolution: enter Ux on PM_ENTRY_TIMER timeout with no LPMA and no TS1
-                # (7.2.4.2.3, spec-legal sandbox path: LPMA rx is not in the interface contract).
-                If(t_pm_entry.done,
+                # Acceptor resolution: enter Ux on LPMA reception or on PM_ENTRY_TIMER timeout with
+                # no LPMA and no TS1 (7.2.4.2.3).
+                If(t_pm_entry.done | self.lpma,
                     NextValue(pm_acc_kind, 0),
                     If(pm_acc_kind == 1,
                         NextState("U1")
@@ -714,7 +727,7 @@ class USB3LTSSM(LiteXModule):
             ).Elif(hs_done_err,
                 # tNoLFPSResponseTimeout (2ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
-            ).Elif(t_u2_inact.done & self.u2_inactivity_enable,
+            ).Elif((t_u2_inact.done & self.u2_inactivity_enable) | (with_timers & u2_timeout_done),
                 # PORT_U2_TIMEOUT: U1 -> U2 direct degradation (7.2.4.2.3).
                 NextState("U2")
             ).Elif(self.ds_port & u1_ping_done,
@@ -1156,10 +1169,20 @@ class USB3LTSSM(LiteXModule):
                 rx_detect.eq(self.lfps_rx_exit_u2)
             )
         ]
+        # In U1/U2/U3, only a burst started in the state is a request: the burst checkers measure the
+        # non-idle duration and still detect the partner's U0 transmission (ex: LPMA, Logical Idle)
+        # when the state is entered (U1/U2 entered on LPMA reception), the partner's electrical idle
+        # has to be seen first.
+        rx_armed = Signal()
         self.sync += [
+            If(~hs_capable,
+                rx_armed.eq(0)
+            ).Elif(~rx_detect,
+                rx_armed.eq(1)
+            ),
             If(self.hs_run | ~hs_capable,
                 self.rx_burst_ok.eq(0)
-            ).Elif(rx_detect,
+            ).Elif(rx_detect & (rx_armed | (fsm.state == fsm.encoding["Loopback"])),
                 self.rx_burst_ok.eq(1)
             )
         ]
@@ -1187,6 +1210,22 @@ class USB3LTSSM(LiteXModule):
                 )
             ).Else(
                 self.u1_res_cnt.eq(0)
+            )
+        ]
+
+        # U2 Inactivity Timeout counter (reset on U1 entry).
+        self.sync += [
+            If(fsm.state == fsm.encoding["U1"],
+                self.u2_tick_cnt.eq(self.u2_tick_cnt + 1),
+                If(self.u2_tick_cnt == (self.u2_tick_lim - 1),
+                    self.u2_tick_cnt.eq(0),
+                    If(~self.u2_timeout_done,
+                        self.u2_cnt.eq(self.u2_cnt + 1)
+                    )
+                )
+            ).Else(
+                self.u2_tick_cnt.eq(0),
+                self.u2_cnt.eq(0),
             )
         ]
 
