@@ -19,9 +19,10 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_core.common    import *
-from usb3_core.dpp       import DPPReader
-from usb3_core.endpoints import USB3Endpoint
+from usb3_core.common      import *
+from usb3_core.dpp         import DPPReader
+from usb3_core.endpoints   import USB3Endpoint
+from usb3_core.descriptors import *
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -36,12 +37,6 @@ KIND_CLEAR_FEATURE     = 5
 KIND_HANDLER           = 6 # Delegated to the user request handler.
 KIND_DEVICE_FEATURE    = 7 # SET/CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) (Device).
 KIND_GET_INTERFACE     = 8 # IN response: current alternate setting of the interface.
-
-USB_REQ_CLEAR_FEATURE = 0x01
-USB_REQ_SET_FEATURE   = 0x03
-
-FEATURE_U1_ENABLE = 48
-FEATURE_U2_ENABLE = 49
 
 EP0_HANDLER_WORDS = 128 # Request handler IN response buffer (512 bytes).
 
@@ -254,21 +249,22 @@ class USB3EndpointControl(USB3Endpoint):
                 ),
                 If(kind == KIND_DEVICE_FEATURE,
                     If(wValue == FEATURE_U1_ENABLE,
-                        self.u1_enable.eq(bRequest == USB_REQ_SET_FEATURE)
+                        self.u1_enable.eq(bRequest == REQ_SET_FEATURE)
                     ),
                     If(wValue == FEATURE_U2_ENABLE,
-                        self.u2_enable.eq(bRequest == USB_REQ_SET_FEATURE)
+                        self.u2_enable.eq(bRequest == REQ_SET_FEATURE)
                     ),
                 ),
             )
         ]
         self.comb += [
             self.reset_seqs.eq(self.hdr_strobe & status_tp & (kind == KIND_SET_CONFIGURATION)),
-            self.clear_halt.eq(self.hdr_strobe & status_tp & (kind == KIND_CLEAR_FEATURE) & (wValue == 0)),
+            self.clear_halt.eq(self.hdr_strobe & status_tp & (kind == KIND_CLEAR_FEATURE) &
+                (wValue == FEATURE_ENDPOINT_HALT)),
             self.clear_ept.eq(wIndex[0:4]),
             self.clear_dir.eq(wIndex[7]),
-            self.set_interface.eq(self.hdr_strobe & status_tp & ~stall & (bmRequestType == 0x01) &
-                (bRequest == 0x0b)),
+            self.set_interface.eq(self.hdr_strobe & status_tp & ~stall &
+                (bmRequestType == REQ_TYPE_INTERFACE_OUT) & (bRequest == REQ_SET_INTERFACE)),
             self.interface.eq(wIndex[0:8]),
             self.alt_setting.eq(wValue[0:8]),
         ]

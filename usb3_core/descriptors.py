@@ -24,6 +24,32 @@ DESC_SS_EP_COMP    = 0x30
 DESC_IAD           = 0x0b
 DESC_CS_INTERFACE  = 0x24
 
+# Standard Requests (9.4, Table 9-5).
+REQ_GET_STATUS        = 0x00
+REQ_CLEAR_FEATURE     = 0x01
+REQ_SET_FEATURE       = 0x03
+REQ_SET_ADDRESS       = 0x05
+REQ_GET_DESCRIPTOR    = 0x06
+REQ_GET_CONFIGURATION = 0x08
+REQ_SET_CONFIGURATION = 0x09
+REQ_GET_INTERFACE     = 0x0a
+REQ_SET_INTERFACE     = 0x0b
+REQ_SET_SEL           = 0x30
+REQ_SET_ISOCH_DELAY   = 0x31
+
+# Standard Requests bmRequestType (9.3.1, Table 9-2): direction, recipient.
+REQ_TYPE_DEVICE_OUT    = 0x00
+REQ_TYPE_INTERFACE_OUT = 0x01
+REQ_TYPE_ENDPOINT_OUT  = 0x02
+REQ_TYPE_DEVICE_IN     = 0x80
+REQ_TYPE_INTERFACE_IN  = 0x81
+REQ_TYPE_ENDPOINT_IN   = 0x82
+
+# Standard Feature Selectors (9.4, Table 9-7).
+FEATURE_ENDPOINT_HALT = 0
+FEATURE_U1_ENABLE     = 48
+FEATURE_U2_ENABLE     = 49
+
 # Device class of devices with Interface Association Descriptors (Miscellaneous, Common Class, IAD).
 DEVICE_CLASS_IAD = (0xef, 0x02, 0x01)
 
@@ -187,33 +213,35 @@ class USB3Descriptors:
         (GET_STATUS(Device)), "get_interface" (response: one word per alternate setting)."""
         r = []
         # GET_DESCRIPTOR.
-        r.append((0x80, 0x06, (DESC_DEVICE        << 8) | 0, self.device(),        "in"))
-        r.append((0x80, 0x06, (DESC_CONFIGURATION << 8) | 0, self.configuration(), "in"))
-        r.append((0x80, 0x06, (DESC_BOS           << 8) | 0, self.bos(),           "in"))
+        get_descriptor = (REQ_TYPE_DEVICE_IN, REQ_GET_DESCRIPTOR)
+        r.append((*get_descriptor, (DESC_DEVICE        << 8) | 0, self.device(),        "in"))
+        r.append((*get_descriptor, (DESC_CONFIGURATION << 8) | 0, self.configuration(), "in"))
+        r.append((*get_descriptor, (DESC_BOS           << 8) | 0, self.bos(),           "in"))
         for i in range(len(self.strings) + 1):
-            r.append((0x80, 0x06, (DESC_STRING << 8) | i, self.string(i), "in"))
+            r.append((*get_descriptor, (DESC_STRING << 8) | i, self.string(i), "in"))
         # GET_STATUS (Device: U1/U2 Enable bits inserted by the Control Endpoint, Interface/Endpoint),
         # GET_CONFIGURATION/GET_INTERFACE.
-        r.append((0x80, 0x00, None, [0x00, 0x00], "device_status"))
-        for bmRequestType in [0x81, 0x82]:
-            r.append((bmRequestType, 0x00, None, [0x00, 0x00], "in"))
-        r.append((0x80, 0x08, None, [0x01], "in"))
+        r.append((REQ_TYPE_DEVICE_IN, REQ_GET_STATUS, None, [0x00, 0x00], "device_status"))
+        for bmRequestType in [REQ_TYPE_INTERFACE_IN, REQ_TYPE_ENDPOINT_IN]:
+            r.append((bmRequestType, REQ_GET_STATUS, None, [0x00, 0x00], "in"))
+        r.append((REQ_TYPE_DEVICE_IN, REQ_GET_CONFIGURATION, None, [0x01], "in"))
         n_alts = max(self.alt_settings().values(), default=1)
-        r.append((0x81, 0x0a, None, sum([[alt, 0, 0, 0] for alt in range(n_alts)], []), "get_interface"))
+        alts   = sum([[alt, 0, 0, 0] for alt in range(n_alts)], [])
+        r.append((REQ_TYPE_INTERFACE_IN, REQ_GET_INTERFACE, None, alts, "get_interface"))
         # SET_ADDRESS, SET_CONFIGURATION, SET/CLEAR_FEATURE, SET_INTERFACE, SET_SEL, SET_ISOCH_DELAY.
-        r.append((0x00, 0x05, None, None, "set_address"))
-        r.append((0x00, 0x09, None, None, "set_configuration"))
-        for bRequest in [0x03, 0x01]:
-            for feature in [48, 49]: # U1_ENABLE, U2_ENABLE.
-                r.append((0x00, bRequest, feature, None, "device_feature"))
-        for bmRequestType in [0x00, 0x01, 0x02]:
-            r.append((bmRequestType, 0x03, None, None, "out"))
-        r.append((0x00, 0x01, None, None, "out"))
-        r.append((0x01, 0x01, None, None, "out"))
-        r.append((0x02, 0x01, None, None, "clear_feature"))
-        r.append((0x01, 0x0b, None, None, "out"))
-        r.append((0x00, 0x30, None, None, "out"))
-        r.append((0x00, 0x31, None, None, "out"))
+        r.append((REQ_TYPE_DEVICE_OUT, REQ_SET_ADDRESS,       None, None, "set_address"))
+        r.append((REQ_TYPE_DEVICE_OUT, REQ_SET_CONFIGURATION, None, None, "set_configuration"))
+        for bRequest in [REQ_SET_FEATURE, REQ_CLEAR_FEATURE]:
+            for feature in [FEATURE_U1_ENABLE, FEATURE_U2_ENABLE]:
+                r.append((REQ_TYPE_DEVICE_OUT, bRequest, feature, None, "device_feature"))
+        for bmRequestType in [REQ_TYPE_DEVICE_OUT, REQ_TYPE_INTERFACE_OUT, REQ_TYPE_ENDPOINT_OUT]:
+            r.append((bmRequestType, REQ_SET_FEATURE, None, None, "out"))
+        r.append((REQ_TYPE_DEVICE_OUT,    REQ_CLEAR_FEATURE,   None, None, "out"))
+        r.append((REQ_TYPE_INTERFACE_OUT, REQ_CLEAR_FEATURE,   None, None, "out"))
+        r.append((REQ_TYPE_ENDPOINT_OUT,  REQ_CLEAR_FEATURE,   None, None, "clear_feature"))
+        r.append((REQ_TYPE_INTERFACE_OUT, REQ_SET_INTERFACE,   None, None, "out"))
+        r.append((REQ_TYPE_DEVICE_OUT,    REQ_SET_SEL,         None, None, "out"))
+        r.append((REQ_TYPE_DEVICE_OUT,    REQ_SET_ISOCH_DELAY, None, None, "out"))
         # Class/vendor requests.
         for bmRequestType, bRequest, response in self.class_requests:
             r.append((bmRequestType, bRequest, None, response, "in" if response is not None else "out"))
