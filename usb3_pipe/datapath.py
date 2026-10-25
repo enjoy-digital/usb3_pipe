@@ -4,13 +4,17 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 TX/RX datapaths (USB 3.2 6.3/6.4): word alignment, SKP Ordered Sets insertion/removal,
-8b/10b errors substitution/monitoring, electrical idle filtering, clock domain crossing and
-data-width adaptation between the transceiver and the sys clock domain.
+"""USB3 TX/RX datapaths (USB 3.2 6.3/6.4).
+
+- Gen 1: word alignment, SKP Ordered Sets insertion/removal, 8b/10b errors substitution/monitoring,
+  electrical idle filtering, clock domain crossing and data-width adaptation between the
+  transceiver and the sys clock domain.
+- Gen 2: block transmitter/receiver (Gen2TX/Gen2RX): TSEQ/TS1/TS2/SYNC/SDS/SKP Ordered Sets, Data
+  Blocks and scrambling rules (6.3.2.3), see doc/gen2-x2-roadmap.md.
 """
 
 from functools import reduce
-from operator import or_
+from operator import or_, and_
 
 from migen import *
 from migen.genlib.cdc import MultiReg
@@ -19,8 +23,14 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common import K, COM, SKP
-from usb3_pipe.coding import RX8b10bChecker
+from usb3_pipe.common     import K, COM, SKP
+from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
+from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ
+from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
+from usb3_pipe.coding     import RX8b10bChecker
+from usb3_pipe.coding     import GEN2_DC_REDUCE_ONES, GEN2_DC_REDUCE_ZEROS, popcount
+from usb3_pipe.coding     import gen2_block_layout
+from usb3_pipe.scrambling import GEN2_LFSR_SEED, Gen2Scrambler
 
 # RX SKP Remover (6.4.3) ---------------------------------------------------------------------------
 
@@ -443,4 +453,340 @@ class RXDatapath(LiteXModule):
             skip_remover.source.connect(cdc.sink),
             cdc.source.connect(word_aligner.sink),
             word_aligner.source.connect(self.source),
+        ]
+
+# Gen 2 SKP Ordered Sets (6.4.3.3) -----------------------------------------------------------------
+
+GEN2_SKP_INTERVAL = 40 # Average interval between SKP Ordered Sets (blocks, 6.4.3.3).
+
+# Gen 2 TX -----------------------------------------------------------------------------------------
+
+def _symbols(symbols):
+    return Cat(*[Constant(s, 8) for s in symbols])
+
+class Gen2TX(LiteXModule):
+    """Gen 2 block transmitter (one block per cycle on source).
+
+    Controls (levels, one at a time): tx_tseq/tx_ts1/tx_ts2 (Ordered Sets, a SYNC Ordered Set first
+    and then every sync_interval_ts TS1/TS2 or sync_interval_tseq TSEQ, 6.4.1.2.1) or tx_data (SDS
+    Ordered Set then Data Blocks from sink, Logical Idle Data Blocks when sink has no data).
+
+    SKP Ordered Sets (6.4.3.3): Y counts the non SKP blocks (reset while sending TSEQ: Y restarts on
+    Polling.Active entry), Z = Y/skp_interval accumulated (2 max) and inserted after SYNC, TS1, TS2,
+    SDS, Logical Idle and the last Data Block of a packet (sink.last), never inside a packet. SYNC has
+    priority over SKP.
+    """
+    def __init__(self, seed=GEN2_LFSR_SEED, skp_interval=GEN2_SKP_INTERVAL, sync_interval_ts=32,
+        sync_interval_tseq=16384):
+        self.enable      = Signal()  # i
+        self.tx_tseq     = Signal()  # i
+        self.tx_ts1      = Signal()  # i
+        self.tx_ts2      = Signal()  # i
+        self.tx_data     = Signal()  # i
+        self.link_config = Signal(8) # i: TS1/TS2 Link Functionality (Table 6-6).
+        self.tx_os       = Signal()  # o: TSEQ/TS1/TS2 Ordered Set sent (pulse).
+
+        self.sink   = sink   = stream.Endpoint([("data", 128)])
+        self.source = source = stream.Endpoint(gen2_block_layout())
+
+        # # #
+
+        self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed)
+
+        # Block selection --------------------------------------------------------------------------
+        tx_os        = Signal()
+        sync_count   = Signal(max=max(sync_interval_ts, sync_interval_tseq))
+        sync_period  = Signal.like(sync_count)
+        y            = Signal(max=skp_interval)
+        skp_pending  = Signal(2)
+        skp_allowed  = Signal()
+        sds_sent     = Signal()
+        self.comb += [
+            tx_os.eq(self.tx_tseq | self.tx_ts1 | self.tx_ts2),
+            sync_period.eq(Mux(self.tx_tseq, sync_interval_tseq - 1, sync_interval_ts - 1)),
+        ]
+
+        sel_sync = Signal()
+        sel_skp  = Signal()
+        sel_sds  = Signal()
+        sel_data = Signal()
+        sel_ts   = Signal()
+        self.comb += [
+            If(self.enable,
+                If(tx_os & (sync_count == 0),
+                    sel_sync.eq(1)
+                ).Elif((skp_pending != 0) & skp_allowed,
+                    sel_skp.eq(1)
+                ).Elif(self.tx_data,
+                    If(~sds_sent,
+                        sel_sds.eq(1)
+                    ).Else(
+                        sel_data.eq(1)
+                    )
+                ).Elif(tx_os,
+                    sel_ts.eq(1)
+                )
+            )
+        ]
+
+        # Payload / scrambling modes (6.3.2.3) -----------------------------------------------------
+        ts_identifier = Signal(8)
+        self.comb += [
+            If(self.tx_tseq,
+                ts_identifier.eq(GEN2_TSEQ)
+            ).Elif(self.tx_ts1,
+                ts_identifier.eq(GEN2_TS1)
+            ).Else(
+                ts_identifier.eq(GEN2_TS2)
+            )
+        ]
+        ts_payload = Signal(128)
+        self.comb += ts_payload.eq(Cat(
+            Replicate(ts_identifier, 4),
+            Constant(0, 8),
+            Mux(self.tx_tseq, 0, self.link_config),
+            Replicate(ts_identifier, 10),
+        ))
+        idle = Signal()
+        self.comb += idle.eq(sel_data & ~sink.valid)
+        self.comb += [
+            source.valid.eq(sel_sync | sel_skp | sel_sds | sel_data | sel_ts),
+            scrambler.ce.eq(source.valid & source.ready),
+            If(sel_sync,
+                # All Symbols bypass, LFSR re-initialized after the SYNC Ordered Set.
+                source.header.eq(BLOCK_HEADER_CONTROL),
+                scrambler.i.eq(_symbols(gen2_sync_payload())),
+                scrambler.init.eq(source.ready),
+            ).Elif(sel_skp,
+                # Bypass, no advance.
+                source.header.eq(BLOCK_HEADER_CONTROL),
+                source.skp.eq(1),
+            ).Elif(sel_sds,
+                # Bypass, advance.
+                source.header.eq(BLOCK_HEADER_CONTROL),
+                scrambler.i.eq(_symbols(gen2_sds_payload())),
+                scrambler.advance.eq(0xffff),
+            ).Elif(sel_data,
+                # Scrambled, advance (Logical Idle: 00h Symbols).
+                source.header.eq(BLOCK_HEADER_DATA),
+                scrambler.i.eq(Mux(idle, 0, sink.data)),
+                scrambler.advance.eq(0xffff),
+                scrambler.scramble.eq(0xffff),
+                sink.ready.eq(source.ready),
+            ).Elif(sel_ts,
+                # Symbol 0 bypass/advance, Symbols 1-15 scrambled (14/15 DC Balance override below).
+                source.header.eq(BLOCK_HEADER_CONTROL),
+                scrambler.i.eq(ts_payload),
+                scrambler.advance.eq(0xffff),
+                scrambler.scramble.eq(0xfffe),
+            )
+        ]
+
+        # DC Balance (6.4.1.2.2) -------------------------------------------------------------------
+        # Running DC Balance (1s - 0s) of the transmitted TSEQ/TS1/TS2 bits (Block Header included),
+        # saturated at +-511, reset at the start of the Data Blocks transmission. Evaluated at the end
+        # of Symbol 11: > 31: DC Balance Symbols 14 and 15, > 15: Symbol 15 only (unscrambled, the LFSR
+        # still advances).
+        self.dc_balance = dc_balance = Signal((11, True))
+        ones_11   = Signal((9, True))
+        ones_15   = Signal((9, True))
+        balance   = Signal((12, True))
+        magnitude = Signal(11)
+        ts_out    = Signal(128)
+        sym14     = Signal(8)
+        sym15     = Signal(8)
+        self.comb += [
+            ones_11.eq(popcount(Cat(source.header, scrambler.o[0:96]))),
+            balance.eq(dc_balance + 2*ones_11 - 100),
+            magnitude.eq(Mux(balance < 0, -balance, balance)),
+            sym14.eq(scrambler.o[112:120]),
+            sym15.eq(scrambler.o[120:128]),
+            If(magnitude > 31,
+                sym14.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0])),
+                sym15.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1])),
+            ).Elif(magnitude > 15,
+                sym15.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1])),
+            ),
+            ts_out.eq(Cat(scrambler.o[0:112], sym14, sym15)),
+            ones_15.eq(popcount(Cat(source.header, ts_out))),
+        ]
+        new_balance = Signal((12, True))
+        self.comb += new_balance.eq(dc_balance + 2*ones_15 - 132)
+
+        # Output -----------------------------------------------------------------------------------
+        lfsr = scrambler.state
+        self.comb += [
+            If(sel_skp,
+                source.data.eq(Cat(
+                    _symbols([GEN2_SKP]*GEN2_SKP_TX_SYMBOLS + [GEN2_SKPEND]),
+                    lfsr[16:23], ~lfsr[22], lfsr[8:16], lfsr[0:8]))
+            ).Elif(sel_ts,
+                source.data.eq(ts_out)
+            ).Else(
+                source.data.eq(scrambler.o)
+            ),
+            self.tx_os.eq(sel_ts & source.ready),
+        ]
+
+        # State ------------------------------------------------------------------------------------
+        self.sync += [
+            If(~self.enable,
+                sync_count.eq(0),
+                y.eq(0),
+                skp_pending.eq(0),
+                skp_allowed.eq(0),
+                sds_sent.eq(0),
+                dc_balance.eq(0),
+            ).Elif(source.valid & source.ready,
+                # SYNC scheduling (TS Ordered Sets count).
+                If(sel_ts,
+                    If(sync_count == sync_period,
+                        sync_count.eq(0)
+                    ).Else(
+                        sync_count.eq(sync_count + 1)
+                    )
+                ).Elif(sel_sync,
+                    sync_count.eq(1)
+                ),
+                # SKP scheduling.
+                If(~sel_skp,
+                    If(self.tx_tseq & ~self.tx_data,
+                        y.eq(0)
+                    ).Elif(y == (skp_interval - 1),
+                        y.eq(0),
+                        If(skp_pending != 2,
+                            skp_pending.eq(skp_pending + 1)
+                        )
+                    ).Else(
+                        y.eq(y + 1)
+                    ),
+                    skp_allowed.eq(sel_sync | sel_sds | (sel_ts & ~self.tx_tseq) | idle |
+                        (sel_data & sink.last)),
+                ).Else(
+                    skp_pending.eq(skp_pending - 1)
+                ),
+                # Data Stream.
+                If(sel_sds,
+                    sds_sent.eq(1)
+                ).Elif(sel_sync | sel_ts,
+                    sds_sent.eq(0)
+                ),
+                # DC Balance.
+                If(sel_ts,
+                    If(new_balance > 511,
+                        dc_balance.eq(511)
+                    ).Elif(new_balance < -511,
+                        dc_balance.eq(-511)
+                    ).Else(
+                        dc_balance.eq(new_balance)
+                    )
+                ).Elif(sel_sds | sel_data,
+                    dc_balance.eq(0)
+                )
+            ),
+            If(~self.tx_data & ~tx_os, sds_sent.eq(0)),
+        ]
+
+# Gen 2 RX -----------------------------------------------------------------------------------------
+
+class Gen2RX(LiteXModule):
+    """Gen 2 block receiver (from Gen2BlockAligner).
+
+    Descrambling (6.3.2.3): Data Blocks advance/descramble, control blocks advance the LFSR (Symbol 0
+    bypass), SYNC Ordered Sets re-initialize it (SKP Ordered Sets are removed by the aligner and do not
+    advance it). TSEQ/TS1/TS2 detection on Symbols 0-13 (Symbols 14/15 not checked, 6.4.1.2.2, Link
+    Functionality excluded): rx_tseq/rx_ts1/rx_ts2 pulse every n_ts consecutive Ordered Sets (SKP and
+    SYNC Ordered Sets are not interruptions). The Data Blocks following an SDS are output on source.
+    """
+    def __init__(self, seed=GEN2_LFSR_SEED, n_ts=8):
+        self.sink   = sink   = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
+        self.source = source = stream.Endpoint([("data", 128)])
+
+        self.rx_tseq     = Signal()  # o (pulse)
+        self.rx_ts1      = Signal()  # o (pulse)
+        self.rx_ts2      = Signal()  # o (pulse)
+        self.rx_sync     = Signal()  # o (pulse)
+        self.rx_sds      = Signal()  # o (pulse)
+        self.link_config = Signal(8) # o: Link Functionality of the last TS1/TS2.
+        self.data_stream = Signal()  # o: Receiving the Data Stream (after an SDS).
+        self.lfsr        = Signal(23) # o: Descrambler LFSR state.
+
+        # # #
+
+        self.descrambler = descrambler = Gen2Scrambler(nbytes=16, seed=seed)
+        self.comb += self.lfsr.eq(descrambler.state)
+
+        control = Signal()
+        sym0    = Signal(8)
+        is_sync = Signal()
+        is_sds  = Signal()
+        self.comb += [
+            sink.ready.eq(1),
+            control.eq(sink.header == BLOCK_HEADER_CONTROL),
+            sym0.eq(sink.data[0:8]),
+            is_sync.eq(control & (sink.data == symbols_to_int(gen2_sync_payload()))),
+            is_sds.eq( control & (sym0 == GEN2_SDS)),
+            descrambler.ce.eq(sink.valid),
+            descrambler.i.eq(sink.data),
+            If(control,
+                If(is_sync,
+                    descrambler.init.eq(sink.valid)
+                ).Elif(is_sds,
+                    descrambler.advance.eq(0xffff)
+                ).Else(
+                    descrambler.advance.eq(0xffff),
+                    descrambler.scramble.eq(0xfffe)
+                )
+            ).Else(
+                descrambler.advance.eq(0xffff),
+                descrambler.scramble.eq(0xffff)
+            ),
+            source.valid.eq(sink.valid & ~control & self.data_stream),
+            source.data.eq(descrambler.o),
+            self.rx_sync.eq(sink.valid & is_sync),
+            self.rx_sds.eq(sink.valid & is_sds),
+        ]
+
+        # Training Sequences detection.
+        o = descrambler.o
+        def ts_match(identifier, with_link_config):
+            sym = [o[8*i:8*(i+1)] for i in range(14)]
+            checks = [sym[i] == identifier for i in list(range(4)) + list(range(6, 14))]
+            checks.append(sym[4] == 0)
+            if not with_link_config:
+                checks.append(sym[5] == 0)
+            return reduce(and_, checks)
+        matches = {
+            "tseq" : ts_match(GEN2_TSEQ, False),
+            "ts1"  : ts_match(GEN2_TS1,  True),
+            "ts2"  : ts_match(GEN2_TS2,  True),
+        }
+        for name, m in matches.items():
+            matched = Signal(name=f"{name}_matched")
+            count   = Signal(max=n_ts, name=f"{name}_count")
+            pulse   = getattr(self, f"rx_{name}")
+            self.comb += matched.eq(sink.valid & control & ~is_sync & ~is_sds & m)
+            self.sync += [
+                pulse.eq(0),
+                If(matched,
+                    If(count == (n_ts - 1),
+                        count.eq(0),
+                        pulse.eq(1)
+                    ).Else(
+                        count.eq(count + 1)
+                    )
+                ).Elif(sink.valid & ~is_sync,
+                    count.eq(0)
+                )
+            ]
+            if name != "tseq":
+                self.sync += If(matched, self.link_config.eq(o[40:48]))
+        self.sync += [
+            If(sink.valid & control,
+                If(is_sds,
+                    self.data_stream.eq(1)
+                ).Else(
+                    self.data_stream.eq(0)
+                )
+            )
         ]

@@ -18,7 +18,10 @@ from migen import *
 
 from litex.gen import *
 
-from usb3_pipe.gen2 import *
+from usb3_pipe.common     import *
+from usb3_pipe.coding     import *
+from usb3_pipe.scrambling import *
+from usb3_pipe.datapath   import *
 
 # Reference Models ---------------------------------------------------------------------------------
 
