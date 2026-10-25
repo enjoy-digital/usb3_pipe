@@ -29,9 +29,13 @@ def lfsr_advance(state):
         new[i] ^= msb
     return new
 
-def lfsr_after_ts(seed=0xffff):
-    """LFSR state after a TS1/TS2 Ordered Set: initialized to seed after the COMs and advanced on the
-    12 following Symbols (TX scrambler start state, scrambling starts after the last TS2)."""
+# Gen 1 LFSR seeds (6.3.1.3, Gen 1x2 Lane 1: 6.13.5).
+LFSR_SEED_LANE0 = 0xffff
+LFSR_SEED_LANE1 = 0x8000
+
+def lfsr_after_ts(seed=LFSR_SEED_LANE0):
+    """LFSR state after a TS1/TS2 Ordered Set: initialized to seed after the COMs and advanced on
+    the 12 following Symbols (TX scrambler start state, scrambling starts after the last TS2)."""
     lfsr = seed
     for _ in range(12*8):
         msb  = (lfsr >> 15) & 0x1
@@ -39,9 +43,6 @@ def lfsr_after_ts(seed=0xffff):
         if msb:
             lfsr ^= 0x0039
     return lfsr
-
-# Gen 1x2 Lane 1 seed (6.13.5, Lane 0: FFFFh).
-LFSR_SEED_LANE1 = 0x8000
 
 def lfsr_xor(signal, mask):
     bits = [signal[i] for i in range(len(signal)) if (mask >> i) & 0x1]
@@ -58,7 +59,7 @@ class ScramblerUnit(LiteXModule):
     X^4 + X^3 + 1 polynom). The LFSR advances 8 serial shifts on each symbol except SKP and is
     initialized after each COM, including in the middle of a word (USB 3.2 6.3.1.3).
     """
-    def __init__(self, reset=0xffff, seed=0xffff):
+    def __init__(self, reset=LFSR_SEED_LANE0, seed=LFSR_SEED_LANE0):
         self.skp   = Signal(4)  # i: SKP symbol on lane i.
         self.com   = Signal(4)  # i: COM symbol on lane i.
         self.value = Signal(32) # o: Scrambling value of lane i: value[8*i:8*(i+1)].
@@ -96,7 +97,7 @@ class Scrambler(LiteXModule):
     This module scrambles the TX data/ctrl stream. K codes shall not be scrambled, the LFSR does not
     advance on SKP and is initialized after COM.
     """
-    def __init__(self, reset=0x7dbd, seed=0xffff):
+    def __init__(self, reset=lfsr_after_ts(LFSR_SEED_LANE0), seed=LFSR_SEED_LANE0):
         self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -126,7 +127,7 @@ class Descrambler(LiteXModule):
     automatically synchronizes itself to the incoming stream: the LFSR is initialized after each
     received COM.
     """
-    def __init__(self, reset=0xffff, seed=0xffff):
+    def __init__(self, reset=LFSR_SEED_LANE0, seed=LFSR_SEED_LANE0):
         self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])

@@ -27,7 +27,6 @@ def connect_ltssm_pipe(ltssm, pipe):
         pipe.lfps_tx_exit_u2.eq(ltssm.lfps_tx_exit_u2),
         pipe.lfps_tx_wakeup_u3.eq(ltssm.lfps_tx_wakeup_u3),
         pipe.lfps_tx_reset.eq(ltssm.lfps_tx_reset),
-        pipe.ts_rx_enable.eq(ltssm.ts_rx_enable),
         pipe.ts_tx_enable.eq(ltssm.ts_tx_enable),
         pipe.ts_tx_tseq.eq(ltssm.ts_tx_tseq),
         pipe.ts_tx_ts1.eq(ltssm.ts_tx_ts1),

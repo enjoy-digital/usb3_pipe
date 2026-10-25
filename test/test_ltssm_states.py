@@ -65,7 +65,7 @@ def stay_in(dut, name, n):
 OUTPUTS = [
     "u0", "rx_ready", "tx_ready", "u1", "u2", "u3", "compliance", "exit_to_compliance",
     "exit_to_rx_detect", "loopback", "hot_reset", "ess_inactive", "polling_idle",
-    "lfps_tx_idle", "lfps_tx_polling", "ts_rx_enable", "ts_tx_enable",
+    "lfps_tx_idle", "lfps_tx_polling", "ts_tx_enable",
     "ts_tx_tseq", "ts_tx_ts1", "ts_tx_ts2", "idle_handshake", "ts2_decode",
 ]
 
@@ -197,20 +197,20 @@ class LTSSMDriver:
 
 STATE_OUTPUTS = {
     "Polling.LFPS"           : ["lfps_tx_idle", "lfps_tx_polling"],
-    "Polling.RxEQ"           : ["ts_rx_enable", "ts_tx_enable", "ts_tx_tseq"],
-    "Polling.Active"         : ["ts_rx_enable", "ts_tx_enable", "ts_tx_ts1"],
-    "Polling.Configuration"  : ["ts_rx_enable", "ts_tx_enable", "ts_tx_ts2"],
+    "Polling.RxEQ"           : ["ts_tx_enable", "ts_tx_tseq"],
+    "Polling.Active"         : ["ts_tx_enable", "ts_tx_ts1"],
+    "Polling.Configuration"  : ["ts_tx_enable", "ts_tx_ts2"],
     "Polling.Idle"           : ["idle_handshake", "polling_idle", "ts2_decode"],
     "U0"                     : ["u0", "rx_ready", "tx_ready"],
     "U1"                     : ["lfps_tx_idle", "u1"],
     "U2"                     : ["lfps_tx_idle", "u2"],
     "U3"                     : ["lfps_tx_idle", "u3"],
-    "Recovery.Active"        : ["ts_rx_enable", "ts_tx_enable", "ts_tx_ts1"],
-    "Recovery.Configuration" : ["ts_rx_enable", "ts_tx_enable", "ts_tx_ts2"],
+    "Recovery.Active"        : ["ts_tx_enable", "ts_tx_ts1"],
+    "Recovery.Configuration" : ["ts_tx_enable", "ts_tx_ts2"],
     "Recovery.Idle"          : ["idle_handshake", "ts2_decode"],
     "Loopback"               : ["loopback"],
     "Loopback.Exit"          : ["lfps_tx_idle", "loopback"],
-    "HotReset.Active"        : ["hot_reset", "ts_rx_enable", "ts_tx_enable", "ts_tx_ts2"],
+    "HotReset.Active"        : ["hot_reset", "ts_tx_enable", "ts_tx_ts2"],
     "HotReset.Exit"          : ["hot_reset", "idle_handshake"],
     "eSS.Inactive"           : ["lfps_tx_idle", "ess_inactive"],
     "Compliance"             : ["lfps_tx_idle", "compliance", "exit_to_compliance"],
@@ -388,14 +388,14 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
         run(new_dut(with_timers=False), generator)
 
     def test_u1_to_u2_inactivity_timer(self):
-        # PORT_U2_TIMEOUT: U1 -> U2 directly on U2 inactivity timer expiry (7.5.7.2).
+        # U2 Inactivity Timeout (LMP, 256us units): U1 -> U2 directly on expiry (7.5.7.2, 10.6.2.4).
         for enable in [0, 1]:
-            with self.subTest(u2_inactivity_enable=enable):
+            with self.subTest(enable=enable):
                 def generator(dut):
-                    yield dut.u2_inactivity_enable.eq(enable)
+                    yield dut.u2_timeout.eq(4 if enable else 0)
                     yield from self.goto(dut, "U1")
                     if enable:
-                        yield from self.check_timeout(dut, "U1", "U2", 1e-3)
+                        yield from self.check_timeout(dut, "U1", "U2", 4*256e-6)
                         self.assertTrue((yield from stay_in(dut, "U2", 32)))
                     else:
                         self.assertTrue((yield from stay_in(dut, "U1", 8*cycles(1e-3))))

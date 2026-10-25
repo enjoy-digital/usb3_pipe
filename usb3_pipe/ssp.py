@@ -22,11 +22,10 @@ acceleration, both partners must use the same scale).
 """
 
 from migen import *
-from migen.genlib.cdc import MultiReg
 
 from litex.gen import *
 
-from usb3_pipe.lfps import lfps_clk_half_period_cycles
+from usb3_pipe.lfps import lfps_clk_half_period_cycles, LFPSIdleDeglitcher
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -68,18 +67,8 @@ class LFPSRXFrontEnd(LiteXModule):
 
         # # #
 
-        idle_resync = Signal()
-        self.specials += MultiReg(self.idle, idle_resync)
-        idle_reg = Signal(2, reset=0b11)
-        idle     = Signal(reset=1)
-        self.sync += [
-            idle_reg.eq(Cat(idle_reg[1], idle_resync)),
-            If(idle_reg == 0b00,
-                idle.eq(0)
-            ).Elif(idle_reg == 0b11,
-                idle.eq(1)
-            )
-        ]
+        self.idle_deglitcher = idle_deglitcher = LFPSIdleDeglitcher(self.idle)
+        idle = idle_deglitcher.o
         idle_d       = Signal(reset=1)
         burst_count  = Signal(32)
         period_count = Signal(32)

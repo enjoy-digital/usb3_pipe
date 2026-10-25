@@ -17,7 +17,7 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import *
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
-from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts
+from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
 from usb3_pipe.serdes import RXWordAligner
 
 # Idle Handshake -----------------------------------------------------------------------------------
@@ -75,18 +75,18 @@ class USB3PIPE(LiteXModule):
     - LFPS detection/generation.
     - Training Sequence Ordered Sets detection/generation.
     - Clock compensation Ordered Sets removing/insertion.
-    - Convertion to/from a 32-bit/4-bit data/ctrl stream.
+    - Conversion to/from a 32-bit/4-bit data/ctrl stream.
     - Clock domain crossing to/from sys_clk (>=125MHz).
     - RX words alignment.
     - TX scrambling/RX descrambling.
 
-    Gen 1x2 lanes (usb3_pipe/x2.py): lfsr_seed is the lane scrambler seed (FFFFh Lane 0, 8000h Lane 1,
-    6.13.5) and with x2_lane the descrambled lane stream is output as is on source (no framing
-    alignment and no rx_ready gating: the lanes are deskewed on the Training Sequences, the framing
-    alignment/gating is done after the lanes destriping).
+    Gen 1x2 lanes (usb3_pipe/x2.py): lfsr_seed is the lane scrambler seed (FFFFh Lane 0, 8000h
+    Lane 1, 6.13.5) and with x2_lane the descrambled lane stream is output as is on source (no
+    framing alignment and no rx_ready gating: the lanes are deskewed on the Training Sequences, the
+    framing alignment/gating is done after the lanes destriping).
     """
     def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True, timer_scale=1,
-        lfsr_seed=0xffff, x2_lane=False):
+        lfsr_seed=LFSR_SEED_LANE0, x2_lane=False):
         assert sys_clk_freq >= 125e6
 
         # Endpoints --------------------------------------------------------------------------------
@@ -125,7 +125,6 @@ class USB3PIPE(LiteXModule):
         self.lfps_rx_wakeup_u3  = Signal()   # o
         self.lfps_rx_reset      = Signal()   # o
 
-        self.ts_rx_enable       = Signal()   # i
         self.ts_rx_ts1          = Signal()   # o
         self.ts_rx_ts1_inv      = Signal()   # o
         self.ts_rx_ts2          = Signal()   # o
@@ -165,7 +164,9 @@ class USB3PIPE(LiteXModule):
             source = self.source
 
         # LFPS -------------------------------------------------------------------------------------
-        self.lfps = lfps = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
+        self.lfps = lfps = LFPSUnit(serdes,
+            sys_clk_freq = sys_clk_freq,
+            timer_scale  = timer_scale)
         self.comb += [
             # LFPS Control.
             lfps.tx_polling.eq(self.lfps_tx_polling),
@@ -190,7 +191,6 @@ class USB3PIPE(LiteXModule):
         self.ts = ts = TSUnit(serdes=serdes)
         self.comb += [
             # TS Control.
-            ts.rx_enable.eq(self.ts_rx_enable),
             ts.tx_enable.eq(self.ts_tx_enable),
             ts.tx_tseq.eq(  self.ts_tx_tseq),
             ts.tx_ts1.eq(   self.ts_tx_ts1),
@@ -208,10 +208,10 @@ class USB3PIPE(LiteXModule):
             self.ts_tx_done.eq(   ts.tx_done),
         ]
 
-        # Scrambling enable (Gen 1, 7.5.4.10.1, 7.5.10.5.1) -----------------------------------------
-        # Scrambling is disabled if directed, or if the Disable Scrambling bit is asserted in the TS2
-        # received in Polling/Recovery.Configuration. The bit is only decoded in Polling.Idle and
-        # Recovery.Idle (ignored in Hot Reset, 7.5.12.3.1).
+        # Scrambling enable (Gen 1, 7.5.4.10.1, 7.5.10.5.1) ----------------------------------------
+        # Scrambling is disabled if directed, or if the Disable Scrambling bit is asserted in the
+        # TS2 received in Polling/Recovery.Configuration. The bit is only decoded in Polling.Idle
+        # and Recovery.Idle (ignored in Hot Reset, 7.5.12.3.1).
         scrambling   = Signal()
         scrambling_r = Signal(reset=1)
         self.comb += If(self.ts2_decode,
@@ -233,9 +233,9 @@ class USB3PIPE(LiteXModule):
         self.comb += scrambler.enable.eq(scrambling)
         tx_idle = Signal()
         self.comb += [
-            # Logical Idle (7.2.3): send Idle Symbols (00h, scrambled) when the Link Layer has no data,
-            # the transceiver would otherwise re-transmit stale symbols and desync the partner's
-            # descrambler.
+            # Logical Idle (7.2.3): send Idle Symbols (00h, scrambled) when the Link Layer has no
+            # data, the transceiver would otherwise re-transmit stale symbols and desync the
+            # partner's descrambler.
             If(sink.valid & self.tx_ready,
                 sink.connect(scrambler.sink),
             ).Else(
@@ -260,13 +260,13 @@ class USB3PIPE(LiteXModule):
 
         # Framing Alignment ------------------------------------------------------------------------
         # The SerDes word alignment is acquired on COM (TS1/TS2) and no COM is received in U0. The
-        # partner's Link Layer framing is aligned on its own symbol count, which includes the
-        # SKP Ordered Sets (2 symbols, 6.4.3.1) removed by the SerDes: the framing can then be shifted
-        # by 2 symbols in the received words. Re-align the words on the framing Ordered Sets (SHP, SDP,
-        # SLC, 7.2.1/7.2.2), after the descrambler so its LFSR still advances on every symbol: the
-        # symbols dropped/repeated on a re-alignment are the Logical Idle symbols before the framing.
-        # The aligner always processes the received words (one word of latency), only its output to
-        # the Link Layer is gated by rx_ready.
+        # partner's Link Layer framing is aligned on its own symbol count, which includes the SKP
+        # Ordered Sets (2 symbols, 6.4.3.1) removed by the SerDes: the framing can then be shifted
+        # by 2 symbols in the received words. Re-align the words on the framing Ordered Sets (SHP,
+        # SDP, SLC, 7.2.1/7.2.2), after the descrambler so its LFSR still advances on every symbol:
+        # the symbols dropped/repeated on a re-alignment are the Logical Idle symbols before the
+        # framing. The aligner always processes the received words (one word of latency), only its
+        # output to the Link Layer is gated by rx_ready.
         if x2_lane:
             self.comb += descrambler.source.connect(source)
         else:
@@ -281,11 +281,13 @@ class USB3PIPE(LiteXModule):
         # Idle Handshake ---------------------------------------------------------------------------
         self.idle_handshake_unit = idle_handshake = IdleHandshake()
         rx_valid = Signal()
+        rx_data  = descrambler.source.data
+        rx_ctrl  = descrambler.source.ctrl
         self.comb += [
             rx_valid.eq(descrambler.source.valid & descrambler.source.ready),
             idle_handshake.enable.eq(self.idle_handshake),
-            idle_handshake.rx_idle.eq(rx_valid & (descrambler.source.data == 0) & (descrambler.source.ctrl == 0)),
-            idle_handshake.rx_data.eq(rx_valid & ((descrambler.source.data != 0) | (descrambler.source.ctrl != 0))),
+            idle_handshake.rx_idle.eq(rx_valid & (rx_data == 0) & (rx_ctrl == 0)),
+            idle_handshake.rx_data.eq(rx_valid & ((rx_data != 0) | (rx_ctrl != 0))),
             idle_handshake.tx_idle.eq(tx_enable & tx_idle & scrambler.sink.ready),
             self.idle_done.eq(idle_handshake.done),
         ]

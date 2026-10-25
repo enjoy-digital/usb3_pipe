@@ -37,7 +37,7 @@ from usb3_pipe.common     import COM
 from usb3_pipe.core       import USB3PIPE
 from usb3_pipe.ltssm      import USB3LTSSM
 from usb3_pipe.phy        import connect_ltssm_pipe, USB3PHY_STATUS, USB3PHY_LINK_CTRL
-from usb3_pipe.scrambling import LFSR_SEED_LANE1
+from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, link_layout
 from usb3_pipe.ssp        import SSPPolling
 
@@ -100,7 +100,7 @@ class USB3X2PHY(LiteXModule):
                 timer_scale          = timer_scale,
                 lfsr_seed            = seed,
                 x2_lane              = True)
-            for s, seed in [(lane0_serdes, 0xffff), (serdes[1], LFSR_SEED_LANE1)]]
+            for s, seed in [(lane0_serdes, LFSR_SEED_LANE0), (serdes[1], LFSR_SEED_LANE1)]]
         self.submodules += pipes
         self.ltssm = ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale, ssp=True)
         self.comb += ltssm.ds_port.eq(role == "host")
@@ -110,7 +110,7 @@ class USB3X2PHY(LiteXModule):
         self.comb += [s for s in connect_ltssm_pipe(ltssm, pipes[0]) if id(s.l) not in combined]
 
         # Lane 1: same TX/RX controls, no LFPS (6.13.12): electrical idle while Lane 0 sends LFPS.
-        for name in ["lfps_tx_idle", "ts_rx_enable", "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1",
+        for name in ["lfps_tx_idle", "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1",
             "ts_tx_ts2", "serdes_rx_align", "rx_ready", "tx_ready", "idle_handshake", "ts2_decode"]:
             self.comb += getattr(pipes[1], name).eq(getattr(ltssm, name))
         self.comb += [

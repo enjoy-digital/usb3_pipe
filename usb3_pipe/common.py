@@ -48,17 +48,19 @@ END =  Symbol("END", K(29, 7), "End")
 SLC =  Symbol("SLC", K(30, 7), "Start Link Command")
 EPF =  Symbol("EPF", K(23, 7), "End Packet Framing")
 
-symbols = [SKP, SDP, EDB, SUB, COM, RSD, SHP, END, SLC, EPF]
-
 # Training Sequence Ordered Sets (6.4.1.2) ---------------------------------------------------------
 
 class OrderedSet(list):
     """Ordered Set definition with name, 8-bit values and description"""
     def __init__(self, name, values, description=""):
         self.name        = name
-        self.values      = values
         self.description = description
         list.__init__(self, values)
+
+    @property
+    def has_link_config(self):
+        """TS1/TS2 Ordered Sets carry the Link Configuration (Symbol 5, Table 6-4/6-5)."""
+        return self.name in ["TS1", "TS1_INV", "TS2"]
 
     def to_bytes(self):
         r = bytes()
@@ -118,8 +120,6 @@ TS2 = OrderedSet("TS2",
 # [1] : 0x45450000
 # [2] : 0x45454545
 # [3] : 0x45454545
-
-ordered_sets = [TSEQ, TS1, TS1_INV, TS2]
 
 # Endianness Swap ----------------------------------------------------------------------------------
 

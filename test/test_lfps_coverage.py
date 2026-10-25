@@ -351,7 +351,7 @@ class TestLFPSBurstDetection(unittest.TestCase):
         # U2/Loopback Exit and U3 Wakeup: bursts of 80us (Table 6-30/6-31 tBurst min) detected,
         # one cycle shorter not (LFPSUnit checker configuration, standalone checker for speed).
         for name, min_cycles in [("u2", lfps.exit_u2_min_cycles), ("u3", lfps.exit_u3_min_cycles)]:
-            dut = LFPSBurstChecker(f, min_cycles=min_cycles(f))
+            dut = LFPSBurstChecker(min_cycles=min_cycles(f))
             dut.detected = []
             def generator(dut):
                 yield dut.idle.eq(1)

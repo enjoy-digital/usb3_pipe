@@ -4,18 +4,17 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 PHY debug (doc/debugging-guide.md): LTSSM state history and counters (USB3PHYDebug), RX errors
-(USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug).
+"""USB3 PHY debug (doc/debugging-guide.md): LTSSM state history and counters (USB3PHYDebug), RX
+errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug).
 """
 
 from functools import reduce
 from operator import xor
 
 from migen import *
+from migen.genlib.cdc import BusSynchronizer, GrayCounter, MultiReg, PulseSynchronizer
 
 from litex.gen import *
-
-from migen.genlib.cdc import BusSynchronizer, GrayCounter, MultiReg
 
 from litex.soc.interconnect.csr import *
 from litex.soc.cores.freqmeter import FreqMeter
@@ -38,7 +37,7 @@ USB3PHY_DEBUG_HISTORY_DEPTH = 32
 class USB3PHYDebug(LiteXModule):
     """USB3 PHY Debug (CSRs, hardware bring-up).
 
-    Lightweight always-on observability of a USB3PHY, to be polled from the host (UARTBone/JTAGBone):
+    Lightweight always-on observability of a USB3PHY, polled from the host (UARTBone/JTAGBone):
     - LTSSM state, SerDes ready.
     - LTSSM state history (last `USB3PHY_DEBUG_HISTORY_DEPTH` transitions, or the first ones after a
       clear with history_freeze, state + us timestamp).
@@ -54,9 +53,9 @@ class USB3PHYDebug(LiteXModule):
         self._phy_reset       = CSRStorage(description="PHY (PIPE + LTSSM) reset (level).")
         self._serdes_rx_reset = CSRStorage(description="SerDes RX re-initialization (level).")
         self._clear           = CSR() # Clear counters and history (write).
-        self._status    = CSRStatus(11, description="Status: LTSSM state [7:0], SerDes ready [8], "
-                                                    "RX idle [9], RX polarity [10].")
-        self._timestamp = CSRStatus(32, description="Timestamp (us).")
+        self._status          = CSRStatus(11, description="Status: LTSSM state [7:0], "
+            "SerDes ready [8], RX idle [9], RX polarity [10].")
+        self._timestamp       = CSRStatus(32, description="Timestamp (us).")
 
         # # #
 
@@ -84,12 +83,13 @@ class USB3PHYDebug(LiteXModule):
 
         # LTSSM State History.
         depth = USB3PHY_DEBUG_HISTORY_DEPTH
-        self._history_count = CSRStatus(32, description="Number of LTSSM state transitions.")
-        self._history_index = CSRStorage(log2_int(depth), description="History entry to read (0 = oldest).")
-        self._history_state = CSRStatus(8,  description="History entry state.")
-        self._history_time  = CSRStatus(32, description="History entry timestamp (us).")
-        self._history_freeze = CSRStorage(description="Keep the first transitions after a clear "
-                                                       "(else the last ones).")
+        self._history_count  = CSRStatus(32, description="Number of LTSSM state transitions.")
+        self._history_index  = CSRStorage(log2_int(depth),
+            description="History entry to read (0 = oldest).")
+        self._history_state  = CSRStatus(8,  description="History entry state.")
+        self._history_time   = CSRStatus(32, description="History entry timestamp (us).")
+        self._history_freeze = CSRStorage(
+            description="Keep the first transitions after a clear (else the last ones).")
         history_count = self._history_count.status
         history       = Memory(8 + 32, depth)
         history_wr    = history.get_port(write_capable=True)
@@ -122,7 +122,8 @@ class USB3PHYDebug(LiteXModule):
         # Event Counters.
         k28_4 = Signal()
         self.comb += k28_4.eq(serdes.source.valid & serdes.source.ready & Reduce("OR", [
-            serdes.source.ctrl[i] & (serdes.source.data[8*i:8*(i+1)] == K(28, 4)) for i in range(4)]))
+            serdes.source.ctrl[i] & (serdes.source.data[8*i:8*(i+1)] == K(28, 4))
+            for i in range(4)]))
         events = [
             # Name,               Signal,                     Edge (1) or Level (0).
             ("ts1",               pipe.ts_rx_ts1,             1),
@@ -144,7 +145,8 @@ class USB3PHYDebug(LiteXModule):
             ("u3",                ltssm.u3,                   1),
         ]
         for name, signal, edge in events:
-            csr = CSRStatus(32, name=f"{name}_count")
+            csr = CSRStatus(32, name=f"{name}_count",
+                description=f"{name} {'events' if edge else 'cycles'} count (saturating).")
             setattr(self, f"_{name}_count", csr)
             signal_d = Signal()
             self.sync += signal_d.eq(signal)
@@ -176,13 +178,10 @@ class USB3RXErrorsDebug(LiteXModule):
         n = len(decoders)
 
         # Clear (sys -> rx).
-        clear = Signal()
-        clear_toggle   = Signal()
-        clear_toggle_r = Signal(3)
-        self.sync += If(self._clear.re, clear_toggle.eq(~clear_toggle))
+        self.clear_ps = clear_ps = PulseSynchronizer("sys", clock_domain)
+        self.comb += clear_ps.i.eq(self._clear.re)
+        clear   = clear_ps.o
         sync_rx = getattr(self.sync, clock_domain)
-        sync_rx += clear_toggle_r.eq(Cat(clear_toggle, clear_toggle_r[:2]))
-        self.comb += clear.eq(clear_toggle_r[1] ^ clear_toggle_r[2])
 
         # Counters (rx).
         events = {
@@ -198,7 +197,8 @@ class USB3RXErrorsDebug(LiteXModule):
         bursts  = Signal(32)
         max_run = Signal(32)
         sync_rx += [
-            error.eq(Reduce("OR", events["decoder_invalid"] + events["code_invalid"] + events["disparity"])),
+            error.eq(Reduce("OR",
+                events["decoder_invalid"] + events["code_invalid"] + events["disparity"])),
             error_d.eq(error),
             If(clear,
                 run.eq(0),
@@ -222,7 +222,7 @@ class USB3RXErrorsDebug(LiteXModule):
             ).Else(
                 count.eq(count + increment)
             )
-            csr  = CSRStatus(32, name=f"{name}_count")
+            csr  = CSRStatus(32, name=f"{name}_count", description=f"RX {name} count.")
             sync = BusSynchronizer(32, clock_domain, "sys")
             self.submodules += sync
             setattr(self, f"_{name}_count", csr)
@@ -230,8 +230,11 @@ class USB3RXErrorsDebug(LiteXModule):
                 sync.i.eq(count),
                 csr.status.eq(sync.o),
             ]
-        for name, value in [("bursts", bursts), ("max_good_run", max_run)]:
-            csr  = CSRStatus(32, name=f"{name}_count" if name == "bursts" else name)
+        for name, value, description in [
+            ("bursts_count", bursts,  "RX error bursts count."),
+            ("max_good_run", max_run, "RX longest error-free run (words)."),
+            ]:
+            csr  = CSRStatus(32, name=name, description=description)
             sync = BusSynchronizer(32, clock_domain, "sys")
             self.submodules += sync
             setattr(self, f"_{csr.name}", csr)
@@ -261,7 +264,8 @@ class USB3SerDesDebug(LiteXModule):
         self._tx_inhibit       = CSRStorage(description="TX inhibit.")
         self._tx_inhibit_state = CSRStorage(9, description="TX inhibit while in LTSSM state [7:0] "
                                                             "when enabled [8].")
-        self._loopback         = CSRStorage(3, description="Transceiver loopback (0b010: Near-End PMA).")
+        self._loopback         = CSRStorage(3,
+            description="Transceiver loopback (0b010: Near-End PMA).")
         self.rx_tx_phase       = Signal(16) # o
 
         # # #
