@@ -73,7 +73,7 @@ $ vlc v4l2:///dev/video0:width=1280:height=720
 $ v4l2-ctl --set-fmt-video=width=1920,height=1080 --set-parm=60 --stream-mmap --stream-count=300   # 60.00 fps
 ```
 
-## `uvc_iso`: USB Video Class camera, Isochronous (not yet validated on hardware)
+## `uvc_iso`: USB Video Class camera, Isochronous
 
 Same camera as `uvc` with Isochronous streaming (the usual UVC camera mode): VideoStreaming interface
 with alternate setting 0 (no endpoint) and 1 (Isochronous IN EP1, MaxBurst 16, Mult 0, bInterval 1:
@@ -89,6 +89,9 @@ $ ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 -framerate 60 /dev/v
 $ v4l2-ctl --set-fmt-video=width=1920,height=1080 --set-parm=30 --stream-mmap --stream-count=300
 $ sudo dmesg | grep -i uvc   # Bandwidth/alternate setting errors.
 ```
+
+On the Acorn (Linux xHCI host): 640x480@60 and 1280x720@60 at 60.04 fps, 1280x720@30 and
+1920x1080@30 at 30.01 fps, complete frames.
 
 ## `msc`: Mass Storage RAM disk
 

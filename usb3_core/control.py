@@ -130,9 +130,7 @@ class USB3EndpointControl(USB3Endpoint):
         # ROM (descriptors/constant responses) followed by the request handler response buffer.
         handler_base = len(rom)
         mem_depth    = max(len(rom) + (EP0_HANDLER_WORDS if with_handler else 0), 1)
-        # Fully initialized (handler buffer zeroed): with a partial init, the handler buffer content
-        # is undefined (X) until written, and Vivado may resolve it to 1 on data bits never written
-        # to 1 by the handler (ex: bit 31 with the isochronous UVC probes, returned set on hardware).
+        # Fully initialized (handler buffer zeroed).
         mem_init     = rom + [0]*(mem_depth - len(rom))
         mem          = Memory(32, mem_depth, init=mem_init) # Not a module attribute (would be CSR-mapped).
         rd_port = mem.get_port(has_re=True)
@@ -285,6 +283,23 @@ class USB3EndpointControl(USB3Endpoint):
         if with_handler:
             wr_port = mem.get_port(write_capable=True)
             self.specials += wr_port
+            # Registered write, data register kept (dont_touch): Vivado narrows the memory write
+            # port to the data bits the handler can write to 1 and the other bits of the responses
+            # then read back as 1 on hardware (ex: bit 31 never written to 1 by the isochronous UVC
+            # probes: 31-bit write port, every response word read with bit 31 set).
+            wr_adr = Signal(len(wr_port.adr), reset_less=True)
+            wr_dat = Signal(32, reset_less=True, attr={"keep"})
+            wr_we  = Signal()
+            self.sync += [
+                wr_adr.eq(handler_base + resp_words),
+                wr_dat.eq(self.req_in.data),
+                wr_we.eq(self.req_in.valid & self.req_in.ready),
+            ]
+            self.comb += [
+                wr_port.adr.eq(wr_adr),
+                wr_port.dat_w.eq(wr_dat),
+                wr_port.we.eq(wr_we),
+            ]
             setup_d = Signal()
             self.sync += [
                 setup_d.eq(new_setup), # kind registered one cycle after the SETUP.
@@ -302,9 +317,7 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_index.eq(wIndex),
                 self.req_length.eq(wLength),
                 self.req_in.ready.eq(self.req_valid & ~resp_ready & (resp_words != EP0_HANDLER_WORDS)),
-                wr_port.adr.eq(handler_base + resp_words),
-                wr_port.dat_w.eq(self.req_in.data),
-                wr_port.we.eq(self.req_in.valid & self.req_in.ready),
+
             ]
             self.sync += [
                 If(new_setup,
