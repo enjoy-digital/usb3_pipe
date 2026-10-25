@@ -133,7 +133,7 @@ class USB3EndpointControl(USB3Endpoint):
         # is undefined (X) until written, and Vivado may resolve it to 1 on data bits never written
         # to 1 by the handler (ex: bit 31 with the isochronous UVC probes, returned set on hardware).
         mem_init     = rom + [0]*(mem_depth - len(rom))
-        self.mem     = mem = Memory(32, mem_depth, init=mem_init)
+        mem          = Memory(32, mem_depth, init=mem_init) # Not a module attribute (would be CSR-mapped).
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, rd_port
 
