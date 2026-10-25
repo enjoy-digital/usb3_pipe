@@ -33,8 +33,7 @@ from migen import *
 
 from litex.gen import *
 
-from litex.soc.interconnect     import stream
-from litex.soc.interconnect.csr import *
+from litex.soc.interconnect import stream
 
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3IsoIN
@@ -293,27 +292,6 @@ class USB3UVCControl(LiteXModule):
         self.sync += self.commit.eq(apply & (selector == VS_COMMIT_CONTROL))
         self.comb += self.mode.eq(commit_mode)
 
-        # Debug (add_debug).
-        self.dbg_set_frame    = set_frame
-        self.dbg_set_interval = set_interval
-        self.dbg_probe_mode   = probe_mode
-        self.dbg_commit_mode  = commit_mode
-
-    def add_debug(self):
-        """Debug CSRs: last SET_CUR bFrameIndex/dwFrameInterval decoded, probe/commit modes."""
-        self._dbg_modes = CSRStatus(fields=[
-            CSRField("set_frame",   size=8, offset=0,  description="Last SET_CUR bFrameIndex."),
-            CSRField("probe_mode",  size=8, offset=8,  description="PROBE mode."),
-            CSRField("commit_mode", size=8, offset=16, description="COMMIT mode."),
-        ])
-        self._dbg_set_interval = CSRStatus(32, description="Last SET_CUR dwFrameInterval.")
-        self.comb += [
-            self._dbg_modes.fields.set_frame.eq(self.dbg_set_frame),
-            self._dbg_modes.fields.probe_mode.eq(self.dbg_probe_mode),
-            self._dbg_modes.fields.commit_mode.eq(self.dbg_commit_mode),
-            self._dbg_set_interval.status.eq(self.dbg_set_interval),
-        ]
-
 # UVC Stream (pattern + payloads) ------------------------------------------------------------------
 
 class USB3UVCStream(LiteXModule):
@@ -534,10 +512,9 @@ class USB3UVC(LiteXModule):
 
     transfer: "bulk" (default) or "iso" (Isochronous IN endpoint, payload_size: max_burst x 1024 by
     default, bInterval: interval).
-    with_debug: EP0 IN responses/PROBE debug CSRs (core.ep0_dbg_*, function_control_dbg_*).
     """
     def __init__(self, phy, sys_clk_freq, modes=None, payload_size=None, max_burst=16, transfer="bulk",
-        interval=1, with_debug=False, **kwargs):
+        interval=1, **kwargs):
         assert transfer in ["bulk", "iso"]
         iso      = (transfer == "iso")
         clk_freq = int(sys_clk_freq)
@@ -553,6 +530,3 @@ class USB3UVC(LiteXModule):
             with_ep0_handler = True)
         self.function = USB3UVCFunction(core.ep0, core.endpoints[0], core.link.reset, clk_freq,
             modes, payload_size)
-        if with_debug:
-            core.add_ep0_debug()
-            self.function.control.add_debug()

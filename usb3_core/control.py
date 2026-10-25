@@ -17,8 +17,7 @@ from migen import *
 
 from litex.gen import *
 
-from litex.soc.interconnect     import stream
-from litex.soc.interconnect.csr import *
+from litex.soc.interconnect import stream
 
 from usb3_core.common    import *
 from usb3_core.endpoints import USB3Endpoint, DPPReader
@@ -126,7 +125,6 @@ class USB3EndpointControl(USB3Endpoint):
                 # GET_INTERFACE: one word per alternate setting, 1 byte response.
                 length  = 1 if kind == "get_interface" else len(response)
             entries.append((bmRequestType, bRequest, wValue, offset, length, KINDS[kind]))
-        self.rom_data = rom
         # ROM (descriptors/constant responses) followed by the request handler response buffer.
         handler_base = len(rom)
         mem_depth    = max(len(rom) + (EP0_HANDLER_WORDS if with_handler else 0), 1)
@@ -422,86 +420,4 @@ class USB3EndpointControl(USB3Endpoint):
         self.comb += [
             self.rx_dpp.ready.eq(1),
             self.landed.eq(self.rx_dpp_done),
-        ]
-
-# USB3 Control Endpoint Debug ----------------------------------------------------------------------
-
-class USB3PacketCapture(LiteXModule):
-    """Capture of the first n beats of the last packet (first: packet start, with valid)."""
-    def __init__(self, width, n=9):
-        self.valid = Signal()      # i
-        self.first = Signal()      # i
-        self.data  = Signal(width) # i
-        self.words = Array(Signal(width, reset_less=True) for _ in range(n)) # o
-        self.count = Signal(16)    # o: Beats of the last packet.
-
-        # # #
-
-        self.sync += If(self.valid,
-            If(self.first,
-                self.words[0].eq(self.data),
-                self.count.eq(1),
-            ).Else(
-                If(self.count < n, self.words[self.count].eq(self.data)),
-                self.count.eq(self.count + 1),
-            )
-        )
-
-class USB3EndpointControlDebug(LiteXModule):
-    """EP0 IN responses debug (CSRs, read with sel: word index 0-8).
-
-    - req_in : request handler IN response written (data, be/last), from req_setup.
-    - ep0_tx : last EP0 DPP (EP0 output: response memory read), data, bytes/last, length.
-    - link_tx: last EP0 DPP at the Protocol Layer TX DPP mux output (to the Link Layer), data,
-      bytes/last, length.
-    """
-    def __init__(self, ep0, link_tx_dpp, link_tx_dpp_ep0, n=9):
-        self.sel          = CSRStorage(4, description="Captured word index (0-8).")
-        self.req_in_data  = CSRStatus(32, description="Handler IN response word (data).")
-        self.req_in_ctrl  = CSRStatus(32, description="Handler IN response word: be[3:0], last[4], words[31:16].")
-        self.ep0_tx_data  = CSRStatus(32, description="EP0 TX DPP word (data).")
-        self.ep0_tx_ctrl  = CSRStatus(32, description="EP0 TX DPP word: bytes[2:0], last[3], words[15:8], length[31:16].")
-        self.link_tx_data = CSRStatus(32, description="Link TX DPP word (EP0 DPP, data).")
-        self.link_tx_ctrl = CSRStatus(32, description="Link TX DPP word: bytes[2:0], last[3], words[15:8], length[31:16].")
-
-        # # #
-
-        sel = self.sel.storage
-
-        # Request handler IN response.
-        self.req_in = req_in = USB3PacketCapture(32 + 4 + 1, n)
-        req_first = Signal()
-        self.sync += If(ep0.req_setup, req_first.eq(1)).Elif(req_in.valid, req_first.eq(0))
-        self.comb += [
-            req_in.valid.eq(ep0.req_in.valid & ep0.req_in.ready),
-            req_in.first.eq(req_first),
-            req_in.data.eq(Cat(ep0.req_in.data, ep0.req_in.be, ep0.req_in.last)),
-        ]
-
-        # DPPs (EP0 output, Link Layer input).
-        def dpp_capture(name, valid, dpp):
-            capture = USB3PacketCapture(32 + 3 + 1, n)
-            setattr(self, name, capture)
-            sop    = Signal(reset=1)
-            length = Signal(16)
-            self.sync += If(valid,
-                sop.eq(dpp.last),
-                length.eq(Mux(sop, dpp.bytes, length + dpp.bytes)),
-            )
-            self.comb += [
-                capture.valid.eq(valid),
-                capture.first.eq(sop),
-                capture.data.eq(Cat(dpp.data, dpp.bytes, dpp.last)),
-            ]
-            return capture, length
-        ep0_tx,  ep0_tx_len  = dpp_capture("ep0_tx",  ep0.tx_dpp.valid & ep0.tx_dpp.ready, ep0.tx_dpp)
-        link_tx, link_tx_len = dpp_capture("link_tx", link_tx_dpp.valid & link_tx_dpp.ready & link_tx_dpp_ep0, link_tx_dpp)
-
-        self.comb += [
-            self.req_in_data.status.eq(req_in.words[sel][0:32]),
-            self.req_in_ctrl.status.eq(Cat(req_in.words[sel][32:37], C(0, 11), req_in.count)),
-            self.ep0_tx_data.status.eq(ep0_tx.words[sel][0:32]),
-            self.ep0_tx_ctrl.status.eq(Cat(ep0_tx.words[sel][32:36], C(0, 4), ep0_tx.count[0:8], ep0_tx_len)),
-            self.link_tx_data.status.eq(link_tx.words[sel][0:32]),
-            self.link_tx_ctrl.status.eq(Cat(link_tx.words[sel][32:36], C(0, 4), link_tx.count[0:8], link_tx_len)),
         ]
