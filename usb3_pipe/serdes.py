@@ -367,6 +367,10 @@ class RXIdleFilter(LiteXModule):
 
 # TX SKP Inserter (6.4.3) --------------------------------------------------------------------------
 
+# 2 SKP Ordered Sets every 176 words (704 symbols): average of 1 SKP Ordered Set every 354 symbols
+# (6.4.3).
+SKP_INTERVAL_WORDS = 176
+
 class TXSKPInserter(LiteXModule):
     """TX SKP Inserter
 
@@ -390,20 +394,20 @@ class TXSKPInserter(LiteXModule):
 
         # # #
 
-        data_count   = Signal(8)
+        data_count   = Signal(max=SKP_INTERVAL_WORDS)
         skip_grant   = Signal(reset=1)
         skip_queue   = Signal()
         skip_dequeue = Signal()
         skip_count   = Signal(2)
 
-        # Queue one 2 SKP Ordered Set every 176 Data/Ctrl words
+        # Queue 2 SKP Ordered Sets every SKP_INTERVAL_WORDS Data/Ctrl words.
         self.sync += [
             skip_queue.eq(0),
             If(~self.enable,
                 data_count.eq(0)
             ).Elif(sink.valid & sink.ready,
                 data_count.eq(data_count + 1),
-                If(data_count == 175,
+                If(data_count == (SKP_INTERVAL_WORDS - 1),
                     data_count.eq(0),
                     skip_queue.eq(1)
                 )
@@ -538,7 +542,7 @@ class RXDatapath(LiteXModule):
             word_aligner.source.connect(self.source),
         ]
 
-# USB3 Serializer/Deserializer --------------------------------------------------------------------
+# USB3 Serializer/Deserializer ---------------------------------------------------------------------
 
 class USB3SerDes(LiteXModule):
     """USB3 SerDes on a LiteICLink transceiver.
@@ -632,6 +636,7 @@ class USB3SerDes(LiteXModule):
 # Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
 
 class K7USB3SerDes(USB3SerDes):
+    """Kintex7 GTX USB3 SerDes (Channel PLL)."""
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
         USB3SerDes.__init__(self)
 
@@ -643,7 +648,7 @@ class K7USB3SerDes(USB3SerDes):
         self.pll = pll = GTXChannelPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
         gtx = self.add_transceiver("gtx", GTX, pll, tx_pads, rx_pads, sys_clk_freq)
 
-        # Override GTX RX settings for USB3 ---------------------------------------------------------
+        # Override GTX RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
         # the Xilinx 7-Series Transceivers Wizard (SATA, SSC) and PCIe Gen2 (pcie_7x) GT wrappers:
         # - RXCDR_CFG: SSC tolerant CDR settings (RXOUT_DIV=1).
@@ -689,6 +694,7 @@ class K7USB3SerDes(USB3SerDes):
 # Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
 class A7USB3SerDes(USB3SerDes):
+    """Artix7 GTP USB3 SerDes (Quad PLL, optional RXCDR_CFG override)."""
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
         rxcdr_cfg=None):
         USB3SerDes.__init__(self)
@@ -701,7 +707,7 @@ class A7USB3SerDes(USB3SerDes):
         self.pll = pll = GTPQuadPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
         gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq)
 
-        # Override GTP RX settings for USB3 ---------------------------------------------------------
+        # Override GTP RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):
         # - RXCDR_CFG: UG482 Table 4-14 (CDR Recommended Settings for Protocols with SSC, RXOUT_DIV=1).
         #   The 8B/10B (no SSC) settings (Table 4-15, +-1250ppm) saturate the CDR frequency tracking
@@ -767,7 +773,7 @@ class USPUSB3SerDes(USB3SerDes):
                 i_CPLLREFCLKSEL = 0b111,
             )
 
-        # Override GTY RX settings for USB3 ---------------------------------------------------------
+        # Override GTY RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
         # the Xilinx Ultrascale+ Transceivers Wizard (SATA preset at 5Gbps, SSC) and PCIe Gen2
         # (pcie4_uscale_plus) GT wrappers:
