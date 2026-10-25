@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Gen 1x2 Host <-> Device Verilator simulations (sim_x2.py): SuperSpeedPlus Polling (SCD1/SCD2, LBPM
+"""Gen 1x2 Host <-> Device Verilator simulations (sim.py --lanes 2): SuperSpeedPlus Polling (SCD1/SCD2, LBPM
 PHY Capability/Ready: Gen 1x2 negotiated), link training to U0 on both lanes, 64-bit PRBS packets
 checked on both sides with lane-to-lane skew, per lane polarity inversion and per lane SKP Ordered
 Sets differences."""
@@ -34,7 +34,8 @@ CONFIGS_SLOW = {
 
 class TestPHYX2(unittest.TestCase):
     def run_sim(self, name, args):
-        cmd = [sys.executable, str(ROOT / "sim_x2.py"), "--output-dir", str(get_output_dir(self, name))] + args
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--lanes", "2",
+            "--output-dir", str(get_output_dir(self, name))] + args
         try:
             p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, timeout=1200)

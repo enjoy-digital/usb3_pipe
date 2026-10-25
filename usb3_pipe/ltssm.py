@@ -18,8 +18,7 @@ from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
     exit_burst_cycles,
     exit_u1_min_cycles, exit_u2_min_cycles, exit_u3_min_cycles)
 from usb3_pipe.lfps import (LFPSRXFrontEnd, SCDGenerator, SCDChecker, LBPMGenerator, LBPMChecker,
-    LBPM_PHY_CAPABILITY, LBPM_PHY_READY, lbpm_phy_capability,
-    lfps_clk_half_period_cycles, rounded_cycles)
+    LBPM_PHY_CAPABILITY, LBPM_PHY_READY, lbpm_phy_capability, rounded_cycles)
 
 # Link Training and Status State Machine -----------------------------------------------------------
 
@@ -1424,17 +1423,3 @@ class SSPPolling(LiteXModule):
             self.fail.eq(1),
             If(~self.start, NextState("IDLE"))
         )
-
-        # LFPS clock pattern (for transceivers sending the LFPS as a data pattern).
-        self.tx_pattern = Signal(20) # o
-        lfps_clk = Signal()
-        lfps_div = Signal(8)
-        half     = lfps_clk_half_period_cycles(sys_clk_freq, 25e6)
-        self.sync += [
-            lfps_div.eq(lfps_div + 1),
-            If(lfps_div == (half - 1),
-                lfps_div.eq(0),
-                lfps_clk.eq(~lfps_clk)
-            )
-        ]
-        self.comb += self.tx_pattern.eq(Replicate(lfps_clk, 20))

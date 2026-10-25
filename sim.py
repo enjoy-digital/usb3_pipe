@@ -207,29 +207,40 @@ class USB3SerDesModel(LiteXModule):
 
 # Link-Layer Stand-In (PRBS Packets) ---------------------------------------------------------------
 
-PRBS_START = (0xfbfbfbfb, 0b1111) # K27.7 x4: Packet start marker.
-PRBS_END   = (0xfdfdfdfd, 0b1111) # K29.7 x4: Packet end marker.
+PRBS_START = 0xfb # K27.7 on all the Symbols of the word: Packet start marker.
+PRBS_END   = 0xfd # K29.7 on all the Symbols of the word: Packet end marker.
 
-def xorshift32(x, name):
-    """Next state of a 32-bit xorshift PRBS (combinatorial), as (statements, signal)."""
-    a = Signal(32, name=name + "_a")
-    b = Signal(32, name=name + "_b")
-    c = Signal(32, name=name + "_c")
-    return [a.eq(x ^ (x << 13)), b.eq(a ^ (a >> 17)), c.eq(b ^ (b << 5))], c
+def prbs_marker(symbol, data_width):
+    """Word with symbol (K-code) on all its Symbols, as (data, ctrl)."""
+    n = data_width//8
+    return (int.from_bytes(bytes([symbol])*n, "little"), 2**n - 1)
+
+def xorshift(x, name):
+    """Next state of a 32/64-bit xorshift PRBS (combinatorial), as (statements, signal)."""
+    n = len(x)
+    s = {32: (13, 17, 5), 64: (13, 7, 17)}[n]
+    a = Signal(n, name=name + "_a")
+    b = Signal(n, name=name + "_b")
+    c = Signal(n, name=name + "_c")
+    return [a.eq(x ^ (x << s[0])), b.eq(a ^ (a >> s[1])), c.eq(b ^ (b << s[2]))], c
 
 class PRBSPacketGenerator(LiteXModule):
     """Link-Layer stand-in (TX): random length packets of PRBS data words, framed by K-code start/end
-    markers (first/last) and separated by random gaps (Logical Idle sent by the PIPE).
+    markers (first/last) and separated by random gaps of 0 to 2**gap_bits - 1 cycles (Logical Idle
+    sent by the PIPE).
     """
-    def __init__(self):
+    def __init__(self, data_width=32, gap_bits=4):
         self.enable = Signal()   # i
-        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", data_width), ("ctrl", data_width//8)])
         self.words  = Signal(32) # o: Data words sent.
 
         # # #
 
-        prbs = Signal(32, reset=1)
-        prbs_next_stmts, prbs_next = xorshift32(prbs, "prbs_gen")
+        start = prbs_marker(PRBS_START, data_width)
+        end   = prbs_marker(PRBS_END,   data_width)
+
+        prbs = Signal(data_width, reset=1)
+        prbs_next_stmts, prbs_next = xorshift(prbs, "prbs_gen")
         self.comb += prbs_next_stmts
 
         count = Signal(5)
@@ -245,8 +256,8 @@ class PRBSPacketGenerator(LiteXModule):
         fsm.act("START",
             source.valid.eq(1),
             source.first.eq(1),
-            source.data.eq(PRBS_START[0]),
-            source.ctrl.eq(PRBS_START[1]),
+            source.data.eq(start[0]),
+            source.ctrl.eq(start[1]),
             If(source.ready,
                 NextState("DATA")
             )
@@ -267,10 +278,10 @@ class PRBSPacketGenerator(LiteXModule):
         fsm.act("END",
             source.valid.eq(1),
             source.last.eq(1),
-            source.data.eq(PRBS_END[0]),
-            source.ctrl.eq(PRBS_END[1]),
+            source.data.eq(end[0]),
+            source.ctrl.eq(end[1]),
             If(source.ready,
-                NextValue(count, prbs[8:12]), # 0-15 cycles gap.
+                NextValue(count, prbs[8:8 + gap_bits]), # Gap.
                 NextState("GAP")
             )
         )
@@ -282,24 +293,27 @@ class PRBSPacketChecker(LiteXModule):
     a corrupted/lost word only gives a bounded number of errors). Outside packets, only Logical Idle
     (descrambled 00h data symbols) is expected.
     """
-    def __init__(self):
+    def __init__(self, data_width=32):
         self.enable  = Signal()   # i
-        self.sink    = sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.sink    = sink = stream.Endpoint([("data", data_width), ("ctrl", data_width//8)])
         self.words   = Signal(32) # o: Data words checked.
         self.packets = Signal(32) # o: Packets received.
         self.errors  = Signal(32) # o: Errors.
 
         # # #
 
-        prev      = Signal(32)
+        start = prbs_marker(PRBS_START, data_width)
+        end   = prbs_marker(PRBS_END,   data_width)
+
+        prev      = Signal(data_width)
         prev_ok   = Signal()
         in_packet = Signal()
-        prev_next_stmts, prev_next = xorshift32(prev, "prbs_chk")
+        prev_next_stmts, prev_next = xorshift(prev, "prbs_chk")
         self.comb += prev_next_stmts
         self.comb += sink.ready.eq(1)
 
-        is_start = (sink.data == PRBS_START[0]) & (sink.ctrl == PRBS_START[1])
-        is_end   = (sink.data == PRBS_END[0])   & (sink.ctrl == PRBS_END[1])
+        is_start = (sink.data == start[0]) & (sink.ctrl == start[1])
+        is_end   = (sink.data == end[0])   & (sink.ctrl == end[1])
         self.sync += If(self.enable & sink.valid,
             If(is_start,
                 If(in_packet, self.errors.eq(self.errors + 1)),
@@ -373,15 +387,26 @@ class USB3PIPESim(SoCMini):
     - ppm/ssc:       Host/Device in separate clock domains, the Device clock offset by ppm and/or with
                      SSC. Each SerDes model receives in the partner's (recovered) clock domain.
     - prbs_words:    Words to check on both sides before ending the simulation (without core).
+
+    Gen 1x2 (lanes=2, PRBS stand-ins on 64-bit link words, see doc/gen2-x2-roadmap.md): the PHYs
+    train to U0 through the SuperSpeedPlus Polling (SCD1/SCD2, LBPM), with lane-to-lane skew, per
+    lane polarity (Host Lane 1 TX inverted) and SKP Ordered Sets differences:
+    - lane_delays:      Lane 0/1 delays (words of 4 symbols) from Host to Device (lanes skew).
+    - lane1_word_shift: Lane 1 RX word shift (symbols) of the Device SerDes model.
+    - lane_skp:         Extra SKP Ordered Sets (2 Symbols) on the Host Lane 1 then Lane 0 every
+                        lane_skp cycles in U0 (per lane SKP differences, 0 = disabled, >= 4096 for
+                        the model).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
-        host_lpm=False):
+        host_lpm=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096):
+        assert lanes in [1, 2]
+        assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
         sys_clk_freq = int(133e6)
-        # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on hardware),
-        # 2 with the PRBS stand-ins.
+        # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on
+        # hardware) and with 2 lanes, 2 with the PRBS stand-ins.
         if phy_dw is None:
-            phy_dw = 40 if with_core else 20
+            phy_dw = 40 if (with_core or lanes > 1) else 20
 
         # Platform.
         platform = Platform()
@@ -402,24 +427,35 @@ class USB3PIPESim(SoCMini):
             cds = {"host": "sys", "dev": "sys"}
 
         # USB3 Host (Host = Downstream Port) / Device (Device = Upstream Port).
+        phys     = {}
         ltssms   = {}
         serdeses = {}
         checkers = {}
         for name, role, partner in [("host", "host", "dev"), ("dev", "device", "host")]:
             renamer = ClockDomainsRenamer({"sys": cds[name], "rx": cds[partner]})
-            serdes  = renamer(USB3SerDesModel(
+            serdes  = [renamer(USB3SerDesModel(
                 phy_dw          = phy_dw,
-                rx_word_shift   = rx_word_shift,
-                rx_clock_domain = "rx"))
+                rx_word_shift   = lane1_word_shift if (name, lane) == ("dev", 1) else rx_word_shift,
+                rx_clock_domain = "rx")) for lane in range(lanes)]
             phy     = renamer(USB3PHY(
-                serdes       = serdes,
-                sys_clk_freq = sys_clk_freq,
-                role         = role,
-                timer_scale  = timer_scale))
-            self.add_module(name=f"{name}_usb3_serdes", module=serdes)
+                serdes               = serdes[0] if lanes == 1 else serdes,
+                sys_clk_freq         = sys_clk_freq,
+                role                 = role,
+                timer_scale          = timer_scale,
+                with_endianness_swap = (lanes == 1),
+                lanes                = lanes))
+            if lanes == 1:
+                self.add_module(name=f"{name}_usb3_serdes", module=serdes[0])
+            else:
+                for lane in range(lanes):
+                    self.add_module(name=f"{name}_usb3_serdes{lane}", module=serdes[lane])
             self.add_module(name=f"{name}_usb3_phy",    module=phy)
             ltssm = phy.ltssm
-            self.comb += serdes.tx_polarity.eq(1) # Inverse TX polarity to test RX auto-polarity
+            if lanes == 1:
+                # Inverse TX polarity to test RX auto-polarity.
+                self.comb += serdes[0].tx_polarity.eq(1)
+            else:
+                self.comb += serdes[1].tx_polarity.eq(name == "host") # Per lane polarity (6.13.7).
 
             if with_core and (name == "host"):
                 # Scripted host Link/Protocol Layer (link initialization, enumeration).
@@ -440,7 +476,7 @@ class USB3PIPESim(SoCMini):
                     ltssm.lau.eq(host_model.pm[2]),
                     ltssm.exit_u1_req.eq(host_model.pm[3]),
                     ltssm.exit_u2_req.eq(host_model.pm[4]),
-                    serdes.tx_skp.eq(host_model.skp),
+                    serdes[0].tx_skp.eq(host_model.skp),
                 ]
             elif with_core:
                 # USB3 Device Core, Bulk loopback: EP2 OUT -> EP1 IN.
@@ -456,8 +492,12 @@ class USB3PIPESim(SoCMini):
                     loopback.source.connect(core.endpoints[0].sink),
                 ]
             else:
-                generator = renamer(PRBSPacketGenerator())
-                checker   = renamer(PRBSPacketChecker())
+                # Gen 1x2: gaps of 0-3 cycles (Logical Idle gaps of 4+ cycles with per lane extra
+                # SKP Ordered Sets give Device PRBS errors, see doc/gen2-x2-roadmap.md).
+                generator = renamer(PRBSPacketGenerator(
+                    data_width = 32*lanes,
+                    gap_bits   = {1: 4, 2: 2}[lanes]))
+                checker   = renamer(PRBSPacketChecker(data_width=32*lanes))
                 self.add_module(name=f"{name}_prbs_generator", module=generator)
                 self.add_module(name=f"{name}_prbs_checker",   module=checker)
                 self.comb += [
@@ -472,11 +512,15 @@ class USB3PIPESim(SoCMini):
             if not (with_core and (name == "dev")):
                 self.comb += ltssm.link_activity.eq(1)
 
+            phys[name]     = phy
             ltssms[name]   = ltssm
             serdeses[name] = serdes
 
         # Connect Host <--> Device.
-        serdeses["host"].connect(serdeses["dev"])
+        if lanes == 1:
+            serdeses["host"][0].connect(serdeses["dev"][0])
+        else:
+            self.add_lanes_connection(serdeses, phys, cds, lane_delays, lane_skp)
 
         # Simulation Timer.
         timer = Signal(32)
@@ -495,6 +539,8 @@ class USB3PIPESim(SoCMini):
                         )
                     )
                 ]
+            if lanes > 1:
+                self.add_lanes_status(phys[name], name, sync, timer)
 
         # Simulation End.
         done   = Signal()
@@ -520,9 +566,13 @@ class USB3PIPESim(SoCMini):
                 (checkers["host"].words >= prbs_words) &
                 (checkers["dev"].words  >= prbs_words))
             for name, checker in checkers.items():
+                fmt  = "{} PRBS: %d words, %d packets, %d errors".format(name.upper())
+                args = [checker.words, checker.packets, checker.errors]
+                if lanes > 1:
+                    fmt  += ", x2: %d"
+                    args += [phys[name].x2]
                 self.sync += If(done & ~report,
-                    Display("{} PRBS: %d words, %d packets, %d errors".format(name.upper()),
-                        checker.words, checker.packets, checker.errors)
+                    Display(fmt, *args)
                 )
         self.sync += [
             If(done | (timer >= max_cycles),
@@ -531,6 +581,65 @@ class USB3PIPESim(SoCMini):
             ),
             If(report, Finish())
         ]
+
+    def add_lanes_connection(self, serdeses, phys, cds, lane_delays, lane_skp):
+        """Gen 1x2 Host <--> Device lanes connection (Host -> Device lanes delayed)."""
+        for lane in range(2):
+            h = serdeses["host"][lane]
+            d = serdeses["dev"][lane]
+            self.comb += d.tx.connect(h.rx)
+            n = lane_delays[lane]
+            if n > 0:
+                delay = [Signal(len(h.tx.data)) for _ in range(n)]
+                sync  = getattr(self.sync, cds["host"])
+                sync += delay[0].eq(h.tx.data)
+                for i in range(1, n):
+                    sync += delay[i].eq(delay[i-1])
+                self.comb += d.rx.data.eq(delay[-1])
+            else:
+                self.comb += h.tx.connect(d.rx)
+            self.specials += MultiReg(h.tx_idle, d.rx_idle)
+            self.specials += MultiReg(d.tx_idle, h.rx_idle)
+
+        # Extra SKP Ordered Sets on a single Host lane at a time -----------------------------------
+        # Each lane receives SKP Ordered Sets not present on the other lane (lane-to-lane skew varying
+        # by 2 Symbols, per lane SKP removal). The SerDes model holds its TX datapath for the inserted
+        # SKP Ordered Sets (1 word every 2 insertions, absorbed by the TX CDC FIFO): they are inserted
+        # alternately on Lane 1 and Lane 0 and rarely enough for the TX CDC FIFOs not to fill (the
+        # lanes TX must stay in lockstep).
+        if lane_skp:
+            skp_timer = Signal(32)
+            sync = getattr(self.sync, cds["host"])
+            sync += [
+                serdeses["host"][0].tx_skp.eq(0),
+                serdeses["host"][1].tx_skp.eq(0),
+                If(phys["host"].u0,
+                    skp_timer.eq(skp_timer + 1),
+                    If(skp_timer == (lane_skp//2 - 1),
+                        serdeses["host"][1].tx_skp.eq(1),
+                    ),
+                    If(skp_timer == (lane_skp - 1),
+                        skp_timer.eq(0),
+                        serdeses["host"][0].tx_skp.eq(1),
+                    )
+                )
+            ]
+
+    def add_lanes_status(self, phy, name, sync, timer):
+        """Gen 1x2 status: SuperSpeedPlus Polling states (with negotiated x2) and lanes deskew."""
+        label = {"host": "HOST", "dev": "DEV "}[name]
+        phy.ssp.finalize() # Elaborate the FSM to expose its encoding.
+        ssp = phy.ssp.fsm
+        for state, value in ssp.encoding.items():
+            sync += If((ssp.next_state != ssp.state) & (ssp.next_state == value),
+                Display("[%08d] {} SSP entering {} state (x2: %d)".format(label, state),
+                    timer, phy.ssp.x2)
+            )
+        aligned_d = Signal()
+        sync += aligned_d.eq(phy.deskew_aligned)
+        sync += If(phy.deskew_aligned & ~aligned_d,
+            Display("[%08d] {} lanes deskewed".format(label), timer)
+        )
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -541,7 +650,7 @@ def main():
     parser.add_argument("--trace-end",     default=-1,          help="Cycle to end VCD tracing.")
     parser.add_argument("--timer-scale",   default=1,           help="LTSSM/LFPS timers scale factor (1 = spec exact).")
     parser.add_argument("--no-core",       action="store_true", help="Replace the USB3 Core with PRBS Link-Layer stand-ins.")
-    parser.add_argument("--prbs-words",    default=2**16,       help="Words to check on both sides (with --no-core).")
+    parser.add_argument("--prbs-words",    default=None,        help="Words to check on both sides (with --no-core, default: 2^16, 2^14 with --lanes 2).")
     parser.add_argument("--rx-word-shift", default=0,           help="SerDes models RX shift (0-3 symbols).")
     parser.add_argument("--ppm",           default=0,           help="Device clock offset vs Host clock (ppm).")
     parser.add_argument("--ssc",           action="store_true", help="Enable SSC (0/-5000ppm down-spread) on the Device clock.")
@@ -551,12 +660,19 @@ def main():
     parser.add_argument("--host-status-gap", default=64,        help="Host model gap between the Data stage ACK TP and the STATUS TP (cycles).")
     parser.add_argument("--host-pm",       action="store_true", help="Host model U1/U2 requests (LGO_U1/LGO_U2) after the enumeration.")
     parser.add_argument("--host-lpm",      action="store_true", help="Device Core with LPM, Host model U1/U2 entries/exits after the enumeration.")
+    parser.add_argument("--lanes",         default=1,           help="Lanes (1: Gen 1x1, 2: Gen 1x2 with PRBS Link-Layer stand-ins).", choices=["1", "2"])
+    parser.add_argument("--lane0-delay",   default=0,           help="Host to Device Lane 0 delay (words, --lanes 2).")
+    parser.add_argument("--lane1-delay",   default=1,           help="Host to Device Lane 1 delay (words, --lanes 2).")
+    parser.add_argument("--lane1-word-shift", default=2,        help="Device Lane 1 RX word shift (symbols, --lanes 2).")
+    parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
     sim_config = SimConfig(default_clk="sys_clk")
 
-    with_core = not args.no_core
+    lanes      = int(args.lanes)
+    with_core  = (not args.no_core) and (lanes == 1)
+    prbs_words = args.prbs_words or {1: 2**16, 2: 2**14}[lanes]
 
     soc = USB3PIPESim(
         timer_scale   = int(args.timer_scale),
@@ -564,13 +680,17 @@ def main():
         rx_word_shift = int(args.rx_word_shift),
         ppm           = float(args.ppm),
         ssc           = args.ssc,
-        prbs_words    = int(args.prbs_words),
+        prbs_words    = int(prbs_words),
         max_cycles    = int(args.max_cycles),
         host_skp      = not args.no_host_skp,
         host_latency  = int(args.host_latency),
         host_status_gap = int(args.host_status_gap),
         host_pm       = args.host_pm,
-        host_lpm      = args.host_lpm)
+        host_lpm      = args.host_lpm,
+        lanes            = lanes,
+        lane_delays      = (int(args.lane0_delay), int(args.lane1_delay)),
+        lane1_word_shift = int(args.lane1_word_shift),
+        lane_skp         = int(args.lane_skp))
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",
