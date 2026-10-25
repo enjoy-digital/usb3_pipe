@@ -45,7 +45,7 @@ Device classes (complete devices, or functions to compose a device):
 ```python
 from usb3_core.cdc_acm import USB3CDCACM # LiteX UART PHY: self.uart = UART(USB3CDCACM(phy, sys_clk_freq))
 from usb3_core.uvc     import USB3UVC    # UVC camera (test pattern).
-from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk.
+from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB3MSCDRAM(...)).
 ```
 
 ## Modules
@@ -60,7 +60,7 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk.
 | `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints, `add_csr()`. |
 | `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port, LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
 | `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes. |
-| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine, block RAM disk (FAT image). |
+| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine on a storage (stream interface): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`). |
 | `USB3Bench` | `bench.py` | Bandwidth benchmark source/checker. |
 | `USB3CoreTrace` | `trace.py` | Header Packets trace (debug). |
 | `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Parallel CRCs (equations generated from the polynoms). |
@@ -93,6 +93,26 @@ core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[USB3BulkIN(1, 1
     USB3BulkOUT(3, 2), USB3BulkIN(4, 2)], with_ep0_handler=True)
 uvc = USB3UVCFunction(core.ep0, core.endpoints[0], core.link.reset, sys_clk_freq)
 acm = USB3CDCACMFunction(core.ep0, core.endpoints[1], core.endpoints[2])
+```
+
+## Mass Storage storages
+
+`USB3MSCSCSI` (Bulk-Only Transport/SCSI) reads/writes blocks through a `USB3MSCStorage` interface:
+`cmd` stream (`write`, `lba`, `blocks`), `source` (read data) and `sink` (write data) 32-bit streams,
+`ready` (commands fail with NOT READY when low) and `idle` (write data committed: the WRITE(10) CSW
+is sent once the storage is idle, so a following READ(10) returns the written data).
+
+- `USB3MSCRAMStorage(size, image)`: block RAM disk, optionally initialized with a disk image
+  (`msc_fat_image`).
+- `USB3MSCDRAM(rd_port, wr_port, size, base, ready)`: DRAM disk on two LiteDRAM native ports
+  (`crossbar.get_port("read")`/`get_port("write")`, DMA reader/writer + width converters). The disk
+  is stored little-endian at `base` (visible from the CPU at `main_ram + base`), `ready` is typically
+  the DRAM initialization status. Not initialized: format it from the host (`mkfs.vfat /dev/sdX`).
+
+```python
+storage = USB3MSCDRAM(soc.sdram.crossbar.get_port("read"), soc.sdram.crossbar.get_port("write"),
+    size=256*1024*1024, base=256*1024*1024)
+soc.usb3_msc = USB3MSC(phy, sys_clk_freq, storage=storage)
 ```
 
 ## Performance (Acorn CLE-215+, SFP2USB, Linux xHCI host)

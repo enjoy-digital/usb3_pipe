@@ -4,10 +4,12 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Mass Storage (Bulk-Only Transport, SCSI transparent command set) RAM disk.
+"""USB3 Mass Storage (Bulk-Only Transport, SCSI transparent command set) RAM/DRAM disk.
 
-A USB3 device exposing a disk (/dev/sdX, no driver needed) backed by FPGA block RAM, optionally
-initialized with a disk image (ex: a FAT file system with files, see msc_fat_image).
+A USB3 device exposing a disk (/dev/sdX, no driver needed) backed by a storage:
+- USB3MSCRAMStorage: FPGA block RAM, optionally initialized with a disk image (ex: a FAT file system
+  with files, see msc_fat_image).
+- USB3MSCDRAM: DRAM through LiteDRAM DMAs (large disk, not initialized: mkfs.vfat from the host).
 
 - Bulk-Only Transport (USB MSC BOT 1.0): CBW (31 bytes) on Bulk OUT, optional data phase, CSW (13 bytes)
   on Bulk IN. Get Max LUN/Bulk-Only Mass Storage Reset class requests (constant responses).
@@ -98,7 +100,35 @@ def scsi_responses(blocks, vendor="EnjoyDig", product="USB3-PIPE RAMDisk", revis
             list(MSC_BLOCK_SIZE.to_bytes(2, "big")),
     }
 
-# USB3 MSC RAM Disk ----------------------------------------------------------------------------------
+# USB3 MSC Storage --------------------------------------------------------------------------------
+
+# Storage command: read/write blocks (MSC_BLOCK_SIZE) from lba.
+msc_storage_cmd_layout = [
+    ("write",  1),
+    ("lba",   32),
+    ("blocks", 16),
+]
+
+class USB3MSCStorage(LiteXModule):
+    """Storage interface of the SCSI command engine (BRAM/DRAM backends).
+
+    - cmd    : Read/write command (msc_storage_cmd_layout), accepted when the storage is idle.
+    - source : Read data (32-bit words, blocks*MSC_BLOCK_SIZE//4 words per read command).
+    - sink   : Write data (32-bit words, blocks*MSC_BLOCK_SIZE//4 words per write command).
+    - ready  : Storage available (ex: DRAM initialized), commands fail with NOT READY when low.
+    - idle   : No command ongoing, write data committed (a following read returns it).
+    """
+    def __init__(self, size):
+        assert size % MSC_BLOCK_SIZE == 0
+        self.size   = size
+        self.blocks = size//MSC_BLOCK_SIZE
+        self.cmd    = stream.Endpoint(msc_storage_cmd_layout) # i
+        self.source = stream.Endpoint([("data", 32)])         # o
+        self.sink   = stream.Endpoint([("data", 32)])         # i
+        self.ready  = Signal()                                # o
+        self.idle   = Signal()                                # o
+
+# USB3 MSC RAM Disk --------------------------------------------------------------------------------
 
 class USB3MSCRAM(LiteXModule):
     """Disk RAM (32-bit words): read port (adr/re/dat_r, 1 cycle latency), write port (adr/dat_w/we).
@@ -135,14 +165,12 @@ class USB3MSCRAM(LiteXModule):
         self.sync += If(self.rd_port.re, rd_bank.eq(self.rd_port.adr[bbits:]))
         self.comb += self.rd_port.dat_r.eq(Array(rd_dats)[rd_bank])
 
-# USB3 MSC SCSI ------------------------------------------------------------------------------------
-
-class USB3MSCSCSI(LiteXModule):
-    """Bulk-Only Transport/SCSI command engine on a block RAM disk."""
-    def __init__(self, bulk_in, bulk_out, size, image=None):
-        assert size % MSC_BLOCK_SIZE == 0
-        blocks = size//MSC_BLOCK_SIZE
-        words  = size//4
+class USB3MSCRAMStorage(USB3MSCStorage):
+    """Block RAM disk storage (USB3MSCRAM), optionally initialized with a disk image."""
+    def __init__(self, size, image=None):
+        USB3MSCStorage.__init__(self, size)
+        words           = size//4
+        words_per_block = MSC_BLOCK_SIZE//4
 
         # # #
 
@@ -152,11 +180,166 @@ class USB3MSCSCSI(LiteXModule):
             image = bytes(image[:size]).ljust(size, b"\x00")
             init  = [int.from_bytes(image[4*i:4*i+4], "little") for i in range(words)]
         self.ram = ram = USB3MSCRAM(words, init=init)
-        rd_port  = ram.rd_port
-        wr_port  = ram.wr_port
+
+        # Always ready.
+        self.comb += self.ready.eq(1)
+
+        # Address/Count.
+        adr   = Signal(max=max(words, 2), reset_less=True)
+        count = Signal(32, reset_less=True) # Words to read/write.
+
+        # RAM reader (1 cycle latency, prefetch FIFO).
+        self.fifo = fifo = stream.SyncFIFO([("data", 32)], 8)
+        rd_issue = Signal()
+        rd_valid = Signal()
+        self.comb += [
+            ram.rd_port.adr.eq(adr),
+            ram.rd_port.re.eq(rd_issue),
+        ]
+        self.sync += rd_valid.eq(rd_issue)
+        self.comb += [
+            fifo.sink.valid.eq(rd_valid),
+            fifo.sink.data.eq(ram.rd_port.dat_r),
+            fifo.source.connect(self.source),
+        ]
+
+        # RAM writer.
+        self.comb += [
+            ram.wr_port.adr.eq(adr),
+            ram.wr_port.dat_w.eq(self.sink.data),
+        ]
+
+        # FSM.
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            self.idle.eq(~rd_valid & ~fifo.source.valid),
+            self.cmd.ready.eq(self.idle),
+            NextValue(adr,   self.cmd.lba*words_per_block),
+            NextValue(count, self.cmd.blocks*words_per_block),
+            If(self.cmd.valid & self.cmd.ready,
+                If(self.cmd.write,
+                    NextState("WRITE")
+                ).Else(
+                    NextState("READ")
+                )
+            )
+        )
+        fsm.act("READ",
+            rd_issue.eq(fifo.level < 4),
+            If(rd_issue,
+                NextValue(adr,   adr   + 1),
+                NextValue(count, count - 1),
+                If(count == 1, NextState("IDLE"))
+            )
+        )
+        fsm.act("WRITE",
+            self.sink.ready.eq(1),
+            If(self.sink.valid,
+                ram.wr_port.we.eq(1),
+                NextValue(adr,   adr   + 1),
+                NextValue(count, count - 1),
+                If(count == 1, NextState("IDLE"))
+            )
+        )
+
+# USB3 MSC DRAM Disk -------------------------------------------------------------------------------
+
+class USB3MSCDRAM(USB3MSCStorage):
+    """DRAM disk storage: LiteDRAM DMA reader/writer on native ports (from the LiteDRAM crossbar).
+
+    The disk (size bytes) starts at base (bytes) in the DRAM, data stored little-endian (as seen from
+    the CPU/Wishbone bus at main_ram + base). Port data width: multiple of 32 bits, block multiple.
+
+    rd_port/wr_port: separate ports (each DMA drives its port's cmd), ex: crossbar.get_port("read")
+    and crossbar.get_port("write").
+    ready: optional storage ready signal (ex: DRAM initialized by the BIOS), 1 when None.
+
+    The disk content is not initialized: format it from the host (ex: mkfs.vfat /dev/sdX).
+    """
+    def __init__(self, rd_port, wr_port, size, base=0, ready=None, fifo_depth=64):
+        from litedram.frontend.dma import LiteDRAMDMAReader, LiteDRAMDMAWriter
+        USB3MSCStorage.__init__(self, size)
+        data_width = rd_port.data_width
+        port_bytes = data_width//8
+        assert wr_port.data_width == data_width
+        assert data_width % 32 == 0
+        assert MSC_BLOCK_SIZE % port_bytes == 0
+        assert base % MSC_BLOCK_SIZE == 0
+        assert (base + size) <= (2**rd_port.address_width)*port_bytes
+        words_per_block = MSC_BLOCK_SIZE//port_bytes
+
+        # # #
+
+        # Ready.
+        self.comb += self.ready.eq(1 if ready is None else ready)
+
+        # Address/Count (DRAM port words).
+        adr   = Signal(rd_port.address_width, reset_less=True)
+        count = Signal(32, reset_less=True)
+
+        # DMA Reader (port words -> 32-bit words).
+        self.reader  = reader  = LiteDRAMDMAReader(rd_port, fifo_depth=fifo_depth, fifo_buffered=True)
+        self.rd_conv = rd_conv = stream.Converter(data_width, 32)
+        self.comb += [
+            reader.sink.address.eq(adr),
+            reader.source.connect(rd_conv.sink),
+            rd_conv.source.connect(self.source, keep={"valid", "ready", "data"}),
+        ]
+
+        # DMA Writer (32-bit words -> port words).
+        self.wr_conv = wr_conv = stream.Converter(32, data_width)
+        self.writer  = writer  = LiteDRAMDMAWriter(wr_port, fifo_depth=fifo_depth, fifo_buffered=True)
+        self.comb += [
+            self.sink.connect(wr_conv.sink, keep={"valid", "ready", "data"}),
+            writer.sink.address.eq(adr),
+            writer.sink.data.eq(wr_conv.source.data),
+        ]
+
+        # FSM.
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            # Idle when the write data are all handed to the DRAM controller.
+            self.idle.eq(~wr_conv.source.valid & ~writer.fifo.source.valid),
+            self.cmd.ready.eq(self.idle),
+            NextValue(adr,   (base//port_bytes) + self.cmd.lba*words_per_block),
+            NextValue(count, self.cmd.blocks*words_per_block),
+            If(self.cmd.valid & self.cmd.ready,
+                If(self.cmd.write,
+                    NextState("WRITE")
+                ).Else(
+                    NextState("READ")
+                )
+            )
+        )
+        fsm.act("READ",
+            reader.sink.valid.eq(1),
+            If(reader.sink.ready,
+                NextValue(adr,   adr   + 1),
+                NextValue(count, count - 1),
+                If(count == 1, NextState("IDLE"))
+            )
+        )
+        fsm.act("WRITE",
+            writer.sink.valid.eq(wr_conv.source.valid),
+            wr_conv.source.ready.eq(writer.sink.ready),
+            If(writer.sink.valid & writer.sink.ready,
+                NextValue(adr,   adr   + 1),
+                NextValue(count, count - 1),
+                If(count == 1, NextState("IDLE"))
+            )
+        )
+
+# USB3 MSC SCSI ------------------------------------------------------------------------------------
+
+class USB3MSCSCSI(LiteXModule):
+    """Bulk-Only Transport/SCSI command engine on a storage (USB3MSCStorage: BRAM/DRAM)."""
+    def __init__(self, bulk_in, bulk_out, storage, inquiry_product="USB3-PIPE RAMDisk"):
+        blocks = storage.blocks
+
+        # # #
 
         # Responses ROM (opcode -> offset/length).
-        responses = scsi_responses(blocks)
+        responses = scsi_responses(blocks, product=inquiry_product)
         rom   = []
         table = {}
         for opcode, data in responses.items():
@@ -192,29 +375,15 @@ class USB3MSCSCSI(LiteXModule):
         status  = Signal(8, reset_less=True)
 
         # Data phase.
-        adr       = Signal(max=max(words, len(rom), 2), reset_less=True)
+        adr       = Signal(max=max(len(rom), 2), reset_less=True)
         remaining = Signal(32, reset_less=True) # Bytes to send.
         out       = Signal(32, reset_less=True) # Bytes to receive/discard.
 
-        # RAM reader (1 cycle latency, prefetch FIFO).
-        self.fifo = fifo = stream.SyncFIFO([("data", 32), ("be", 4)], 8)
-        rd_issue = Signal()
-        rd_valid = Signal()
-        rd_last  = Signal(reset_less=True)
-        rd_rem   = Signal(32, reset_less=True)
+        # Storage command (READ(10)/WRITE(10)).
         self.comb += [
-            rd_port.adr.eq(adr),
-            rd_port.re.eq(rd_issue),
-        ]
-        self.sync += [
-            rd_valid.eq(rd_issue),
-            rd_last.eq(rd_issue & (rd_rem <= 4)),
-        ]
-        self.comb += [
-            fifo.sink.valid.eq(rd_valid),
-            fifo.sink.data.eq(rd_port.dat_r),
-            fifo.sink.last.eq(rd_last),
-            fifo.sink.be.eq(0b1111),
+            storage.cmd.write.eq(op == SCSI_WRITE_10),
+            storage.cmd.lba.eq(lba),
+            storage.cmd.blocks.eq(nblk),
         ]
 
         # Sense response: fixed format.
@@ -257,14 +426,27 @@ class USB3MSCSCSI(LiteXModule):
             NextValue(residue, Mux(dlen < 18, 0, dlen - 18)),
             NextState("SENSE"),
         ]
-        for opcode in [SCSI_TEST_UNIT_READY, SCSI_PREVENT_ALLOW_REMOVAL, SCSI_SYNCHRONIZE_CACHE_10]:
+        for opcode in [SCSI_PREVENT_ALLOW_REMOVAL, SCSI_SYNCHRONIZE_CACHE_10]:
             decode_cases[opcode] = [NextValue(residue, dlen), NextState("CSW")]
+        # Storage not ready (ex: DRAM not yet initialized): NOT READY/LOGICAL UNIT NOT READY.
+        not_ready = [
+            NextValue(sense_key, 0x02),
+            NextValue(sense_asc, 0x04),
+            NextValue(status, 1),
+        ]
+        decode_cases[SCSI_TEST_UNIT_READY] = [
+            NextValue(residue, dlen),
+            If(~storage.ready, *not_ready),
+            NextState("CSW"),
+        ]
         decode_cases[SCSI_READ_10] = [
-            NextValue(adr, lba*(MSC_BLOCK_SIZE//4)),
             NextValue(remaining, nblk*MSC_BLOCK_SIZE),
-            NextValue(rd_rem, nblk*MSC_BLOCK_SIZE),
             NextValue(residue, dlen - nblk*MSC_BLOCK_SIZE),
-            If((lba + nblk) > blocks,
+            If(~storage.ready,
+                *not_ready,
+                NextValue(remaining, dlen),
+                NextState("PAD"),
+            ).Elif((lba + nblk) > blocks,
                 NextValue(sense_key, 0x05), NextValue(sense_asc, 0x21), # LBA out of range.
                 NextValue(status, 1),
                 NextValue(remaining, dlen),
@@ -272,14 +454,17 @@ class USB3MSCSCSI(LiteXModule):
             ).Elif(nblk == 0,
                 NextState("CSW"),
             ).Else(
-                NextState("READ")
+                NextState("READ-CMD")
             ),
         ]
         decode_cases[SCSI_WRITE_10] = [
-            NextValue(adr, lba*(MSC_BLOCK_SIZE//4)),
             NextValue(out, nblk*MSC_BLOCK_SIZE),
             NextValue(residue, dlen - nblk*MSC_BLOCK_SIZE),
-            If((lba + nblk) > blocks,
+            If(~storage.ready,
+                *not_ready,
+                NextValue(out, dlen),
+                NextState("DISCARD"),
+            ).Elif((lba + nblk) > blocks,
                 NextValue(sense_key, 0x05), NextValue(sense_asc, 0x21),
                 NextValue(status, 1),
                 NextValue(out, dlen),
@@ -287,7 +472,7 @@ class USB3MSCSCSI(LiteXModule):
             ).Elif(nblk == 0,
                 NextState("CSW"),
             ).Else(
-                NextState("WRITE")
+                NextState("WRITE-CMD")
             ),
         ]
         decode_cases["default"] = [
@@ -351,26 +536,42 @@ class USB3MSCSCSI(LiteXModule):
                 NextValue(remaining, Mux(remaining <= 4, 0, remaining - 4)),
             )
         )
+        fsm.act("READ-CMD",
+            storage.cmd.valid.eq(1),
+            If(storage.cmd.ready,
+                NextState("READ")
+            )
+        )
         fsm.act("READ",
-            rd_issue.eq((rd_rem != 0) & (fifo.level < 4)),
-            If(rd_issue,
-                NextValue(adr, adr + 1),
-                NextValue(rd_rem, rd_rem - 4),
-            ),
-            fifo.source.connect(bulk_in.sink),
-            If(fifo.source.valid & fifo.source.ready & fifo.source.last,
-                NextState("CSW")
+            bulk_in.sink.valid.eq(storage.source.valid),
+            bulk_in.sink.data.eq(storage.source.data),
+            bulk_in.sink.last.eq(remaining <= 4),
+            bulk_in.sink.be.eq(0b1111),
+            storage.source.ready.eq(bulk_in.sink.ready),
+            If(storage.source.valid & bulk_in.sink.ready,
+                NextValue(remaining, remaining - 4),
+                If(remaining <= 4, NextState("CSW"))
+            )
+        )
+        fsm.act("WRITE-CMD",
+            storage.cmd.valid.eq(1),
+            If(storage.cmd.ready,
+                NextState("WRITE")
             )
         )
         fsm.act("WRITE",
-            bulk_out.source.ready.eq(1),
-            wr_port.adr.eq(adr),
-            wr_port.dat_w.eq(bulk_out.source.data),
-            If(bulk_out.source.valid,
-                wr_port.we.eq(1),
-                NextValue(adr, adr + 1),
+            storage.sink.valid.eq(bulk_out.source.valid),
+            storage.sink.data.eq(bulk_out.source.data),
+            bulk_out.source.ready.eq(storage.sink.ready),
+            If(bulk_out.source.valid & storage.sink.ready,
                 NextValue(out, out - 4),
-                If(out <= 4, NextState("CSW"))
+                If(out <= 4, NextState("WRITE-DONE"))
+            )
+        )
+        fsm.act("WRITE-DONE",
+            # Data committed to the storage before the CSW (ordering with the following reads).
+            If(storage.idle,
+                NextState("CSW")
             )
         )
         fsm.act("DISCARD",
@@ -400,11 +601,15 @@ class USB3MSCSCSI(LiteXModule):
 # USB3 MSC -----------------------------------------------------------------------------------------
 
 class USB3MSC(LiteXModule):
-    """USB3 Mass Storage RAM disk device."""
-    def __init__(self, phy, sys_clk_freq, size=512*1024, image=None, max_burst=8, **kwargs):
+    """USB3 Mass Storage device: block RAM disk (size, optional image) or storage (ex: USB3MSCDRAM)."""
+    def __init__(self, phy, sys_clk_freq, size=512*1024, image=None, storage=None, max_burst=8,
+        inquiry_product="USB3-PIPE RAMDisk", **kwargs):
         descriptors = msc_descriptors(max_burst=max_burst, **kwargs)
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[
             USB3BulkIN(ept=1,  max_burst=max_burst),
             USB3BulkOUT(ept=2, max_burst=max_burst),
         ])
-        self.scsi = USB3MSCSCSI(core.endpoints[0], core.endpoints[1], size, image)
+        if storage is None:
+            storage = USB3MSCRAMStorage(size, image)
+        self.storage = storage
+        self.scsi    = USB3MSCSCSI(core.endpoints[0], core.endpoints[1], storage, inquiry_product)

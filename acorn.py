@@ -20,6 +20,10 @@ from litex.soc.cores.xadc import S7SystemMonitor
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
+from litedram.modules import MT41K512M16
+from litedram.phy     import s7ddrphy
+from litedram.gen     import LiteDRAMCoreControl
+
 from litescope import LiteScopeAnalyzer
 
 from usb3_pipe       import A7USB3SerDes
@@ -58,10 +62,14 @@ _usb3_io_mini = [
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(LiteXModule):
-    def __init__(self, platform, sys_clk_freq):
+    def __init__(self, platform, sys_clk_freq, with_dram=False):
         self.cd_sys    = ClockDomain()
         self.cd_oob    = ClockDomain()
         self.cd_clk200 = ClockDomain()
+        if with_dram:
+            self.cd_sys4x     = ClockDomain()
+            self.cd_sys4x_dqs = ClockDomain()
+            self.cd_idelay    = ClockDomain()
 
         # # #
 
@@ -79,29 +87,56 @@ class _CRG(LiteXModule):
         pll.create_clkout(self.cd_sys, sys_clk_freq,   margin=0)
         pll.create_clkout(self.cd_oob, sys_clk_freq/8, margin=0)
 
+        # DRAM clocks (A7DDRPHY: sys4x/sys4x_dqs, IDELAYCTRL reference).
+        if with_dram:
+            pll.create_clkout(self.cd_sys4x,     4*sys_clk_freq, margin=0)
+            pll.create_clkout(self.cd_sys4x_dqs, 4*sys_clk_freq, margin=0, phase=90)
+            pll.create_clkout(self.cd_idelay,    200e6,          margin=0)
+            self.idelayctrl = S7IDELAYCTRL(self.cd_idelay)
+
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(SoCCore):
     def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_core=True,
-        example="loopback", cpu_type=None,
+        example="loopback", cpu_type=None, with_dram=False,
         with_serdes_debug=False, with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
         rxcdr_cfg=None, gtp_params={}, lpm_hold="none", with_lpm=False):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
-        self.crg = _CRG(platform, sys_clk_freq)
+        self.crg = _CRG(platform, sys_clk_freq, with_dram=with_dram)
 
         # SoCCore ----------------------------------------------------------------------------------
         # No CPU by default (bridges only), CPU with the console example (BIOS on the USB3 CDC-ACM).
+        # DRAM: CPU required (BIOS DRAM initialization/calibration). The BIOS console goes to a stub
+        # UART: a crossover UART would block the BIOS (and the DRAM initialization) until a host
+        # reads it. Initialization status: ddrctrl_init_done/init_error CSRs.
+        assert not (with_dram and cpu_type is None), "DRAM requires a CPU (BIOS initialization)."
+        with_stub_uart = with_dram and example not in ["console", "composite"]
         SoCCore.__init__(self, platform, sys_clk_freq,
             ident                = "USB3SoC",
             ident_version        = True,
             cpu_type             = cpu_type,
             integrated_rom_size  = 0x10000 if cpu_type is not None else 0,
             integrated_sram_size = 0x2000  if cpu_type is not None else 0,
-            with_uart            = False,
+            with_uart            = with_stub_uart,
+            uart_name            = "stub",
             with_timer           = cpu_type is not None,
         )
+
+        # DDR3 SDRAM -------------------------------------------------------------------------------
+        if with_dram:
+            self.ddrphy = s7ddrphy.A7DDRPHY(platform.request("ddram"),
+                memtype          = "DDR3",
+                nphases          = 4,
+                sys_clk_freq     = sys_clk_freq,
+                iodelay_clk_freq = 200e6)
+            self.add_sdram("sdram",
+                phy           = self.ddrphy,
+                module        = MT41K512M16(sys_clk_freq, "1:4"),
+                l2_cache_size = 8192)
+            # DRAM initialization status (written by the BIOS).
+            self.ddrctrl = LiteDRAMCoreControl()
 
         # UARTBone / JTAGBone ----------------------------------------------------------------------
         if with_uartbone:
@@ -231,6 +266,7 @@ def main():
     parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=USB3_EXAMPLES)
     parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
     parser.add_argument("--cpu-type",          default=None,        help="CPU (console example, ex: vexriscv).")
+    parser.add_argument("--with-dram",         action="store_true", help="Enable the DDR3 SDRAM (requires a CPU, default with the msc_dram example).")
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group.", choices=["link", "lfps", "ts", "datapath", "phase"])
@@ -245,6 +281,11 @@ def main():
         parser.print_help()
 
     output_dir = args.output_dir or "build/sqrl_acorn"
+    # DRAM disk: DDR3 SDRAM, initialized by the BIOS (VexRiscv CPU by default, console on a stub UART).
+    with_dram = args.with_dram or (args.example == "msc_dram")
+    cpu_type  = args.cpu_type
+    if with_dram and cpu_type is None:
+        cpu_type = "vexriscv"
     platform = sqrl_acorn.Platform(with_multiboot=False)
     if args.variant == "standard":
         platform.add_extension(_usb3_io_standard)
@@ -256,7 +297,8 @@ def main():
         with_jtagbone     = args.with_jtagbone,
         with_core         = not args.no_core,
         example           = args.example,
-        cpu_type          = args.cpu_type,
+        cpu_type          = cpu_type,
+        with_dram         = with_dram,
         with_serdes_debug = args.with_serdes_debug,
         with_analyzer     = args.with_analyzer,
         analyzer_group    = args.analyzer_group,
