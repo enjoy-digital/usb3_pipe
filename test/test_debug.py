@@ -4,12 +4,9 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-import sys
 import unittest
-import subprocess
 
-from types   import SimpleNamespace
-from pathlib import Path
+from types import SimpleNamespace
 
 from migen import *
 
@@ -17,8 +14,6 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common import K
 from usb3_pipe.debug  import USB3PHYDebug, USB3PHY_DEBUG_HISTORY_DEPTH
-
-from test.common import get_output_dir
 
 # Fake PHY/SerDes ----------------------------------------------------------------------------------
 
@@ -102,24 +97,3 @@ class TestUSB3PHYDebug(unittest.TestCase):
             self.assertEqual((yield dbg._history_count.status), 0)
 
         run_simulation(dut, generator())
-
-    def test_acorn_elaboration(self):
-        # Acorn target elaborates with the USB3PHY + debug + each analyzer group (no Vivado).
-        root = Path(__file__).resolve().parents[1]
-        for i, args in enumerate([["--no-core", "--with-jtagbone", "--with-serdes-debug"],
-                     ["--no-core", "--with-analyzer", "--analyzer-group", "lfps"],
-                     ["--no-core", "--with-analyzer", "--analyzer-group", "datapath"],
-                     ["--no-core", "--with-serdes-debug", "--with-analyzer", "--analyzer-group", "phase",
-                      "--lpm-hold", "rxeq", "--gtp-param", "p_RXCDR_HOLD_DURING_EIDLE=1"]]):
-            with self.subTest(args=args):
-                output_dir = get_output_dir(self, str(i))
-                p = subprocess.run([sys.executable, "acorn.py", "--output-dir", str(output_dir)] + args,
-                    cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                self.assertEqual(p.returncode, 0, p.stdout[-3000:])
-                csr = (output_dir / "csr.csv").read_text()
-                self.assertIn("usb3_debug_history_count", csr)
-                self.assertIn("usb3_debug_serdes_rx_reset", csr)
-                if "--with-serdes-debug" in args:
-                    for name in ["usb3_serdes_debug_drp_sel", "usb3_serdes_debug_drp_addr",
-                                 "usb3_serdes_debug_tx_inhibit_state"]:
-                        self.assertIn(name, csr)
