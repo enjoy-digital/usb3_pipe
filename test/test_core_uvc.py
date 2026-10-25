@@ -118,9 +118,10 @@ class TestCoreUVC(unittest.TestCase):
 # Isochronous --------------------------------------------------------------------------------------
 
 class ISODUT(LiteXModule):
-    def __init__(self, max_burst=1):
+    def __init__(self, max_burst=1, with_debug=False):
         self.phy = phy = PHYStandIn()
-        self.uvc = USB3UVC(phy, CLK_FREQ, modes=MODES, max_burst=max_burst, transfer="iso")
+        self.uvc = USB3UVC(phy, CLK_FREQ, modes=MODES, max_burst=max_burst, transfer="iso",
+            with_debug=with_debug)
 
 class TestCoreUVCIso(unittest.TestCase):
     def test_iso_descriptors(self):
@@ -170,6 +171,43 @@ class TestCoreUVCIso(unittest.TestCase):
             for mem in mems:
                 if mem.init and any(port.we is not None for port in mem.ports):
                     self.assertEqual(len(mem.init), mem.depth, f"{transfer}: {mem.name_override}")
+
+    def test_ep0_debug(self):
+        # EP0 IN responses debug CSRs: handler response, EP0 DPP and Link TX DPP captures of GET_CUR
+        # PROBE, SET_CUR decoded bFrameIndex/dwFrameInterval and modes.
+        dut  = ISODUT(with_debug=True)
+        host = PyHost(dut.phy)
+        dbg  = dut.uvc.core.ep0_dbg
+        ctl  = dut.uvc.function.control
+        def scenario():
+            yield from pyhost_link_init(host)
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            probe2 = uvc_probe(MODES, 1, 1024, CLK_FREQ)
+            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
+            probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+            self.assertEqual(probe, probe2)
+            words = [int.from_bytes(bytes((probe2 + [0, 0])[4*i:4*i+4]), "little") for i in range(9)]
+            captured = {"req_in": [], "ep0_tx": [], "link_tx": []}
+            for i in range(9):
+                yield dbg.sel.storage.eq(i)
+                yield
+                yield
+                for name in captured:
+                    data = (yield getattr(dbg, f"{name}_data").status)
+                    ctrl = (yield getattr(dbg, f"{name}_ctrl").status)
+                    captured[name].append((data, ctrl))
+            self.assertEqual([d for d, c in captured["req_in"]], words)
+            self.assertEqual([(c & 0x1f) for d, c in captured["req_in"]], [0x0f]*8 + [0x13])  # be/last.
+            self.assertEqual(captured["req_in"][0][1] >> 16, 9)                              # Words.
+            for name in ["ep0_tx", "link_tx"]:
+                self.assertEqual([d for d, c in captured[name]][:8], words[:8])
+                self.assertEqual(captured[name][8][0] & 0xffff, words[8] & 0xffff)
+                self.assertEqual([(c & 0xf) for d, c in captured[name]], [4]*8 + [8 | 2])   # bytes/last.
+                self.assertEqual(captured[name][0][1] >> 16, 34)                            # Length.
+            self.assertEqual((yield ctl._dbg_set_interval.status), frame_interval(MODES[1][2]))
+            modes = (yield from ctl._dbg_modes.read())
+            self.assertEqual((modes & 0xff, (modes >> 8) & 0xff), (uvc_frame_index(MODES, 1), 1))
+        run_pyhost(dut, host, scenario())
 
     def test_iso_stream(self):
         # 1 packet per service interval (1024 bytes payloads): 64x8 frames (1024 bytes) in 2 payloads

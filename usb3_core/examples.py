@@ -118,7 +118,8 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
     # UVC camera (test pattern), Isochronous streaming (16KB per 125us service interval, ~131MB/s):
     # ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 -framerate 60 /dev/videoX.
     elif example == "uvc_iso":
-        soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq, transfer="iso", max_burst=16)
+        soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq, transfer="iso", max_burst=16,
+            with_debug=True) # EP0 IN responses debug CSRs (not yet validated on hardware).
         usb3_uvc.core.add_csr(with_trace=True)
 
     # USB3 CDC-ACM serial port: SoC console or Wishbone bridge.
