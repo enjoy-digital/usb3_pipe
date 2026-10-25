@@ -9,6 +9,8 @@
 import struct
 import unittest
 
+import pytest
+
 from migen import *
 
 from litex.gen import *
@@ -26,7 +28,7 @@ class DUT(LiteXModule):
         self.msc = USB3MSC(phy, 125e6, size=SIZE, max_burst=2)
 
 class TestCoreMSC(unittest.TestCase):
-    def test_scsi_commands(self):
+    def scsi_commands_test(self, with_data=True):
         dut  = DUT()
         host = PyHost(dut.phy)
         state = {"out_seq": 0, "in_seq": 0, "tag": 1}
@@ -69,12 +71,13 @@ class TestCoreMSC(unittest.TestCase):
             data, residue, status = yield from command([SCSI_READ_CAPACITY_10], length=8)
             self.assertEqual(struct.unpack(">II", bytes(data)), (SIZE//512 - 1, 512))
             # WRITE(10) 2 blocks at LBA 5, READ(10) back.
-            block = [(7*i + 1) & 0xff for i in range(1024)]
-            data, residue, status = yield from command([SCSI_WRITE_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024,
-                din=False, data_out=block)
-            self.assertEqual((residue, status), (0, 0))
-            data, residue, status = yield from command([SCSI_READ_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024)
-            self.assertEqual((data, residue, status), (block, 0, 0))
+            if with_data:
+                block = [(7*i + 1) & 0xff for i in range(1024)]
+                data, residue, status = yield from command([SCSI_WRITE_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024,
+                    din=False, data_out=block)
+                self.assertEqual((residue, status), (0, 0))
+                data, residue, status = yield from command([SCSI_READ_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024)
+                self.assertEqual((data, residue, status), (block, 0, 0))
             # Unsupported command (IN 8 bytes): padded, failed, REQUEST SENSE: ILLEGAL REQUEST/0x20.
             data, residue, status = yield from command([0xff], length=8)
             self.assertEqual((data, status), ([0]*8, 1))
@@ -84,6 +87,14 @@ class TestCoreMSC(unittest.TestCase):
             data, residue, status = yield from command([SCSI_READ_10, 0, 0, 0, 0, 31, 0, 0, 2, 0], length=1024)
             self.assertEqual(status, 1)
         run_pyhost(dut, host, scenario())
+
+    def test_scsi_commands(self):
+        # Short: no WRITE(10)/READ(10) data phases.
+        self.scsi_commands_test(with_data=False)
+
+    @pytest.mark.slow
+    def test_scsi_commands_data(self):
+        self.scsi_commands_test(with_data=True)
 
     def test_ram_banks(self):
         # Disk RAM built from several banks: initialization, writes and reads across the banks.

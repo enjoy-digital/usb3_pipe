@@ -100,11 +100,10 @@ class TestCoreIso(unittest.TestCase):
         self.assertEqual(comp, [6, DESC_SS_EP_COMP, 3, 0, 0x00, 0x10])
         self.assertEqual(d.alt_settings(), {0: 2})
 
-    def test_iso_in(self):
+    def iso_in_test(self, transfers, bursts):
         max_burst = 4
         dut  = DUT(max_burst=max_burst)
         host = PyHost(dut.phy)
-        transfers = [payload(0, 4096), payload(1, 2500), payload(2, 1024), payload(3, 102), payload(4, 3072)]
         state = {"written": 0, "read": -1}
         def writer():
             # One transfer written per service interval, once the previous one read.
@@ -125,7 +124,6 @@ class TestCoreIso(unittest.TestCase):
             dps = yield from pyhost_iso_in(host, ept=1, bursts=[max_burst])
             self.assertEqual([(d["seq"], d["lpf"], d["length"], p) for d, p, crc in dps], [(0, 1, 0, [])])
             # Transfers: one ACK TP per interval, then several ACK TPs per interval (Seq Num + NumP).
-            bursts = [[max_burst], [2, 2], [1, 1, 1, 1], [max_burst], [1, 3]]
             state["read"] = 0
             for i, t in enumerate(transfers):
                 yield from host.wait(lambda: state["written"] > i)
@@ -146,6 +144,18 @@ class TestCoreIso(unittest.TestCase):
             self.assertEqual((yield dut.iso.n_transfers), len(transfers))
             self.assertEqual((yield dut.iso.n_zlps), 2)
         run(dut, host, [writer(), scenario()])
+
+    def test_iso_in(self):
+        # Short: one ACK TP for a 2 packets transfer, then several ACK TPs for a short packet.
+        self.iso_in_test(
+            transfers = [payload(0, 1100), payload(1, 102)],
+            bursts    = [[4], [1, 1, 1, 1]])
+
+    @pytest.mark.slow
+    def test_iso_in_long(self):
+        self.iso_in_test(
+            transfers = [payload(0, 4096), payload(1, 2500), payload(2, 1024), payload(3, 102), payload(4, 3072)],
+            bursts    = [[4], [2, 2], [1, 1, 1, 1], [4], [1, 3]])
 
     @pytest.mark.slow
     def test_iso_in_buffered(self):

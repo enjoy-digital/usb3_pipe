@@ -10,6 +10,8 @@ TX -> channel (bit offset, polarity inversion, bit slip, SKP add/remove) -> RX l
 
 import random
 import unittest
+
+import pytest
 import functools
 
 from migen import *
@@ -185,6 +187,9 @@ def run_tx(n_tseq=20, n_ts1=80, n_ts2=24, n_packets=40, link_config=0x00, seed=0
     run_simulation(dut, [control(dut), collect(dut)])
     return words, packets
 
+# Short Gen2TX runs (default suite), full runs: pytest -m slow.
+RUN_TX_SHORT = dict(n_ts1=48, n_ts2=16, n_packets=8)
+
 # Tests --------------------------------------------------------------------------------------------
 
 class TestGen2(unittest.TestCase):
@@ -249,10 +254,10 @@ class TestGen2(unittest.TestCase):
             self.assertEqual((yield dut.o), first)
         run_simulation(dut, generator(dut))
 
-    def test_tx_vs_reference(self):
+    def tx_vs_reference_test(self, **kwargs):
         # Gen2TX output decoded with the bit-serial reference model: Ordered Sets content, DC Balance
         # Symbols, SKP LFSR Symbols, SYNC/SKP scheduling and Data Blocks.
-        words, packets = run_tx(link_config=0x08)
+        words, packets = run_tx(link_config=0x08, **kwargs)
         blocks = Gen2ReferenceDecoder(self).decode(bits_from_words(words))
         kinds  = [b[0] for b in blocks]
         # SYNC first, then every 8 TSEQ (sync_interval_tseq) / 32 TS1/TS2.
@@ -298,6 +303,14 @@ class TestGen2(unittest.TestCase):
                     idx += 1
             elif kind == "SKP":
                 self.assertTrue(allowed)
+
+    def test_tx_vs_reference(self):
+        # Short: less TS1/TS2/packets.
+        self.tx_vs_reference_test(**RUN_TX_SHORT)
+
+    @pytest.mark.slow
+    def test_tx_vs_reference_long(self):
+        self.tx_vs_reference_test()
 
     def test_dc_balance(self):
         # Long TS1 run: the running DC Balance stays bounded (DC Balance Symbols, 6.4.1.2.2).
@@ -400,22 +413,21 @@ class TestGen2(unittest.TestCase):
         self.assertEqual([n for n, l in skp], skps)
         self.assertEqual([l for n, l in skp], [0x123456 + i for i in range(64) if i % 10 == 5])
 
-    def test_loopback(self):
+    def loopback_test(self, edits={0: -4, 1: +4, 2: +16, 3: -20}, **kwargs):
         # Gen2TX -> gearbox -> channel -> Gen2BlockAligner -> Gen2RX:
         # - channel: bit offset, polarity inversion, a bit slip during TS1 (realignment on the next
         #   SYNC), SKP Ordered Sets shortened/lengthened (re-timer clock compensation).
         # - RX: polarity detected on SYNC, TS1/TS2 detected, SDS, Data Blocks recovered, received
         #   SKP LFSR state equal to the RX descrambler state.
         rng = random.Random(2)
-        words, packets = run_tx(link_config=0x08)
+        words, packets = run_tx(link_config=0x08, **kwargs)
         bits   = bits_from_words(words)
         blocks = Gen2ReferenceDecoder(self).decode(bits)
         sent_data = [b[3] for b in blocks[[b[0] for b in blocks].index("SDS"):] if b[0] == "DATA"]
 
         # SKP Ordered Sets edits (applied from the end to keep the positions valid).
         skp_blocks = [b for b in blocks if b[0] == "SKP"]
-        self.assertGreaterEqual(len(skp_blocks), 4)
-        edits = {0: -4, 1: +4, 2: +16, 3: -20}
+        self.assertGreaterEqual(len(skp_blocks), len(edits))
         for index in sorted(edits, reverse=True):
             kind, pos, length, n = skp_blocks[index]
             delta = edits[index]
@@ -473,12 +485,20 @@ class TestGen2(unittest.TestCase):
         # SKP received after the realignment (SKP Ordered Sets before it may be lost).
         received_skp = [n for n, l, r in events["skp"]]
         self.assertEqual(received_skp, expected_skp[len(expected_skp) - len(received_skp):])
-        self.assertGreaterEqual(len(received_skp), 4)
+        self.assertGreaterEqual(len(received_skp), len(edits))
         for n, skp_lfsr, rx_lfsr in events["skp"]:
             self.assertEqual(skp_lfsr, rx_lfsr)
         self.assertEqual(events["data"], sent_data[:len(events["data"])])
         self.assertGreaterEqual(len(events["data"]), len(sent_data) - 2)
         self.assertEqual([d for d in events["data"] if d != 0][:10], [d for p in packets for d in p][:10])
+
+    def test_loopback(self):
+        # Short: less TS1/TS2/packets, one SKP Ordered Set edit.
+        self.loopback_test(edits={0: -4}, **RUN_TX_SHORT)
+
+    @pytest.mark.slow
+    def test_loopback_long(self):
+        self.loopback_test()
 
 if __name__ == "__main__":
     unittest.main()
