@@ -21,8 +21,7 @@ from usb3_pipe.ltssm import USB3LTSSM
 from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
     exit_burst_cycles, exit_u1_min_cycles, exit_u2_min_cycles, exit_u3_min_cycles)
 
-from test import test_ltssm
-from test.test_ltssm_link import LTSSMLinkHarness
+from test.model.ltssm import LTSSMTestCase, LTSSMLinkHarness
 
 # Configurations -----------------------------------------------------------------------------------
 
@@ -53,10 +52,7 @@ def burst_cycles(kind, sys_clk_freq, timer_scale):
 
 # Helpers ------------------------------------------------------------------------------------------
 
-class PMTestCase(unittest.TestCase):
-    wait_for    = test_ltssm.TestLTSSM.wait_for
-    drive_to_u0 = test_ltssm.TestLTSSM.drive_to_u0
-
+class PMTestCase(LTSSMTestCase):
     def make_dut(self, sys_clk_freq=PM_CLK_FREQ, timer_scale=1, with_timers=False, **kwargs):
         return USB3LTSSM(sys_clk_freq=sys_clk_freq, with_timers=with_timers,
             timer_scale=timer_scale, **kwargs)
@@ -849,9 +845,7 @@ class LTSSMPMLinkHarness(LTSSMLinkHarness):
             ]
 
 
-class TestLTSSMPMLink(unittest.TestCase):
-    wait_for = test_ltssm.TestLTSSM.wait_for
-
+class TestLTSSMPMLink(LTSSMTestCase):
     def both(self, dut, name):
         return getattr(dut.host, name) & getattr(dut.dev, name)
 

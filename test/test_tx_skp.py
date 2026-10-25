@@ -13,7 +13,7 @@ from usb3_pipe.common import SKP
 from usb3_pipe.core import USB3PIPE
 from usb3_pipe.serdes import TXSKPInserter
 
-from test.test_pipe_tx import GTTXModel
+from test.model.gt import GTModel
 
 SKP_WORD = (int.from_bytes(bytes([SKP.value]*4), "little"), 0b1111)
 
@@ -80,7 +80,7 @@ class TestTXSKP(unittest.TestCase):
 
     def test_pipe_disables_skp_during_tseq(self):
         # The PIPE disables SKP scheduling while transmitting TSEQ.
-        gt = GTTXModel()
+        gt = GTModel()
         gt.tx_skp_enable = Signal(reset=1)
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt

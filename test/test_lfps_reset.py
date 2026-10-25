@@ -11,19 +11,13 @@ from migen import *
 from usb3_pipe.lfps   import LFPSUnit
 from usb3_pipe.serdes import RXErrorMonitor
 
+from test.model.gt import LFPSSerDesStub
+
 SYS_CLK_FREQ = 125e6
 TIMER_SCALE  = 1000 # LFPS timings divided by 1000 (ms -> us).
 
 def ms_to_cycles(t):
     return int(t*1e-3*SYS_CLK_FREQ/TIMER_SCALE)
-
-class SerDesStub(Module):
-    def __init__(self, with_rx_errors=True):
-        self.rx_idle    = Signal(reset=1)
-        self.tx_idle    = Signal()
-        self.tx_pattern = Signal(20)
-        if with_rx_errors:
-            self.rx_errors = Signal()
 
 class DecoderStub:
     def __init__(self):
@@ -34,7 +28,7 @@ class DecoderStub:
 class TestWarmResetDetection(unittest.TestCase):
     def run_line(self, segments, with_rx_errors=True):
         """Drive the RX line with (duration_ms, idle, errors) segments, return the rx_reset trace."""
-        serdes = SerDesStub(with_rx_errors)
+        serdes = LFPSSerDesStub(with_rx_errors=with_rx_errors)
         dut    = LFPSUnit(serdes=serdes, sys_clk_freq=SYS_CLK_FREQ, timer_scale=TIMER_SCALE)
         dut.submodules += serdes
         trace  = []

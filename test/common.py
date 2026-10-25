@@ -51,6 +51,13 @@ def symbols_to_words(symbols):
         words.append((data, ctrl))
     return words
 
+def swap_word(word):
+    """EndiannessSwap model: symbol order reversed in the word."""
+    data, ctrl = word
+    sdata = int.from_bytes(data.to_bytes(4, "little"), "big")
+    sctrl = int("{:04b}".format(ctrl)[::-1], 2)
+    return sdata, sctrl
+
 def ordered_set_words(ordered_set, link_config=None):
     """Return the (data, ctrl) words of an Ordered Set (COM symbols as K)."""
     data_bytes = ordered_set.to_bytes()

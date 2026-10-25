@@ -16,16 +16,14 @@ from litex.gen import *
 from usb3_core.host_model import *
 from usb3_core.msc        import *
 
+from test.model.host import cbw
+
 SIZE = 16*1024 # 32 blocks.
 
 class DUT(LiteXModule):
     def __init__(self):
         self.phy = phy = PHYStandIn()
         self.msc = USB3MSC(phy, 125e6, size=SIZE, max_burst=2)
-
-def cbw(tag, length, din, cb):
-    cb = bytes(cb).ljust(16, b"\x00")
-    return list(struct.pack("<IIIBBB16s", CBW_SIGNATURE, tag, length, 0x80 if din else 0, 0, len(cb), cb))
 
 class TestCoreMSC(unittest.TestCase):
     def test_scsi_commands(self):

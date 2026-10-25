@@ -22,6 +22,8 @@ from litedram.core       import LiteDRAMCore
 from usb3_core.host_model import *
 from usb3_core.msc        import *
 
+from test.model.host import cbw
+
 # Helpers ------------------------------------------------------------------------------------------
 
 @passive
@@ -98,10 +100,6 @@ def storage_read(storage, lba, nwords, rng):
             words.append((yield storage.source.data))
     yield storage.source.ready.eq(0)
     return words
-
-def cbw(tag, length, din, cb):
-    cb = bytes(cb).ljust(16, b"\x00")
-    return list(struct.pack("<IIIBBB16s", CBW_SIGNATURE, tag, length, 0x80 if din else 0, 0, len(cb), cb))
 
 class SimDDR3(MT41K512M16):
     nrows = 64 # Small DRAM (1MB) for the simulation model.

@@ -18,8 +18,8 @@ import pytest
 from usb3_core.host_model  import *
 from usb3_core.descriptors import bulk_descriptors
 
-from test.common           import get_output_dir
-from test.test_core_device import check_core_enumeration
+from test.common       import get_output_dir
+from test.model.device import check_core_enumeration
 
 pytestmark = pytest.mark.sim
 
