@@ -11,7 +11,13 @@ descriptors/requests table; OUT: data acknowledged and ignored), Status stage (S
 acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT)/SET_INTERFACE/SET_FEATURE
 and CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) applied). GET_STATUS(Device) reports the U1/U2 Enable bits.
 Unsupported requests are stalled (STALL TP).
+
+USB3ControlDispatcher: request handler shared by several functions (composite devices), requests
+routed by interface.
 """
+
+from operator  import or_
+from functools import reduce
 
 from migen import *
 
@@ -428,3 +434,65 @@ class USB3EndpointControl(USB3Endpoint):
             self.rx_dpp.ready.eq(1),
             self.landed.eq(self.rx_dpp_done),
         ]
+
+# USB3 Control Port --------------------------------------------------------------------------------
+
+class USB3ControlPort:
+    """Request handler port of a USB3ControlDispatcher: same interface as the USB3EndpointControl
+    request handler (req_*) and status (configured, set_interface...), requests of its interfaces
+    only."""
+    def __init__(self, ep0):
+        # Status (shared).
+        for name in ["dev_addr", "configured", "reset_seqs", "clear_halt", "clear_ept", "clear_dir",
+            "set_interface", "interface", "alt_setting", "u1_enable", "u2_enable"]:
+            setattr(self, name, getattr(ep0, name))
+
+        # Request fields (shared).
+        for name in ["req_type", "req_request", "req_value", "req_index", "req_length"]:
+            setattr(self, name, getattr(ep0, name))
+
+        # Request handler interface (selected requests).
+        self.req_setup = Signal() # o
+        self.req_valid = Signal() # o
+        self.req_stall = Signal() # i
+        self.req_done  = Signal() # o
+        self.req_in    = stream.Endpoint(endpoint_layout()) # i
+        self.req_out   = stream.Endpoint(endpoint_layout()) # o
+
+# USB3 Control Dispatcher --------------------------------------------------------------------------
+
+class USB3ControlDispatcher(LiteXModule):
+    """Dispatches the EP0 request handler between several request handlers (functions of a
+    composite device, ex: several CDC-ACM functions).
+
+    interfaces: list of interface numbers lists, one per port (self.ports): the class/vendor
+    requests to an interface (bmRequestType recipient: Interface, wIndex[7:0]) are routed to the
+    port of this interface, other handler requests are stalled.
+    """
+    def __init__(self, ep0, interfaces):
+        self.ports = []
+
+        # # #
+
+        # Unclaimed requests: stalled.
+        self.comb += ep0.req_stall.eq(1)
+
+        for port_interfaces in interfaces:
+            port = USB3ControlPort(ep0)
+            sel  = Signal()
+            self.comb += [
+                sel.eq((ep0.req_type[0:5] == 1) &
+                    reduce(or_, [ep0.req_index[0:8] == i for i in port_interfaces])),
+                port.req_setup.eq(ep0.req_setup & sel),
+                port.req_valid.eq(ep0.req_valid & sel),
+                port.req_done.eq( ep0.req_done  & sel),
+                port.req_out.valid.eq(ep0.req_out.valid & sel),
+                port.req_out.data.eq(ep0.req_out.data),
+                port.req_out.last.eq(ep0.req_out.last),
+                port.req_out.be.eq(ep0.req_out.be),
+                If(sel,
+                    ep0.req_stall.eq(port.req_stall),
+                    port.req_in.connect(ep0.req_in),
+                ),
+            ]
+            self.ports.append(port)
