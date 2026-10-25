@@ -1,0 +1,186 @@
+#
+# This file is part of USB3-PIPE project.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# SPDX-License-Identifier: BSD-2-Clause
+
+"""`agentlab` command line interface."""
+
+import os
+import sys
+import json
+import time
+import argparse
+
+from agentlab.host.events import filter_events, format_events, uart_lines
+
+# Arguments ----------------------------------------------------------------------------------------
+
+def add_connection_args(parser):
+    parser.add_argument("--csr-csv",      default=os.environ.get("AGENTLAB_CSR_CSV"),
+        help="Gateware csr.csv/csr.json (default: $AGENTLAB_CSR_CSV).")
+    parser.add_argument("--serial",       default=None, help="Device USB serial number.")
+    parser.add_argument("--control-port", default=None, help="Control tty override.")
+    parser.add_argument("--server",       default=None, help="litex_server host:port.")
+    parser.add_argument("--sys-clk-freq", default=None, type=float, help="Timebase override (Hz).")
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="agentlab", description="AgentLab instrument CLI.")
+    add_connection_args(parser)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # Info.
+    sub.add_parser("info", help="Device and CSR information.")
+
+    # UART.
+    uart     = sub.add_parser("uart", help="DUT UARTs.")
+    uart_sub = uart.add_subparsers(dest="action", required=True)
+    for name in ["read", "write", "wait"]:
+        p = uart_sub.add_parser(name)
+        p.add_argument("index",      type=int, help="DUT UART index.")
+        p.add_argument("--baudrate", type=int, default=None)
+        if name == "read":
+            p.add_argument("--timeout", type=float, default=1.0, help="Seconds.")
+        if name == "write":
+            p.add_argument("data", help="Text (escapes such as \\n and \\r are interpreted).")
+        if name == "wait":
+            p.add_argument("pattern",   help="Python regex.")
+            p.add_argument("--timeout", type=float, default=10.0, help="Seconds.")
+
+    # Power.
+    power     = sub.add_parser("power", help="Power switches.")
+    power_sub = power.add_subparsers(dest="action", required=True)
+    for name in ["on", "off", "cycle", "get"]:
+        p = power_sub.add_parser(name)
+        p.add_argument("index", type=int)
+        if name == "cycle":
+            p.add_argument("--off-time", type=float, default=1.0, help="Seconds.")
+
+    # GPIO.
+    gpio     = sub.add_parser("gpio", help="GPIOs.")
+    gpio_sub = gpio.add_subparsers(dest="action", required=True)
+    p = gpio_sub.add_parser("set")
+    p.add_argument("index", type=int)
+    p.add_argument("value", type=int, choices=[0, 1])
+    p = gpio_sub.add_parser("get")
+    p.add_argument("index", type=int)
+    p = gpio_sub.add_parser("release")
+    p.add_argument("index", type=int)
+
+    # Events.
+    events = sub.add_parser("events", help="Events stream.")
+    events.add_argument("--follow",   action="store_true", help="Print events until Ctrl-C.")
+    events.add_argument("--duration", type=float, default=1.0, help="Capture time (seconds).")
+    events.add_argument("--types",    default=None, help="Comma separated (uart_rx,gpio,...).")
+    events.add_argument("--source",   type=int, default=None)
+    events.add_argument("--lines",    action="store_true", help="Rebuild UART RX text lines.")
+
+    # Timestamp / Marker.
+    sub.add_parser("timestamp", help="Read the device timestamp.")
+    marker = sub.add_parser("marker", help="Emit a marker event.")
+    marker.add_argument("value", type=lambda x: int(x, 0), nargs="?", default=0)
+
+    return parser
+
+# Commands -----------------------------------------------------------------------------------------
+
+def _unescape(s):
+    return s.encode().decode("unicode_escape").encode("latin-1")
+
+def run(args, instrument, out=None):
+    out = out or sys.stdout
+    p   = lambda *a: print(*a, file=out)
+    if args.cmd == "info":
+        p(json.dumps(instrument.info(), indent=2))
+    elif args.cmd == "uart":
+        if args.baudrate is not None:
+            instrument.uart_set_baudrate(args.index, args.baudrate)
+        uart = instrument.uart(args.index)
+        if args.action == "read":
+            out.write(uart.read(timeout=args.timeout).decode(errors="replace"))
+        elif args.action == "write":
+            uart.write(_unescape(args.data))
+        elif args.action == "wait":
+            r = uart.wait_for(args.pattern, timeout=args.timeout)
+            out.write(r.text)
+            if not r.matched:
+                p("\n[timeout after {:.3f}s]".format(r.elapsed))
+                return 1
+    elif args.cmd == "power":
+        if args.action == "on":
+            instrument.power_set(args.index, True)
+        elif args.action == "off":
+            instrument.power_set(args.index, False)
+        elif args.action == "cycle":
+            instrument.power_cycle(args.index, off_time=args.off_time)
+        elif args.action == "get":
+            p(int(instrument.power_get(args.index)))
+    elif args.cmd == "gpio":
+        if args.action == "set":
+            instrument.gpio_set(args.index, bool(args.value))
+        elif args.action == "get":
+            p(int(instrument.gpio_get(args.index)))
+        elif args.action == "release":
+            instrument.gpio_release(args.index)
+    elif args.cmd == "events":
+        return run_events(args, instrument, p)
+    elif args.cmd == "timestamp":
+        t = instrument.timestamp()
+        p("{} ticks ({:.9f}s)".format(t, instrument.ticks_to_s(t)))
+    elif args.cmd == "marker":
+        t = instrument.marker(args.value)
+        p("{} ticks ({:.9f}s)".format(t, instrument.ticks_to_s(t)))
+    return 0
+
+def run_events(args, instrument, p):
+    types  = None if args.types is None else args.types.split(",")
+    reader = instrument.events
+    seen   = 0
+    def dump():
+        nonlocal seen
+        events = reader.snapshot()
+        new, seen = events[seen:], len(events)
+        new = filter_events(new, types=types, source=args.source)
+        if args.lines:
+            for l in uart_lines(new):
+                p("{:14.9f}s uart{} {}".format(instrument.ticks_to_s(l.timestamp), l.source,
+                    l.text))
+        else:
+            for line in format_events(new, instrument.sys_clk_freq):
+                p(line)
+    try:
+        if args.follow:
+            while True:
+                time.sleep(0.1)
+                dump()
+        else:
+            time.sleep(args.duration)
+            dump()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+# Main ---------------------------------------------------------------------------------------------
+
+def open_instrument(args):
+    from agentlab.host.instrument import Instrument
+    return Instrument.open(csr_csv=args.csr_csv, serial=args.serial,
+        control_port=args.control_port, server=args.server, sys_clk_freq=args.sys_clk_freq)
+
+def main(argv=None, instrument_factory=open_instrument):
+    args = build_parser().parse_args(argv)
+    try:
+        instrument = instrument_factory(args)
+    except (RuntimeError, OSError) as e:
+        print("agentlab: {}".format(e), file=sys.stderr)
+        return 2
+    try:
+        return run(args, instrument)
+    except (RuntimeError, OSError, KeyError) as e:
+        print("agentlab: {}".format(e), file=sys.stderr)
+        return 2
+    finally:
+        instrument.close()
+
+if __name__ == "__main__":
+    sys.exit(main())
