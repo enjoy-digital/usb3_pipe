@@ -160,6 +160,17 @@ class TestCoreUVCIso(unittest.TestCase):
             alts = [alt for alt, bpi in bpis.items() if bpi >= le32(22)]   # dwMaxPayloadTransferSize.
             self.assertEqual(alts, [1])
 
+    def test_memories_initialized(self):
+        # Initialized memories with write ports (EP0 descriptors ROM + request handler buffer) must be
+        # initialized over their whole depth: on hardware, the handler buffer read back the
+        # isochronous probes with bit 31 set (never written to 1, undefined init resolved to 1).
+        for transfer in ["bulk", "iso"]:
+            dut = ISODUT() if transfer == "iso" else DUT()
+            mems = [s for s in dut.get_fragment().specials if isinstance(s, Memory)]
+            for mem in mems:
+                if mem.init and any(port.we is not None for port in mem.ports):
+                    self.assertEqual(len(mem.init), mem.depth, f"{transfer}: {mem.name_override}")
+
     def test_iso_stream(self):
         # 1 packet per service interval (1024 bytes payloads): 64x8 frames (1024 bytes) in 2 payloads
         # (1012 + 12 bytes of data), zero-length packets between frames.

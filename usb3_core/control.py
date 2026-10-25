@@ -128,8 +128,12 @@ class USB3EndpointControl(USB3Endpoint):
         self.rom_data = rom
         # ROM (descriptors/constant responses) followed by the request handler response buffer.
         handler_base = len(rom)
-        mem_depth    = len(rom) + (EP0_HANDLER_WORDS if with_handler else 0)
-        mem     = Memory(32, max(mem_depth, 1), init=rom)
+        mem_depth    = max(len(rom) + (EP0_HANDLER_WORDS if with_handler else 0), 1)
+        # Fully initialized (handler buffer zeroed): with a partial init, the handler buffer content
+        # is undefined (X) until written, and Vivado may resolve it to 1 on data bits never written
+        # to 1 by the handler (ex: bit 31 with the isochronous UVC probes, returned set on hardware).
+        mem_init     = rom + [0]*(mem_depth - len(rom))
+        self.mem     = mem = Memory(32, mem_depth, init=mem_init)
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, rd_port
 
