@@ -161,6 +161,13 @@ def main():
     try:
         record("initial", status=dbg.status(), history=dbg.history()[1], kern=kern.new_lines())
         for attempt in range(args.attempts):
+            # A link suspended by the host (U3, ex: autosuspend of the UVC/CDC-ACM examples) is not
+            # retrained: the host still sees the port in U3 and would not train it (the device
+            # would end in Polling.LFPS timeout -> Compliance).
+            if dbg.status()["ltssm_state"] == "U3":
+                record("suspended", n=attempt, kern=kern.new_lines())
+                time.sleep(args.wait)
+                continue
             dbg.retrain()
             time.sleep(args.wait)
             count, history = dbg.history()
