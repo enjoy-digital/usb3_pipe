@@ -8,7 +8,7 @@
 
 Setup stage (SETUP DP, acknowledged), optional Data stage (IN: responses from a ROM built from the
 descriptors/requests table; OUT: data acknowledged and ignored), Status stage (STATUS TP,
-acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT)/SET_FEATURE and
+acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT)/SET_INTERFACE/SET_FEATURE and
 CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) applied). GET_STATUS(Device) reports the U1/U2 Enable bits.
 Unsupported requests are stalled (STALL TP).
 """
@@ -17,7 +17,8 @@ from migen import *
 
 from litex.gen import *
 
-from litex.soc.interconnect import stream
+from litex.soc.interconnect     import stream
+from litex.soc.interconnect.csr import *
 
 from usb3_core.common    import *
 from usb3_core.endpoints import USB3Endpoint, DPPReader
@@ -34,6 +35,7 @@ KIND_SET_CONFIGURATION = 4
 KIND_CLEAR_FEATURE     = 5
 KIND_HANDLER           = 6 # Delegated to the user request handler.
 KIND_DEVICE_FEATURE    = 7 # SET/CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) (Device).
+KIND_GET_INTERFACE     = 8 # IN response: current alternate setting of the interface.
 
 USB_REQ_CLEAR_FEATURE = 0x01
 USB_REQ_SET_FEATURE   = 0x03
@@ -51,6 +53,7 @@ KINDS = {
     "clear_feature"     : KIND_CLEAR_FEATURE,
     "device_feature"    : KIND_DEVICE_FEATURE,
     "device_status"     : KIND_IN,
+    "get_interface"     : KIND_GET_INTERFACE,
 }
 
 # Memory Read Port Proxy ---------------------------------------------------------------------------
@@ -79,15 +82,18 @@ class USB3EndpointControl(USB3Endpoint):
     """
     def __init__(self, descriptors, with_handler=False):
         USB3Endpoint.__init__(self, ept=0, direction=0)
-        self.rx_dpp_setup = Signal()  # i: Received DPP is a SETUP DP.
-        self.dev_addr     = Signal(7) # o: Device Address (SET_ADDRESS).
-        self.configured   = Signal()  # o: Configured (SET_CONFIGURATION != 0).
-        self.reset_seqs   = Signal()  # o: SET_CONFIGURATION: endpoints Sequence Numbers reset (pulse).
-        self.clear_halt   = Signal()  # o: CLEAR_FEATURE(ENDPOINT_HALT) (pulse)...
-        self.clear_ept    = Signal(4) # o: ...on this endpoint...
-        self.clear_dir    = Signal()  # o: ...and direction.
-        self.u1_enable    = Signal()  # o: U1 Enable (SET/CLEAR_FEATURE(U1_ENABLE), 9.4.5).
-        self.u2_enable    = Signal()  # o: U2 Enable (SET/CLEAR_FEATURE(U2_ENABLE), 9.4.5).
+        self.rx_dpp_setup  = Signal()  # i: Received DPP is a SETUP DP.
+        self.dev_addr      = Signal(7) # o: Device Address (SET_ADDRESS).
+        self.configured    = Signal()  # o: Configured (SET_CONFIGURATION != 0).
+        self.reset_seqs    = Signal()  # o: SET_CONFIGURATION: endpoints Sequence Numbers reset (pulse).
+        self.clear_halt    = Signal()  # o: CLEAR_FEATURE(ENDPOINT_HALT) (pulse)...
+        self.clear_ept     = Signal(4) # o: ...on this endpoint...
+        self.clear_dir     = Signal()  # o: ...and direction.
+        self.set_interface = Signal()  # o: SET_INTERFACE (pulse, Status stage)...
+        self.interface     = Signal(8) # o: ...of this interface...
+        self.alt_setting   = Signal(8) # o: ...to this alternate setting.
+        self.u1_enable     = Signal()  # o: U1 Enable (SET/CLEAR_FEATURE(U1_ENABLE), 9.4.5).
+        self.u2_enable     = Signal()  # o: U2 Enable (SET/CLEAR_FEATURE(U2_ENABLE), 9.4.5).
 
         # Request handler interface.
         self.req_setup   = Signal()   # o
@@ -117,13 +123,16 @@ class USB3EndpointControl(USB3Endpoint):
             if response is not None:
                 data    = list(response) + [0]*((-len(response)) % 4)
                 rom    += [int.from_bytes(bytes(data[i:i+4]), "little") for i in range(0, len(data), 4)]
-                length  = len(response)
+                # GET_INTERFACE: one word per alternate setting, 1 byte response.
+                length  = 1 if kind == "get_interface" else len(response)
             entries.append((bmRequestType, bRequest, wValue, offset, length, KINDS[kind]))
         self.rom_data = rom
         # ROM (descriptors/constant responses) followed by the request handler response buffer.
         handler_base = len(rom)
-        mem_depth    = len(rom) + (EP0_HANDLER_WORDS if with_handler else 0)
-        mem     = Memory(32, max(mem_depth, 1), init=rom)
+        mem_depth    = max(len(rom) + (EP0_HANDLER_WORDS if with_handler else 0), 1)
+        # Fully initialized (handler buffer zeroed).
+        mem_init     = rom + [0]*(mem_depth - len(rom))
+        mem          = Memory(32, mem_depth, init=mem_init) # Not a module attribute (would be CSR-mapped).
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, rd_port
 
@@ -148,10 +157,10 @@ class USB3EndpointControl(USB3Endpoint):
 
         # Request matching (first match, registered: the request is decoded when the SETUP lands and
         # used from its Data/Status stages).
-        kind   = Signal(3)
+        kind   = Signal(4)
         offset = Signal(max=max(mem_depth, 2), reset_less=True)
         length = Signal(16, reset_less=True)
-        match_kind   = Signal(3)
+        match_kind   = Signal(4)
         match_offset = Signal(max=max(mem_depth, 2))
         match_length = Signal(16)
         cases  = None
@@ -167,10 +176,22 @@ class USB3EndpointControl(USB3Endpoint):
             default = [If(bmRequestType[5:7] != 0, match_kind.eq(KIND_HANDLER)).Else(match_kind.eq(KIND_STALL))]
         self.comb += [*default, cases]
 
+        # Alternate settings (SET_INTERFACE, reset on SET_CONFIGURATION), GET_INTERFACE response: word
+        # of the current alternate setting.
+        alt_settings = descriptors.alt_settings()
+        n_alts       = max(alt_settings.values(), default=1)
+        alts         = Array(Signal(max=max(n_alts, 2)) for _ in range(max(alt_settings.keys(), default=0) + 1))
+        alt_index    = Signal(max=max(len(alts), 2))
+        self.comb += If(wIndex[0:8] < len(alts), alt_index.eq(wIndex[0:8]))
+
         total = Signal(16, reset_less=True)
         self.sync += [
             kind.eq(match_kind),
             offset.eq(match_offset),
+            If(match_kind == KIND_GET_INTERFACE,
+                kind.eq(KIND_IN),
+                offset.eq(match_offset + alts[alt_index]),
+            ),
             length.eq(match_length),
             total.eq(Mux(wLength < match_length, wLength, match_length)),
         ]
@@ -226,7 +247,11 @@ class USB3EndpointControl(USB3Endpoint):
                     self.dev_addr.eq(wValue[0:7])
                 ),
                 If(kind == KIND_SET_CONFIGURATION,
-                    self.configured.eq(wValue != 0)
+                    self.configured.eq(wValue != 0),
+                    *[alt.eq(0) for alt in alts]
+                ),
+                If(self.set_interface & (wValue < n_alts),
+                    alts[alt_index].eq(wValue)
                 ),
                 If(kind == KIND_DEVICE_FEATURE,
                     If(wValue == FEATURE_U1_ENABLE,
@@ -243,6 +268,10 @@ class USB3EndpointControl(USB3Endpoint):
             self.clear_halt.eq(self.hdr_strobe & status_tp & (kind == KIND_CLEAR_FEATURE) & (wValue == 0)),
             self.clear_ept.eq(wIndex[0:4]),
             self.clear_dir.eq(wIndex[7]),
+            self.set_interface.eq(self.hdr_strobe & status_tp & ~stall & (bmRequestType == 0x01) &
+                (bRequest == 0x0b)),
+            self.interface.eq(wIndex[0:8]),
+            self.alt_setting.eq(wValue[0:8]),
         ]
 
         # Request handler ----------------------------------------------------------------------------
@@ -254,6 +283,23 @@ class USB3EndpointControl(USB3Endpoint):
         if with_handler:
             wr_port = mem.get_port(write_capable=True)
             self.specials += wr_port
+            # Registered write, data register kept (dont_touch): Vivado narrows the memory write
+            # port to the data bits the handler can write to 1 and the other bits of the responses
+            # then read back as 1 on hardware (ex: bit 31 never written to 1 by the isochronous UVC
+            # probes: 31-bit write port, every response word read with bit 31 set).
+            wr_adr = Signal(len(wr_port.adr), reset_less=True)
+            wr_dat = Signal(32, reset_less=True, attr={"keep"})
+            wr_we  = Signal()
+            self.sync += [
+                wr_adr.eq(handler_base + resp_words),
+                wr_dat.eq(self.req_in.data),
+                wr_we.eq(self.req_in.valid & self.req_in.ready),
+            ]
+            self.comb += [
+                wr_port.adr.eq(wr_adr),
+                wr_port.dat_w.eq(wr_dat),
+                wr_port.we.eq(wr_we),
+            ]
             setup_d = Signal()
             self.sync += [
                 setup_d.eq(new_setup), # kind registered one cycle after the SETUP.
@@ -271,9 +317,7 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_index.eq(wIndex),
                 self.req_length.eq(wLength),
                 self.req_in.ready.eq(self.req_valid & ~resp_ready & (resp_words != EP0_HANDLER_WORDS)),
-                wr_port.adr.eq(handler_base + resp_words),
-                wr_port.dat_w.eq(self.req_in.data),
-                wr_port.we.eq(self.req_in.valid & self.req_in.ready),
+
             ]
             self.sync += [
                 If(new_setup,
@@ -378,4 +422,86 @@ class USB3EndpointControl(USB3Endpoint):
         self.comb += [
             self.rx_dpp.ready.eq(1),
             self.landed.eq(self.rx_dpp_done),
+        ]
+
+# USB3 Control Endpoint Debug ----------------------------------------------------------------------
+
+class USB3PacketCapture(LiteXModule):
+    """Capture of the first n beats of the last packet (first: packet start, with valid)."""
+    def __init__(self, width, n=9):
+        self.valid = Signal()      # i
+        self.first = Signal()      # i
+        self.data  = Signal(width) # i
+        self.words = Array(Signal(width, reset_less=True) for _ in range(n)) # o
+        self.count = Signal(16)    # o: Beats of the last packet.
+
+        # # #
+
+        self.sync += If(self.valid,
+            If(self.first,
+                self.words[0].eq(self.data),
+                self.count.eq(1),
+            ).Else(
+                If(self.count < n, self.words[self.count].eq(self.data)),
+                self.count.eq(self.count + 1),
+            )
+        )
+
+class USB3EndpointControlDebug(LiteXModule):
+    """EP0 IN responses debug (CSRs, read with sel: word index 0-8).
+
+    - req_in : request handler IN response written (data, be/last), from req_setup.
+    - ep0_tx : last EP0 DPP (EP0 output: response memory read), data, bytes/last, length.
+    - link_tx: last EP0 DPP at the Protocol Layer TX DPP mux output (to the Link Layer), data,
+      bytes/last, length.
+    """
+    def __init__(self, ep0, link_tx_dpp, link_tx_dpp_ep0, n=9):
+        self.sel          = CSRStorage(4, description="Captured word index (0-8).")
+        self.req_in_data  = CSRStatus(32, description="Handler IN response word (data).")
+        self.req_in_ctrl  = CSRStatus(32, description="Handler IN response word: be[3:0], last[4], words[31:16].")
+        self.ep0_tx_data  = CSRStatus(32, description="EP0 TX DPP word (data).")
+        self.ep0_tx_ctrl  = CSRStatus(32, description="EP0 TX DPP word: bytes[2:0], last[3], words[15:8], length[31:16].")
+        self.link_tx_data = CSRStatus(32, description="Link TX DPP word (EP0 DPP, data).")
+        self.link_tx_ctrl = CSRStatus(32, description="Link TX DPP word: bytes[2:0], last[3], words[15:8], length[31:16].")
+
+        # # #
+
+        sel = self.sel.storage
+
+        # Request handler IN response.
+        self.req_in = req_in = USB3PacketCapture(32 + 4 + 1, n)
+        req_first = Signal()
+        self.sync += If(ep0.req_setup, req_first.eq(1)).Elif(req_in.valid, req_first.eq(0))
+        self.comb += [
+            req_in.valid.eq(ep0.req_in.valid & ep0.req_in.ready),
+            req_in.first.eq(req_first),
+            req_in.data.eq(Cat(ep0.req_in.data, ep0.req_in.be, ep0.req_in.last)),
+        ]
+
+        # DPPs (EP0 output, Link Layer input).
+        def dpp_capture(name, valid, dpp):
+            capture = USB3PacketCapture(32 + 3 + 1, n)
+            setattr(self, name, capture)
+            sop    = Signal(reset=1)
+            length = Signal(16)
+            self.sync += If(valid,
+                sop.eq(dpp.last),
+                length.eq(Mux(sop, dpp.bytes, length + dpp.bytes)),
+            )
+            self.comb += [
+                capture.valid.eq(valid),
+                capture.first.eq(sop),
+                capture.data.eq(Cat(dpp.data, dpp.bytes, dpp.last)),
+            ]
+            return capture, length
+        ep0_tx,  ep0_tx_len  = dpp_capture("ep0_tx",  ep0.tx_dpp.valid & ep0.tx_dpp.ready, ep0.tx_dpp)
+        link_tx, link_tx_len = dpp_capture("link_tx", link_tx_dpp.valid & link_tx_dpp.ready & link_tx_dpp_ep0, link_tx_dpp)
+
+        self.comb += [
+            self.req_in_data.status.eq(req_in.words[sel][0:32]),
+            self.req_in_ctrl.status.eq(Cat(req_in.words[sel][32:37], C(0, 11), req_in.count)),
+            self.ep0_tx_data.status.eq(ep0_tx.words[sel][0:32]),
+            self.ep0_tx_ctrl.status.eq(Cat(ep0_tx.words[sel][32:36], C(0, 4), ep0_tx.count[0:8], ep0_tx_len)),
+            self.link_tx_data.status.eq(link_tx.words[sel][0:32]),
+            self.link_tx_ctrl.status.eq(Cat(link_tx.words[sel][32:36], C(0, 4), link_tx.count[0:8], link_tx_len)),
         ]

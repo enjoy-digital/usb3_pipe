@@ -31,7 +31,7 @@ from litex.soc.interconnect.csr import *
 
 from usb3_core.link      import USB3LinkLayer
 from usb3_core.protocol  import USB3ProtocolLayer
-from usb3_core.control   import USB3EndpointControl
+from usb3_core.control   import USB3EndpointControl, USB3EndpointControlDebug
 from usb3_core.trace     import USB3CoreTrace
 
 # USB3 Device Core ---------------------------------------------------------------------------------
@@ -73,6 +73,12 @@ class USB3DeviceCore(LiteXModule):
         self.configured = ep0.configured
         self.u1_enable  = ep0.u1_enable
         self.u2_enable  = ep0.u2_enable
+
+    def add_ep0_debug(self):
+        """EP0 IN responses debug CSRs (ep0_dbg_*, see USB3EndpointControlDebug)."""
+        # TX DPP captured at the Protocol Layer DPP mux output (registered to the Link Layer).
+        self.ep0_dbg = USB3EndpointControlDebug(self.ep0, self.protocol.tx_dpp.sink,
+            link_tx_dpp_ep0 = self.protocol.jobs.source.valid & (self.protocol.jobs.source.ep == 0))
 
     def add_csr(self, with_trace=False, trace_depth=512):
         """Status/statistics CSRs (scripts/usb3_debug.py), optional Header Packets trace

@@ -130,11 +130,13 @@ def lmp_port_configuration(seq):
     return header_packet(0x00000000 | (LMP_SUB_PORT_CFG << 5) | (1 << 9), 0, 0, seq)
 
 # Transaction Packets (USB 3.2 8.5).
-TP_SUB_ACK    = 1
-TP_SUB_NRDY   = 2
-TP_SUB_ERDY   = 3
-TP_SUB_STATUS = 4
-TP_SUB_STALL  = 5
+TP_SUB_ACK       = 1
+TP_SUB_NRDY      = 2
+TP_SUB_ERDY      = 3
+TP_SUB_STATUS    = 4
+TP_SUB_STALL     = 5
+TP_SUB_PING      = 7
+TP_SUB_PING_RESP = 8
 
 def tp(subtype, seq, addr=0, ept=0, direction=0, nump=0, tp_seq=0, pp=0):
     dw0 = 0x04 | (addr << 25)
@@ -731,7 +733,7 @@ def tp_fields(hp):
 def dph_fields(hp):
     dw0, dw1, dw2, seq, crc = hp
     return {"type": dw0 & 0x1f, "seq": dw1 & 0x1f, "eob": (dw1 >> 6) & 1, "ept": (dw1 >> 8) & 0xf,
-        "length": dw1 >> 16}
+        "length": dw1 >> 16, "lpf": (dw1 >> 6) & 1, "direction": (dw1 >> 7) & 1}
 
 def run_pyhost(dut, host, scenario, tx_ready_rate=1.0):
     run_simulation(dut, [host.driver(), host.monitor(tx_ready_rate), scenario], vcd_name=None)
@@ -812,3 +814,36 @@ def pyhost_bulk_in(host, ept, count, seq=0, nump=8):
         else:
             host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=nump, tp_seq=seq, pp=1)
     return [d[0] for d in host.dpps[d0:d0 + count]], seq
+
+# Isochronous transfers (reactive host).
+
+def pyhost_dps(host):
+    """Received Data Packets: (DPH fields, payload, crc_ok), DPHs paired in order with their DPPs."""
+    dphs = [dph_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x08]
+    return [(d, *p) for d, p in zip(dphs, host.dpps)]
+
+def pyhost_ping(host, ept, direction=1):
+    """PING TP (8.5.7): returns the PING_RESPONSE TP fields."""
+    n0 = len(host.hps)
+    host.send_hp(tp, TP_SUB_PING, ept=ept, direction=direction)
+    return (yield from pyhost_wait_tp(host, n0, subtypes=(TP_SUB_PING_RESP,)))
+
+def pyhost_iso_in(host, ept, bursts=[1], ping=True):
+    """Isochronous IN service interval (8.12.6.1): PING/PING_RESPONSE, then ACK TPs requesting the
+    packets of the service interval (bursts: NumP of each ACK TP, first ACK TP with a Seq Num of 0,
+    next ones with the previous Seq Num + NumP, sent once the previous burst received), until a
+    packet with the Last Packet Flag. No response to the DPs (no retry). Returns the received DPs
+    [(DPH fields, payload, crc_ok)]."""
+    if ping:
+        yield from pyhost_ping(host, ept)
+    d0  = len(pyhost_dps(host))
+    seq = 0
+    def dps():
+        return [dp for dp in pyhost_dps(host)[d0:] if dp[0]["ept"] == ept]
+    for nump in bursts:
+        host.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=nump, tp_seq=seq)
+        seq += nump
+        yield from host.wait(lambda: (len(dps()) >= seq) or any(dp[0]["lpf"] for dp in dps()))
+        if any(dp[0]["lpf"] for dp in dps()):
+            break
+    return dps()

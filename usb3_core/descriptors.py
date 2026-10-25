@@ -27,8 +27,15 @@ DESC_CS_INTERFACE  = 0x24
 # Device class of devices with Interface Association Descriptors (Miscellaneous, Common Class, IAD).
 DEVICE_CLASS_IAD = (0xef, 0x02, 0x01)
 
-EP_BULK      = 0x02
-EP_INTERRUPT = 0x03
+EP_ISOCHRONOUS = 0x01
+EP_BULK        = 0x02
+EP_INTERRUPT   = 0x03
+
+# Isochronous endpoints synchronization types (bmAttributes[3:2]).
+EP_SYNC_NONE     = 0x00
+EP_SYNC_ASYNC    = 0x04
+EP_SYNC_ADAPTIVE = 0x08
+EP_SYNC_SYNC     = 0x0c
 
 # U1/U2 Device Exit Latencies advertised with LPM (SuperSpeed USB Device Capability, 9.6.2.2): maximum
 # values (bU1DevExitLat: 10us, wU2DevExitLat: 2047us).
@@ -44,24 +51,43 @@ def le32(v):
 # Endpoint/Interface -------------------------------------------------------------------------------
 
 class USB3EndpointDescriptor:
-    def __init__(self, ept, direction, kind=EP_BULK, max_burst=1, max_packet=1024, interval=0):
+    """Endpoint descriptor and its SuperSpeed Endpoint Companion (9.6.6/9.6.7).
+
+    Periodic (Isochronous/Interrupt) endpoints: interval (bInterval, service interval of
+    2^(interval - 1) x 125us), wBytesPerInterval of max_packet x max_burst x (mult + 1). Isochronous:
+    sync (bmAttributes synchronization type), mult (companion bmAttributes Mult, bursts per service
+    interval - 1).
+    """
+    def __init__(self, ept, direction, kind=EP_BULK, max_burst=1, max_packet=1024, interval=0,
+        sync=EP_SYNC_NONE, mult=0):
+        assert 1 <= max_burst <= 16
+        assert mult == 0 or kind == EP_ISOCHRONOUS
         self.ept        = ept
         self.direction  = direction # 0: OUT, 1: IN.
         self.kind       = kind
         self.max_burst  = max_burst
         self.max_packet = max_packet
         self.interval   = interval
+        self.sync       = sync if kind == EP_ISOCHRONOUS else 0
+        self.mult       = mult
+
+    def bytes_per_interval(self):
+        if self.kind in [EP_ISOCHRONOUS, EP_INTERRUPT]:
+            return self.max_packet*self.max_burst*(self.mult + 1)
+        return 0
 
     def bytes(self):
         address = self.ept | (self.direction << 7)
-        ep   = [7, DESC_ENDPOINT, address, self.kind] + le16(self.max_packet) + [self.interval]
-        bpi  = self.max_packet*self.max_burst if self.kind == EP_INTERRUPT else 0
-        comp = [6, DESC_SS_EP_COMP, self.max_burst - 1, 0] + le16(bpi)
+        ep   = [7, DESC_ENDPOINT, address, self.kind | self.sync] + le16(self.max_packet) + [self.interval]
+        comp = [6, DESC_SS_EP_COMP, self.max_burst - 1, self.mult] + le16(self.bytes_per_interval())
         return ep + comp
 
 class USB3InterfaceDescriptor:
-    def __init__(self, number, cls=0xff, subclass=0x00, protocol=0x00, endpoints=[], extra=[], string=0):
+    """Interface descriptor (alt: alternate setting), class specific descriptors and endpoints."""
+    def __init__(self, number, cls=0xff, subclass=0x00, protocol=0x00, endpoints=[], extra=[], string=0,
+        alt=0):
         self.number    = number
+        self.alt       = alt
         self.cls       = cls
         self.subclass  = subclass
         self.protocol  = protocol
@@ -70,7 +96,7 @@ class USB3InterfaceDescriptor:
         self.string    = string
 
     def bytes(self):
-        r  = [9, DESC_INTERFACE, self.number, 0, len(self.endpoints), self.cls, self.subclass,
+        r  = [9, DESC_INTERFACE, self.number, self.alt, len(self.endpoints), self.cls, self.subclass,
             self.protocol, self.string]
         r += self.extra
         for ep in self.endpoints:
@@ -118,7 +144,7 @@ class USB3Descriptors:
         for interface in self.interfaces:
             if isinstance(interface, USB3InterfaceDescriptor):
                 body += interface.bytes()
-                n_interfaces += 1
+                n_interfaces += int(interface.alt == 0)
             else:
                 body += list(interface)
         total = 9 + len(body)
@@ -142,6 +168,14 @@ class USB3Descriptors:
         s = self.strings[index - 1].encode("utf-16-le")
         return [2 + len(s), DESC_STRING] + list(s)
 
+    def alt_settings(self):
+        """Alternate settings: {interface number: number of alternate settings}."""
+        r = {}
+        for interface in self.interfaces:
+            if isinstance(interface, USB3InterfaceDescriptor):
+                r[interface.number] = max(r.get(interface.number, 0), interface.alt + 1)
+        return r
+
     def add_class_request(self, bmRequestType, bRequest, response=None):
         """Class/vendor request accepted by the Control Endpoint (IN: constant response bytes)."""
         self.class_requests.append((bmRequestType, bRequest, response))
@@ -150,7 +184,7 @@ class USB3Descriptors:
         """Control requests table: list of (bmRequestType, bRequest, wValue, response bytes or None,
         kind). wValue None: any. kind: "in", "out", "set_address", "set_configuration",
         "clear_feature", "device_feature" (SET/CLEAR_FEATURE(U1_ENABLE/U2_ENABLE)), "device_status"
-        (GET_STATUS(Device))."""
+        (GET_STATUS(Device)), "get_interface" (response: one word per alternate setting)."""
         r = []
         # GET_DESCRIPTOR.
         r.append((0x80, 0x06, (DESC_DEVICE        << 8) | 0, self.device(),        "in"))
@@ -164,7 +198,8 @@ class USB3Descriptors:
         for bmRequestType in [0x81, 0x82]:
             r.append((bmRequestType, 0x00, None, [0x00, 0x00], "in"))
         r.append((0x80, 0x08, None, [0x01], "in"))
-        r.append((0x81, 0x0a, None, [0x00], "in"))
+        n_alts = max(self.alt_settings().values(), default=1)
+        r.append((0x81, 0x0a, None, sum([[alt, 0, 0, 0] for alt in range(n_alts)], []), "get_interface"))
         # SET_ADDRESS, SET_CONFIGURATION, SET/CLEAR_FEATURE, SET_INTERFACE, SET_SEL, SET_ISOCH_DELAY.
         r.append((0x00, 0x05, None, None, "set_address"))
         r.append((0x00, 0x09, None, None, "set_configuration"))
@@ -193,6 +228,17 @@ def bulk_descriptors(in_ept=1, out_ept=2, max_burst=8, **kwargs):
         USB3EndpointDescriptor(out_ept, direction=0, max_burst=max_burst),
     ])
     return USB3Descriptors(interfaces=[interface], **kwargs)
+
+def iso_in_descriptors(ept=1, max_burst=1, interval=1, **kwargs):
+    """Vendor class interface with an Isochronous IN endpoint: alternate setting 0 without endpoint
+    (zero bandwidth), alternate setting 1 with the Isochronous IN endpoint (Asynchronous, Mult of 0,
+    service interval of 2^(interval - 1) x 125us)."""
+    alt0 = USB3InterfaceDescriptor(0, alt=0)
+    alt1 = USB3InterfaceDescriptor(0, alt=1, endpoints=[
+        USB3EndpointDescriptor(ept, direction=1, kind=EP_ISOCHRONOUS, max_burst=max_burst,
+            interval=interval, sync=EP_SYNC_ASYNC),
+    ])
+    return USB3Descriptors(interfaces=[alt0, alt1], **kwargs)
 
 def cdc_acm_interfaces(comm_interface=0, notif_ept=3, in_ept=1, out_ept=2, max_burst=8):
     """CDC-ACM (Abstract Control Model) function: IAD, Communication Interface (notification Interrupt
