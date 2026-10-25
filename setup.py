@@ -27,7 +27,16 @@ setup(
           "pytest",
           "pytest-xdist",
           "setuptools",
-        ]
+        ],
+        "agentlab": [ # AgentLab host software (agentlab.host, agentlab CLI).
+          "pyserial",
+          "pyusb",
+        ],
+        "agentlab-mcp": [ # AgentLab MCP server (agentlab-mcp).
+          "pyserial",
+          "pyusb",
+          "mcp",
+        ],
     },
     packages                      = find_packages(exclude=("test*", "sim*", "doc*", "examples*", "bench*")),
     include_package_data          = True,
@@ -44,6 +53,8 @@ setup(
     entry_points = {
         "console_scripts": [
             "usb3_pipe_gen=usb3_pipe.gen:main",
+            "agentlab=agentlab.host.cli:main",
+            "agentlab-mcp=agentlab.host.mcp_server:main",
         ],
     },
 )

@@ -110,3 +110,69 @@ Phase 1 details (`agentlab/gateware/events.py`):
 3. JTAG/SWD: CMSIS-DAP v2 probe (VexRiscv firmware + SWD/JTAG IO core).
 4. Eyes: UVC stream of a DDR3 framebuffer rendered by the firmware (LA waveforms, UART tails,
    status), for multimodal agents.
+
+## Host Usage
+
+Install (from the repository root; the extras only add host dependencies, the gateware packages do
+not depend on them):
+
+```sh
+pip install -e .[agentlab]          # Library + agentlab CLI (pyserial, pyusb).
+pip install -e .[agentlab-mcp]      # + agentlab-mcp MCP server (mcp, 2.x or 1.x).
+```
+
+The device is found in sysfs (VID/PID 1d50:605a and the interface layout above, since other
+USB3-PIPE designs share the VID/PID); the CDC-ACM interfaces are mapped to their `/dev/ttyACMx`.
+CSR features need the gateware `csr.csv` (or `csr.json`): `--csr-csv` or `$AGENTLAB_CSR_CSV`.
+CSRs are accessed with a direct UARTBone client on the control tty (no server process), or through
+a running `litex_server` with `--server host:port`. The vendor events interface needs USB access
+rights (udev rule for 1d50:605a). All device-specific constants (IDs, interface numbers, endpoints,
+event codes, CSR names) are in `agentlab/host/constants.py`.
+
+CLI:
+
+```sh
+export AGENTLAB_CSR_CSV=build/kc705/csr.csv
+agentlab info                                  # Device, ttys, CSRs.
+agentlab power cycle 0 --off-time 2            # Power switch 0 off 2s, then on.
+agentlab uart wait 0 "login:" --timeout 30     # Wait for a regex on DUT UART0.
+agentlab uart write 0 "root\r"
+agentlab uart read 0 --timeout 2 --baudrate 115200
+agentlab gpio set 3 0 && agentlab gpio get 3   # Drive/read GPIO3 (gpio release 3: input).
+agentlab marker 0x42                           # Marker event, prints its device time.
+agentlab events --follow --types uart_rx,gpio  # Timestamped events (--lines: UART text lines).
+```
+
+Python:
+
+```python
+from agentlab.host import Instrument
+
+with Instrument.open(csr_csv="csr.csv", start_events=True) as lab:
+    t0 = lab.marker(1)
+    lab.power_cycle(0, off_time=1.0)
+    r = lab.uart(0).wait_for(r"IP address: (\S+)", timeout=30)
+    print(r.groups, r.elapsed)
+    for line in lab.uart_lines(index=0, since=lab.ticks_to_s(t0)):
+        print("{:.6f}s {}".format(lab.ticks_to_s(line.timestamp), line.text))
+```
+
+MCP server (stdio), e.g. for Claude Code (`.mcp.json`) or any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "agentlab": {
+      "command": "agentlab-mcp",
+      "args": ["--csr-csv", "/path/to/build/kc705/csr.csv"]
+    }
+  }
+}
+```
+
+Tools: `uart_read`, `uart_write`, `uart_wait_for`, `uart_log`, `power_set`, `power_cycle`,
+`gpio_set`, `gpio_get`, `events`, `timestamp`, `marker`. Times are device seconds (`time_s`, shared
+timebase); the instrument is opened on the first tool call and the events reader runs from then.
+
+Tests: `pytest test/test_agentlab_host*.py` (fake backends, default suite); with a device
+connected: `AGENTLAB_CSR_CSV=... pytest -m hw test/test_agentlab_host_hw.py`.
