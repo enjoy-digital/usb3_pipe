@@ -9,7 +9,7 @@ import unittest
 from migen import *
 
 from usb3_pipe.lfps   import LFPSUnit
-from usb3_pipe.serdes import RXErrorMonitor
+from usb3_pipe.datapath import RXErrorMonitor
 
 from test.model.gt import LFPSSerDesStub
 

@@ -10,7 +10,7 @@ import unittest
 from migen import *
 
 from usb3_pipe.common import SKP
-from usb3_pipe.serdes import RXDatapath
+from usb3_pipe.datapath import RXDatapath
 
 from test.common import strip_skp
 

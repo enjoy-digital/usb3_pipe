@@ -11,7 +11,7 @@ from migen.sim import passive
 
 from usb3_pipe.common import SKP
 from usb3_pipe.core import USB3PIPE
-from usb3_pipe.serdes import TXSKPInserter
+from usb3_pipe.datapath import TXSKPInserter
 
 from test.model.gt import GTModel
 

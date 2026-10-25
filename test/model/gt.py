@@ -10,7 +10,7 @@ from migen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.serdes import RXIdleFilter
+from usb3_pipe.datapath import RXIdleFilter
 
 # Transceiver Model --------------------------------------------------------------------------------
 

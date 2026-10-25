@@ -18,7 +18,7 @@ from usb3_pipe.common import *
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
-from usb3_pipe.serdes import RXWordAligner
+from usb3_pipe.datapath import RXWordAligner
 
 # Idle Handshake -----------------------------------------------------------------------------------
 

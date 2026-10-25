@@ -9,9 +9,9 @@ import random
 
 from migen import *
 
-from usb3_pipe.serdes import RXWordAligner
-from usb3_pipe.serdes import RXSKPRemover, TXSKPInserter
-from usb3_pipe.serdes import RXDatapath, TXDatapath
+from usb3_pipe.datapath import RXWordAligner
+from usb3_pipe.datapath import RXSKPRemover, TXSKPInserter
+from usb3_pipe.datapath import RXDatapath, TXDatapath
 from usb3_pipe.common import K, TS1
 
 from test.common import ordered_set_words, words_to_symbols, symbols_to_words, stream_monitor

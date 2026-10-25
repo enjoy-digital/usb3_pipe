@@ -18,7 +18,7 @@ from migen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import COM, SKP, TSEQ, TS1, TS1_INV, TS2, LinkConfig
-from usb3_pipe.serdes import RXSKPRemover
+from usb3_pipe.datapath import RXSKPRemover
 from usb3_pipe.training import TSUnit
 
 from test.common import ordered_set_words, stream_driver, symbols_to_words, words_to_symbols
