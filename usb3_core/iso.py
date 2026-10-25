@@ -19,7 +19,8 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common    import *
 from usb3_core.dpp       import DPPReader
-from usb3_core.endpoints import USB3Endpoint, MAX_PACKET_SIZE, MAX_PACKET_WORDS
+from usb3_core.endpoints import USB3Endpoint
+from usb3_core.slots     import USB3PacketSlots, USB3PacketWriter
 
 # USB3 Isochronous IN Endpoint ---------------------------------------------------------------------
 
@@ -58,18 +59,11 @@ class USB3IsoIN(USB3Endpoint):
         pbits = log2_int(n) + 1   # Pointers: one more bit than the slot index (full/empty).
 
         # Packet Slots -----------------------------------------------------------------------------
-        mem = Memory(32, n*MAX_PACKET_WORDS)
-        wr_port = mem.get_port(write_capable=True)
-        rd_port = mem.get_port(has_re=True)
-        self.specials += mem, wr_port, rd_port
-        lengths = Array(Signal(11, reset_less=True) for _ in range(n))
-        lpfs    = Array(Signal(reset_less=True)     for _ in range(n))
+        self.slots = slots = USB3PacketSlots(n)
+        lengths = slots.lengths
 
-        wr_ptr   = Signal(pbits) # Next slot written by the user.
         snd_ptr  = Signal(pbits) # Next slot to send (or drop).
         free_ptr = Signal(pbits) # Oldest slot not read yet (DPP).
-        used     = Signal(pbits)
-        self.comb += used.eq(wr_ptr - free_ptr)
 
         # Complete transfers (LPF packet written) not sent.
         transfers     = Signal(max=n + 1)
@@ -78,41 +72,18 @@ class USB3IsoIN(USB3Endpoint):
         self.sync += transfers.eq(transfers + transfers_inc - transfers_dec)
 
         # Writer (user) ----------------------------------------------------------------------------
+        # Transfers of up to max_burst packets (LPF on the last one), slots freed once read, sink
+        # not ready while flushing.
         flushing = Signal() # Dropping the buffered packets.
-        wr_count = Signal(9)
-        wr_npkts = Signal(max=max(max_burst, 2)) # Packets of the transfer written.
-        wr_full  = Signal()
-        wr_lpf   = Signal()
-        self.comb += [
-            wr_full.eq(used == n),
-            sink.ready.eq(~wr_full & ~self.flush & ~flushing),
-            wr_port.adr.eq(Cat(wr_count[0:8], wr_ptr[0:pbits-1])),
-            wr_port.dat_w.eq(sink.data),
-            wr_port.we.eq(sink.valid & sink.ready),
-            wr_lpf.eq(sink.last | (wr_npkts == max_burst - 1)),
-        ]
-        wr_commit = Signal()
-        self.comb += [
-            wr_commit.eq(sink.valid & sink.ready &
-                (sink.last | (wr_count == MAX_PACKET_WORDS - 1))),
-            transfers_inc.eq(wr_commit & wr_lpf),
-        ]
-        self.sync += [
-            If(self.flush,
-                wr_count.eq(0),
-                wr_npkts.eq(0),
-            ).Elif(sink.valid & sink.ready,
-                wr_count.eq(wr_count + 1),
-                If(wr_commit,
-                    wr_count.eq(0),
-                    wr_npkts.eq(Mux(wr_lpf, 0, wr_npkts + 1)),
-                    lengths[wr_ptr[0:pbits-1]].eq(4*wr_count +
-                        Mux(sink.last, be_to_bytes(sink.be), 4)),
-                    lpfs[wr_ptr[0:pbits-1]].eq(wr_lpf),
-                    wr_ptr.eq(wr_ptr + 1),
-                )
-            )
-        ]
+        self.writer = writer = USB3PacketWriter(slots, sink,
+            rd_ptr      = free_ptr,
+            flush       = self.flush,
+            enable      = ~self.flush & ~flushing,
+            max_packets = max_burst,
+        )
+        wr_ptr = writer.ptr  # Next slot written by the user.
+        lpfs   = writer.lpfs # Last Packet Flag of the slots.
+        self.comb += transfers_inc.eq(writer.commit & writer.lpf)
 
         # Service Interval State -------------------------------------------------------------------
         h = self.hdr
@@ -125,8 +96,8 @@ class USB3IsoIN(USB3Endpoint):
         skip    = Signal()                   # Dropping the end of an interrupted transfer.
 
         # Sending ----------------------------------------------------------------------------------
-        self.jobs = jobs = stream.SyncFIFO([("slot", pbits - 1), ("zlp", 1), ("drop", 1)], 2*n)
-        snd_slot = Signal(pbits - 1)
+        self.jobs = jobs = stream.SyncFIFO([("slot", slots.sbits), ("zlp", 1), ("drop", 1)], 2*n)
+        snd_slot = Signal(slots.sbits)
         snd_lpf  = Signal()
         send     = Signal() # DPH of a slot sent.
         zlp      = Signal() # Zero-length DPH sent.
@@ -217,11 +188,11 @@ class USB3IsoIN(USB3Endpoint):
         # DPP Reader -------------------------------------------------------------------------------
         # Jobs read in order, slots freed once read (end of their DPP). Dropped slots are read as
         # zero-length DPPs, not forwarded.
-        self.reader = reader = DPPReader(rd_port, depth=16)
+        self.reader = reader = DPPReader(slots.rd_port, depth=16)
         self.pend   = pend   = stream.SyncFIFO([("free", 1), ("drop", 1)], 32)
         self.comb += [
             reader.sink.valid.eq(jobs.source.valid & pend.sink.ready),
-            reader.sink.adr.eq(Cat(C(0, 8), jobs.source.slot)),
+            reader.sink.adr.eq(slots.adr(jobs.source.slot)),
             reader.sink.length.eq(Mux(jobs.source.zlp | jobs.source.drop, 0,
                 lengths[jobs.source.slot])),
             jobs.source.ready.eq(reader.sink.ready & pend.sink.ready),

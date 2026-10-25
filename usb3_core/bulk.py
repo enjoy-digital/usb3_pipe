@@ -25,6 +25,7 @@ from litex.soc.interconnect import stream
 from usb3_core.common    import *
 from usb3_core.dpp       import DPPReader
 from usb3_core.endpoints import USB3Endpoint, MAX_PACKET_SIZE, MAX_PACKET_WORDS
+from usb3_core.slots     import USB3PacketSlots, USB3PacketWriter
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -52,53 +53,26 @@ class USB3BulkIN(USB3Endpoint):
         pbits = log2_int(n) + 1 # Pointers: one more bit than the slot index (full/empty).
 
         # Packet Slots -----------------------------------------------------------------------------
-        mem = Memory(32, n*MAX_PACKET_WORDS)
-        wr_port = mem.get_port(write_capable=True)
-        rd_port = mem.get_port(has_re=True)
-        self.specials += mem, wr_port, rd_port
-        lengths = Array(Signal(11, reset_less=True) for _ in range(n))
+        self.slots = slots = USB3PacketSlots(n)
+        lengths = slots.lengths
 
-        wr_ptr  = Signal(pbits) # Next slot written by the user.
         ack_ptr = Signal(pbits) # Oldest slot not acknowledged by the host.
         snd_ptr = Signal(pbits) # Next slot to send.
         ack_seq = Signal(5)     # Sequence Number of ack_ptr's packet.
         snd_seq = Signal(5)
+
+        # Writer (user) ----------------------------------------------------------------------------
+        # Slots written, freed when acknowledged.
+        self.writer = writer = USB3PacketWriter(slots, sink, rd_ptr=ack_ptr, flush=self.flush)
+        wr_ptr = writer.ptr # Next slot written by the user.
+
         # Pointers differences/increments (modulo 2*n: explicit widths, Migen differences signed).
         inflight = Signal(pbits) # Sent, not acknowledged.
-        used     = Signal(pbits) # Written, not acknowledged.
         snd_next = Signal(pbits)
         self.comb += [
             inflight.eq(snd_ptr - ack_ptr),
-            used.eq(wr_ptr - ack_ptr),
             snd_next.eq(snd_ptr + 1),
             snd_seq.eq(ack_seq + inflight),
-        ]
-
-        # Writer (user) ----------------------------------------------------------------------------
-        wr_count = Signal(9)
-        wr_full  = Signal()
-        self.comb += [
-            wr_full.eq(used == n),
-            sink.ready.eq(~wr_full),
-            wr_port.adr.eq(Cat(wr_count[0:8], wr_ptr[0:pbits-1])),
-            wr_port.dat_w.eq(sink.data),
-            wr_port.we.eq(sink.valid & sink.ready),
-        ]
-        wr_commit = Signal()
-        self.comb += wr_commit.eq(sink.valid & sink.ready &
-            (sink.last | (wr_count == MAX_PACKET_WORDS - 1)))
-        self.sync += [
-            If(self.flush,
-                wr_count.eq(0),
-            ).Elif(sink.valid & sink.ready,
-                wr_count.eq(wr_count + 1),
-                If(wr_commit,
-                    wr_count.eq(0),
-                    lengths[wr_ptr[0:pbits-1]].eq(4*wr_count +
-                        Mux(sink.last, be_to_bytes(sink.be), 4)),
-                    wr_ptr.eq(wr_ptr + 1),
-                )
-            )
         ]
 
         # Host requests (ACK TP) -------------------------------------------------------------------
@@ -127,7 +101,7 @@ class USB3BulkIN(USB3Endpoint):
         avail    = Signal() # Packet available to send.
         in_win   = Signal() # snd_seq in the host window.
         send     = Signal()
-        snd_len  = Signal(11)
+        snd_len  = Signal(bits_for(MAX_PACKET_SIZE))
         snd_eob  = Signal()
         snd_last = Signal() # Last written packet.
         # Writer activity: while the user is writing, the last written max size packet is held until
@@ -148,7 +122,7 @@ class USB3BulkIN(USB3Endpoint):
         ]
 
         # DPP jobs (slots of the DPHs pushed, in order).
-        self.jobs = jobs = stream.SyncFIFO([("slot", pbits - 1)], 2*n)
+        self.jobs = jobs = stream.SyncFIFO([("slot", slots.sbits)], 2*n)
 
         # Sent packets not acknowledged by the host (ACK TP expected): U1/U2 entry rejected.
         self.comb += self.pm_busy.eq(inflight != 0)
@@ -252,10 +226,10 @@ class USB3BulkIN(USB3Endpoint):
         ]
 
         # DPP Reader -------------------------------------------------------------------------------
-        self.reader = reader = DPPReader(rd_port, depth=16)
+        self.reader = reader = DPPReader(slots.rd_port, depth=16)
         self.comb += [
             jobs.source.connect(reader.sink, omit={"slot"}),
-            reader.sink.adr.eq(Cat(C(0, 8), jobs.source.slot)),
+            reader.sink.adr.eq(slots.adr(jobs.source.slot)),
             reader.sink.length.eq(lengths[jobs.source.slot]),
             reader.source.connect(self.tx_dpp),
         ]
@@ -280,12 +254,11 @@ class USB3BulkOUT(USB3Endpoint):
         pbits = log2_int(n) + 1
 
         # Packet Slots -----------------------------------------------------------------------------
-        mem = Memory(32, n*MAX_PACKET_WORDS)
-        wr_port = mem.get_port(write_capable=True)
-        rd_port = mem.get_port(has_re=True)
-        self.specials += mem, wr_port, rd_port
-        lengths = Array(Signal(11, reset_less=True) for _ in range(n))
-        valids  = Array(Signal(reset_less=True)     for _ in range(n))
+        self.slots = slots = USB3PacketSlots(n)
+        wr_port = slots.wr_port
+        rd_port = slots.rd_port
+        lengths = slots.lengths
+        valids  = Array(Signal(reset_less=True) for _ in range(n))
 
         land_ptr   = Signal(pbits) # Next slot to land a DPP.
         decide_ptr = Signal(pbits) # Next landed slot to accept/discard (Protocol Layer, in order).
@@ -301,8 +274,8 @@ class USB3BulkOUT(USB3Endpoint):
         ]
 
         # Landing (DPPs written as received) -------------------------------------------------------
-        land_count = Signal(9)
-        land_bytes = Signal(11)
+        land_count = Signal(bits_for(MAX_PACKET_WORDS))
+        land_bytes = Signal(bits_for(MAX_PACKET_SIZE))
         land_en    = Signal(reset_less=True) # Slot available at the DPP start (latched).
         land_data  = Signal()                # DPP data received.
         landing    = Signal()
@@ -312,7 +285,7 @@ class USB3BulkOUT(USB3Endpoint):
             ).Else(
                 landing.eq(free != 0)
             ),
-            wr_port.adr.eq(Cat(land_count[0:8], land_ptr[0:pbits-1])),
+            wr_port.adr.eq(slots.adr(land_ptr[0:pbits-1], land_count)),
             wr_port.dat_w.eq(self.rx_dpp.data),
             wr_port.we.eq(self.rx_dpp.valid & landing & (land_count < MAX_PACKET_WORDS)),
             self.rx_dpp.ready.eq(1),
@@ -386,9 +359,9 @@ class USB3BulkOUT(USB3Endpoint):
 
         # Reader (user) ----------------------------------------------------------------------------
         self.fifo = fifo = stream.SyncFIFO(endpoint_layout(), 16)
-        rd_count  = Signal(9, reset_less=True)
-        rd_len    = Signal(11)
-        rd_words  = Signal(9)
+        rd_count  = Signal(bits_for(MAX_PACKET_WORDS), reset_less=True)
+        rd_len    = Signal(bits_for(MAX_PACKET_SIZE))
+        rd_words  = Signal(bits_for(MAX_PACKET_WORDS))
         rd_active = Signal()
         rd_valid  = Signal()
         rd_last   = Signal(reset_less=True)
@@ -399,7 +372,7 @@ class USB3BulkOUT(USB3Endpoint):
             rd_slot.eq(rd_ptr[0:pbits-1]),
             rd_len.eq(lengths[rd_slot]),
             rd_words.eq((rd_len + 3)[2:]),
-            rd_port.adr.eq(Cat(rd_count[0:8], rd_slot)),
+            rd_port.adr.eq(slots.adr(rd_slot, rd_count)),
             rd_issue.eq(rd_active & (fifo.level < 12)),
             rd_port.re.eq(rd_issue),
         ]
