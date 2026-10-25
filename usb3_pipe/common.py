@@ -136,6 +136,55 @@ class EndiannessSwap(LiteXModule):
             self.comb += source.data[8*i:8*(i+1)].eq(sink.data[8*(n-1-i):8*(n-1-i+1)])
             self.comb += source.ctrl[i].eq(sink.ctrl[n-1-i])
 
+# LTSSM <-> PIPE Interface -------------------------------------------------------------------------
+
+# Signals between the USB3LTSSM and the USB3PIPE (LFPS, Training Sequences, Idle Symbol handshake,
+# SerDes/Datapath controls): same name on both sides, declared by both from this list and connected
+# by USB3PHY (connect_ltssm_pipe). (name, width, direction from the LTSSM: "o": LTSSM -> PIPE, "i":
+# PIPE -> LTSSM).
+LTSSM_PIPE_INTERFACE = [
+    # LFPS (6.9).
+    ("lfps_tx_polling",      1, "o"), # Polling.LFPS bursts transmission.
+    ("lfps_tx_idle",         1, "o"), # Electrical idle (when no LFPS burst).
+    ("lfps_tx_ping",         1, "o"), # Ping.LFPS transmission (U1).
+    ("lfps_tx_exit_u1",      1, "o"), # U1 exit LFPS transmission.
+    ("lfps_tx_exit_u2",      1, "o"), # U2/Loopback exit LFPS transmission.
+    ("lfps_tx_wakeup_u3",    1, "o"), # U3 wakeup LFPS transmission.
+    ("lfps_tx_reset",        1, "o"), # Warm Reset LFPS transmission.
+    ("lfps_tx_count",       16, "i"), # Polling.LFPS bursts transmitted.
+    ("lfps_rx_polling",      1, "i"), # Polling.LFPS received.
+    ("lfps_rx_ping",         1, "i"), # Ping.LFPS received.
+    ("lfps_rx_exit_u1",      1, "i"), # U1 exit LFPS received.
+    ("lfps_rx_exit_u2",      1, "i"), # U2/Loopback exit LFPS received.
+    ("lfps_rx_wakeup_u3",    1, "i"), # U3 wakeup LFPS received.
+    ("lfps_rx_reset",        1, "i"), # Warm Reset LFPS received.
+
+    # Training Sequences (6.4.1, 7.5.4).
+    ("ts_tx_enable",         1, "o"), # Training Sequences transmission.
+    ("ts_tx_tseq",           1, "o"), # TSEQ transmission.
+    ("ts_tx_ts1",            1, "o"), # TS1 transmission.
+    ("ts_tx_ts2",            1, "o"), # TS2 transmission.
+    ("ts_tx_ts2_reset",      1, "o"), # Reset bit of the transmitted TS2 (Hot Reset, 7.4.2).
+    ("ts_tx_ts2_loopback",   1, "o"), # Loopback bit of the transmitted TS2 (7.5.4.9.1).
+    ("ts_tx_done",           1, "i"), # Training Sequences burst transmitted.
+    ("ts_rx_ts1",            1, "i"), # TS1 received.
+    ("ts_rx_ts1_inv",        1, "i"), # Inverted TS1 received (polarity).
+    ("ts_rx_ts2",            1, "i"), # TS2 received.
+    ("ts_rx_ts2_reset",      1, "i"), # Reset bit of the received TS2 (Hot Reset).
+    ("ts_rx_ts2_loopback",   1, "i"), # Loopback bit of the received TS2 (Loopback slave).
+    ("ts2_decode",           1, "o"), # Decode the received TS2 Disable Scrambling bit.
+
+    # Idle Symbol handshake (7.5.4.10.2, 7.5.10.4.2, 7.5.12.4.2).
+    ("idle_handshake",       1, "o"), # Idle Symbols transmission and handshake.
+    ("idle_handshake_done",  1, "i"), # 8 Idle Symbols received and 16 sent after the first one.
+
+    # SerDes/Datapath.
+    ("serdes_rx_align",      1, "o"), # RX word alignment (re-)acquisition.
+    ("serdes_rx_polarity",   1, "o"), # RX polarity inversion (7.5.4.5).
+    ("rx_ready",             1, "o"), # RX data to the Link Layer (U0).
+    ("tx_ready",             1, "o"), # TX data from the Link Layer (U0).
+]
+
 # Gen 2 Block Headers (6.3.2.2) --------------------------------------------------------------------
 
 BLOCK_HEADER_DATA    = 0b0011

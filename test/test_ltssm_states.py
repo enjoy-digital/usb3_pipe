@@ -85,8 +85,9 @@ class LTSSMDriver:
 
     def goto(self, dut, target):
         """Drive a fresh USB3LTSSM to target. ds_port/compliance_enable/loopback_capable must be set
-        before. Leaves rx_idle8=0 (Idle handshakes not completed) and all pulsed inputs low."""
-        yield dut.rx_idle8.eq(0)
+        before. Leaves idle_handshake_done=0 (Idle handshakes not completed) and all pulsed inputs
+        low."""
+        yield dut.idle_handshake_done.eq(0)
         yield
         if target == "Compliance":
             yield from self.expect(dut, "Compliance", cycles(360e-3, dut.scale) + 16)
@@ -129,7 +130,7 @@ class LTSSMDriver:
         # Polling.Idle -> Loopback (slave on TS2 Loopback bit / master when directed).
         if target in ["Loopback", "Loopback.Master", "Loopback.Exit"]:
             if target == "Loopback":
-                yield from pulse(dut.rx_ts2_loopback)
+                yield from pulse(dut.ts_rx_ts2_loopback)
             else:
                 yield dut.loopback_capable.eq(1)
                 yield dut.directed_loopback.eq(1)
@@ -144,17 +145,17 @@ class LTSSMDriver:
             if (yield dut.ds_port):
                 yield from pulse(dut.hot_reset_req)
             else:
-                yield from pulse(dut.rx_ts2_reset)
+                yield from pulse(dut.ts_rx_ts2_reset)
             yield from self.expect(dut, "HotReset.Active")
             if target == "HotReset.Exit":
-                yield from pulse(dut.rx_ts2_reset) # Partner Reset bit seen, then cleared.
+                yield from pulse(dut.ts_rx_ts2_reset) # Partner Reset bit seen, then cleared.
                 yield from self.expect(dut, "HotReset.Exit", 64)
             return
 
         # Polling.Idle -> U0 (Idle handshake, 7.5.4.10.2).
-        yield dut.rx_idle8.eq(1)
+        yield dut.idle_handshake_done.eq(1)
         yield from self.expect(dut, "U0")
-        yield dut.rx_idle8.eq(0)
+        yield dut.idle_handshake_done.eq(0)
         yield
         if target == "U0":
             return
@@ -247,7 +248,7 @@ class TestLTSSMStateOutputs(unittest.TestCase, LTSSMDriver):
         def generator(dut):
             yield from self.goto(dut, "Recovery.Idle")
             self.assertEqual((yield dut.recovery), 1)
-            yield dut.rx_idle8.eq(1)
+            yield dut.idle_handshake_done.eq(1)
             yield from self.expect(dut, "U0")
             yield
             self.assertEqual((yield dut.recovery), 0)
@@ -340,7 +341,7 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
         # Partner never clears its Reset bit -> tHotResetActiveTimeout -> eSS.Inactive.
         def generator(dut):
             yield from self.goto(dut, "Polling.Idle")
-            yield dut.rx_ts2_reset.eq(1)
+            yield dut.ts_rx_ts2_reset.eq(1)
             yield from self.expect(dut, "HotReset.Active")
             yield from self.check_timeout(dut, "HotReset.Active", "eSS.Inactive", 12e-3)
         run(new_dut(), generator)
@@ -586,20 +587,21 @@ class TestLTSSMWarmResetAllStates(unittest.TestCase, WarmResetChecks):
 class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
     def test_polling_idle_exits(self):
         cases = [
-            # (ds_port, inputs,                                              dst)
-            (0, {"rx_ts2_loopback": 1},                                   "Loopback"),
-            (1, {"rx_ts2_loopback": 1},                                   "Loopback"),
-            (0, {"directed_loopback": 1, "loopback_capable": 1},          "Loopback"),
-            (0, {"directed_loopback": 1, "rx_idle8": 1},                  "U0"),       # Not capable.
-            (0, {"rx_ts2_reset": 1},                                      "HotReset.Active"),
-            (1, {"rx_ts2_reset": 1, "rx_idle8": 1},                       "U0"),       # DS ignores.
-            (1, {"hot_reset_req": 1},                                     "HotReset.Active"),
-            (0, {"hot_reset_req": 1, "rx_idle8": 1},                      "U0"),       # UFP ignores.
-            (1, {"warm_reset_req": 1},                                    "WarmReset"),
-            (0, {"rx_idle8": 1},                                          "U0"),
+            # (ds_port, inputs,                                                dst)
+            (0, {"ts_rx_ts2_loopback": 1},                                     "Loopback"),
+            (1, {"ts_rx_ts2_loopback": 1},                                     "Loopback"),
+            (0, {"directed_loopback": 1, "loopback_capable": 1},               "Loopback"),
+            (0, {"directed_loopback": 1, "idle_handshake_done": 1},            "U0"), # Not capable.
+            (0, {"ts_rx_ts2_reset": 1},                                        "HotReset.Active"),
+            (1, {"ts_rx_ts2_reset": 1, "idle_handshake_done": 1},              "U0"), # DS ignores.
+            (1, {"hot_reset_req": 1},                                          "HotReset.Active"),
+            (0, {"hot_reset_req": 1, "idle_handshake_done": 1},                "U0"), # UFP ignores.
+            (1, {"warm_reset_req": 1},                                         "WarmReset"),
+            (0, {"idle_handshake_done": 1},                                    "U0"),
             # Priorities: Loopback bit > Reset bit > Idle handshake.
-            (0, {"rx_ts2_loopback": 1, "rx_ts2_reset": 1, "rx_idle8": 1}, "Loopback"),
-            (0, {"rx_ts2_reset": 1, "rx_idle8": 1},                       "HotReset.Active"),
+            (0, {"ts_rx_ts2_loopback": 1, "ts_rx_ts2_reset": 1,
+                 "idle_handshake_done": 1},                                    "Loopback"),
+            (0, {"ts_rx_ts2_reset": 1, "idle_handshake_done": 1},              "HotReset.Active"),
         ]
         for ds_port, inputs, dst in cases:
             with self.subTest(ds_port=ds_port, inputs=inputs):
@@ -615,25 +617,25 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
         # TS2 Loopback bit seen in Polling.Configuration is latched -> slave Loopback.
         def generator(dut):
             yield from self.goto(dut, "Polling.Configuration")
-            yield from pulse(dut.rx_ts2_loopback)
+            yield from pulse(dut.ts_rx_ts2_loopback)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
             yield from pulse(dut.ts_tx_done)
-            yield dut.rx_idle8.eq(1)
+            yield dut.idle_handshake_done.eq(1)
             yield from self.expect(dut, "Loopback", 8)
         run(new_dut(), generator)
 
     def test_recovery_idle_exits(self):
         cases = [
             # (ds_port, inputs,                                     dst)
-            (0, {"rx_ts2_loopback": 1},                          "Loopback"),
-            (0, {"directed_loopback": 1, "loopback_capable": 1}, "Loopback"),
-            (0, {"directed_loopback": 1, "rx_idle8": 1},         "U0"),       # Not capable.
-            (0, {"rx_ts2_reset": 1},                             "HotReset.Active"),
-            (1, {"hot_reset_req": 1},                            "HotReset.Active"),
-            (0, {"hot_reset_req": 1, "rx_idle8": 1},             "U0"),       # UFP ignores.
-            (0, {"rx_idle8": 1},                                 "U0"),
-            (0, {"rx_ts2_reset": 1, "rx_idle8": 1},              "HotReset.Active"),
+            (0, {"ts_rx_ts2_loopback": 1},                          "Loopback"),
+            (0, {"directed_loopback": 1, "loopback_capable": 1},    "Loopback"),
+            (0, {"directed_loopback": 1, "idle_handshake_done": 1}, "U0"),       # Not capable.
+            (0, {"ts_rx_ts2_reset": 1},                             "HotReset.Active"),
+            (1, {"hot_reset_req": 1},                               "HotReset.Active"),
+            (0, {"hot_reset_req": 1, "idle_handshake_done": 1},     "U0"),       # UFP ignores.
+            (0, {"idle_handshake_done": 1},                         "U0"),
+            (0, {"ts_rx_ts2_reset": 1, "idle_handshake_done": 1},   "HotReset.Active"),
         ]
         for ds_port, inputs, dst in cases:
             with self.subTest(ds_port=ds_port, inputs=inputs):
@@ -649,11 +651,11 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
         # TS2 Loopback bit seen in Recovery.Configuration is latched -> slave Loopback.
         def generator(dut):
             yield from self.goto(dut, "Recovery.Configuration")
-            yield from pulse(dut.rx_ts2_loopback)
+            yield from pulse(dut.ts_rx_ts2_loopback)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
             yield from pulse(dut.ts_tx_done)
-            yield dut.rx_idle8.eq(1)
+            yield dut.idle_handshake_done.eq(1)
             yield from self.expect(dut, "Loopback", 8)
             # Slave: does not exit on its own.
             self.assertTrue((yield from stay_in(dut, "Loopback", 32)))
@@ -666,16 +668,16 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
             yield dut.loopback_capable.eq(1)
             yield dut.directed_loopback.eq(1)
             yield from self.expect(dut, "Recovery.Active", 4)
-            self.assertEqual((yield dut.tx_ts2_loopback), 0)
+            self.assertEqual((yield dut.ts_tx_ts2_loopback), 0)
             yield from pulse(dut.ts_rx_ts1)
             yield from pulse(dut.ts_tx_done)
             yield from self.expect(dut, "Recovery.Configuration")
-            self.assertEqual((yield dut.tx_ts2_loopback), 1)
+            self.assertEqual((yield dut.ts_tx_ts2_loopback), 1)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
             yield from pulse(dut.ts_tx_done)
             yield from self.expect(dut, "Loopback", 8)
-            self.assertEqual((yield dut.tx_ts2_loopback), 0)
+            self.assertEqual((yield dut.ts_tx_ts2_loopback), 0)
             # Master: exits when no longer directed.
             yield dut.directed_loopback.eq(0)
             yield from self.expect(dut, "Loopback.Exit", 4)
@@ -690,7 +692,7 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
             yield dut.directed_loopback.eq(1)
             yield from self.goto(dut, "Polling.Configuration")
             yield
-            self.assertEqual((yield dut.tx_ts2_loopback), 1)
+            self.assertEqual((yield dut.ts_tx_ts2_loopback), 1)
         run(new_dut(), generator)
 
 # Hot Reset (USB 3.2 7.5.12) -----------------------------------------------------------------------
@@ -705,20 +707,20 @@ class TestLTSSMHotReset(unittest.TestCase, LTSSMDriver):
                     yield dut.ds_port.eq(ds_port)
                     yield from self.goto(dut, "HotReset.Active")
                     yield
-                    self.assertEqual((yield dut.tx_ts2_reset), 1)
+                    self.assertEqual((yield dut.ts_tx_ts2_reset), 1)
                     self.assertEqual((yield dut.hot_reset), 1)
-                    yield dut.rx_ts2_reset.eq(1)
+                    yield dut.ts_rx_ts2_reset.eq(1)
                     # Own reset done after hr_delay: Reset=0 TS2.
-                    n = yield from self.wait_for_value(dut, dut.tx_ts2_reset, 0, 64)
+                    n = yield from self.wait_for_value(dut, dut.ts_tx_ts2_reset, 0, 64)
                     self.assertAlmostEqual(n, 16, delta=4)
                     # Stay in Active while the partner still sends Reset=1.
                     self.assertTrue((yield from stay_in(dut, "HotReset.Active", 16)))
-                    yield dut.rx_ts2_reset.eq(0)
+                    yield dut.ts_rx_ts2_reset.eq(0)
                     yield from self.expect(dut, "HotReset.Exit", 4)
                     self.assertEqual((yield dut.hot_reset), 1)
                     self.assertEqual((yield dut.idle_handshake), 1)
                     self.assertTrue((yield from stay_in(dut, "HotReset.Exit", 8)))
-                    yield dut.rx_idle8.eq(1)
+                    yield dut.idle_handshake_done.eq(1)
                     yield from self.expect(dut, "U0", 4)
                     self.assertEqual((yield dut.hot_reset), 0)
                     self.assertEqual((yield dut.rx_ready), 1)
@@ -756,18 +758,18 @@ class TestLTSSMHotReset(unittest.TestCase, LTSSMDriver):
             yield from self.goto(dut, "U0")
             yield dut.hot_reset_req.eq(1)
             yield from self.expect(dut, "Recovery.Active", 4)
-            self.assertEqual((yield dut.tx_ts2_reset), 0)
+            self.assertEqual((yield dut.ts_tx_ts2_reset), 0)
             yield from pulse(dut.ts_rx_ts1)
             yield from pulse(dut.ts_tx_done)
             yield from self.expect(dut, "Recovery.Configuration")
             self.assertEqual((yield dut.ts_tx_ts2), 1)
-            self.assertEqual((yield dut.tx_ts2_reset), 1)
+            self.assertEqual((yield dut.ts_tx_ts2_reset), 1)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
             yield from pulse(dut.ts_tx_done)
             yield from self.expect(dut, "HotReset.Active", 8)
             yield
-            self.assertEqual((yield dut.tx_ts2_reset), 1)
+            self.assertEqual((yield dut.ts_tx_ts2_reset), 1)
         run(new_dut(), generator)
 
     def test_ds_hot_reset_from_u1_u2_through_recovery(self):
@@ -873,8 +875,8 @@ class TestLTSSMCompliance(unittest.TestCase, LTSSMDriver):
                     yield from self.goto(dut, "Compliance")
                     for name in ["lfps_rx_polling", "directed_recovery", "hot_reset_req",
                                  "lfps_rx_exit_u1", "lfps_rx_exit_u2", "lfps_rx_wakeup_u3",
-                                 "ts_rx_ts1", "ts_rx_ts2", "rx_ts2_reset", "rx_ts2_loopback",
-                                 "rx_idle8"]:
+                                 "ts_rx_ts1", "ts_rx_ts2", "ts_rx_ts2_reset", "ts_rx_ts2_loopback",
+                                 "idle_handshake_done"]:
                         yield getattr(dut, name).eq(1)
                     self.assertTrue((yield from stay_in(dut, "Compliance", 64)))
                 run(new_dut(COMPLIANCE_SCALE), generator)
@@ -886,7 +888,7 @@ class TestLTSSMCompliance(unittest.TestCase, LTSSMDriver):
         def generator(dut):
             yield from self.goto(dut, "eSS.Inactive") # Was in U0 before.
             yield from self.expect(dut, "Polling.LFPS", cycles(12e-3, dut.scale) + 32)
-            yield dut.rx_idle8.eq(0)
+            yield dut.idle_handshake_done.eq(0)
             n = yield from wait_state(dut, "Compliance", cycles(360e-3, dut.scale) + 32)
             self.assertIsNone(n)
         run(new_dut(), generator)

@@ -96,54 +96,15 @@ class USB3PIPE(LiteXModule):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
-        # LTSSM signals ----------------------------------------------------------------------------
+        # LTSSM signals (LTSSM_PIPE_INTERFACE, LTSSM outputs are PIPE inputs) ----------------------
+        for name, width, direction in LTSSM_PIPE_INTERFACE:
+            setattr(self, name, Signal(width, name=name))
 
-        self.rx_ready           = Signal()   # i
-        self.tx_ready           = Signal()   # i
-
-        self.idle_handshake     = Signal()   # i
-
-        self.disable_scrambling = Signal()   # i: Directed to disable scrambling (7.5.4.9.1).
-        self.ts2_decode         = Signal()   # i: Decode the received TS2 Disable Scrambling bit.
-        self.idle_done          = Signal()   # o
-
-        self.serdes_rx_align    = Signal()   # i
-        self.serdes_rx_polarity = Signal()   # i
-
-        self.lfps_tx_polling    = Signal()   # i
-        self.lfps_tx_idle       = Signal()   # i
-        self.lfps_rx_polling    = Signal()   # o
-        self.lfps_tx_count      = Signal(16) # o
-
-        self.lfps_tx_ping       = Signal()   # i
-        self.lfps_tx_exit_u1    = Signal()   # i
-        self.lfps_tx_exit_u2    = Signal()   # i
-        self.lfps_tx_wakeup_u3  = Signal()   # i
-        self.lfps_tx_reset      = Signal()   # i
-
-        self.lfps_rx_ping       = Signal()   # o
-        self.lfps_rx_exit_u1    = Signal()   # o
-        self.lfps_rx_exit_u2    = Signal()   # o
-        self.lfps_rx_wakeup_u3  = Signal()   # o
-        self.lfps_rx_reset      = Signal()   # o
+        self.disable_scrambling = Signal() # i: Directed to disable scrambling (7.5.4.9.1).
 
         if ssp:
             self.lfps_tx_ssp      = Signal() # i: SuperSpeedPlus Polling LFPS transmission.
             self.lfps_tx_ssp_lfps = Signal() # i: SuperSpeedPlus Polling LFPS burst.
-
-        self.ts_rx_ts1          = Signal()   # o
-        self.ts_rx_ts1_inv      = Signal()   # o
-        self.ts_rx_ts2          = Signal()   # o
-        self.ts_rx_ts2_reset    = Signal()   # o
-        self.ts_rx_ts2_loopback = Signal()   # o
-
-        self.ts_tx_enable       = Signal()   # i
-        self.ts_tx_tseq         = Signal()   # i
-        self.ts_tx_ts1          = Signal()   # i
-        self.ts_tx_ts2          = Signal()   # i
-        self.ts_tx_ts2_reset    = Signal()   # i
-        self.ts_tx_ts2_loopback = Signal()   # i
-        self.ts_tx_done         = Signal()   # o
 
         # # #
 
@@ -153,10 +114,8 @@ class USB3PIPE(LiteXModule):
             serdes.rx_polarity.eq(self.serdes_rx_polarity),
         ]
         # No SKP scheduled during TSEQ (only after TS1/TS2, packets and Logical Idle) and count of
-        # transmitted symbols (Y) restarting on Polling.Active entry (6.4.3.1). SerDes without SKP
-        # control: no-op.
-        if hasattr(serdes, "tx_skp_enable"):
-            self.comb += serdes.tx_skp_enable.eq(~self.ts_tx_tseq)
+        # transmitted symbols (Y) restarting on Polling.Active entry (6.4.3.1).
+        self.comb += serdes.tx_skp_enable.eq(~self.ts_tx_tseq)
 
         # Endianness Swap --------------------------------------------------------------------------
         if with_endianness_swap:
@@ -301,5 +260,5 @@ class USB3PIPE(LiteXModule):
             idle_handshake.rx_idle.eq(rx_valid & (rx_data == 0) & (rx_ctrl == 0)),
             idle_handshake.rx_data.eq(rx_valid & ((rx_data != 0) | (rx_ctrl != 0))),
             idle_handshake.tx_idle.eq(tx_enable & tx_idle & scrambler.sink.ready),
-            self.idle_done.eq(idle_handshake.done),
+            self.idle_handshake_done.eq(idle_handshake.done),
         ]

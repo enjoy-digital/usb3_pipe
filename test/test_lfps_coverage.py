@@ -47,7 +47,7 @@ def runs(trace, value=0):
     return r
 
 def lfps_unit(sys_clk_freq, timer_scale=1):
-    serdes = LFPSSerDesStub(with_tx_lfps=True)
+    serdes = LFPSSerDesStub()
     dut    = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq, lfps_clk_freq=LFPS_CLK_FREQ,
         timer_scale=timer_scale)
     dut.submodules += serdes

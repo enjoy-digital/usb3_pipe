@@ -46,6 +46,10 @@ What a USB3 Link Layer needs from the PHY (the USB3 Device Core only uses this i
 | `u2_timeout` (8) | Link -> PHY | U2 Inactivity Timeout (LMP value, 256us units, 00h/FFh: disabled): U1 -> U2 on timeout. |
 | `directed_recovery`, `hot_reset_req`, `warm_reset_req`, `exit_u1/u2_req`, `wakeup_u3_req`, `link_activity` | Link -> PHY | Directed transitions, U0 Recovery timeout activity (`USB3PHY_LINK_CTRL`). |
 
+The LTSSM <-> PIPE signals (LFPS, Training Sequences, Idle Symbol handshake, SerDes/datapath
+controls) are internal to `USB3PHY`: listed once in `LTSSM_PIPE_INTERFACE` (`common.py`) with the
+same names on both sides, wired by `connect_ltssm_pipe()`.
+
 ## Usage
 
 ```python

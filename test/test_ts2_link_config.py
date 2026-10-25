@@ -44,7 +44,7 @@ NORMAL   = LinkConfig(reset=0, loopback=0, scrambling=1)
 
 class TestTS2LinkConfig(unittest.TestCase):
     def pipe_rx(self, words):
-        gt  = GTModel(tx_ready=False, with_ready=True)
+        gt  = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         def probe():
@@ -81,7 +81,7 @@ class TestTS2LinkConfig(unittest.TestCase):
             ("loopback", 0, 1, 0x04),
             ("normal",   0, 0, 0x00)]:
             with self.subTest(name):
-                gt  = GTModel(tx_ready=False, with_ready=True)
+                gt  = GTModel(tx_ready=False)
                 dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
                 dut.submodules += gt
                 def generator(dut):
@@ -103,11 +103,11 @@ class TestTS2LinkConfig(unittest.TestCase):
     def test_phy_connects_ts2_link_config_to_ltssm(self):
         # The LTSSM Hot Reset/Loopback transitions use the decoded TS2 bits: USB3PHY must connect
         # them (rx: PIPE -> LTSSM, tx: LTSSM -> PIPE).
-        gt  = GTModel(tx_ready=False, with_ready=True)
+        gt  = GTModel(tx_ready=False)
         dut = USB3PHY(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         def probe():
-            return ((yield dut.ltssm.rx_ts2_reset), (yield dut.ltssm.rx_ts2_loopback))
+            return ((yield dut.ltssm.ts_rx_ts2_reset), (yield dut.ltssm.ts_rx_ts2_loopback))
         def generator(dut):
             dut.rx_reset = yield from drive_rx(gt, rx_words((TS2, RESET, 8)), probe)
             dut.rx_loopback = yield from drive_rx(gt, rx_words((TS2, LOOPBACK, 8)), probe)
@@ -116,11 +116,11 @@ class TestTS2LinkConfig(unittest.TestCase):
         self.assertEqual(dut.rx_loopback, (0, 1))
 
         # TX: the ts_tx_ts2_reset/loopback PIPE inputs must be driven by the LTSSM outputs.
-        dut  = USB3PHY(serdes=GTModel(tx_ready=False, with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut  = USB3PHY(serdes=GTModel(tx_ready=False), sys_clk_freq=int(125e6), with_endianness_swap=False)
         comb = dut.get_fragment().comb
         for name in ["reset", "loopback"]:
             pipe_input   = getattr(dut.pipe,  "ts_tx_ts2_" + name)
-            ltssm_output = getattr(dut.ltssm, "tx_ts2_" + name)
+            ltssm_output = getattr(dut.ltssm, "ts_tx_ts2_" + name)
             self.assertTrue(any(getattr(s, "l", None) is pipe_input and s.r is ltssm_output
                 for s in comb), name)
 

@@ -32,7 +32,7 @@ def partner_wire(n_idle_words, data_words=[]):
 
 class TestIdleHandshake(unittest.TestCase):
     def pipe_handshake(self, wire, n_cycles=None):
-        gt  = GTModel(with_ready=True)
+        gt  = GTModel()
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         n_cycles = n_cycles or len(wire) + 32
@@ -47,7 +47,7 @@ class TestIdleHandshake(unittest.TestCase):
                 yield gt.source.data.eq(d)
                 yield gt.source.ctrl.eq(c)
                 yield
-                if dut.done_cycle is None and (yield dut.idle_done):
+                if dut.done_cycle is None and (yield dut.idle_handshake_done):
                     dut.done_cycle = i
 
         def checker(dut):
@@ -92,7 +92,7 @@ class TestIdleHandshake(unittest.TestCase):
         dut = USB3LTSSM(sys_clk_freq=int(125e6), with_timers=False)
 
         def generator(dut):
-            yield dut.rx_idle8.eq(0)
+            yield dut.idle_handshake_done.eq(0)
             # Same path as drive_to_u0, stopping in Polling.Idle.
             yield dut.lfps_tx_count.eq(20)
             yield dut.lfps_rx_polling.eq(1)
@@ -112,25 +112,25 @@ class TestIdleHandshake(unittest.TestCase):
                 self.assertEqual((yield dut.idle_handshake), 1)
                 self.assertEqual((yield dut.u0), 0)
                 yield
-            yield dut.rx_idle8.eq(1)
+            yield dut.idle_handshake_done.eq(1)
             self.assertTrue((yield from wait_for(dut, dut.u0, timeout=4)))
             self.assertEqual((yield dut.idle_handshake), 0)
 
         run_simulation(dut, generator(dut))
 
     def test_phy_connects_idle_handshake(self):
-        # USB3PHY must connect the PIPE Idle handshake to the LTSSM (no rx_idle8 proxy).
-        dut  = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        # USB3PHY must connect the PIPE Idle handshake to the LTSSM (no proxy).
+        dut  = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
         comb = dut.get_fragment().comb
         def driven_by(l, r):
             return any(getattr(s, "l", None) is l and s.r is r for s in comb)
-        self.assertTrue(driven_by(dut.ltssm.rx_idle8,       dut.pipe.idle_done))
-        self.assertTrue(driven_by(dut.pipe.idle_handshake, dut.ltssm.idle_handshake))
+        self.assertTrue(driven_by(dut.ltssm.idle_handshake_done, dut.pipe.idle_handshake_done))
+        self.assertTrue(driven_by(dut.pipe.idle_handshake,       dut.ltssm.idle_handshake))
 
     def test_phy_link_interface(self):
         # USB3PHY exposes the LTSSM Link-Layer control interface (same Signals, reset values kept).
         from usb3_pipe.phy import USB3PHY_LINK_CTRL
-        dut = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
         for name, direction in USB3PHY_LINK_CTRL:
             self.assertIs(getattr(dut, name), getattr(dut.ltssm, name))
         self.assertEqual(dut.link_activity.reset.value, 1)

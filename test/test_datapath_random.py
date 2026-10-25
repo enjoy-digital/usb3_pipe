@@ -20,6 +20,7 @@ from usb3_pipe.core import USB3PIPE
 from usb3_pipe.scrambling import Scrambler, Descrambler
 from usb3_pipe.datapath import RXWordAligner, RXSKPRemover, TXSKPInserter, TXDatapath, RXDatapath
 
+from test.model.gt import GTModel
 from test.common import (ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words,
     strip_skp, stream_driver, swap_word)
 
@@ -359,20 +360,11 @@ class TestRXWordAlignerRandom(unittest.TestCase):
 
 # USB3PIPE End-to-End ------------------------------------------------------------------------------
 
-class SerDesLoopModel(Module):
+class SerDesLoopModel(GTModel):
     """SerDes loop model: TXDatapath (SKP insertion, CDC, 32->16-bit) looped to RXDatapath (16->32-bit,
     SKP removal, CDC, word alignment)."""
     def __init__(self):
-        self.sink          = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source        = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.rx_align      = Signal()
-        self.rx_polarity   = Signal()
-        self.rx_idle       = Signal()
-        self.tx_idle       = Signal()
-        self.tx_pattern    = Signal(20)
-        self.tx_skp_enable = Signal(reset=1)
-
-        # # #
+        GTModel.__init__(self, tx_ready=False)
 
         self.submodules.tx = tx = TXDatapath("serdes")
         self.submodules.rx = rx = RXDatapath("serdes")

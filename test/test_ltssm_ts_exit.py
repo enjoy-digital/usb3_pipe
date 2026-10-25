@@ -64,7 +64,7 @@ class TestLTSSMTSExit(LTSSMTestCase):
 
     def test_polling_configuration_sends_16_ts2_after_receiving(self):
         def generator(dut):
-            yield dut.rx_idle8.eq(0)
+            yield dut.idle_handshake_done.eq(0)
             yield from drive_to_polling_active(dut)
             yield from pulse(dut.ts_rx_ts1)
             yield from pulse(dut.ts_tx_done)
@@ -76,7 +76,7 @@ class TestLTSSMTSExit(LTSSMTestCase):
         # 8 consecutive TS2 already received in Polling.Active: the whole first TS2 burst of
         # Polling.Configuration is sent after them.
         def generator(dut):
-            yield dut.rx_idle8.eq(0)
+            yield dut.idle_handshake_done.eq(0)
             yield from drive_to_polling_active(dut)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
@@ -90,7 +90,7 @@ class TestLTSSMTSExit(LTSSMTestCase):
     def test_recovery_configuration_sends_16_ts2_after_receiving(self):
         def generator(dut):
             yield from self.drive_to_u0(dut)
-            yield dut.rx_idle8.eq(0)
+            yield dut.idle_handshake_done.eq(0)
             yield from pulse(dut.directed_recovery)
             self.assertTrue((yield from self.wait_for(dut, dut.ts_tx_ts1)))
             yield from pulse(dut.ts_rx_ts1)

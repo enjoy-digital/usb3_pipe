@@ -472,7 +472,7 @@ class LFPSUnit(LiteXModule):
 
         # Polling (burst + repeat, softened scale to survive the idle deglitcher) ------------------
         # Bursts measured through the SerDes electrical idle filter (stretched by rx_idle_stretch).
-        rx_idle_stretch = getattr(serdes, "rx_idle_stretch", 0)
+        rx_idle_stretch = serdes.rx_idle_stretch
         polling_scale   = polling_scale_of(timer_scale)
         self.polling_checker = polling_checker = LFPSChecker(PollingLFPS,
             sys_clk_freq   = sys_clk_freq,
@@ -535,12 +535,12 @@ class LFPSUnit(LiteXModule):
         # Warm Reset -------------------------------------------------------------------------------
         # A non electrical idle line is also seen with SuperSpeed data (U0, Recovery...): the LFPS
         # is differentiated from data by the RX decode errors it produces (see RXErrorMonitor).
-        # SerDes without rx_errors fall back to the electrical idle detection only.
-        rx_errors = getattr(serdes, "rx_errors", None)
+        # SerDes without decode errors (rx_errors held at 1) fall back to the electrical idle
+        # detection only.
         self.reset_checker = reset_checker = LFPSBurstChecker(
             min_cycles=scaled_cycles(sys_clk_freq, ResetDetectDelay, timer_scale))
         self.comb += [
-            reset_checker.idle.eq(serdes.rx_idle | ((~rx_errors) if rx_errors is not None else 0)),
+            reset_checker.idle.eq(serdes.rx_idle | (~serdes.rx_errors)),
             self.rx_reset.eq(reset_checker.detect),
         ]
 
@@ -578,9 +578,7 @@ class LFPSUnit(LiteXModule):
                 serdes.tx_pattern.eq(Mux(self.tx_ssp_lfps, lfps_pattern, 0)),
             ).Else(tx_mux)
         self.comb += tx_mux
-        # SerDes without tx_lfps: raw pattern only sent when non-zero (high half of the period).
-        if hasattr(serdes, "tx_lfps"):
-            self.comb += serdes.tx_lfps.eq(tx_lfps)
+        self.comb += serdes.tx_lfps.eq(tx_lfps)
 
 # SuperSpeedPlus Constants/Helpers (6.9.4/6.9.5, Table 7-13) ---------------------------------------
 

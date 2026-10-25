@@ -22,10 +22,12 @@ PIPE_EVENTS = ["ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2", "lfps_rx_polling", "lf
 
 def fake_phy():
     phy = SimpleNamespace(
-        reset       = Signal(),
-        ltssm_state = Signal(5),
-        ltssm       = SimpleNamespace(u0=Signal(), recovery=Signal(), u1=Signal(), u2=Signal(), u3=Signal()),
-        pipe        = SimpleNamespace(**{name: Signal(name=name) for name in PIPE_EVENTS}),
+        reset           = Signal(),
+        serdes_rx_reset = Signal(),
+        ltssm_state     = Signal(5),
+        ltssm           = SimpleNamespace(u0=Signal(), recovery=Signal(), u1=Signal(), u2=Signal(),
+            u3=Signal()),
+        pipe            = SimpleNamespace(**{name: Signal(name=name) for name in PIPE_EVENTS}),
     )
     serdes = SimpleNamespace(
         ready       = Signal(),
