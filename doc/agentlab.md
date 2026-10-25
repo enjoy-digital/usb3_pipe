@@ -17,6 +17,14 @@ Built on the USB3 Device Core (composite device) and LiteX (VexRiscv, LiteDRAM, 
 The gateware takes its DUT pins from the target (`dut_pads`: uarts, gpios, power, la, jtag/swd), so
 the same instrument runs on both boards.
 
+Phase 1 DUT pins (details in the targets docstrings):
+- KC705 (LVCMOS25, VADJ 2.5V default): UART0-3 TX/RX on LA02-LA05 P/N, GPIO0-15 on LA06-LA13 P/N,
+  power 0-3 on LA14-LA15 P/N; reserved: LA16-LA31 P/N (logic analyzer channels 0-31), LA32-LA33 P/N
+  + LA01_CC_P (JTAG/SWD).
+- Acorn (debug pins, LVCMOS33): UART0 TX/RX on H5/J5, GPIO0/1 on J2/K2 (loop H5-J5 and J2-K2 for
+  tests), UART1-3 internally looped back, power switch 0 on user_led3. CSRs through the USB control
+  CDC-ACM or JTAGBone (no UARTBone on the baseboard UART).
+
 ## USB Composite Device
 
 Device class 0xEF/02/01 (IADs), one configuration:
@@ -32,6 +40,13 @@ Device class 0xEF/02/01 (IADs), one configuration:
 
 Endpoint numbers are indicative (max 15 IN/15 OUT): the gateware descriptors are the reference.
 
+Phase 1 (`agentlab/gateware/usb.py`, `agentlab_usb_map()`): interfaces 0-10/EP1-EP11 as above
+(USB3 data endpoints: Max Burst 2 for the CDC-ACM, 4 for the events), VID/PID 0x1d50/0x605a
+(USB3-PIPE), product string "AgentLab". The CDC-ACM class requests (SET/GET_LINE_CODING,
+SET_CONTROL_LINE_STATE) are dispatched to the function of their interface (wIndex,
+`usb3_core.control.USB3ControlDispatcher`): each DUT UART has its own line coding/DTR. A DUT UART
+sends its RX bytes to the host only while the port is open (DTR set).
+
 ## Timebase and Events Stream
 
 - `timestamp`: 64-bit free-running counter at `sys_clk_freq` (125MHz, 8ns), CSR readable, latched on
@@ -45,12 +60,34 @@ Endpoint numbers are indicative (max 15 IN/15 OUT): the gateware descriptors are
 | 2-7 | value (UART byte, GPIO new level, power state, ...) |
 | 8-15 | timestamp (64-bit) |
 
+Phase 1 details (`agentlab/gateware/events.py`):
+
+- UART RX: timestamp at the middle of the stop bit; UART TX: end of the stop bit; value: the byte.
+- GPIO edge (0x03) / power (0x04): one record per changed bit (source: bit index), value byte 2:
+  new level of the bit, bytes 3-7: levels of all the GPIOs/power switches (bit n: GPIO/switch n),
+  same timestamp for the changes of the same cycle. GPIO edges only for the GPIOs enabled in
+  `agentlab_gpio_edge_mask` (none by default).
+- Marker (0x06): source 0, value: the 32-bit value written to `agentlab_marker`.
+- Overflow (0xff): source 0, value: number of lost events, timestamp of the first lost event.
+- Sources merged round-robin, 512 records FIFO, records sent continuously on the Bulk IN endpoint
+  (records never split; packets of up to 1024 bytes ended after ~1us without record: the host reads
+  a stream of 16-byte records, short packets are normal).
+
 ## CSRs (names are the host API contract)
 
-- `agentlab_timestamp` (64-bit, latch/read), `agentlab_marker` (write: marker event).
-- `agentlab_power_out` (bit per power switch), `agentlab_power_status` (optional sense).
+- `agentlab_timestamp_latch` (write 1: latch), `agentlab_timestamp_value` (64-bit, latched
+  timestamp), `agentlab_marker` (32-bit, write: marker event with this value).
+- `agentlab_power_out` (bit per power switch), `agentlab_power_status` (optional sense, else the
+  outputs).
 - `agentlab_gpio_oe`, `agentlab_gpio_out`, `agentlab_gpio_in`, `agentlab_gpio_edge_mask`.
-- `agentlab_uart{n}_*`: DUT UART config (baudrate also from the CDC-ACM line coding).
+- `agentlab_uart{n}_baudrate` (rw, also written by the CDC-ACM SET_LINE_CODING, default 115200, 8N1
+  only: format fields ignored), `agentlab_uart{n}_tuning_word` (ro),
+  `agentlab_uart{n}_status` (`connected`: host port open, DTR).
+- `agentlab_events_enable` (default 1), `agentlab_events_clear` (write 1: drop the buffered records,
+  reset the lost counter), `agentlab_events_lost` (lost events count), `agentlab_events_level`
+  (buffered records).
+- Constants (csr.csv): `agentlab_uarts`, `agentlab_gpios`, `agentlab_power`,
+  `agentlab_events_interface`, `agentlab_events_ep`.
 - `agentlab_la_*`: channels, samplerate divider, trigger (mask/value/edge), pre-trigger depth,
   capture length, arm/status (phase 2).
 - `agentlab_video_*`: framebuffer base/format (phase 4).
