@@ -1,0 +1,12 @@
+graft usb3_pipe
+graft usb3_core
+
+include LICENSE
+
+graft doc
+
+prune examples
+prune test
+
+global-exclude *.py[cod]
+global-exclude __pycache__/*

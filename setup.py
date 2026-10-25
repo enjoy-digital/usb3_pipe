@@ -1,42 +1,47 @@
 #!/usr/bin/env python3
 
-import sys
-from pathlib import Path
-
-from setuptools import find_packages
 from setuptools import setup
+from setuptools import find_packages
 
 
-if sys.version_info[:3] < (3, 5):
-    raise SystemExit("You need Python 3.5+")
+with open("README.md", "r", encoding="utf-8") as fp:
+    long_description = fp.read()
 
 
 setup(
-    name="usb3_pipe",
-    version="0.1.dev0",
-    description="USB3.0 SuperSpeed PHY (FPGA transceivers) and USB3 Device Core for LiteX",
-    long_description=Path("README.md").read_text(),
-    long_description_content_type="text/markdown",
-    author="Florent Kermarrec",
-    author_email="florent@enjoy-digital.fr",
-    url="http://enjoy-digital.fr",
-    download_url="https://github.com/enjoy-digital/usb3_pipe",
-    test_suite="test",
-    license="BSD",
-    platforms=["Any"],
-    keywords="HDL ASIC FPGA hardware design",
-    classifiers=[
+    name                          = "usb3_pipe",
+    version                       = "0.1.dev0",
+    description                   = "USB3.0 SuperSpeed PHY (FPGA transceivers) and USB3 Device Core for LiteX",
+    long_description              = long_description,
+    long_description_content_type = "text/markdown",
+    author                        = "Florent Kermarrec",
+    author_email                  = "florent@enjoy-digital.fr",
+    url                           = "http://enjoy-digital.fr",
+    download_url                  = "https://github.com/enjoy-digital/usb3_pipe",
+    test_suite                    = "test",
+    license                       = "BSD",
+    python_requires               = "~=3.7",
+    install_requires              = ["pyyaml", "litex", "liteiclink"],
+    extras_require                = {
+        "develop": [
+          "pytest",
+          "pytest-xdist",
+          "setuptools",
+        ]
+    },
+    packages                      = find_packages(exclude=("test*", "sim*", "doc*", "examples*", "scripts*")),
+    include_package_data          = True,
+    keywords                      = "HDL ASIC FPGA hardware design",
+    classifiers                   = [
         "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
         "Environment :: Console",
-        "Development Status :: Alpha",
+        "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: BSD License",
         "Operating System :: OS Independent",
         "Programming Language :: Python",
     ],
-    packages=find_packages(exclude=("test*", "sim*", "doc*", "examples*")),
-    include_package_data=True,
-    entry_points={
+    entry_points = {
         "console_scripts": [
             "usb3_pipe_gen=usb3_pipe.gen:main",
         ],

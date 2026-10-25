@@ -30,33 +30,35 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 | Enumeration | SuperSpeed (5000M), standard Linux drivers (usbfs, cdc_acm, uvcvideo, usb-storage) |
 | Bulk bandwidth | IN 446 MB/s, OUT 449 MB/s, full duplex 376 + 400 MB/s (~90% of 5Gbps 8b/10b) |
 | Stability | 139 GB full duplex transferred with data checked: 0 errors, no retry/Recovery |
-| Demos | Bulk loopback/benchmark, LiteX BIOS console (CDC-ACM), UVC camera up to 1080p60, Mass Storage RAM disk, composite camera + console |
+| Demos | Bulk loopback/benchmark, LiteX BIOS console (CDC-ACM), UVC camera up to 1080p60 (Bulk) or 1080p30 (Isochronous), Mass Storage RAM disk (and DDR3 disk), composite camera + console |
 
 [> Features
 -----------
-- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY SerDes (LiteICLink), LFPS, Training Sequences, 8b/10b, scrambling,
-  SKP insertion/removal, word/framing alignment, polarity, LTSSM (Polling/U0/Recovery/U1-U3/Hot/Warm
-  Reset/Compliance/Loopback), debug counters. Also generated as a standalone Verilog core.
+- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY SerDes (LiteICLink), LFPS, Training
+  Sequences, 8b/10b, scrambling, SKP insertion/removal, word/framing alignment, polarity, LTSSM
+  (Polling/U0/Recovery/U1-U3/Hot/Warm Reset/Compliance/Loopback), debug counters. Also generated as a
+  standalone Verilog core (`usb3_pipe_gen`, Artix7/Kintex7/Ultrascale+).
 - **USB3 Device Core** (`usb3_core/`): Link Layer (header flow control, retries, LMPs, timers), Protocol
-  Layer, Control Endpoint (standard requests, class/vendor request handler), Bulk IN/OUT endpoints with
-  bursts, descriptors builder, Header Packets trace (debug).
-- **Device classes**: vendor Bulk, CDC-ACM (serial port/LiteX console), UVC (video camera), MSC (mass
-  storage), composite devices.
+  Layer, Control Endpoint (standard requests, alternate settings, class/vendor request handler), Bulk
+  IN/OUT endpoints with bursts, Isochronous IN endpoints, U1/U2 Link Power Management (`with_lpm`, off
+  by default), descriptors builder, Header Packets trace (debug).
+- **Device classes**: vendor Bulk, CDC-ACM (serial port/LiteX console), UVC (video camera, Bulk or
+  Isochronous), MSC (mass storage on block RAM or DRAM, ex: DDR3 through LiteDRAM), composite devices.
 - **Simulation**: Verilator Host model <-> PHYs <-> Device Core (`sim.py`), Migen unit/system tests with
   Python host models (~300 tests).
 
 ```
        USB3 Host (xHCI)
              |  SuperSpeed (5Gbps)
-  +----------+----------------------------------------------------------------------------+
-  | FPGA     |                                                                            |
+  +----------+------------------------------------------------------------------------------+
+  | FPGA     |                                                                              |
   |  +-------+-------+   +---------------------+   +--------------------------------------+ |
-  |  | Transceiver   |-->| USB3 PIPE + LTSSM   |-->| USB3 Device Core                      | |
-  |  | (GTP/GTX)     |<--| (usb3_pipe.USB3PHY) |<--| Link -> Protocol -> EP0/Bulk endpoints| |
+  |  | Transceiver   |-->| USB3 PIPE + LTSSM   |-->| USB3 Device Core                     | |
+  |  | (GTP/GTX/GTY) |<--| (usb3_pipe.USB3PHY) |<--| Link -> Protocol -> EP0/Bulk/Iso EPs | |
   |  +---------------+   +---------------------+   +----+------------+------------+-------+ |
   |                                                     |            |            |         |
   |                                              CDC-ACM/UART   UVC camera   Mass Storage   |
-  +-------------------------------------------------------------------------------------------+
+  +-----------------------------------------------------------------------------------------+
 ```
 
 [> Hardware
@@ -83,7 +85,8 @@ $ pip3 install -e .
 
 # Simulation: Host model <-> PHYs <-> USB3 Device Core (link training, enumeration, Bulk transfers).
 $ ./sim.py
-$ pytest test
+$ pytest test             # Unit/system tests (~300), pytest -n auto: parallel (pytest-xdist).
+$ pytest test -m slow     # Long simulations (Verilator), not run by default.
 
 # Hardware: build/load (JTAG) the Bulk loopback example, check the enumeration, run a loopback.
 $ ./acorn.py --build --load --with-jtagbone
@@ -93,7 +96,8 @@ $ ./scripts/usb3_bulk.py loopback --size 1024 --count 1000
 
 [> Demos
 --------
-Build with `./acorn.py --build --load --example <name>`, see [doc/examples.md](doc/examples.md):
+Build with `./acorn.py --build --load --example <name>` (`--with-lpm`: U1/U2 on the vendor Bulk
+examples), see [doc/examples.md](doc/examples.md):
 
 | Example | Device | Host side |
 |---|---|---|
@@ -102,9 +106,13 @@ Build with `./acorn.py --build --load --example <name>`, see [doc/examples.md](d
 | `cdc_uartbone` | CDC-ACM serial port (UARTBone) | `litex_server --uart --uart-port /dev/ttyACM0` |
 | `console` (`--cpu-type vexriscv`) | CDC-ACM LiteX BIOS console | `litex_term /dev/ttyACM0` |
 | `uvc` | UVC camera, YUY2 test pattern (480p60/720p60/1080p30/1080p60) | `ffplay -f v4l2 -video_size 1920x1080 /dev/video0`, VLC |
+| `uvc_iso` | UVC camera, Isochronous streaming (480p60/720p30/720p60/1080p30) | `ffplay -f v4l2 -video_size 1280x720 /dev/video0`, VLC |
 | `msc` | Mass Storage 512KB FAT RAM disk | `/dev/sdX`, mount |
 | `msc_dram` | Mass Storage 512MB DDR3 disk (not yet validated on hardware) | `mkfs.vfat /dev/sdX`, mount |
 | `composite` (`--cpu-type vexriscv`) | UVC camera + CDC-ACM console | both at the same time |
+
+`kc705.py`/`alibaba_xcku3p.py` build the same examples (`--example`), except `msc_dram` (no DRAM
+controller in these targets); `--with-lpm` is an `acorn.py` option.
 
 [> Documentation
 ----------------
