@@ -17,7 +17,7 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import *
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
-from usb3_pipe.scrambling import Scrambler, Descrambler
+from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts
 from usb3_pipe.serdes import RXWordAligner
 
 # Idle Handshake -----------------------------------------------------------------------------------
@@ -79,8 +79,14 @@ class USB3PIPE(LiteXModule):
     - Clock domain crossing to/from sys_clk (>=125MHz).
     - RX words alignment.
     - TX scrambling/RX descrambling.
+
+    Gen 1x2 lanes (usb3_pipe/x2.py): lfsr_seed is the lane scrambler seed (FFFFh Lane 0, 8000h Lane 1,
+    6.13.5) and with x2_lane the descrambled lane stream is output as is on source (no framing
+    alignment and no rx_ready gating: the lanes are deskewed on the Training Sequences, the framing
+    alignment/gating is done after the lanes destriping).
     """
-    def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True, timer_scale=1):
+    def __init__(self, serdes, sys_clk_freq, with_endianness_swap=True, timer_scale=1,
+        lfsr_seed=0xffff, x2_lane=False):
         assert sys_clk_freq >= 125e6
 
         # Endpoints --------------------------------------------------------------------------------
@@ -220,7 +226,7 @@ class USB3PIPE(LiteXModule):
         # Hot Reset.Exit) and continues in U0, the Link Layer data is only accepted with tx_ready.
         tx_enable = Signal()
         self.comb += tx_enable.eq(self.tx_ready | self.idle_handshake)
-        scrambler = Scrambler()
+        scrambler = Scrambler(reset=lfsr_after_ts(lfsr_seed), seed=lfsr_seed)
         scrambler = ResetInserter()(scrambler)
         self.comb += scrambler.reset.eq(~tx_enable)
         self.scrambler = scrambler
@@ -248,7 +254,7 @@ class USB3PIPE(LiteXModule):
         # before U0: its LFSR is initialized on every received COM and advances on every non-SKP
         # symbol (6.3.1.3), so it is synchronized with the partner's scrambler when rx_ready is set.
         # Only the output to the Link Layer is gated by rx_ready.
-        self.descrambler = descrambler = Descrambler()
+        self.descrambler = descrambler = Descrambler(reset=lfsr_seed, seed=lfsr_seed)
         self.comb += descrambler.enable.eq(scrambling)
         self.comb += serdes.source.connect(descrambler.sink)
 
@@ -261,13 +267,16 @@ class USB3PIPE(LiteXModule):
         # symbols dropped/repeated on a re-alignment are the Logical Idle symbols before the framing.
         # The aligner always processes the received words (one word of latency), only its output to
         # the Link Layer is gated by rx_ready.
-        self.framing_aligner = framing_aligner = RXWordAligner(markers=[SHP, SDP, SLC])
-        self.comb += [
-            descrambler.source.connect(framing_aligner.sink),
-            framing_aligner.source.connect(source, omit={"valid", "ready"}),
-            source.valid.eq(framing_aligner.source.valid & self.rx_ready),
-            framing_aligner.source.ready.eq(source.ready | ~self.rx_ready),
-        ]
+        if x2_lane:
+            self.comb += descrambler.source.connect(source)
+        else:
+            self.framing_aligner = framing_aligner = RXWordAligner(markers=[SHP, SDP, SLC])
+            self.comb += [
+                descrambler.source.connect(framing_aligner.sink),
+                framing_aligner.source.connect(source, omit={"valid", "ready"}),
+                source.valid.eq(framing_aligner.source.valid & self.rx_ready),
+                framing_aligner.source.ready.eq(source.ready | ~self.rx_ready),
+            ]
 
         # Idle Handshake ---------------------------------------------------------------------------
         self.idle_handshake_unit = idle_handshake = IdleHandshake()
