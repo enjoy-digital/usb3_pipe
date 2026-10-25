@@ -212,12 +212,13 @@ class USB3LTSSM(LiteXModule):
         # responder still sees the initiator burst in flight at any timer_scale (Table 6-31 order
         # preserved). The tNoLFPSResponse guard (2ms/2ms/10ms) is >= the responder's own burst +
         # detection latency.
+        hs_guard     = [0, scaled(2e-3), scaled(2e-3), scaled(10e-3)] # tNoLFPSResponseTimeout.
         hs_mode      = Signal(2)
         hs_run       = Signal()
         hs_send      = Signal() # burst ongoing
         hs_rx        = Signal() # partner burst seen
-        hs_cnt       = Signal(32)
-        hs_gcnt      = Signal(32)
+        hs_cnt       = Signal(max=max(hs_guard) + 1) # <= hs_gcnt.
+        hs_gcnt      = Signal(max=max(hs_guard) + 1) # hs_run ends at the guard.
         hs_done_ok   = Signal() # pulse
         hs_done_err  = Signal() # pulse
 
@@ -229,7 +230,7 @@ class USB3LTSSM(LiteXModule):
             exit_burst_cycles(sys_clk_freq, timer_scale, U3WakeupLFPSBurst,
                               exit_u3_min_cycles(sys_clk_freq, timer_scale)),
         ])
-        hs_guard_len = Array([0, scaled(2e-3), scaled(2e-3), scaled(10e-3)])
+        hs_guard_len = Array(hs_guard)
         hs_rx_pulse  = Array([0,
             self.lfps_rx_exit_u1,
             self.lfps_rx_exit_u2,
@@ -271,8 +272,8 @@ class USB3LTSSM(LiteXModule):
         wr_run  = Signal() # Warm Reset burst ongoing
         wr_orig = Signal() # 1 = originator (DS), 0 = responder (UFP)
         wr_rx   = Signal()
-        wr_cnt  = Signal(32)
-        wr_gcnt = Signal(32)
+        wr_cnt  = Signal(max=scaled(100e-3) + 1) # wr_run ends at tReset.
+        wr_gcnt = Signal(max=scaled(200e-3) + 1) # wr_run ends at the guard.
         wr_done = Signal() # pulse: burst phase finished
 
         self.sync += [
@@ -306,12 +307,12 @@ class USB3LTSSM(LiteXModule):
 
         # U1 DS Ping timeout counter (tU1PingTimeout 300ms, reset on Ping reception, 7.5.7.2) ------
         u1_ping_lim  = scaled(300e-3)
-        u1_ping_cnt  = Signal(32)
+        u1_ping_cnt  = Signal(max=u1_ping_lim + 1)
         u1_ping_done = u1_ping_cnt >= u1_ping_lim
 
         # U1 UFP min residency (U1_MIN_RESIDENCY 3us, 7.2.4.2.7) -----------------------------------
         u1_res_lim        = scaled(3e-6)
-        u1_res_cnt        = Signal(32)
+        u1_res_cnt        = Signal(max=u1_res_lim + 1)
         u1_residency_done = u1_res_cnt >= u1_res_lim
 
         # U2 Inactivity Timeout counter (u2_timeout x 256us in U1, 10.6.2.4) -----------------------
