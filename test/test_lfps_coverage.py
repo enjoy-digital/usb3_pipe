@@ -19,6 +19,8 @@ from migen import *
 from usb3_pipe import lfps
 from usb3_pipe.lfps import LFPSChecker, LFPSBurstChecker, LFPSUnit
 
+from test.model.gt import LFPSSerDesStub
+
 FREQS         = [125e6, 133.33e6, 150e6]
 LFPS_CLK_FREQ = 25e6
 
@@ -44,16 +46,8 @@ def runs(trace, value=0):
             start = None
     return r
 
-class SerDesStub(Module):
-    """LFPS face of the SerDes, without RX idle filter (rx_idle driven directly)."""
-    def __init__(self):
-        self.rx_idle    = Signal(reset=1)
-        self.tx_idle    = Signal()
-        self.tx_lfps    = Signal()
-        self.tx_pattern = Signal(20)
-
 def lfps_unit(sys_clk_freq, timer_scale=1):
-    serdes = SerDesStub()
+    serdes = LFPSSerDesStub(with_tx_lfps=True)
     dut    = LFPSUnit(serdes=serdes, sys_clk_freq=sys_clk_freq, lfps_clk_freq=LFPS_CLK_FREQ,
         timer_scale=timer_scale)
     dut.submodules += serdes

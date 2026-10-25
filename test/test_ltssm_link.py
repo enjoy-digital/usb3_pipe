@@ -8,75 +8,7 @@ import unittest
 
 from migen import *
 
-from usb3_pipe.ltssm import USB3LTSSM
-
-
-class LTSSMLinkHarness(Module):
-    def __init__(self, sys_clk_freq=int(125e6)):
-        self.submodules.host = host = USB3LTSSM(sys_clk_freq, with_timers=False)
-        self.submodules.dev  = dev  = USB3LTSSM(sys_clk_freq, with_timers=False)
-
-        self.host_force_ts1 = Signal()
-
-        self.host_lfps_count = Signal(16)
-        self.dev_lfps_count  = Signal(16)
-
-        host_ts_counter = Signal(3)
-        dev_ts_counter  = Signal(3)
-        host_ts_active  = Signal()
-        dev_ts_active   = Signal()
-        host_ts_done    = Signal()
-        dev_ts_done     = Signal()
-
-        self.comb += [
-            host_ts_active.eq(host.ts_tx_enable & (host.ts_tx_tseq | host.ts_tx_ts1 | host.ts_tx_ts2)),
-            dev_ts_active.eq(dev.ts_tx_enable & (dev.ts_tx_tseq | dev.ts_tx_ts1 | dev.ts_tx_ts2)),
-            host.lfps_tx_count.eq(self.host_lfps_count),
-            dev.lfps_tx_count.eq(self.dev_lfps_count),
-            host.lfps_rx_polling.eq(dev.lfps_tx_polling & (self.dev_lfps_count >= 20)),
-            dev.lfps_rx_polling.eq(host.lfps_tx_polling & (self.host_lfps_count >= 20)),
-            host.ts_tx_done.eq(host_ts_done),
-            dev.ts_tx_done.eq(dev_ts_done),
-            host.ts_rx_ts1.eq(self.host_force_ts1 | (dev_ts_done & dev.ts_tx_ts1)),
-            host.ts_rx_ts1_inv.eq(0),
-            host.ts_rx_ts2.eq(dev_ts_done & dev.ts_tx_ts2),
-            dev.ts_rx_ts1.eq(host_ts_done & host.ts_tx_ts1),
-            dev.ts_rx_ts1_inv.eq(0),
-            dev.ts_rx_ts2.eq(host_ts_done & host.ts_tx_ts2),
-        ]
-
-        self.sync += [
-            If(host.lfps_tx_polling,
-                self.host_lfps_count.eq(self.host_lfps_count + 1)
-            ).Else(
-                self.host_lfps_count.eq(0)
-            ),
-            If(dev.lfps_tx_polling,
-                self.dev_lfps_count.eq(self.dev_lfps_count + 1)
-            ).Else(
-                self.dev_lfps_count.eq(0)
-            ),
-            host_ts_done.eq(0),
-            If(host_ts_active,
-                host_ts_counter.eq(host_ts_counter + 1),
-                If(host_ts_counter == 3,
-                    host_ts_done.eq(1),
-                    host_ts_counter.eq(0)
-                )
-            ).Else(
-                host_ts_counter.eq(0)
-            ),
-            dev_ts_done.eq(0),
-            If(dev_ts_active,
-                dev_ts_counter.eq(dev_ts_counter + 1),
-                If(dev_ts_counter == 3,
-                    dev_ts_done.eq(1),
-                    dev_ts_counter.eq(0)
-                )
-            ).Else(
-                dev_ts_counter.eq(0)
-            ),
-        ]
+from test.model.ltssm import LTSSMLinkHarness
 
 
 class TestLTSSMLink(unittest.TestCase):

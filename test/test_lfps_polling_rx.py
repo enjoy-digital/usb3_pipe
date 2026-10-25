@@ -9,24 +9,15 @@ import unittest
 from migen import *
 
 from usb3_pipe.lfps import LFPSUnit
-from usb3_pipe.serdes import RXIdleFilter
+
+from test.model.gt import LFPSSerDesStub
 
 SYS_CLK_FREQ = 125e6
 
 # Helpers ------------------------------------------------------------------------------------------
 
-class SerDesModel(Module):
-    """LFPS face of the SerDes: raw electrical idle detection through the RX idle filter."""
-    def __init__(self):
-        self.rx_elecidle = Signal(reset=1)
-        self.tx_idle     = Signal()
-        self.tx_pattern  = Signal(20)
-        self.submodules.rx_idle_filter = RXIdleFilter(self.rx_elecidle)
-        self.rx_idle         = self.rx_idle_filter.idle
-        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
-
 def detections(t_burst, t_repeat, n=4):
-    serdes = SerDesModel()
+    serdes = LFPSSerDesStub(with_rx_idle_filter=True)
     dut    = LFPSUnit(serdes=serdes, sys_clk_freq=SYS_CLK_FREQ)
     dut.submodules += serdes
     b, r = int(round(t_burst*SYS_CLK_FREQ)), int(round(t_repeat*SYS_CLK_FREQ))

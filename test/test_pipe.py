@@ -13,23 +13,12 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import COM, TS1
 from usb3_pipe.core import USB3PIPE
 
-
-class DummySerDes(Module):
-    def __init__(self):
-        self.sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-
-        self.rx_align = Signal()
-        self.rx_polarity = Signal()
-        self.rx_idle = Signal()
-
-        self.tx_idle = Signal()
-        self.tx_pattern = Signal(20)
+from test.model.gt import GTModel
 
 
 class TestUSB3PIPE(unittest.TestCase):
     def test_tx_waits_for_tx_ready(self):
-        serdes = DummySerDes()
+        serdes = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=serdes, sys_clk_freq=int(125e6), with_endianness_swap=False)
 
         def generator(dut):
@@ -52,7 +41,7 @@ class TestUSB3PIPE(unittest.TestCase):
         run_simulation(dut, generator(dut))
 
     def test_rx_waits_for_rx_ready(self):
-        serdes = DummySerDes()
+        serdes = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=serdes, sys_clk_freq=int(125e6), with_endianness_swap=False)
 
         def generator(dut):
@@ -74,7 +63,7 @@ class TestUSB3PIPE(unittest.TestCase):
         run_simulation(dut, generator(dut))
 
     def test_short_rx_idle_glitch_does_not_report_lfps_polling(self):
-        serdes = DummySerDes()
+        serdes = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=serdes, sys_clk_freq=int(125e6), with_endianness_swap=False)
 
         def generator(dut):
@@ -93,7 +82,7 @@ class TestUSB3PIPE(unittest.TestCase):
         run_simulation(dut, generator(dut))
 
     def test_malformed_ts1_is_not_reported(self):
-        serdes = DummySerDes()
+        serdes = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=serdes, sys_clk_freq=int(125e6), with_endianness_swap=False)
         ts1_length = len(TS1.to_bytes())//4
         ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
@@ -115,7 +104,7 @@ class TestUSB3PIPE(unittest.TestCase):
         run_simulation(dut, generator(dut))
 
     def test_serdes_control_passthrough(self):
-        serdes = DummySerDes()
+        serdes = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=serdes, sys_clk_freq=int(125e6), with_endianness_swap=False)
 
         def generator(dut):

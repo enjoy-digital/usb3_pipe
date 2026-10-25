@@ -10,15 +10,13 @@ from migen import *
 
 from usb3_pipe.ltssm import USB3LTSSM
 
-from test import test_ltssm
+from test.model.ltssm import LTSSMTestCase
 
 SYS_CLK_FREQ = int(125e6)
 
 # TX Electrical Idle (USB 3.2 7.5.4.x, 7.5.6, 7.5.7) -----------------------------------------------
 
-class TestLTSSMTXElectricalIdle(unittest.TestCase):
-    wait_for = test_ltssm.TestLTSSM.wait_for
-
+class TestLTSSMTXElectricalIdle(LTSSMTestCase):
     def test_tx_not_idle_while_transmitting(self):
         # TSEQ (Polling.RxEQ), TS1 (Polling.Active), TS2 (Polling.Configuration), Idle Symbols
         # (Polling.Idle) and U0 data are SuperSpeed transmissions: the transmitter must not be in

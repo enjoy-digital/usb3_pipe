@@ -15,15 +15,10 @@ from usb3_pipe.ltssm import USB3LTSSM
 from usb3_pipe.phy import USB3PHY
 
 from test.common import ScramblerModel, ordered_set_words, words_to_symbols, symbols_to_words
-from test import test_ltssm
-from test.test_pipe_tx import GTTXModel, wire_monitor
+from test.model.gt    import GTModel, wire_monitor
+from test.model.ltssm import wait_for
 
 # Helpers ------------------------------------------------------------------------------------------
-
-class GTModel(GTTXModel):
-    def __init__(self):
-        GTTXModel.__init__(self)
-        self.ready = Signal(reset=1)
 
 def partner_wire(n_idle_words, data_words=[]):
     """Partner stream: TS2s, n_idle_words Idle words, then data, scrambled (6.3.1.3, 7.2.3)."""
@@ -37,7 +32,7 @@ def partner_wire(n_idle_words, data_words=[]):
 
 class TestIdleHandshake(unittest.TestCase):
     def pipe_handshake(self, wire, n_cycles=None):
-        gt  = GTModel()
+        gt  = GTModel(with_ready=True)
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         n_cycles = n_cycles or len(wire) + 32
@@ -94,7 +89,6 @@ class TestIdleHandshake(unittest.TestCase):
 
     def test_ltssm_polling_idle_waits_for_handshake(self):
         # Polling.Idle transmits Idle Symbols and only goes to U0 on the Idle handshake.
-        t = test_ltssm.TestLTSSM()
         dut = USB3LTSSM(sys_clk_freq=int(125e6), with_timers=False)
 
         def generator(dut):
@@ -105,7 +99,7 @@ class TestIdleHandshake(unittest.TestCase):
             yield
             yield dut.lfps_tx_count.eq(24)
             yield
-            self.assertTrue((yield from t.wait_for(dut, dut.ts_tx_tseq)))
+            self.assertTrue((yield from wait_for(dut, dut.ts_tx_tseq)))
             for pulse in [dut.ts_tx_done, dut.ts_rx_ts1, dut.ts_tx_done, dut.ts_rx_ts2, dut.ts_tx_done,
                 dut.ts_tx_done]:
                 yield pulse.eq(1)
@@ -113,20 +107,20 @@ class TestIdleHandshake(unittest.TestCase):
                 yield pulse.eq(0)
                 yield
             yield dut.lfps_rx_polling.eq(0)
-            self.assertTrue((yield from t.wait_for(dut, dut.polling_idle)))
+            self.assertTrue((yield from wait_for(dut, dut.polling_idle)))
             for _ in range(64):
                 self.assertEqual((yield dut.idle_handshake), 1)
                 self.assertEqual((yield dut.u0), 0)
                 yield
             yield dut.rx_idle8.eq(1)
-            self.assertTrue((yield from t.wait_for(dut, dut.u0, timeout=4)))
+            self.assertTrue((yield from wait_for(dut, dut.u0, timeout=4)))
             self.assertEqual((yield dut.idle_handshake), 0)
 
         run_simulation(dut, generator(dut))
 
     def test_phy_connects_idle_handshake(self):
         # USB3PHY must connect the PIPE Idle handshake to the LTSSM (no rx_idle8 proxy).
-        dut  = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut  = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
         comb = dut.get_fragment().comb
         def driven_by(l, r):
             return any(getattr(s, "l", None) is l and s.r is r for s in comb)
@@ -136,7 +130,7 @@ class TestIdleHandshake(unittest.TestCase):
     def test_phy_link_interface(self):
         # USB3PHY exposes the LTSSM Link-Layer control interface (same Signals, reset values kept).
         from usb3_pipe.phy import USB3PHY_LINK_CTRL
-        dut = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
         for name, direction in USB3PHY_LINK_CTRL:
             self.assertIs(getattr(dut, name), getattr(dut.ltssm, name))
         self.assertEqual(dut.link_activity.reset.value, 1)

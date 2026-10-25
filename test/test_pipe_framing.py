@@ -14,7 +14,8 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import SKP, SDP, SHP, SLC, EPF, TS2
 from usb3_pipe.core import USB3PIPE
 
-from test.common import ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words, strip_skp
+from test.common import (ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words, strip_skp,
+    swap_word)
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -36,10 +37,6 @@ class SerDesRXModel(Module):
 
 def framing(start):
     return [(start, 1)]*3 + [(EPF.value, 1)]
-
-def swap_word(word):
-    data, ctrl = word
-    return int.from_bytes(data.to_bytes(4, "little"), "big"), int("{:04b}".format(ctrl)[::-1], 2)
 
 # Test PIPE Framing Alignment ----------------------------------------------------------------------
 

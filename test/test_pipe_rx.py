@@ -14,20 +14,8 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import TS2
 from usb3_pipe.core import USB3PIPE
 
-from test.common import ScramblerModel, ordered_set_words, words_to_symbols, symbols_to_words
-
-# Transceiver RX model -----------------------------------------------------------------------------
-
-class GTRXModel(Module):
-    """Transceiver RX model: presents one received word per cycle (the GT ignores back-pressure)."""
-    def __init__(self):
-        self.sink        = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source      = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.rx_align    = Signal()
-        self.rx_polarity = Signal()
-        self.rx_idle     = Signal()
-        self.tx_idle     = Signal()
-        self.tx_pattern  = Signal(20)
+from test.common   import ScramblerModel, ordered_set_words, words_to_symbols, symbols_to_words
+from test.model.gt import GTModel
 
 # USB3PIPE RX --------------------------------------------------------------------------------------
 
@@ -49,7 +37,7 @@ class TestUSB3PIPERX(unittest.TestCase):
         wire    = symbols_to_words(ts2 + idle + data + idle_end)
         rx_ready_delay = len(ordered_set_words(TS2))*16 + 16 # rx_ready set while receiving Idle.
 
-        gt  = GTRXModel()
+        gt  = GTModel(tx_ready=False)
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
 

@@ -8,13 +8,14 @@ import os
 import re
 import sys
 import glob
-import tempfile
 import unittest
 import subprocess
 
 import yaml
 
 from usb3_pipe.gen import ConfigError, get_config, get_ports, get_ltssm_states, get_ltssm_state_localparam
+
+from test.common import get_output_dir
 
 root_dir     = os.path.join(os.path.dirname(__file__), "..")
 examples_dir = os.path.join(root_dir, "examples")
@@ -32,8 +33,8 @@ def get_verilog_ports(filename, module):
     return ports
 
 class TestGen(unittest.TestCase):
-    def generate(self, config, name="usb3_pipe_core"):
-        output_dir = tempfile.mkdtemp()
+    def generate(self, config, name="usb3_pipe_core", *subdir):
+        output_dir = str(get_output_dir(self, *subdir))
         config_file = os.path.join(output_dir, "config.yml")
         with open(config_file, "w") as f:
             yaml.dump(config, f)
@@ -43,8 +44,8 @@ class TestGen(unittest.TestCase):
             cwd=root_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return output_dir
 
-    def check_core(self, config, name="usb3_pipe_core"):
-        output_dir = self.generate(config, name)
+    def check_core(self, config, name="usb3_pipe_core", *subdir):
+        output_dir = self.generate(config, name, *subdir)
         gateware   = os.path.join(output_dir, "gateware")
 
         # Generated files.
@@ -92,7 +93,8 @@ class TestGen(unittest.TestCase):
         for example in examples:
             with self.subTest(example=os.path.basename(example)):
                 with open(example) as f:
-                    self.check_core(yaml.safe_load(f))
+                    self.check_core(yaml.safe_load(f), "usb3_pipe_core",
+                        os.path.splitext(os.path.basename(example))[0])
 
     def test_a7_link_ctrl_host(self):
         self.check_core({

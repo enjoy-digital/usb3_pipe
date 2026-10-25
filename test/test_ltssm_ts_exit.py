@@ -10,15 +10,9 @@ from migen import *
 
 from usb3_pipe.ltssm import USB3LTSSM
 
-from test import test_ltssm
+from test.model.ltssm import LTSSMTestCase, wait_for, pulse
 
 # Helpers ------------------------------------------------------------------------------------------
-
-def pulse(signal):
-    yield signal.eq(1)
-    yield
-    yield signal.eq(0)
-    yield
 
 def in_state(dut, name):
     return (yield dut.fsm.state) == dut.fsm.encoding[name]
@@ -28,27 +22,26 @@ def run(generator):
     dut.finalize()
     run_simulation(dut, generator(dut))
 
-def drive_to_polling_active(t, dut):
+def drive_to_polling_active(dut):
     yield dut.lfps_tx_count.eq(20)
     yield dut.lfps_rx_polling.eq(1)
     yield
     yield dut.lfps_tx_count.eq(24)
     yield
-    assert (yield from t.wait_for(dut, dut.ts_tx_tseq))
+    assert (yield from wait_for(dut, dut.ts_tx_tseq))
     yield from pulse(dut.ts_tx_done)
-    assert (yield from t.wait_for(dut, dut.ts_tx_ts1))
+    assert (yield from wait_for(dut, dut.ts_tx_ts1))
     yield dut.lfps_rx_polling.eq(0)
 
 # TS exit conditions (USB 3.2 7.5.4.8.2, 7.5.4.9.2, 7.5.10.4.2) ------------------------------------
 
-class TestLTSSMTSExit(unittest.TestCase):
+class TestLTSSMTSExit(LTSSMTestCase):
     def test_polling_active_exits_on_ts2(self):
         # The port shall transition to Polling.Configuration upon receiving eight consecutive and
         # identical TS1 or TS2 ordered sets (7.5.4.8.2): the partner may already be in
         # Polling.Configuration, sending TS2.
-        t = test_ltssm.TestLTSSM()
         def generator(dut):
-            yield from drive_to_polling_active(t, dut)
+            yield from drive_to_polling_active(dut)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
             yield
@@ -70,10 +63,9 @@ class TestLTSSMTSExit(unittest.TestCase):
         self.assertTrue((yield from in_state(dut, idle_state)))
 
     def test_polling_configuration_sends_16_ts2_after_receiving(self):
-        t = test_ltssm.TestLTSSM()
         def generator(dut):
             yield dut.rx_idle8.eq(0)
-            yield from drive_to_polling_active(t, dut)
+            yield from drive_to_polling_active(dut)
             yield from pulse(dut.ts_rx_ts1)
             yield from pulse(dut.ts_tx_done)
             yield
@@ -83,10 +75,9 @@ class TestLTSSMTSExit(unittest.TestCase):
     def test_polling_configuration_ts2_received_in_active(self):
         # 8 consecutive TS2 already received in Polling.Active: the whole first TS2 burst of
         # Polling.Configuration is sent after them.
-        t = test_ltssm.TestLTSSM()
         def generator(dut):
             yield dut.rx_idle8.eq(0)
-            yield from drive_to_polling_active(t, dut)
+            yield from drive_to_polling_active(dut)
             yield from pulse(dut.ts_rx_ts2)
             yield from pulse(dut.ts_tx_done)
             yield
@@ -97,12 +88,11 @@ class TestLTSSMTSExit(unittest.TestCase):
         run(generator)
 
     def test_recovery_configuration_sends_16_ts2_after_receiving(self):
-        t = test_ltssm.TestLTSSM()
         def generator(dut):
-            yield from t.drive_to_u0(dut)
+            yield from self.drive_to_u0(dut)
             yield dut.rx_idle8.eq(0)
             yield from pulse(dut.directed_recovery)
-            self.assertTrue((yield from t.wait_for(dut, dut.ts_tx_ts1)))
+            self.assertTrue((yield from self.wait_for(dut, dut.ts_tx_ts1)))
             yield from pulse(dut.ts_rx_ts1)
             yield from pulse(dut.ts_tx_done)
             yield

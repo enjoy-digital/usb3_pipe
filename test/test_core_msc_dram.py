@@ -10,6 +10,8 @@ import random
 import struct
 import unittest
 
+import pytest
+
 from migen import *
 
 from litex.gen import *
@@ -21,6 +23,8 @@ from litedram.core       import LiteDRAMCore
 
 from usb3_core.host_model import *
 from usb3_core.msc        import *
+
+from test.model.host import *
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -99,10 +103,6 @@ def storage_read(storage, lba, nwords, rng):
     yield storage.source.ready.eq(0)
     return words
 
-def cbw(tag, length, din, cb):
-    cb = bytes(cb).ljust(16, b"\x00")
-    return list(struct.pack("<IIIBBB16s", CBW_SIGNATURE, tag, length, 0x80 if din else 0, 0, len(cb), cb))
-
 class SimDDR3(MT41K512M16):
     nrows = 64 # Small DRAM (1MB) for the simulation model.
 
@@ -159,12 +159,19 @@ class TestCoreMSCDRAM(unittest.TestCase):
         run_simulation(dut, self.storage_test(dut, [(0, 1), (29, 3), (5, 4), (6, 1), (16, 2)]))
 
     def test_dram_storage(self):
+        # Short: 256KB disk at 512KB in the DRAM (LiteDRAM controller, SDRAM PHY model), last block
+        # of the disk.
+        dut = DRAMStorageDUT(size=256*1024, base=512*1024)
+        run_simulation(dut, self.storage_test(dut, [(511, 1)]))
+
+    @pytest.mark.slow
+    def test_dram_storage_overlapping(self):
         # 256KB disk at 512KB in the DRAM (LiteDRAM controller, SDRAM PHY model).
         dut = DRAMStorageDUT(size=256*1024, base=512*1024)
         # Overlapping writes, last blocks of the disk.
         run_simulation(dut, self.storage_test(dut, [(1, 2), (2, 1), (511, 1)]))
 
-    def test_dram_scsi_commands(self):
+    def dram_scsi_commands_test(self, with_data=True):
         size   = 256*1024*1024 # 256MB disk.
         base   = 256*1024*1024 # At 256MB in the DRAM.
         blocks = size//MSC_BLOCK_SIZE
@@ -216,6 +223,8 @@ class TestCoreMSCDRAM(unittest.TestCase):
             # READ CAPACITY(10): DRAM disk size.
             data, residue, status = yield from command([SCSI_READ_CAPACITY_10], length=8)
             self.assertEqual(struct.unpack(">II", bytes(data)), (blocks - 1, 512))
+            if not with_data:
+                return
             # WRITE(10) 3 blocks at the end of the disk, READ(10) back.
             lba   = blocks - 3
             block = [(13*i + 5) & 0xff for i in range(3*512)]
@@ -248,6 +257,14 @@ class TestCoreMSCDRAM(unittest.TestCase):
             native_port_model(dut.wr_port, mem, seed=2),
             scenario(),
         ], vcd_name=None)
+
+    def test_dram_scsi_commands(self):
+        # Short: DRAM not ready/ready, no WRITE(10)/READ(10) data phases.
+        self.dram_scsi_commands_test(with_data=False)
+
+    @pytest.mark.slow
+    def test_dram_scsi_commands_data(self):
+        self.dram_scsi_commands_test(with_data=True)
 
 if __name__ == "__main__":
     unittest.main()

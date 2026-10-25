@@ -10,7 +10,7 @@ from migen import *
 
 from usb3_pipe.ltssm import USB3LTSSM
 
-from test import test_ltssm
+from test.model.ltssm import LTSSMTestCase
 
 SYS_CLK_FREQ = int(125e6)
 
@@ -19,9 +19,7 @@ def us_to_cycles(t):
 
 # LFPS Exit Handshake (USB 3.2 6.9.2, Table 6-31) --------------------------------------------------
 
-class TestLTSSMExitHandshake(unittest.TestCase):
-    wait_for    = test_ltssm.TestLTSSM.wait_for
-    drive_to_u0 = test_ltssm.TestLTSSM.drive_to_u0
+class TestLTSSMExitHandshake(LTSSMTestCase):
 
     def enter_u1(self, dut):
         yield from self.drive_to_u0(dut)

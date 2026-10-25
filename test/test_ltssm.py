@@ -10,56 +10,10 @@ from migen import *
 
 from usb3_pipe.ltssm import USB3LTSSM
 
+from test.model.ltssm import LTSSMTestCase
 
-class TestLTSSM(unittest.TestCase):
-    def wait_for(self, dut, signal, timeout=64):
-        for _ in range(timeout):
-            if (yield signal):
-                return True
-            yield
-        return False
 
-    def drive_to_u0(self, dut, inverted=False):
-        yield dut.lfps_tx_count.eq(20)
-        yield dut.lfps_rx_polling.eq(1)
-        yield
-        yield dut.lfps_tx_count.eq(24)
-        yield
-
-        self.assertEqual((yield from self.wait_for(dut, dut.ts_tx_tseq)), True)
-        yield dut.ts_tx_done.eq(1)
-        yield
-        yield dut.ts_tx_done.eq(0)
-
-        self.assertEqual((yield from self.wait_for(dut, dut.ts_tx_ts1)), True)
-        if inverted:
-            yield dut.ts_rx_ts1_inv.eq(1)
-            yield
-            yield dut.ts_rx_ts1_inv.eq(0)
-        else:
-            yield dut.ts_rx_ts1.eq(1)
-            yield
-            yield dut.ts_rx_ts1.eq(0)
-        yield
-        yield dut.ts_tx_done.eq(1)
-        yield
-        yield dut.ts_tx_done.eq(0)
-
-        self.assertEqual((yield from self.wait_for(dut, dut.ts_tx_ts2)), True)
-        yield dut.ts_rx_ts2.eq(1)
-        yield
-        yield dut.ts_rx_ts2.eq(0)
-        yield
-        # 16 TS2 sent after receiving the TS2s (7.5.4.9.2): end of the current burst, then a full one.
-        for _ in range(2):
-            yield dut.ts_tx_done.eq(1)
-            yield
-            yield dut.ts_tx_done.eq(0)
-            yield
-
-        self.assertEqual((yield from self.wait_for(dut, dut.u0)), True)
-        yield
-
+class TestLTSSM(LTSSMTestCase):
     def test_polling_lfps_requires_minimum_bursts(self):
         def generator(dut):
             yield dut.lfps_rx_polling.eq(1)

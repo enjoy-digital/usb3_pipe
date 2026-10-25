@@ -11,6 +11,12 @@ import subprocess
 
 from pathlib import Path
 
+import pytest
+
+from test.common import get_output_dir
+
+pytestmark = pytest.mark.sim
+
 class TestPHY(unittest.TestCase):
     def test_phy_reaches_idle(self):
         # Repo root = ../
@@ -20,7 +26,7 @@ class TestPHY(unittest.TestCase):
         sim_script = root / "sim.py"
         self.assertTrue(sim_script.exists(), f"Missing simulation script: {sim_script}")
 
-        cmd = [sys.executable, str(sim_script)]
+        cmd = [sys.executable, str(sim_script), "--output-dir", str(get_output_dir(self))]
         try:
             p = subprocess.run(
                 cmd,

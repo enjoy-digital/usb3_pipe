@@ -6,6 +6,8 @@
 
 import unittest
 
+import pytest
+
 from migen import *
 
 from usb3_pipe.core import USB3PIPE
@@ -36,11 +38,10 @@ class TestLFPSTXWaveform(unittest.TestCase):
         self.assertTrue(len(period_ns) > 0)
         self.assertTrue(all(20 <= p <= 100 for p in period_ns), period_ns)
 
-    def test_lfps_square_wave(self):
+    def square_wave_test(self, cases):
         serdes = USB3SerDesModel(phy_dw=20)
         dut    = USB3PIPE(serdes=serdes, sys_clk_freq=SYS_CLK_FREQ, timer_scale=1)
         dut.submodules += serdes
-        cases  = [("lfps_tx_polling", 400), ("lfps_tx_ping", 64), ("lfps_tx_exit_u1", 200)]
 
         def generator(dut):
             dut.wires = {}
@@ -59,6 +60,14 @@ class TestLFPSTXWaveform(unittest.TestCase):
         for tx_signal, _ in cases:
             with self.subTest(tx_signal):
                 self.check_square_wave(dut.wires[tx_signal])
+
+    def test_lfps_square_wave(self):
+        # Short: first Polling.LFPS burst.
+        self.square_wave_test([("lfps_tx_polling", 200)])
+
+    @pytest.mark.slow
+    def test_lfps_square_wave_all(self):
+        self.square_wave_test([("lfps_tx_polling", 400), ("lfps_tx_ping", 64), ("lfps_tx_exit_u1", 200)])
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,35 +13,8 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.core import USB3PIPE
 
-from test.common import ScramblerModel, words_to_symbols, symbols_to_words, stream_driver
-
-# Transceiver TX model -----------------------------------------------------------------------------
-
-class GTTXModel(Module):
-    """Transceiver TX model: always ready, and like the GT (which ignores valid), transmits the last
-    presented word again when the stream is not valid. Also provides the RX/LFPS interface."""
-    def __init__(self):
-        self.sink        = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source      = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.rx_align    = Signal()
-        self.rx_polarity = Signal()
-        self.rx_idle     = Signal()
-        self.tx_idle     = Signal()
-        self.tx_pattern  = Signal(20)
-        self.comb += self.sink.ready.eq(1)
-
-def wire_monitor(gt, n):
-    """Record n words transmitted on the wire (last word repeated when not valid), starting from the
-    first valid word."""
-    words = []
-    last  = None
-    for _ in range(n):
-        yield
-        if (yield gt.sink.valid):
-            last = ((yield gt.sink.data), (yield gt.sink.ctrl))
-        if last is not None:
-            words.append(last)
-    return words
+from test.common   import ScramblerModel, words_to_symbols, symbols_to_words, stream_driver
+from test.model.gt import GTModel, wire_monitor
 
 # USB3PIPE TX --------------------------------------------------------------------------------------
 
@@ -53,7 +26,7 @@ class TestUSB3PIPETX(unittest.TestCase):
         rng   = random.Random(0)
         words = [(rng.randrange(1, 2**32), 0) for _ in range(256)] # Non-zero data words.
 
-        gt  = GTTXModel()
+        gt  = GTModel()
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
 

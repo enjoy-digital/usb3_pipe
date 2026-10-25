@@ -7,12 +7,29 @@
 """Shared test helpers: USB3 Gen1 reference models and stream drivers/monitors.
 
 Symbols are (byte, k) tuples. Words are 32-bit data/4-bit ctrl with the first symbol in lane 0
-(data[7:0]/ctrl[0]), as on the PIPE/SerDes streams (before USB3PIPE's EndiannessSwap).
+(data[7:0]/ctrl[0]), as on the PIPE/SerDes streams (before USB3PIPE's EndiannessSwap). The Link
+Layer words of usb3_core.host_model (words_from_symbols/symbols_from_words) use the opposite order
+(first symbol in data[31:24]/ctrl[3], after the EndiannessSwap, see swap_word).
 """
 
 import random
+import shutil
+
+from pathlib import Path
 
 from usb3_pipe.common import COM, SKP
+
+# Test Output Directories --------------------------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+
+def get_output_dir(test, *names):
+    """Return a fresh build/test/<test id>[/<names>] directory (one per test/subtest: safe with
+    pytest-xdist, kept after the run for debug)."""
+    output_dir = ROOT.joinpath("build", "test", test.id().removeprefix("test."), *names)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True)
+    return output_dir
 
 # Symbols <-> Words --------------------------------------------------------------------------------
 
@@ -35,6 +52,13 @@ def symbols_to_words(symbols):
             ctrl |= k << j
         words.append((data, ctrl))
     return words
+
+def swap_word(word):
+    """EndiannessSwap model: symbol order reversed in the word."""
+    data, ctrl = word
+    sdata = int.from_bytes(data.to_bytes(4, "little"), "big")
+    sctrl = int("{:04b}".format(ctrl)[::-1], 2)
+    return sdata, sctrl
 
 def ordered_set_words(ordered_set, link_config=None):
     """Return the (data, ctrl) words of an Ordered Set (COM symbols as K)."""

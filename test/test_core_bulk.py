@@ -16,7 +16,8 @@ from migen import *
 from usb3_core.host_model import *
 from usb3_core.common     import LCMD_LBAD
 
-from test.test_core_device import DUT
+from test.model.host   import *
+from test.model.device import BulkLoopbackDUT as DUT
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -25,7 +26,6 @@ def payload(i, n=1024):
 
 # Tests --------------------------------------------------------------------------------------------
 
-@pytest.mark.slow
 class TestCoreBulk(unittest.TestCase):
     def out_burst(self, host, start, n, seq0=0, corrupt=None):
         for i in range(n):
@@ -39,6 +39,7 @@ class TestCoreBulk(unittest.TestCase):
     def acks(self, host, start=0):
         return [tp_fields(hp) for hp in host.hps[start:] if (hp[0] & 0x1f) == 0x04 and (hp[1] & 0xf) == 1]
 
+    @pytest.mark.slow
     def test_bulk_out_burst_in_burst(self):
         # 4 OUT packets back-to-back (burst), then 4 IN packets requested with a single ACK TP.
         dut  = DUT(max_burst=8)
@@ -69,6 +70,7 @@ class TestCoreBulk(unittest.TestCase):
                 yield
         run_pyhost(dut, host, scenario())
 
+    @pytest.mark.slow
     def test_bulk_out_crc_error_retry(self):
         # DPP with a CRC-32 error: ACK TP with retry for this packet, then accepted when resent.
         dut  = DUT(max_burst=8)
@@ -112,6 +114,7 @@ class TestCoreBulk(unittest.TestCase):
             self.assertEqual([(a["seq"], a["retry"]) for a in self.acks(host, n0)], [(1, 0)])
         run_pyhost(dut, host, scenario())
 
+    @pytest.mark.slow
     def test_bulk_in_nrdy_erdy(self):
         # IN request without data: NRDY, then ERDY when data is available.
         dut  = DUT(max_burst=8)
@@ -130,6 +133,7 @@ class TestCoreBulk(unittest.TestCase):
             self.assertEqual(host.dpps[0][0], payload(0))
         run_pyhost(dut, host, scenario())
 
+    @pytest.mark.slow
     def test_bulk_in_eob(self):
         # Fewer packets available than requested: EOB on the last one, flow control (the ACK TPs of
         # the packets sent before the EOB do not reopen the window), ERDY and new request.
@@ -160,6 +164,7 @@ class TestCoreBulk(unittest.TestCase):
             self.assertEqual(host.dpps[2][0], payload(2))
         run_pyhost(dut, host, scenario())
 
+    @pytest.mark.slow
     def test_bulk_pointers_wrap(self):
         # max_burst=2 (pointers modulo 4): 10 packets looped back, bursts of 2, pointers wrapping.
         dut  = DUT(max_burst=2)
@@ -255,6 +260,7 @@ class TestCoreBulk(unittest.TestCase):
             self.assertEqual([d[0] for d in host.dpps[:2]], [payload(0, 64), payload(1, 64)])
         run_pyhost(dut, host, scenario())
 
+    @pytest.mark.slow
     def test_tx_backpressure(self):
         # PHY TX ready deasserted randomly (SKP insertion): packets integrity.
         dut  = DUT(max_burst=8)

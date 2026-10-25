@@ -21,7 +21,7 @@ from usb3_pipe.scrambling import Scrambler, Descrambler
 from usb3_pipe.serdes import RXWordAligner, RXSKPRemover, TXSKPInserter, TXDatapath, RXDatapath
 
 from test.common import (ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words,
-    strip_skp, stream_driver)
+    strip_skp, stream_driver, swap_word)
 
 SKP_WORD    = (SKP.value*0x01010101, 0b1111)
 # Link Layer framing K-codes (USB 3.2 6.3.1, Table 6-3): never COM/SKP.
@@ -42,13 +42,6 @@ def random_word(rng, k_rate=0.05, k_values=FRAMING_K):
         else:
             data |= rng.randrange(256) << 8*i
     return data, ctrl
-
-def swap_word(word):
-    """EndiannessSwap model: symbol order reversed in the word."""
-    data, ctrl = word
-    sdata = int.from_bytes(data.to_bytes(4, "little"), "big")
-    sctrl = int("{:04b}".format(ctrl)[::-1], 2)
-    return sdata, sctrl
 
 def handshake_monitor(endpoint, rng, ready_rate, done, fields=("data", "ctrl"), idle=32):
     """Collect words on handshakes with random ready, until done() and `idle` cycles without valid.

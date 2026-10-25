@@ -9,22 +9,13 @@ import unittest
 from migen import *
 
 from usb3_pipe.lfps   import LFPSUnit
-from usb3_pipe.serdes import RXIdleFilter
+
+from test.model.gt import LFPSSerDesStub
 
 SYS_CLK_FREQ = 125e6
 
 def ns_to_cycles(t):
     return round(t*1e-9*SYS_CLK_FREQ)
-
-class SerDesStub(Module):
-    """SerDes RX electrical idle path as in the K7/A7 SerDes (RXELECIDLE + RXIdleFilter)."""
-    def __init__(self):
-        self.rx_elecidle = Signal(reset=1) # Raw transceiver electrical idle.
-        self.tx_idle     = Signal()
-        self.tx_pattern  = Signal(20)
-        self.submodules.rx_idle_filter = RXIdleFilter(self.rx_elecidle)
-        self.rx_idle         = self.rx_idle_filter.idle
-        self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
 
 # Ping.LFPS / U1 Exit classification (USB 3.2 Table 6-30, 6.9.2 implementation note) ---------------
 
@@ -32,7 +23,7 @@ class TestPingClassification(unittest.TestCase):
     def burst(self, burst_cycles):
         """Send a single burst of burst_cycles (raw electrical idle deasserted), return the number
         of rx_ping pulses and whether rx_exit_u1 was asserted."""
-        serdes = SerDesStub()
+        serdes = LFPSSerDesStub(with_rx_idle_filter=True)
         dut    = LFPSUnit(serdes=serdes, sys_clk_freq=SYS_CLK_FREQ)
         dut.submodules += serdes
         dut.pings   = 0

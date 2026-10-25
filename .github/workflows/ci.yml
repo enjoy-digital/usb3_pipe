@@ -1,6 +1,11 @@
 name: ci
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
 
 jobs:
   build:
@@ -8,22 +13,42 @@ jobs:
     steps:
       # Checkout Repository.
       - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Setup CCache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: actions/checkout@v4
 
       # Install Tools.
       - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget build-essential ninja-build
+          sudo apt-get install -y wget build-essential ninja-build help2man
           sudo apt-get install -y libevent-dev libjson-c-dev flex bison
           sudo apt-get install -y libfl-dev libfl2 zlib1g-dev
 
+      # Cache Verilator install (same pinned version as LiteX CI).
+      - name: Cache Verilator install
+        id: verilator-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/verilator-install
+          key: verilator-ubuntu22-7d2d32420a630befa4097170ecbf227e04e32522
+
+      # Build / Install Verilator (only on cache miss).
+      - name: Build Verilator
+        if: steps.verilator-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/verilator/verilator
+          cd verilator
+          git checkout 7d2d32420a630befa4097170ecbf227e04e32522
+          autoconf
+          ./configure --prefix=/tmp/verilator-install
+          make -j$(nproc)
+          make install
+
+      - name: Install Verilator into /usr/local
+        run: sudo cp -a /tmp/verilator-install/. /usr/local/
+
       # Install Python.
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
           cache: "pip"
@@ -32,7 +57,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install setuptools requests pexpect meson pytest
+          python3 -m pip install setuptools requests pexpect meson pytest pytest-xdist
 
       # Install Migen / LiteX / Cores.
       - name: Install LiteX
@@ -40,26 +65,21 @@ jobs:
           mkdir -p third_party
           cd third_party
           wget https://raw.githubusercontent.com/enjoy-digital/litex/master/litex_setup.py
-          python3 litex_setup.py --config=standard --init --install --user
-
-      # Build / Install Verilator.
-      - name: Build Verilator
-        run: |
-          sudo apt-get install help2man
-          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
-          git clone https://github.com/verilator/verilator
-          cd verilator
-          git checkout 7d2d32420a630befa4097170ecbf227e04e32522
-          autoconf
-          ./configure
-          make -j$(nproc)
-          sudo make install
+          python3 litex_setup.py --config=standard --clone-depth=1 --init --install --user
 
       # Install Project.
       - name: Install Project
         run: python3 setup.py develop --user
 
-      # Test.
+      # Tests (Python simulations, elaborations).
       - name: Run Tests
-        run: |
-          python3 -m pytest -v
+        run: python3 -m pytest -v -n auto -m "not slow and not sim"
+
+      # Tests (Verilator simulations).
+      - name: Run Verilator Simulations
+        run: python3 -m pytest -v -n 2 -m "not slow and sim"
+
+      # Long Simulations (nightly).
+      - name: Run Long Simulations
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: python3 -m pytest -v -n auto -m slow
