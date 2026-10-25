@@ -39,7 +39,7 @@ from usb3_core.crc         import CRC16, CRC32
 from usb3_core.link        import USB3LinkLayer
 from usb3_core.protocol    import USB3ProtocolLayer
 from usb3_core.control     import USB3EndpointControl
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors
 from usb3_core.device      import USB3DeviceCore
 

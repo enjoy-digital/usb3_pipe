@@ -40,7 +40,10 @@ def be_to_bytes(be):
 
 def bytes_to_be(nbytes):
     """Valid bytes of the word (1-4, 2 LSBs used: 0 = 4) to be."""
-    return Mux(nbytes[0:2] == 1, 0b0001, Mux(nbytes[0:2] == 2, 0b0011, Mux(nbytes[0:2] == 3, 0b0111, 0b1111)))
+    return Mux(nbytes[0:2] == 1, 0b0001,
+           Mux(nbytes[0:2] == 2, 0b0011,
+           Mux(nbytes[0:2] == 3, 0b0111,
+           0b1111)))
 
 # Symbols (6.3.5) ----------------------------------------------------------------------------------
 
@@ -108,9 +111,17 @@ def header_layout():
     """Header Packet (3 DWords, without CRC/Link Control Word)."""
     return [("dw0", 32), ("dw1", 32), ("dw2", 32)]
 
+def tx_header_layout():
+    """Header Packet to transmit (dpp: followed by a Data Packet Payload)."""
+    return header_layout() + [("dpp", 1)]
+
 def dpp_layout():
     """Data Packet Payload words (bytes: valid bytes of the word, 1-4, 0 for a zero-length DPP)."""
     return [("data", 32), ("bytes", 3)]
+
+def endpoint_layout():
+    """Endpoints user streams: 32-bit words (first byte on data[0:8]), be: valid bytes."""
+    return [("data", 32), ("be", 4)]
 
 # Header Fields (8.3/8.5/8.6) ----------------------------------------------------------------------
 
@@ -131,3 +142,19 @@ def dph_dw1(seq, ept, direction, length, eob=0, setup=0):
     """Data Packet Header DWord 1."""
     return Cat(field(seq, 5), C(0, 1), field(eob, 1), field(direction, 1), field(ept, 4), C(0, 3),
         field(setup, 1), field(length, 16))
+
+class HeaderFields:
+    """Received Header Packet fields (TP/DPH)."""
+    def __init__(self, dw0, dw1, dw2):
+        self.type      = dw0[0:5]
+        # TP.
+        self.subtype   = dw1[0:4]
+        self.retry     = dw1[6]
+        self.direction = dw1[7]
+        self.ept       = dw1[8:12]
+        self.nump      = dw1[16:21]
+        self.tp_seq    = dw1[21:26]
+        # DPH.
+        self.dp_seq    = dw1[0:5]
+        self.setup     = dw1[15]
+        self.length    = dw1[16:32]

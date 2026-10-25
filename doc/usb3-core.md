@@ -19,7 +19,7 @@ Endpoint, Bulk/Isochronous Endpoints and device classes (CDC-ACM, UVC, Mass Stor
 
 ```python
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors
 
 self.usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq,
@@ -54,14 +54,14 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB
 |---|---|---|
 | `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function, U2 Inactivity Timeout), LGO_U3 accepted, LGO_U1/U2 accepted when idle with `with_lpm` (else LXU), LPMA forwarded, U1/U2 exit on pending packets. |
 | `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order. |
-| `USB3BulkIN`/`USB3BulkOUT` | `endpoints.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`. |
-| `USB3IsoIN` | `endpoints.py` | Isochronous IN endpoint (MaxBurst 1-16, Mult 0): one transfer per service interval, sent on the host ACK TPs (Seq Num 0, then Seq Num + NumP), LPF on the last packet, zero-length DP when no data, no retry/flow control, `flush`. |
+| `USB3BulkIN`/`USB3BulkOUT` | `bulk.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`. |
+| `USB3IsoIN` | `iso.py` | Isochronous IN endpoint (MaxBurst 1-16, Mult 0): one transfer per service interval, sent on the host ACK TPs (Seq Num 0, then Seq Num + NumP), LPF on the last packet, zero-length DP when no data, no retry/flow control, `flush`. |
 | `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), U1/U2 Enable (SET/CLEAR_FEATURE, GET_STATUS), class/vendor request handler (`with_ep0_handler`). |
 | `USB3Descriptors` | `descriptors.py` | Descriptors builder (device, configuration with SuperSpeed companions, BOS, strings, IADs). |
 | `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints, `add_csr()`. |
-| `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port, LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
+| `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port (descriptors/class requests), LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
 | `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes, Bulk (default) or Isochronous (`transfer="iso"`) streaming. |
-| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine on a storage (stream interface): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`). |
+| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine on a storage (stream interface): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`), storages in `msc_storage.py`. |
 | `USB3Bench` | `bench.py` | Bandwidth benchmark source/checker. |
 | `USB3CoreTrace` | `trace.py` | Header Packets trace (debug). |
 | `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Parallel CRCs (equations generated from the polynoms). |

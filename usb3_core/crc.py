@@ -19,8 +19,8 @@ from litex.gen import *
 # CRC Equations ------------------------------------------------------------------------------------
 
 def crc_equations(width, poly, nbits):
-    """Parallel CRC equations: returns, for each bit of the next state, a mask over the current state
-    bits (bits 0..width-1) and the data bits (bits width..width+nbits-1)."""
+    """Parallel CRC equations: returns, for each bit of the next state, a mask over the current
+    state bits (bits 0..width-1) and the data bits (bits width..width+nbits-1)."""
     state = [1 << i for i in range(width)]
     for i in range(nbits):
         msb   = state[width - 1]
@@ -67,11 +67,11 @@ class CRC16(CRCComb):
     def __init__(self):
         CRCComb.__init__(self, width=16, poly=0x100b, init=0xffff, data_width=96)
 
-# CRC-16 Words ------------------------------------------------------------------------------------
+# CRC-16 Words -------------------------------------------------------------------------------------
 
 class CRC16Words(LiteXModule):
-    """CRC-16 of a Header Packet computed on its 32-bit words (one word per cycle: smaller and faster
-    than the 96-bit combinatorial CRC16).
+    """CRC-16 of a Header Packet computed on its 32-bit words (one word per cycle: smaller and
+    faster than the 96-bit combinatorial CRC16).
 
     clear: initialize the CRC, ce: process data (4 bytes, data[0:8] first). value: CRC of the
     processed words (registered state).
@@ -99,9 +99,9 @@ class CRC16Words(LiteXModule):
 class CRC32(LiteXModule):
     """CRC-32 of a Data Packet Payload, computed on 32-bit words (1 to 4 valid bytes per word).
 
-    clear: initialize the CRC (before the first word), ce: process data (bytes valid bytes: data[0:8]
-    first, 0: no data). value: CRC of the processed data (registered state), next_value: CRC including
-    the current data.
+    clear: initialize the CRC (before the first word), ce: process data (bytes valid bytes:
+    data[0:8] first, 0: no data). value: CRC of the processed data (registered state), next_value:
+    CRC including the current data.
     """
     def __init__(self):
         self.clear      = Signal()   # i
@@ -115,7 +115,8 @@ class CRC32(LiteXModule):
 
         state = Signal(32, reset=0xffffffff)
         new   = Signal(32)
-        cases = {n: new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:8*n]))) for n in range(1, 5)}
+        cases = {n: new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:8*n])))
+            for n in range(1, 5)}
         cases["default"] = new.eq(state)
         self.comb += Case(self.bytes, cases)
         self.sync += [

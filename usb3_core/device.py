@@ -4,7 +4,8 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Device Core (SuperSpeed Gen1 Link and Protocol Layers, Control Endpoint, Bulk Endpoints).
+"""USB3 Device Core (SuperSpeed Gen1 Link and Protocol Layers, Control Endpoint, Bulk/Isochronous
+Endpoints).
 
 Connects to a USB3 PHY through its Link interface (see usb3_pipe.phy.USB3PHY): any PHY providing the
 same interface can be used.
@@ -15,7 +16,8 @@ Example:
         USB3BulkIN(ept=1,  max_burst=8),
         USB3BulkOUT(ept=2, max_burst=8),
     ])
-    # usb3.endpoints[0].sink: Device -> Host packets, usb3.endpoints[1].source: Host -> Device packets.
+    # usb3.endpoints[0].sink  : Device -> Host packets.
+    # usb3.endpoints[1].source: Host -> Device packets.
 
 with_lpm: U1/U2 Link Power Management (USB 3.2 7.2.4.2): non-zero U1/U2 exit latencies advertised in
 the BOS, LGO_U1/LGO_U2 accepted by the Link Layer when idle (else rejected with LXU), U1/U2 exited
@@ -31,14 +33,15 @@ from litex.soc.interconnect.csr import *
 
 from usb3_core.link      import USB3LinkLayer
 from usb3_core.protocol  import USB3ProtocolLayer
-from usb3_core.control   import USB3EndpointControl, USB3EndpointControlDebug
+from usb3_core.control   import USB3EndpointControl
 from usb3_core.trace     import USB3CoreTrace
 
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
-    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=[], timer_scale=1, with_ep0_handler=False,
-        with_lpm=False):
+    def __init__(self, phy, sys_clk_freq, descriptors, endpoints=None, timer_scale=1,
+        with_ep0_handler=False, with_lpm=False):
+        endpoints      = [] if endpoints is None else endpoints
         self.endpoints = endpoints
 
         # # #
@@ -52,11 +55,12 @@ class USB3DeviceCore(LiteXModule):
         self.comb += link.lpm_enable.eq(with_lpm)
 
         # Control Endpoint.
-        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors, with_handler=with_ep0_handler))
+        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors,
+            with_handler = with_ep0_handler))
         self.comb += ep0.reset.eq(link.reset)
 
         # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
-        for i, ep in enumerate(endpoints):
+        for ep in endpoints:
             self.add_module(name=f"ep{ep.ept}_{['out', 'in'][ep.direction]}", module=ep)
             self.comb += ep.reset_seq.eq(link.reset | ep0.reset_seqs |
                 (ep0.clear_halt & (ep0.clear_ept == ep.ept) & (ep0.clear_dir == ep.direction)))
@@ -74,12 +78,6 @@ class USB3DeviceCore(LiteXModule):
         self.u1_enable  = ep0.u1_enable
         self.u2_enable  = ep0.u2_enable
 
-    def add_ep0_debug(self):
-        """EP0 IN responses debug CSRs (ep0_dbg_*, see USB3EndpointControlDebug)."""
-        # TX DPP captured at the Protocol Layer DPP mux output (registered to the Link Layer).
-        self.ep0_dbg = USB3EndpointControlDebug(self.ep0, self.protocol.tx_dpp.sink,
-            link_tx_dpp_ep0 = self.protocol.jobs.source.valid & (self.protocol.jobs.source.ep == 0))
-
     def add_csr(self, with_trace=False, trace_depth=512):
         """Status/statistics CSRs (scripts/usb3_debug.py), optional Header Packets trace
         (scripts/usb3_trace.py)."""
@@ -90,9 +88,9 @@ class USB3DeviceCore(LiteXModule):
             CSRField("configured", size=1, description="Configured (SET_CONFIGURATION)."),
             CSRField("address",    size=7, offset=8, description="Device Address."),
         ])
-        self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets received with errors).")
-        self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets retransmissions).")
-        self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, sequence/credit errors).")
+        self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets RX errors).")
+        self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets resent).")
+        self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, errors).")
         self.comb += [
             self._status.fields.ready.eq(self.link.ready),
             self._status.fields.configured.eq(self.ep0.configured),

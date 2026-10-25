@@ -13,14 +13,14 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_core.common import be_to_bytes
+from usb3_core.common import be_to_bytes, endpoint_layout
 
 # Byte Unpacker ------------------------------------------------------------------------------------
 
 class USB3ByteUnpacker(LiteXModule):
     """32-bit words (be: valid bytes) to bytes."""
     def __init__(self):
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("be", 4)])
+        self.sink   = sink   = stream.Endpoint(endpoint_layout())
         self.source = source = stream.Endpoint([("data", 8)])
 
         # # #
@@ -38,7 +38,7 @@ class USB3ByteUnpacker(LiteXModule):
             If(sink.ready, index.eq(0))
         )
 
-# Byte Packer ---------------------------------------------------------------------------------------
+# Byte Packer --------------------------------------------------------------------------------------
 
 class USB3BytePacker(LiteXModule):
     """Bytes to 32-bit words. A complete word is held until the next byte (packet continues) or
@@ -46,7 +46,7 @@ class USB3BytePacker(LiteXModule):
     with be); packets are also ended at max_bytes."""
     def __init__(self, max_bytes=1024, idle_cycles=64):
         self.sink   = sink   = stream.Endpoint([("data", 8)])
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
+        self.source = source = stream.Endpoint(endpoint_layout())
 
         # # #
 
@@ -72,7 +72,11 @@ class USB3BytePacker(LiteXModule):
             ).Else(
                 source.data.eq(acc),
                 source.last.eq(1),
-                Case(idx, {1: source.be.eq(0b0001), 2: source.be.eq(0b0011), 3: source.be.eq(0b0111)}),
+                Case(idx, {
+                    1: source.be.eq(0b0001),
+                    2: source.be.eq(0b0011),
+                    3: source.be.eq(0b0111),
+                }),
             ),
             # No byte accepted while a partial word is sent (its index is reset).
             sink.ready.eq((~pending | (source.valid & source.ready)) & ~send_part),

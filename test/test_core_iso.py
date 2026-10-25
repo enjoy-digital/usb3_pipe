@@ -18,7 +18,7 @@ from litex.gen import *
 from usb3_core.host_model  import *
 from usb3_core.descriptors import *
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3IsoIN
+from usb3_core.iso         import USB3IsoIN
 
 # DUT ----------------------------------------------------------------------------------------------
 

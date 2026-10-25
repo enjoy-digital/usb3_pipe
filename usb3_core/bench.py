@@ -17,15 +17,17 @@ from litex.gen import *
 from litex.soc.interconnect     import stream
 from litex.soc.interconnect.csr import *
 
+from usb3_core.common import endpoint_layout
+
 # USB3 Bench ---------------------------------------------------------------------------------------
 
 class USB3Bench(LiteXModule):
     def __init__(self, with_csr=True):
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)]) # To Bulk IN.
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("be", 4)]) # From Bulk OUT.
+        self.source = source = stream.Endpoint(endpoint_layout()) # To Bulk IN.
+        self.sink   = sink   = stream.Endpoint(endpoint_layout()) # From Bulk OUT.
 
         self.source_enable = Signal(reset=1) # i
-        self.clear         = Signal()        # i: Counters clear (the next received word is not checked).
+        self.clear         = Signal()        # i: Counters clear (next received word not checked).
         self.source_words  = Signal(64)      # o
         self.sink_words    = Signal(64)      # o
         self.sink_errors   = Signal(32)      # o
@@ -72,7 +74,7 @@ class USB3Bench(LiteXModule):
         ])
         self._source_words = CSRStatus(64, description="Bulk IN words sent.")
         self._sink_words   = CSRStatus(64, description="Bulk OUT words received.")
-        self._sink_errors  = CSRStatus(32, description="Bulk OUT words errors (counter discontinuities).")
+        self._sink_errors  = CSRStatus(32, description="Bulk OUT words errors (discontinuities).")
         self.comb += [
             self.source_enable.eq(self._control.fields.source_enable),
             self.clear.eq(self._control.fields.clear),

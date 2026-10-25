@@ -20,7 +20,7 @@ from litex.soc.interconnect import stream
 from usb3_core.host_model  import *
 from usb3_core.descriptors import bulk_descriptors
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
 
 # DUT ----------------------------------------------------------------------------------------------
 

@@ -12,9 +12,9 @@ test pattern (color bars, moving marker, moving luma band) in several modes sele
 
     ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/video0
 
-- Descriptors: IAD, VideoControl (Camera Input Terminal -> Streaming Output Terminal), VideoStreaming
-  (Uncompressed YUY2 format, one frame descriptor per mode, Bulk IN endpoint or alternate settings
-  0/1 without/with an Isochronous IN endpoint).
+- Descriptors: IAD, VideoControl (Camera Input Terminal -> Streaming Output Terminal),
+  VideoStreaming (Uncompressed YUY2 format, one frame descriptor per mode, Bulk IN endpoint or
+  alternate settings 0/1 without/with an Isochronous IN endpoint).
 - USB3UVCControl: VS PROBE/COMMIT requests (EP0 request handler).
 - USB3UVCStream  : test pattern generator and payloads (12-byte payload header: FID/EOF/PTS/SCR).
 - USB3UVC        : complete device (USB3DeviceCore + control + stream).
@@ -33,11 +33,12 @@ from migen import *
 
 from litex.gen import *
 
-from litex.soc.interconnect     import stream
-from litex.soc.interconnect.csr import *
+from litex.soc.interconnect import stream
 
+from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3IsoIN
+from usb3_core.bulk        import USB3BulkIN
+from usb3_core.iso         import USB3IsoIN
 from usb3_core.descriptors import *
 
 # Constants ----------------------------------------------------------------------------------------
@@ -66,7 +67,10 @@ UVC_GET_LEN = 0x85
 UVC_GET_INF = 0x86
 UVC_GET_DEF = 0x87
 
-YUY2_GUID = [0x59, 0x55, 0x59, 0x32, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71]
+YUY2_GUID = [
+    0x59, 0x55, 0x59, 0x32, 0x00, 0x00, 0x10, 0x00,
+    0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+]
 
 UVC_HEADER_SIZE  = 12   # Payload header: bHeaderLength, bmHeaderInfo, PTS (4), SCR (6).
 UVC_PROBE_SIZE   = 34   # UVC 1.1 Video Probe and Commit Controls.
@@ -89,8 +93,8 @@ def frame_interval(fps):
     return 10_000_000//fps # 100ns units.
 
 def check_modes(modes, payload_size, bulk=True):
-    """Pattern constraints, bulk: the last payload of each frame must end with a short packet (payload
-    delimitation, isochronous: delimited by the service intervals)."""
+    """Pattern constraints, bulk: the last payload of each frame must end with a short packet
+    (payload delimitation, isochronous: delimited by the service intervals)."""
     data_size = payload_size - UVC_HEADER_SIZE
     for width, height, fps in modes:
         assert (width % 16) == 0, "width must be a multiple of 16 (color bars, 2 pixels per word)."
@@ -118,11 +122,12 @@ def uvc_frame_index(modes, mode):
 def uvc_probe(modes, mode, payload_size, clk_freq):
     """Video Probe and Commit Controls (UVC 1.1, 34 bytes) of a mode (0-N)."""
     width, height, fps = modes[mode]
-    return (le16(0) + [1, uvc_frame_index(modes, mode)] + le32(frame_interval(fps)) + le16(0)*4 + le16(0) +
-        le32(frame_size(width, height)) + le32(payload_size) + le32(clk_freq) + [0x03, 0, 0, 0])
+    return (le16(0) + [1, uvc_frame_index(modes, mode)] + le32(frame_interval(fps)) + le16(0)*4 +
+        le16(0) + le32(frame_size(width, height)) + le32(payload_size) + le32(clk_freq) +
+        [0x03, 0, 0, 0])
 
-def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_000, transfer="bulk",
-    interval=1):
+def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_000,
+    transfer="bulk", interval=1):
     """UVC function: IAD, VideoControl and VideoStreaming interfaces (VS: vc_interface + 1).
 
     transfer: "bulk" (Bulk IN endpoint) or "iso" (VS alternate setting 0 without endpoint, alternate
@@ -132,23 +137,25 @@ def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_
     iad = [8, DESC_IAD, vc_interface, 2, CC_VIDEO, SC_VIDEO_INTERFACE_COLLECTION, 0x00, 0]
 
     # VideoControl: Header, Camera Input Terminal (1), Streaming Output Terminal (2).
-    vc_it  = [18, DESC_CS_INTERFACE, VC_INPUT_TERMINAL, 1] + le16(0x0201) + [0, 0] + le16(0)*3 + [3, 0, 0, 0]
+    vc_it  = [18, DESC_CS_INTERFACE, VC_INPUT_TERMINAL, 1] + le16(0x0201) + [0, 0] + le16(0)*3 + \
+        [3, 0, 0, 0]
     vc_ot  = [9, DESC_CS_INTERFACE, VC_OUTPUT_TERMINAL, 2] + le16(0x0101) + [0, 1, 0]
-    vc_hdr = [13, DESC_CS_INTERFACE, VC_HEADER] + le16(0x0110) + le16(13 + len(vc_it) + len(vc_ot)) + \
-        le32(clk_freq) + [1, vs_interface]
+    vc_hdr = [13, DESC_CS_INTERFACE, VC_HEADER] + le16(0x0110) + \
+        le16(13 + len(vc_it) + len(vc_ot)) + le32(clk_freq) + [1, vs_interface]
     vc = USB3InterfaceDescriptor(vc_interface, cls=CC_VIDEO, subclass=SC_VIDEOCONTROL,
         extra=vc_hdr + vc_it + vc_ot)
 
     # VideoStreaming: Input Header, Uncompressed YUY2 Format, Frames, Color Matching.
-    vs_fmt    = [27, DESC_CS_INTERFACE, VS_FORMAT_UNCOMPRESSED, 1, len(uvc_frames(modes))] + YUY2_GUID + \
-        [16, 1, 0, 0, 0, 0]
+    vs_fmt    = [27, DESC_CS_INTERFACE, VS_FORMAT_UNCOMPRESSED, 1, len(uvc_frames(modes))] + \
+        YUY2_GUID + [16, 1, 0, 0, 0, 0]
     # One frame descriptor per resolution, with its discrete frame intervals.
     vs_frames = []
     for i, ((width, height), rates) in enumerate(uvc_frames(modes), start=1):
         size = frame_size(width, height)
-        vs_frames += [26 + 4*len(rates), DESC_CS_INTERFACE, VS_FRAME_UNCOMPRESSED, i, 0] + le16(width) + \
-            le16(height) + le32(size*min(rates)*8) + le32(size*max(rates)*8) + le32(size) + \
-            le32(frame_interval(rates[0])) + [len(rates)] + sum([le32(frame_interval(f)) for f in rates], [])
+        vs_frames += [26 + 4*len(rates), DESC_CS_INTERFACE, VS_FRAME_UNCOMPRESSED, i, 0] + \
+            le16(width) + le16(height) + le32(size*min(rates)*8) + le32(size*max(rates)*8) + \
+            le32(size) + le32(frame_interval(rates[0])) + [len(rates)] + \
+            sum([le32(frame_interval(f)) for f in rates], [])
     vs_color  = [6, DESC_CS_INTERFACE, VS_COLORFORMAT, 1, 1, 4]
     vs_hdr    = [14, DESC_CS_INTERFACE, VS_INPUT_HEADER, 1] + \
         le16(14 + len(vs_fmt) + len(vs_frames) + len(vs_color)) + [0x80 | ept, 0, 2, 0, 0, 0, 1, 0]
@@ -157,17 +164,20 @@ def uvc_interfaces(modes, vc_interface=0, ept=1, max_burst=16, clk_freq=125_000_
             extra=vs_hdr + vs_fmt + vs_frames + vs_color,
             endpoints=[USB3EndpointDescriptor(ept, direction=1, max_burst=max_burst)])
         return [iad, vc, vs]
-    # Isochronous: alternate setting 0 (zero bandwidth) with the class specific descriptors, alternate
-    # setting 1 with the Isochronous IN endpoint (Asynchronous, wBytesPerInterval: max_burst x 1024).
+    # Isochronous: alternate setting 0 (zero bandwidth) with the class specific descriptors,
+    # alternate setting 1 with the Isochronous IN endpoint (Asynchronous, wBytesPerInterval:
+    # max_burst x 1024).
     vs0 = USB3InterfaceDescriptor(vs_interface, alt=0, cls=CC_VIDEO, subclass=SC_VIDEOSTREAMING,
         extra=vs_hdr + vs_fmt + vs_frames + vs_color)
     vs1 = USB3InterfaceDescriptor(vs_interface, alt=1, cls=CC_VIDEO, subclass=SC_VIDEOSTREAMING,
-        endpoints=[USB3EndpointDescriptor(ept, direction=1, kind=EP_ISOCHRONOUS, max_burst=max_burst,
-            interval=interval, sync=EP_SYNC_ASYNC)])
+        endpoints=[USB3EndpointDescriptor(ept, direction=1, kind=EP_ISOCHRONOUS,
+            max_burst = max_burst,
+            interval  = interval,
+            sync      = EP_SYNC_ASYNC)])
     return [iad, vc, vs0, vs1]
 
-def uvc_descriptors(modes=UVC_MODES, ept=1, max_burst=16, clk_freq=125_000_000, transfer="bulk", interval=1,
-    **kwargs):
+def uvc_descriptors(modes=UVC_MODES, ept=1, max_burst=16, clk_freq=125_000_000, transfer="bulk",
+    interval=1, **kwargs):
     kwargs.setdefault("product",      "USB3-PIPE Camera")
     kwargs.setdefault("device_class", DEVICE_CLASS_IAD)
     return USB3Descriptors(interfaces=uvc_interfaces(modes, ept=ept, max_burst=max_burst,
@@ -178,8 +188,8 @@ def uvc_descriptors(modes=UVC_MODES, ept=1, max_burst=16, clk_freq=125_000_000, 
 class USB3UVCControl(LiteXModule):
     """VideoStreaming PROBE/COMMIT controls on the EP0 request handler (other requests stalled).
 
-    The mode (resolution and frame rate) is selected by bFrameIndex/dwFrameInterval of SET_CUR (frame
-    index only if the interval does not match, first mode otherwise).
+    The mode (resolution and frame rate) is selected by bFrameIndex/dwFrameInterval of SET_CUR
+    (frame index only if the interval does not match, first mode otherwise).
     commit (pulse)/mode: committed mode (0 to N-1), stream start.
     """
     def __init__(self, ep0, modes, payload_size, clk_freq, vs_interface=1):
@@ -229,7 +239,9 @@ class USB3UVCControl(LiteXModule):
             If(ep0.req_setup,
                 count.eq(0),
                 active.eq(valid & ep0.req_type[7]),
-                kind.eq(Mux(ep0.req_request == UVC_GET_LEN, 1, Mux(ep0.req_request == UVC_GET_INF, 2, 0))),
+                kind.eq(Mux(ep0.req_request == UVC_GET_LEN, 1,
+                        Mux(ep0.req_request == UVC_GET_INF, 2,
+                        0))),
             ).Elif(ep0.req_in.valid & ep0.req_in.ready,
                 count.eq(count + 1),
                 If(ep0.req_in.last, active.eq(0)),
@@ -275,13 +287,16 @@ class USB3UVCControl(LiteXModule):
         for m in reversed(range(n)):
             # Frame index match first (lower priority), then frame index + interval match.
             match  = (set_frame == uvc_frame_index(modes, m))
-            cases  = If(match, set_mode.eq(m)) if cases is None else If(match, set_mode.eq(m)).Else(cases)
+            cases  = If(match, set_mode.eq(m)) if cases is None else \
+                If(match, set_mode.eq(m)).Else(cases)
         for m in reversed(range(n)):
-            match  = (set_frame == uvc_frame_index(modes, m)) & (set_interval == frame_interval(modes[m][2]))
+            match  = (set_frame    == uvc_frame_index(modes, m)) & \
+                     (set_interval == frame_interval(modes[m][2]))
             cases  = If(match, set_mode.eq(m)).Else(cases)
         self.comb += [set_mode.eq(0), cases]
         apply = Signal()
-        self.comb += apply.eq(ep0.req_done & vs & (ep0.req_request == UVC_SET_CUR) & ~ep0.req_type[7])
+        self.comb += apply.eq(ep0.req_done & vs & (ep0.req_request == UVC_SET_CUR) &
+            ~ep0.req_type[7])
         self.sync += [
             If(apply & (selector == VS_PROBE_CONTROL),
                 probe_mode.eq(set_mode)
@@ -293,42 +308,21 @@ class USB3UVCControl(LiteXModule):
         self.sync += self.commit.eq(apply & (selector == VS_COMMIT_CONTROL))
         self.comb += self.mode.eq(commit_mode)
 
-        # Debug (add_debug).
-        self.dbg_set_frame    = set_frame
-        self.dbg_set_interval = set_interval
-        self.dbg_probe_mode   = probe_mode
-        self.dbg_commit_mode  = commit_mode
-
-    def add_debug(self):
-        """Debug CSRs: last SET_CUR bFrameIndex/dwFrameInterval decoded, probe/commit modes."""
-        self._dbg_modes = CSRStatus(fields=[
-            CSRField("set_frame",   size=8, offset=0,  description="Last SET_CUR bFrameIndex."),
-            CSRField("probe_mode",  size=8, offset=8,  description="PROBE mode."),
-            CSRField("commit_mode", size=8, offset=16, description="COMMIT mode."),
-        ])
-        self._dbg_set_interval = CSRStatus(32, description="Last SET_CUR dwFrameInterval.")
-        self.comb += [
-            self._dbg_modes.fields.set_frame.eq(self.dbg_set_frame),
-            self._dbg_modes.fields.probe_mode.eq(self.dbg_probe_mode),
-            self._dbg_modes.fields.commit_mode.eq(self.dbg_commit_mode),
-            self._dbg_set_interval.status.eq(self.dbg_set_interval),
-        ]
-
 # UVC Stream (pattern + payloads) ------------------------------------------------------------------
 
 class USB3UVCStream(LiteXModule):
     """YUY2 test pattern frames in UVC payloads.
 
     start (pulse): start streaming in mode (stream restarted), stop (pulse): stop streaming.
-    source: payloads (to the Bulk IN endpoint, or the Isochronous IN endpoint: one payload per service
-    interval, last: end of payload).
+    source: payloads (to the Bulk IN endpoint, or the Isochronous IN endpoint: one payload per
+    service interval, last: end of payload).
     """
     def __init__(self, modes, clk_freq, payload_size=UVC_PAYLOAD_SIZE, bulk=True):
         check_modes(modes, payload_size, bulk)
         self.start  = Signal()                       # i
         self.stop   = Signal()                       # i
         self.mode   = Signal(max=max(len(modes), 2)) # i
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
+        self.source = source = stream.Endpoint(endpoint_layout())
         self.frames = Signal(32)                     # o: Frames sent.
 
         # # #
@@ -482,7 +476,7 @@ class USB3UVCStream(LiteXModule):
             )
         )
 
-# USB3 UVC Function -------------------------------------------------------------------------------
+# USB3 UVC Function --------------------------------------------------------------------------------
 
 class USB3UVCFunction(LiteXModule):
     """UVC camera function of a USB3 device (EP0 with request handler, Bulk or Isochronous IN video
@@ -495,8 +489,9 @@ class USB3UVCFunction(LiteXModule):
     stopped by alternate setting 0 (uvcvideo stream off) or a link reset.
     The buffered packets are flushed on start/stop.
     """
-    def __init__(self, ep0, video_in, link_reset, clk_freq, modes=UVC_MODES, payload_size=UVC_PAYLOAD_SIZE,
-        vs_interface=1):
+    def __init__(self, ep0, video_in, link_reset, clk_freq, modes=UVC_MODES,
+        payload_size = UVC_PAYLOAD_SIZE,
+        vs_interface = 1):
         iso = isinstance(video_in, USB3IsoIN)
         if iso:
             assert payload_size <= video_in.max_burst*1024
@@ -534,10 +529,9 @@ class USB3UVC(LiteXModule):
 
     transfer: "bulk" (default) or "iso" (Isochronous IN endpoint, payload_size: max_burst x 1024 by
     default, bInterval: interval).
-    with_debug: EP0 IN responses/PROBE debug CSRs (core.ep0_dbg_*, function_control_dbg_*).
     """
-    def __init__(self, phy, sys_clk_freq, modes=None, payload_size=None, max_burst=16, transfer="bulk",
-        interval=1, with_debug=False, **kwargs):
+    def __init__(self, phy, sys_clk_freq, modes=None, payload_size=None, max_burst=16,
+        transfer="bulk", interval=1, **kwargs):
         assert transfer in ["bulk", "iso"]
         iso      = (transfer == "iso")
         clk_freq = int(sys_clk_freq)
@@ -547,12 +541,10 @@ class USB3UVC(LiteXModule):
             payload_size = max_burst*1024 if iso else UVC_PAYLOAD_SIZE
         descriptors = uvc_descriptors(modes, ept=1, max_burst=max_burst, clk_freq=clk_freq,
             transfer=transfer, interval=interval, **kwargs)
-        endpoint = USB3IsoIN(ept=1, max_burst=max_burst) if iso else USB3BulkIN(ept=1, max_burst=max_burst)
+        endpoint = (USB3IsoIN(ept=1, max_burst=max_burst) if iso else
+            USB3BulkIN(ept=1, max_burst=max_burst))
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
             endpoints        = [endpoint],
             with_ep0_handler = True)
         self.function = USB3UVCFunction(core.ep0, core.endpoints[0], core.link.reset, clk_freq,
             modes, payload_size)
-        if with_debug:
-            core.add_ep0_debug()
-            self.function.control.add_debug()

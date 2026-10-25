@@ -19,14 +19,27 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_core.common    import *
-from usb3_core.endpoints import HeaderFields
+from usb3_core.common import *
+
+# Layouts ------------------------------------------------------------------------------------------
+
+def dpp_status_layout():
+    """Received DPP status (ok: received without error, landed: stored by its endpoint)."""
+    return [("ok", 1), ("landed", 1)]
+
+def tp_response_layout():
+    """TP response (DWord 1, Device Address when generated)."""
+    return [("dw1", 32), ("addr", 7)]
+
+def dpp_job_layout(n_endpoints):
+    """DPP to transmit (endpoint index, in the DPHs order)."""
+    return [("ep", bits_for(n_endpoints))]
 
 # USB3 Protocol Layer ------------------------------------------------------------------------------
 
 class USB3ProtocolLayer(LiteXModule):
     def __init__(self, link, endpoints, dev_addr):
-        self.pm_busy = Signal() # o: Pending Header Packets/DPPs or busy endpoints (U1/U2 entry rejected).
+        self.pm_busy = Signal() # o: Pending Header Packets/DPPs or busy endpoints (U1/U2 rejected).
 
         # # #
 
@@ -39,7 +52,7 @@ class USB3ProtocolLayer(LiteXModule):
         # DPP status (one per accepted DPH, in order) ----------------------------------------------
         landed = Signal()
         self.comb += landed.eq(Reduce("OR", [ep.landed for ep in endpoints]))
-        self.status = status = stream.SyncFIFO([("ok", 1), ("landed", 1)], 8)
+        self.status = status = stream.SyncFIFO(dpp_status_layout(), 8)
         self.comb += [
             status.sink.valid.eq(link.rx_dpp_done),
             status.sink.ok.eq(link.rx_dpp_ok),
@@ -61,13 +74,15 @@ class USB3ProtocolLayer(LiteXModule):
                 ep.rx_dpp_done.eq(link.rx_dpp_done & sel),
                 ep.rx_dpp_ok.eq(link.rx_dpp_ok),
             ]
-            if hasattr(ep, "rx_dpp_setup"):
+            # SETUP DPs: Control Endpoint only.
+            if ep.ept == 0:
                 self.comb += ep.rx_dpp_setup.eq(link.rx_dpp.setup)
         self.comb += link.rx_dpp.ready.eq(1)
 
         # RX Header Packets dispatch ---------------------------------------------------------------
-        # TP responses, with the Device Address when generated (STATUS ACK of a SET_ADDRESS: old one).
-        self.resp = resp = stream.SyncFIFO([("dw1", 32), ("addr", 7)], 4)
+        # TP responses, with the Device Address when generated (STATUS ACK of a SET_ADDRESS: old
+        # one).
+        self.resp = resp = stream.SyncFIFO(tp_response_layout(), 4)
         is_dp    = Signal()
         is_ping  = Signal()
         resp_any = Signal()
@@ -100,7 +115,7 @@ class USB3ProtocolLayer(LiteXModule):
             ]
 
         # TX Header Packets/DPPs to the Link Layer (registered: timings).
-        self.tx_hp  = tx_hp  = stream.Buffer(header_layout() + [("dpp", 1)], pipe_valid=True, pipe_ready=True)
+        self.tx_hp  = tx_hp  = stream.Buffer(tx_header_layout(), pipe_valid=True, pipe_ready=True)
         self.tx_dpp = tx_dpp = stream.PipeValid(dpp_layout())
         self.comb += [
             tx_hp.source.connect(link.tx_hp),
@@ -108,7 +123,7 @@ class USB3ProtocolLayer(LiteXModule):
         ]
 
         # TX Header Packets arbitration ------------------------------------------------------------
-        self.jobs = jobs = stream.SyncFIFO([("ep", bits_for(len(endpoints)))], 8)
+        self.jobs = jobs = stream.SyncFIFO(dpp_job_layout(len(endpoints)), 8)
         sources = [(None, resp.source)] + [(i, ep.tx_hp) for i, ep in enumerate(endpoints)]
         cases = None
         for i, source in reversed(sources):
@@ -130,7 +145,8 @@ class USB3ProtocolLayer(LiteXModule):
                     jobs.sink.valid.eq(source.valid & source.ready & source.dpp),
                     jobs.sink.ep.eq(i),
                 ]
-            cases = If(source.valid, *grant) if cases is None else If(source.valid, *grant).Else(cases)
+            cases = If(source.valid, *grant) if cases is None else \
+                If(source.valid, *grant).Else(cases)
         self.comb += cases
         # TX DPP (in the DPHs order).
         dpp_cases = {}

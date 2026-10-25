@@ -28,8 +28,9 @@ from litex.soc.cores.code_8b10b import Encoder, Decoder
 from usb3_pipe.serdes import *
 from usb3_pipe.phy    import USB3PHY
 from usb3_core.host_model import USB3HostModel, enumeration_script
+from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors
 
 # IOs ----------------------------------------------------------------------------------------------
@@ -447,7 +448,7 @@ class USB3PIPESim(SoCMini):
                     endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)],
                     with_lpm    = host_lpm))
                 self.add_module(name=f"{name}_usb3_core", module=core)
-                loopback = renamer(stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True))
+                loopback = renamer(stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True))
                 self.add_module(name=f"{name}_loopback", module=loopback)
                 self.comb += [
                     core.endpoints[1].source.connect(loopback.sink),
