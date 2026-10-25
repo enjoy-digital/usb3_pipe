@@ -13,8 +13,12 @@ turn every finding into a simulation test.
 - JTAG through the baseboard FT4232H (channel A). If other FTDI boards are connected, always select
   the Acorn explicitly (USB bus/device for openFPGALoader, USB location for OpenOCD): the platform
   programmer picks the first FTDI it finds.
-- Use a dedicated `litex_server` port (ex: 1240): another `litex_server`/Etherbone bridge may already
-  listen on the default 1234 and a client would silently talk to another board. Always check the
+- `litex_server` port: the host scripts (`usb3_debug.py`, `usb3_bench.py`, `usb3_soak.py`,
+  `usb3_trace.py`, `usb3_analyzer.py`, `usb3_suspend.py`) default to the LiteX default port 1234
+  (`--port`), `scripts/acorn_run.py` starts its own `litex_server` (JTAGBone) on a dedicated port
+  (`--port`, default 1240). Use a dedicated port (ex: `litex_server --jtag --bind-port 1240` and
+  `--port 1240` on the scripts, as in the examples below) when another `litex_server`/Etherbone
+  bridge may already listen on 1234: a client would silently talk to another board. Always check the
   identifier first (`litex_cli --port 1240 --ident` must return `USB3SoC ...`).
 
 ## Build And Load
@@ -130,8 +134,8 @@ LTSSM state encodings: `usb3_pipe.gen.get_ltssm_states()`.
 
 ## Bulk Data And Stability
 
-`acorn.py` loops EP2 OUT back to EP1 IN (USB3DeviceCore Bulk endpoints). With the device accessible to the user
-(`scripts/99-usb3-pipe.rules`):
+The `loopback` example (`acorn.py` default) loops EP2 OUT back to EP1 IN (USB3DeviceCore Bulk
+endpoints). With the device accessible to the user (`scripts/99-usb3-pipe.rules`):
 
 ```bash
 ./scripts/usb3_bulk.py info                                   # Endpoints, speed.
@@ -152,7 +156,8 @@ Full duplex bandwidth/soak with data checked on both sides (`--example bench`):
 
 ## USB3 Device Core: Header Packets trace
 
-`USB3DeviceCore.add_csr(with_trace=True)` (enabled in the `acorn.py` examples) records the received and
+`USB3DeviceCore.add_csr(with_trace=True)` (enabled in the device class examples: `cdc_uartbone`,
+`console`, `uvc`, `uvc_iso`, `msc`, `msc_dram`, `composite`) records the received and
 transmitted Header Packets (TPs/DPHs/LMPs, ITPs skipped) with timestamps: the Protocol Layer exchanges
 with the host (control transfers, bursts, NRDY/ERDY flow control, retries) are visible without USB
 analyzer.
@@ -168,7 +173,9 @@ analyzer.
 ```
 
 The core status CSRs (`usb3_core_status`: ready/configured/address, `rx_lbad`, `tx_retry`,
-`recovery_req`) count the Link Layer errors/Recovery requests (`usb3_soak.py` logs them).
+`recovery_req`) count the Link Layer errors/Recovery requests (`usb3_soak.py` logs them). The prefix
+is `usb3_core` in the vendor Bulk/`composite` examples, `usb3_<class>_core` in the single class
+examples (ex: `usb3_uvc_core_status`); `usb3_trace.py` autodetects it (`--prefix`).
 
 ## Suspend/Resume (U3)
 
@@ -182,7 +189,7 @@ reports each resume as `clean` (U3 exit) or `reset` (U3 exit failed, the host re
 with the LTSSM history captured from U3 (`history_freeze`):
 
 ```sh
-$ ./scripts/usb3_suspend.py --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
+$ ./scripts/usb3_suspend.py --port 1240 --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
 cycle 2: clean (0.6s), LTSSM: Recovery.Active Recovery.Configuration Recovery.Idle U0 ...
 cycle 0: reset (1.7s), LTSSM: Polling.ExitToRxDetect Polling.Entry Polling.LFPS ... WarmReset ...
 ```
