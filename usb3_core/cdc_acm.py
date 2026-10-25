@@ -76,24 +76,105 @@ class USB3CDCACMFunction(LiteXModule):
             console before the host opens the port).
     source: bytes from the host.
     connect: host terminal connected (device configured and DTR set by SET_CONTROL_LINE_STATE).
+
+    interface: Communication Interface number: class requests of this interface only (wIndex),
+    several CDC-ACM functions on the same EP0 (else any interface).
+    with_line_coding: the class requests (SET/GET_LINE_CODING, SET_CONTROL_LINE_STATE) are handled
+    by the function (request handler, not in the descriptors requests table: no
+    add_cdc_acm_requests, see USB3ControlDispatcher with several handlers) and the line coding set
+    by the host is exposed (baudrate, stop_bits, parity, data_bits, line_coding: update pulse).
     """
-    def __init__(self, ep0, bulk_in, bulk_out):
+    def __init__(self, ep0, bulk_in, bulk_out, interface=None, with_line_coding=False):
         self.sink    = sink    = stream.Endpoint([("data", 8)]) # i
         self.source  = source  = stream.Endpoint([("data", 8)]) # o
         self.connect = connect = Signal()                       # o
+        if with_line_coding:
+            self.baudrate    = baudrate    = Signal(32, reset=115200) # o: dwDTERate.
+            self.stop_bits   = stop_bits   = Signal(8)                # o: bCharFormat.
+            self.parity      = parity      = Signal(8)                # o: bParityType.
+            self.data_bits   = data_bits   = Signal(8, reset=8)       # o: bDataBits.
+            self.line_coding = line_coding = Signal()                 # o: SET_LINE_CODING (pulse).
 
         # # #
+
+        # Requests of this function (interface).
+        req_match = Signal()
+        if interface is None:
+            self.comb += req_match.eq(1)
+        else:
+            self.comb += req_match.eq(ep0.req_index[0:8] == interface)
+        set_line_coding        = Signal()
+        get_line_coding        = Signal()
+        set_control_line_state = Signal()
+        self.comb += [
+            set_line_coding.eq(req_match & (ep0.req_type == 0x21) &
+                (ep0.req_request == CDC_SET_LINE_CODING)),
+            get_line_coding.eq(req_match & (ep0.req_type == 0xa1) &
+                (ep0.req_request == CDC_GET_LINE_CODING)),
+            set_control_line_state.eq(req_match & (ep0.req_type == 0x21) &
+                (ep0.req_request == CDC_SET_CONTROL_LINE_STATE)),
+        ]
 
         # Connection (DTR from SET_CONTROL_LINE_STATE).
         dtr = Signal()
         self.sync += [
-            If(ep0.req_done & (ep0.req_type == 0x21) &
-                (ep0.req_request == CDC_SET_CONTROL_LINE_STATE),
+            If(ep0.req_done & set_control_line_state,
                 dtr.eq(ep0.req_value[0])
             ),
             If(~ep0.configured, dtr.eq(0)),
         ]
         self.comb += connect.eq(ep0.configured & dtr)
+
+        # Line Coding (request handler).
+        if with_line_coding:
+            self.comb += ep0.req_stall.eq(ep0.req_valid &
+                ~(set_line_coding | get_line_coding | set_control_line_state))
+
+            # GET_LINE_CODING: 7 bytes response.
+            get_active = Signal()
+            get_word   = Signal()
+            self.sync += [
+                If(ep0.req_setup,
+                    get_active.eq(get_line_coding),
+                    get_word.eq(0),
+                ).Elif(ep0.req_in.valid & ep0.req_in.ready,
+                    get_word.eq(1),
+                    If(ep0.req_in.last, get_active.eq(0)),
+                )
+            ]
+            self.comb += [
+                ep0.req_in.valid.eq(get_active),
+                If(get_word == 0,
+                    ep0.req_in.data.eq(baudrate),
+                    ep0.req_in.be.eq(0b1111),
+                ).Else(
+                    ep0.req_in.data.eq(Cat(stop_bits, parity, data_bits)),
+                    ep0.req_in.last.eq(1),
+                    ep0.req_in.be.eq(0b0111),
+                ),
+            ]
+
+            # SET_LINE_CODING: 7 bytes OUT Data stage, applied on the Status stage.
+            set_word      = Signal(2)
+            set_baudrate  = Signal(32, reset_less=True)
+            set_format    = Signal(24, reset_less=True)
+            self.comb += ep0.req_out.ready.eq(1)
+            self.sync += [
+                If(ep0.req_setup, set_word.eq(0)),
+                If(ep0.req_out.valid & set_line_coding,
+                    If(set_word == 0, set_baudrate.eq(ep0.req_out.data)),
+                    If(set_word == 1, set_format.eq(ep0.req_out.data[0:24])),
+                    If(set_word != 2, set_word.eq(set_word + 1)),
+                ),
+                line_coding.eq(0),
+                If(ep0.req_done & set_line_coding & (set_word == 2),
+                    baudrate.eq(set_baudrate),
+                    stop_bits.eq(set_format[0:8]),
+                    parity.eq(set_format[8:16]),
+                    data_bits.eq(set_format[16:24]),
+                    line_coding.eq(1),
+                ),
+            ]
 
         # Host -> Device.
         self.unpacker = unpacker = USB3ByteUnpacker()
