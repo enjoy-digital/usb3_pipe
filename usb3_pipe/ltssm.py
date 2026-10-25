@@ -362,6 +362,52 @@ class USB3LTSSM(LiteXModule):
         # FSM --------------------------------------------------------------------------------------
         self.fsm = fsm = FSM(reset_state="Polling.Entry")
 
+        # Transitions shared by several states (lists of statements). The signals are bound as
+        # default arguments: a closure would turn the captured __init__ locals into cell variables
+        # and break the migen Signal name inference (tracer) of the __init__ locals.
+        def goto_recovery(recovery=self.recovery, seen=(rx_ts1_seen, rx_ts1_inv_seen, rx_ts2_seen)):
+            # Recovery entry: TS1/TS2 evidence of the previous training attempt cleared.
+            return [
+                NextValue(recovery, 1),
+                *[NextValue(s, 0) for s in seen],
+                NextState("Recovery.Active"),
+            ]
+
+        def goto_hot_reset(hr_seen=hr_seen):
+            return [
+                NextValue(hr_seen, 0),
+                NextState("HotReset.Active"),
+            ]
+
+        def goto_ux(kind):
+            # Ux entry for a PM handshake kind (1: U1, 2: U2, 3: U3).
+            return [If(kind == 1,
+                NextState("U1")
+            ).Elif(kind == 2,
+                NextState("U2")
+            ).Else(
+                NextState("U3")
+            )]
+
+        def warm_reset(orig, wr_run=wr_run, wr_orig=wr_orig):
+            # Warm Reset LFPS burst: orig=1 DS originator, orig=0 UFP responder (6.9).
+            return [
+                NextValue(wr_run,  1),
+                NextValue(wr_orig, orig),
+                NextState("WarmReset"),
+            ]
+
+        def hs_start(mode, responder=False, hs=(hs_mode, hs_run, hs_send, hs_rx)):
+            # LFPS exit/wakeup handshake start (mode: 1 U1, 2 U2/Loopback, 3 U3). A responder
+            # starts with hs_rx pre-latched: the qualified partner burst is the request evidence.
+            hs_mode, hs_run, hs_send, hs_rx = hs
+            return [
+                NextValue(hs_mode, mode),
+                NextValue(hs_run,  1),
+                NextValue(hs_send, 1),
+                *([NextValue(hs_rx, 1)] if responder else []),
+            ]
+
         # Partner exit/wakeup LFPS detection (6.9.2, Table 6-31) -----------------------------------
         # The handshake initiator transmits LFPS until the handshake is declared successful or
         # failed: the responder shall respond while the initiator LFPS is still received (t11-t10:
@@ -499,16 +545,12 @@ class USB3LTSSM(LiteXModule):
                 NextState("Loopback")
             ).Elif(self.rx_ts2_reset & ~self.ds_port,
                 # Reset bit in TS2: US to Hot Reset (7.5.4.10.2).
-                NextValue(hr_seen, 0),
-                NextState("HotReset.Active")
+                *goto_hot_reset()
             ).Elif(self.hot_reset_req & self.ds_port,
                 # DS directed Hot Reset (7.5.4.10.2).
-                NextValue(hr_seen, 0),
-                NextState("HotReset.Active")
+                *goto_hot_reset()
             ).Elif(self.warm_reset_req & self.ds_port,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 1),
-                NextState("WarmReset")
+                *warm_reset(orig=1)
             ).Elif(self.rx_idle8,
                 # Idle handshake done (8 Idle received + 16 Idle sent model) -> U0.
                 NextState("U0")
@@ -546,54 +588,29 @@ class USB3LTSSM(LiteXModule):
             # Warm Reset LFPS detect (6.9: UFP must detect it in any state, responds until DS
             # stops).
             If(self.lfps_rx_reset,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 0),
-                NextState("WarmReset")
+                *warm_reset(orig=0)
             # Hot Reset: US forced by TS2 Reset bit.
             ).Elif(self.rx_ts2_reset,
-                NextValue(hr_seen, 0),
-                NextState("HotReset.Active")
+                *goto_hot_reset()
             # Hot Reset: DS directed, through Recovery (7.5.6.2): the Reset bit is sent in the TS2
             # of Recovery.Configuration and Hot Reset entered from Recovery.Idle (7.4.2, 7.5.10).
             ).Elif(self.hot_reset_req & self.ds_port,
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             # Real Recovery triggers (7.5.6.2): TS1 detect (trigger 2), tU0RecoveryTimeout (4),
             # directed (3).
             ).Elif(self.ts_rx_ts1, # TS1 received in U0: partner in Recovery (7.5.6.2, trigger 2).
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(t_u0_recovery.done,
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(self.directed_recovery,
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(self.directed_loopback & self.loopback_capable,
                 # Directed loopback from U0: via Recovery with TS2 Loopback bit (7.5.11).
                 NextValue(lb_pending, 1),
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(self.warm_reset_req & self.ds_port,
                 # DS directed Warm Reset: send Warm Reset LFPS burst (6.9).
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 1),
-                NextState("WarmReset")
+                *warm_reset(orig=1)
             # PM: accept partner request (UFP shall not reject U3, 7.2.4.2.4).
             ).Elif(self.lgo_u3 & ~pm_sent_lgo & (pm_acc_kind == 0),
                 NextValue(pm_acc_kind, 3),
@@ -637,13 +654,7 @@ class USB3LTSSM(LiteXModule):
                     NextValue(pm_conc_kind, 0),
                     NextValue(pm_lpma_fire, 1),
                     NextValue(u3_entry_cnt, 0), # entry success breaks the failure streak
-                    If(pm_kind == 1,
-                        NextState("U1")
-                    ).Elif(pm_kind == 2,
-                        NextState("U2")
-                    ).Else(
-                        NextState("U3")
-                    )
+                    *goto_ux(pm_kind)
                 ).Elif(self.lxu,
                     NextValue(pm_sent_lgo, 0), # rejected: remain in U0
                     NextValue(u3_entry_cnt, 0), # resolved handshake is not a timeout failure
@@ -665,11 +676,7 @@ class USB3LTSSM(LiteXModule):
                         If(pm_kind == 3,
                             NextValue(u3_entry_cnt, u3_entry_cnt + 1)
                         ),
-                        NextValue(self.recovery, 1),
-                        NextValue(rx_ts1_seen,     0),
-                        NextValue(rx_ts1_inv_seen, 0),
-                        NextValue(rx_ts2_seen,     0),
-                        NextState("Recovery.Active")
+                        *goto_recovery()
                     )
                 )
             ).Elif(pm_acc_kind != 0,
@@ -677,21 +684,11 @@ class USB3LTSSM(LiteXModule):
                 # no LPMA and no TS1 (7.2.4.2.3).
                 If(t_pm_entry.done | self.lpma,
                     NextValue(pm_acc_kind, 0),
-                    If(pm_acc_kind == 1,
-                        NextState("U1")
-                    ).Elif(pm_acc_kind == 2,
-                        NextState("U2")
-                    ).Else(
-                        NextState("U3")
-                    )
+                    *goto_ux(pm_acc_kind)
                 ).Elif(self.ts_rx_ts1,
                     # LAU corrupted case: Recovery before PM_ENTRY timeout (7.2.4.2.3).
                     NextValue(pm_acc_kind, 0),
-                    NextValue(self.recovery, 1),
-                    NextValue(rx_ts1_seen,     0),
-                    NextValue(rx_ts1_inv_seen, 0),
-                    NextValue(rx_ts2_seen,     0),
-                    NextState("Recovery.Active")
+                    *goto_recovery()
                 )
             )
         )
@@ -704,19 +701,13 @@ class USB3LTSSM(LiteXModule):
             t_ux_exit.wait.eq(ux_armed),
             self.u1.eq(1),
             If(self.lfps_rx_reset,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 0),
-                NextState("WarmReset")
+                *warm_reset(orig=0)
             ).Elif(self.lfps_rx_polling,
                 # Simplification: partner restarted training (Rx.Detect absence equivalent).
                 NextState("Polling.Entry")
             ).Elif(hs_done_ok,
                 # U1 exit handshake success -> both partners to Recovery (6.9.2/7.2.4.2.7).
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(hs_done_err,
                 # tNoLFPSResponseTimeout (2ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")
@@ -729,19 +720,14 @@ class USB3LTSSM(LiteXModule):
             ).Elif(~hs_run & self.rx_burst_ok,
                 # Responder: partner's single exit burst qualified (6.9.2). hs_rx is pre-latched:
                 # the qualified burst IS the partner request evidence.
-                NextValue(hs_mode, 1),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
-                NextValue(hs_rx,   1),
+                *hs_start(mode=1, responder=True),
                 # Ux_EXIT_TIMER is only started by the port initiating the exit (7.2.4.2.1).
             ).Elif(~hs_run & ((self.exit_u1_req & (self.ds_port | u1_residency_done))
                               | (self.hot_reset_req & self.ds_port)),
                 # U1 exit initiator (UFP only after U1_MIN_RESIDENCY). DS-directed
                 # PORT_RESET exits through the same handshake (p189-190); the held
                 # request completes the chain later in Recovery.Idle -> Hot Reset.
-                NextValue(hs_mode, 1),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
+                *hs_start(mode=1),
                 NextValue(ux_armed, 1)
             )
         )
@@ -754,32 +740,21 @@ class USB3LTSSM(LiteXModule):
             t_ux_exit.wait.eq(ux_armed),
             self.u2.eq(1),
             If(self.lfps_rx_reset,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 0),
-                NextState("WarmReset")
+                *warm_reset(orig=0)
             ).Elif(self.lfps_rx_polling,
                 NextState("Polling.Entry") # Simplification: partner restarted training.
             ).Elif(hs_done_ok,
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(hs_done_err,
                 NextState("eSS.Inactive")
             ).Elif(~hs_run & self.rx_burst_ok,
                 # Responder: partner's single exit burst qualified (6.9.2), hs_rx pre-latched.
-                NextValue(hs_mode, 2),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
-                NextValue(hs_rx,   1),
+                *hs_start(mode=2, responder=True),
                 # Ux_EXIT_TIMER is only started by the port initiating the exit (7.2.4.2.1).
             ).Elif(~hs_run & (self.exit_u2_req | (self.hot_reset_req & self.ds_port)),
                 # U2 exit initiator; DS-directed PORT_RESET rides the same
                 # handshake (p189-190) and completes in Recovery.Idle -> Hot Reset.
-                NextValue(hs_mode, 2),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
+                *hs_start(mode=2),
                 NextValue(ux_armed, 1)
             )
         )
@@ -792,26 +767,18 @@ class USB3LTSSM(LiteXModule):
             self.u3.eq(1),
             t_u3_retry.wait.eq(u3_retry_wait),
             If(self.lfps_rx_reset,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 0),
-                NextState("WarmReset")
+                *warm_reset(orig=0)
             ).Elif(self.lfps_rx_polling,
                 NextState("Polling.Entry") # Simplification: partner restarted training.
             ).Elif((self.hot_reset_req | self.warm_reset_req) & self.ds_port,
                 # PORT_RESET/BH_PORT_RESET directed in U3 -> Warm Reset
                 # (Inband Reset selection, p189-190).
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 1),
-                NextState("WarmReset")
+                *warm_reset(orig=1)
             ).Elif(hs_done_ok,
                 # U3 wakeup handshake success -> Recovery (7.2.4.2.7).
                 NextValue(u3_wakeup_pending, 0),
                 NextValue(u3_retry_wait, 0),
-                NextValue(self.recovery, 1),
-                NextValue(rx_ts1_seen,     0),
-                NextValue(rx_ts1_inv_seen, 0),
-                NextValue(rx_ts2_seen,     0),
-                NextState("Recovery.Active")
+                *goto_recovery()
             ).Elif(hs_done_err,
                 # Wakeup failure: remain in U3 and retry after tU3WakeupRetryDelay (100ms)
                 # (7.2.4.2.7, no failure limit: the 3 failures -> eSS.Inactive rule is for U3
@@ -822,15 +789,10 @@ class USB3LTSSM(LiteXModule):
                 NextValue(u3_wakeup_pending, 1)
             ).Elif(u3_wakeup_pending & ~hs_run & ~u3_retry_wait,
                 # Initiate/retry wakeup (Ux_EXIT_TIMER not applied to U3, 7.2.4.2.1).
-                NextValue(hs_mode, 3),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1)
+                *hs_start(mode=3)
             ).Elif(~hs_run & self.rx_burst_ok,
                 # Respond to the partner wakeup (qualified single burst, hs_rx pre-latched).
-                NextValue(hs_mode, 3),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
-                NextValue(hs_rx,   1)
+                *hs_start(mode=3, responder=True)
             ).Elif(t_u3_retry.done,
                 # tU3WakeupRetryDelay (100ms) elapsed: clear the wait so the pending wakeup is
                 # re-initiated by the branch above on the next cycle (7.2.4.2.4).
@@ -848,14 +810,10 @@ class USB3LTSSM(LiteXModule):
                 NextValue(self.compliance_ping_count, self.compliance_ping_count + 1)
             ),
             If(self.lfps_rx_reset,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 0),
-                NextState("WarmReset")
+                *warm_reset(orig=0)
             ).Elif(self.warm_reset_req & self.ds_port,
                 # Only Warm Reset exits Compliance (7.5.5.2).
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 1),
-                NextState("WarmReset")
+                *warm_reset(orig=1)
             )
         )
 
@@ -864,31 +822,22 @@ class USB3LTSSM(LiteXModule):
             t_ux_exit.wait.eq(ux_armed),
             self.loopback.eq(1),
             If(self.lfps_rx_reset,
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 0),
-                NextState("WarmReset")
+                *warm_reset(orig=0)
             ).Elif(self.lfps_rx_polling,
                 # Simplification: partner restarted training after failed exit.
                 NextState("Polling.ExitToRxDetect")
             ).Elif((self.hot_reset_req | self.warm_reset_req) & self.ds_port,
                 # PORT_RESET/BH_PORT_RESET directed in Loopback -> Warm Reset
                 # (Inband Reset selection, p189-190); outranks the master exit.
-                NextValue(wr_run,  1),
-                NextValue(wr_orig, 1),
-                NextState("WarmReset")
+                *warm_reset(orig=1)
             ).Elif(loopback_master & ~self.directed_loopback & ~hs_run,
                 # Master exit directed: Loopback exit LFPS (timing of U2 exit, 7.5.11.2).
-                NextValue(hs_mode, 2),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
+                *hs_start(mode=2),
                 NextState("Loopback.Exit")
             ).Elif(~loopback_master & self.rx_burst_ok,
                 # Slave: exit on the master's qualified Loopback exit LFPS (7.5.11.2);
                 # hs_rx pre-latched from the qualified burst.
-                NextValue(hs_mode, 2),
-                NextValue(hs_run,  1),
-                NextValue(hs_send, 1),
-                NextValue(hs_rx,   1),
+                *hs_start(mode=2, responder=True),
                 NextState("Loopback.Exit")
             )
         )
@@ -1035,14 +984,12 @@ class USB3LTSSM(LiteXModule):
                 NextState("Loopback")
             ).Elif(self.rx_ts2_reset,
                 # Reset bit in TS2 -> Hot Reset.
-                NextValue(hr_seen, 0),
-                NextState("HotReset.Active")
+                *goto_hot_reset()
             ).Elif(self.hot_reset_req & self.ds_port,
                 # DS-directed Hot Reset (7.5.12 Recovery.Idle entry): completes the
                 # U1/U2 directed chain (LFPS Exit -> Recovery -> Hot Reset, p189-190)
                 # and must outrank the idle handshake below.
-                NextValue(hr_seen, 0),
-                NextState("HotReset.Active")
+                *goto_hot_reset()
             ).Elif(self.rx_idle8,
                 # Idle handshake -> U0 (7.5.10.3).
                 NextState("U0")
@@ -1085,13 +1032,9 @@ class USB3LTSSM(LiteXModule):
                 continue
             fsm.act(state,
                 If(self.lfps_rx_reset,
-                    NextValue(wr_run,  1),
-                    NextValue(wr_orig, 0),
-                    NextState("WarmReset")
+                    *warm_reset(orig=0)
                 ).Elif(self.warm_reset_req & self.ds_port,
-                    NextValue(wr_run,  1),
-                    NextValue(wr_orig, 1),
-                    NextState("WarmReset")
+                    *warm_reset(orig=1)
                 )
             )
 
