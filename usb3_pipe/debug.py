@@ -5,7 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 PHY debug (doc/debugging-guide.md): LTSSM state history and counters (USB3PHYDebug), RX
-errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug).
+errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug), LiteScope probes
+groups (usb3_analyzer_groups).
 """
 
 from functools import reduce
@@ -309,3 +310,61 @@ class USB3SerDesDebug(LiteXModule):
 
         # RX errors.
         self.rx_errors = USB3RXErrorsDebug(gt.decoders, serdes.rx_substitution.checker)
+
+# USB3 Analyzer Groups -----------------------------------------------------------------------------
+
+USB3_ANALYZER_GROUPS = ["link", "lfps", "ts", "datapath", "phase"]
+
+def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
+    """LiteScope probes groups of a USB3PHY/USB3SerDes (bench/usb3_analyzer.py), returns a dict
+    {name: signals}:
+    - link     : LTSSM + TS/LFPS Polling detections/generation, RX idle/errors/polarity.
+    - lfps     : LTSSM + LFPS TX/RX (Polling, Ping, U1/U2/U3 exit, Warm Reset).
+    - ts       : LTSSM + TS detections/generation, SerDes RX/TX streams.
+    - datapath : LTSSM + SerDes and PHY RX/TX streams, SKP removal.
+    - phase    : LTSSM + RX vs TX clocks phase (requires serdes_debug: USB3SerDesDebug).
+    """
+    pipe  = phy.pipe
+    ltssm = phy.ltssm
+    link_signals = [
+        phy.ltssm_state,
+        ltssm.u0,
+        ltssm.recovery,
+        ltssm.rx_ready,
+        ltssm.tx_ready,
+        ltssm.idle_handshake,
+        ltssm.rx_idle8,
+        ltssm.ts2_decode,
+    ]
+    groups = {
+        "link" : link_signals + [
+            pipe.ts_rx_ts1, pipe.ts_rx_ts1_inv, pipe.ts_rx_ts2, pipe.ts_tx_done,
+            pipe.ts_tx_tseq, pipe.ts_tx_ts1, pipe.ts_tx_ts2,
+            pipe.lfps_rx_polling, pipe.lfps_tx_polling, pipe.lfps_tx_count,
+            serdes.rx_idle, serdes.rx_errors, serdes.rx_polarity,
+        ],
+        "lfps" : link_signals + [
+            serdes.tx_idle, serdes.tx_lfps, serdes.tx_pattern,
+            serdes.rx_idle, serdes.rx_errors,
+            pipe.lfps_rx_polling, pipe.lfps_rx_ping, pipe.lfps_rx_exit_u1,
+            pipe.lfps_rx_exit_u2, pipe.lfps_rx_wakeup_u3, pipe.lfps_rx_reset,
+            pipe.lfps_tx_polling, pipe.lfps_tx_count,
+        ],
+        "ts" : link_signals + [
+            pipe.ts_rx_ts1, pipe.ts_rx_ts1_inv, pipe.ts_rx_ts2, pipe.ts_tx_done,
+            pipe.ts_tx_tseq, pipe.ts_tx_ts1, pipe.ts_tx_ts2,
+            serdes.source, serdes.sink,
+        ],
+        "datapath" : link_signals + [
+            serdes.rx_errors,
+            serdes.rx_datapath.skip_remover.skip,
+            serdes.source, serdes.sink,
+            phy.source, phy.sink,
+        ],
+    }
+    if serdes_debug is not None:
+        groups["phase"] = link_signals + [
+            serdes_debug.rx_tx_phase,
+            serdes.rx_idle, serdes.rx_errors,
+        ]
+    return groups
