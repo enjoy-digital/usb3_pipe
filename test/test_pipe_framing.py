@@ -14,26 +14,16 @@ from litex.soc.interconnect import stream
 from usb3_pipe.common import SKP, SDP, SHP, SLC, EPF, TS2
 from usb3_pipe.core import USB3PIPE
 
+from test.model.gt import GTModel
 from test.common import (ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words, strip_skp,
     swap_word)
 
 # Helpers ------------------------------------------------------------------------------------------
 
-class SerDesRXModel(Module):
+class SerDesRXModel(GTModel):
     """SerDes model: RX words as delivered by the SerDes RX datapath (COM aligned, SKP removed)."""
     def __init__(self):
-        self.sink          = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source        = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.rx_align      = Signal()
-        self.rx_polarity   = Signal()
-        self.rx_idle       = Signal()
-        self.tx_idle       = Signal()
-        self.tx_pattern    = Signal(20)
-        self.tx_skp_enable = Signal(reset=1)
-
-        # # #
-
-        self.comb += self.sink.ready.eq(1)
+        GTModel.__init__(self, tx_ready=True)
 
 def framing(start):
     return [(start, 1)]*3 + [(EPF.value, 1)]

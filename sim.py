@@ -76,9 +76,14 @@ class USB3SerDesModel(LiteXModule):
         self.rx_polarity = Signal() # i
         self.rx_idle     = Signal() # o
         self.rx_errors   = Signal() # o
+
         self.tx_skp_enable = Signal(reset=1) # i
-        self.rx_align    = Signal() # i
-        self.tx_skp      = Signal() # i: Insert a SKP Ordered Set (2 symbols) in the TX symbols stream.
+        self.rx_align      = Signal()        # i
+        self.rx_reset      = Signal()        # i: (Not modelled).
+        self.tx_skp        = Signal()        # i: Insert a SKP Ordered Set (2 symbols) on TX.
+
+        self.rx_idle_stretch = 0
+        self.xcvr_name       = None
 
         # # #
 

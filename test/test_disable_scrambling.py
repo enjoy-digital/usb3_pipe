@@ -31,7 +31,7 @@ class TestDisableScrambling(unittest.TestCase):
         data = [(rng.randrange(1, 2**32), 0) for _ in range(32)]
         rx   = ordered_set_words(TS2, link_config=ts2_link_config)*8 + [(0, 0)]*8 + data
 
-        gt  = GTModel(with_ready=True)
+        gt  = GTModel()
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         n_ts2 = len(ordered_set_words(TS2))*8
@@ -79,7 +79,7 @@ class TestDisableScrambling(unittest.TestCase):
     def test_directed_disable_scrambling(self):
         # When directed, the port shall set the Disabling Scrambling bit in the TS2 (7.5.4.9.1) and
         # disable the scrambling.
-        gt  = GTModel(with_ready=True)
+        gt  = GTModel()
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         def generator(dut):
@@ -98,7 +98,7 @@ class TestDisableScrambling(unittest.TestCase):
         self.assertEqual(set(wire), {(0, 0)})
 
     def test_phy_connects_ts2_decode(self):
-        dut  = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut  = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
         comb = dut.get_fragment().comb
         self.assertTrue(any(getattr(s, "l", None) is dut.pipe.ts2_decode and s.r is dut.ltssm.ts2_decode
             for s in comb))

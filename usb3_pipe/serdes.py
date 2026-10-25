@@ -30,6 +30,8 @@ class USB3SerDes(LiteXModule):
     electrical idle/OOB signals) are done by the subclasses.
     """
     def __init__(self):
+        # SerDes interface (used by USB3PIPE/USB3PHY/LFPSUnit/debug, also implemented by the
+        # simulation models: test/model/gt.py, sim.py).
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
@@ -43,11 +45,14 @@ class USB3SerDes(LiteXModule):
 
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
-        self.rx_errors   = Signal()   # o
+        self.rx_errors   = Signal()   # o: RX decode errors (Warm Reset LFPS detection).
 
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align      = Signal()        # i
         self.rx_reset      = Signal()        # i: RX re-initialization (PMA/CDR/PCS reset sequence).
+
+        self.rx_idle_stretch = 0    # rx_idle stretch (cycles) of the RX idle filter (add_lfps).
+        self.xcvr_name       = None # Transceiver submodule name (add_transceiver).
 
     def get_refclk(self, refclk_pads, buffer="IBUFDS_GTE2"):
         """Transceiver reference clock: from dedicated pads (buffer) or a fabric clock."""

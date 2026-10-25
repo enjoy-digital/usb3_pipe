@@ -18,7 +18,7 @@ class TestPHYRXReset(unittest.TestCase):
     def test_rx_reset_on_exit_to_rx_detect(self):
         # No partner: Polling.LFPS times out and the (Downstream) port exits to Rx.Detect, where the
         # SerDes RX is re-initialized (and only there).
-        gt  = GTModel(tx_ready=False, with_ready=True, with_rx_reset=True)
+        gt  = GTModel(tx_ready=False)
         dut = USB3PHY(serdes=gt, sys_clk_freq=int(125e6), role="host", with_endianness_swap=False,
             timer_scale=100000)
         dut.submodules += gt

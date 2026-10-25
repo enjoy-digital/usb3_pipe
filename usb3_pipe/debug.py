@@ -60,8 +60,7 @@ class USB3PHYDebug(LiteXModule):
 
         # # #
 
-        if hasattr(phy, "serdes_rx_reset"):
-            self.comb += phy.serdes_rx_reset.eq(self._serdes_rx_reset.storage)
+        self.comb += phy.serdes_rx_reset.eq(self._serdes_rx_reset.storage)
 
         clear = Signal()
         self.comb += [
@@ -286,10 +285,9 @@ class USB3SerDesDebug(LiteXModule):
 
         # DRP access (selected on the transceiver DRP mux during the accesses, the mux default is
         # the transceiver RX initialization).
-        if hasattr(gt, "drp_mux"):
-            self._drp_sel = CSRStorage(description="Select DRP access on the transceiver DRP mux.")
-            self.drp      = DRPControl(gt.drp)
-            self.comb += gt.drp_mux.sel.eq(self._drp_sel.storage)
+        self._drp_sel = CSRStorage(description="Select DRP access on the transceiver DRP mux.")
+        self.drp      = DRPControl(gt.drp)
+        self.comb += gt.drp_mux.sel.eq(self._drp_sel.storage)
 
         # RX vs TX clocks phase (gray counters).
         rx_count = ClockDomainsRenamer("rx")(GrayCounter(16))

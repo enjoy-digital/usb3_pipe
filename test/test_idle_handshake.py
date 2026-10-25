@@ -32,7 +32,7 @@ def partner_wire(n_idle_words, data_words=[]):
 
 class TestIdleHandshake(unittest.TestCase):
     def pipe_handshake(self, wire, n_cycles=None):
-        gt  = GTModel(with_ready=True)
+        gt  = GTModel()
         dut = USB3PIPE(serdes=gt, sys_clk_freq=int(125e6), with_endianness_swap=False)
         dut.submodules += gt
         n_cycles = n_cycles or len(wire) + 32
@@ -120,7 +120,7 @@ class TestIdleHandshake(unittest.TestCase):
 
     def test_phy_connects_idle_handshake(self):
         # USB3PHY must connect the PIPE Idle handshake to the LTSSM (no proxy).
-        dut  = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut  = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
         comb = dut.get_fragment().comb
         def driven_by(l, r):
             return any(getattr(s, "l", None) is l and s.r is r for s in comb)
@@ -130,7 +130,7 @@ class TestIdleHandshake(unittest.TestCase):
     def test_phy_link_interface(self):
         # USB3PHY exposes the LTSSM Link-Layer control interface (same Signals, reset values kept).
         from usb3_pipe.phy import USB3PHY_LINK_CTRL
-        dut = USB3PHY(serdes=GTModel(with_ready=True), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
         for name, direction in USB3PHY_LINK_CTRL:
             self.assertIs(getattr(dut, name), getattr(dut.ltssm, name))
         self.assertEqual(dut.link_activity.reset.value, 1)
