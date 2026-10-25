@@ -40,7 +40,10 @@ def be_to_bytes(be):
 
 def bytes_to_be(nbytes):
     """Valid bytes of the word (1-4, 2 LSBs used: 0 = 4) to be."""
-    return Mux(nbytes[0:2] == 1, 0b0001, Mux(nbytes[0:2] == 2, 0b0011, Mux(nbytes[0:2] == 3, 0b0111, 0b1111)))
+    return Mux(nbytes[0:2] == 1, 0b0001,
+           Mux(nbytes[0:2] == 2, 0b0011,
+           Mux(nbytes[0:2] == 3, 0b0111,
+           0b1111)))
 
 # Symbols (6.3.5) ----------------------------------------------------------------------------------
 

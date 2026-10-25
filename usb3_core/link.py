@@ -60,7 +60,7 @@ class USB3LinkLayer(LiteXModule):
 
         # Control/Status.
         self.lpm_enable   = Signal() # i: Accept the partner's LGO_U1/LGO_U2 when idle (else LXU).
-        self.pm_busy      = Signal() # i: Upper layers busy (ex: ACK TP expected): LGO_U1/LGO_U2 rejected.
+        self.pm_busy      = Signal() # i: Upper layers busy (ex: ACK TP expected): LGO_Ux rejected.
         self.ready        = Signal() # o: U0 and link initialized (Advertisement received).
         self.reset        = Signal() # o: Link reset (Polling/Hot Reset): Protocol Layer reset.
 
@@ -112,7 +112,8 @@ class USB3LinkLayer(LiteXModule):
         ]
 
         # RX Header Packets checks -----------------------------------------------------------------
-        hp_w      = [Signal(32, reset_less=True) for _ in range(4)] # DW0, DW1, DW2, CRC-16/Link Control Word.
+        # Header Packet words: DW0, DW1, DW2, CRC-16/Link Control Word.
+        hp_w      = [Signal(32, reset_less=True) for _ in range(4)]
         hp_last   = Signal() # Last Header Packet word received.
         hp_check  = Signal() # Header Packet received, checked (pulse).
         hp_ok     = Signal(reset_less=True)
@@ -277,7 +278,8 @@ class USB3LinkLayer(LiteXModule):
         self.sync += phy.link_activity.eq(hp_check | lc_check | dpp_end)
 
         # RX Header Buffers ------------------------------------------------------------------------
-        self.rx_buffer = rx_buffer = ResetInserter()(stream.SyncFIFO(header_layout(), LINK_HP_BUFFERS))
+        rx_buffer = ResetInserter()(stream.SyncFIFO(header_layout(), LINK_HP_BUFFERS))
+        self.rx_buffer = rx_buffer
         self.comb += [
             rx_buffer.reset.eq(self.reset),
             rx_buffer.sink.dw0.eq(hp_w[0]),
@@ -306,7 +308,7 @@ class USB3LinkLayer(LiteXModule):
         portcap_pending = Signal(reset=1)
         portcfg_pending = Signal()
         force_pm_accept = Signal()
-        pm_accepted     = Signal()  # LGO_U1/LGO_U2 accepted: no new Header Packets until the next U0 entry.
+        pm_accepted     = Signal()  # LGO_U1/LGO_U2 accepted: no new Header Packets until next U0.
         u2_timeout      = Signal(8) # U2 Inactivity Timeout (LMP).
 
         self.comb += self.ready.eq(u0 & adv_received & ~pm_block)
@@ -316,7 +318,8 @@ class USB3LinkLayer(LiteXModule):
         rx_hp_seqer = Signal()
         self.comb += [
             rx_hp_bad.eq(hp_check & ~hp_ok & ~lbad_wait),
-            rx_hp_seqer.eq(hp_check & hp_ok & ~lbad_wait & ((hp_seq != rx_seq) | ~rx_buffer.sink.ready)),
+            rx_hp_seqer.eq(hp_check & hp_ok & ~lbad_wait &
+                ((hp_seq != rx_seq) | ~rx_buffer.sink.ready)),
             hp_accept.eq(hp_check & hp_ok & ~lbad_wait & (hp_seq == rx_seq) & rx_buffer.sink.ready),
             rx_buffer.sink.valid.eq(hp_accept),
         ]
@@ -371,7 +374,8 @@ class USB3LinkLayer(LiteXModule):
         lgo_fwd = Signal()
         self.comb += [
             lgo_u12.eq(lc_lgo & (lc_info[0:2] != 3)),
-            lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | force_pm_accept | (self.lpm_enable & lpm_idle))),
+            lgo_fwd.eq(lc_lgo &
+                ((lc_info[0:2] == 3) | force_pm_accept | (self.lpm_enable & lpm_idle))),
         ]
         self.sync += [
             phy.lgo_u1.eq(lgo_fwd & (lc_info[0:2] == 1)),
@@ -390,7 +394,8 @@ class USB3LinkLayer(LiteXModule):
         # U1_MIN_RESIDENCY before initiating the U1 exit.
         tx_pending = Signal()
         self.comb += [
-            tx_pending.eq(self.tx_hp.valid | (send_seq != tx_seq) | portcap_pending | portcfg_pending),
+            tx_pending.eq(self.tx_hp.valid | (send_seq != tx_seq) | portcap_pending |
+                portcfg_pending),
             phy.exit_u1_req.eq(phy.u1 & tx_pending),
             phy.exit_u2_req.eq(phy.u2 & tx_pending),
             phy.u2_timeout.eq(u2_timeout),
@@ -621,7 +626,8 @@ class USB3LinkLayer(LiteXModule):
             (~adv_received | (ack_seq != send_seq)))
         # CREDIT_HP_TIMER (5ms): Remote Rx Header Buffer Credits missing.
         self.t_credit_hp = t_credit_hp = WaitTimer(scaled(5e-3))
-        self.comb += t_credit_hp.wait.eq(u0 & ~pm_block & ~lc_lcrd & (remote_credits != LINK_HP_BUFFERS))
+        self.comb += t_credit_hp.wait.eq(u0 & ~pm_block & ~lc_lcrd &
+            (remote_credits != LINK_HP_BUFFERS))
 
         # Flow Control -----------------------------------------------------------------------------
         lgood_ok  = Signal()
@@ -692,8 +698,8 @@ class USB3LinkLayer(LiteXModule):
             ),
 
             # Remote Rx Header Buffer credits.
-            remote_credits.eq(remote_credits + (lc_lcrd & lcrd_ok & (remote_credits != LINK_HP_BUFFERS))
-                - tx_sent_hp),
+            remote_credits.eq(remote_credits +
+                (lc_lcrd & lcrd_ok & (remote_credits != LINK_HP_BUFFERS)) - tx_sent_hp),
             If(lc_lcrd & lcrd_ok, remote_lcrd_idx.eq(remote_lcrd_idx + 1)),
 
             # LGOOD_n received: Advertisement or acknowledge.
@@ -731,7 +737,8 @@ class USB3LinkLayer(LiteXModule):
                 pm_block.eq(0),
             ),
 
-            # Link reset (Polling/Hot Reset): Header Sequence Numbers to zero, Tx Header Buffers flushed.
+            # Link reset (Polling/Hot Reset): Header Sequence Numbers to zero, Tx Header Buffers
+            # flushed.
             If(self.reset,
                 rx_seq.eq(0),
                 tx_seq.eq(0),

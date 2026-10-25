@@ -6,10 +6,10 @@
 
 """USB3 Device Core Header Packets trace (debug, scripts/usb3_trace.py).
 
-Records the received (accepted by the Link Layer) and transmitted Header Packets of the Protocol Layer
-(TPs/DPHs, ITPs excluded; LMPs are handled in the Link Layer and not recorded) in a memory with a
-timestamp: the Protocol Layer exchanges with a real host can be observed without analyzer (ex: flow
-control, NRDY/ERDY, control transfers).
+Records the received (accepted by the Link Layer) and transmitted Header Packets of the Protocol
+Layer (TPs/DPHs, ITPs excluded; LMPs are handled in the Link Layer and not recorded) in a memory
+with a timestamp: the Protocol Layer exchanges with a real host can be observed without analyzer
+(ex: flow control, NRDY/ERDY, control transfers).
 
 Entry (64-bit): dw1[0:32], type[32:37] (DW0[4:0]), direction[37] (0: RX, 1: TX), timestamp[38:64]
 (sys clock cycles/16).
@@ -29,7 +29,7 @@ class USB3CoreTrace(LiteXModule):
     def __init__(self, link, depth=512):
         self._control = CSRStorage(fields=[
             CSRField("enable", size=1, reset=1, description="Trace enable (stops when full)."),
-            CSRField("clear",  size=1, pulse=True, description="Trace clear (and timestamp reset)."),
+            CSRField("clear",  size=1, pulse=True, description="Trace clear (timestamp reset)."),
         ])
         self._count = CSRStatus(16,  description="Recorded entries.")
         self._index = CSRStorage(16, description="Entry to read.")

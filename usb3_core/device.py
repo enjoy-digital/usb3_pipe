@@ -16,7 +16,8 @@ Example:
         USB3BulkIN(ept=1,  max_burst=8),
         USB3BulkOUT(ept=2, max_burst=8),
     ])
-    # usb3.endpoints[0].sink: Device -> Host packets, usb3.endpoints[1].source: Host -> Device packets.
+    # usb3.endpoints[0].sink  : Device -> Host packets.
+    # usb3.endpoints[1].source: Host -> Device packets.
 
 with_lpm: U1/U2 Link Power Management (USB 3.2 7.2.4.2): non-zero U1/U2 exit latencies advertised in
 the BOS, LGO_U1/LGO_U2 accepted by the Link Layer when idle (else rejected with LXU), U1/U2 exited
@@ -54,7 +55,8 @@ class USB3DeviceCore(LiteXModule):
         self.comb += link.lpm_enable.eq(with_lpm)
 
         # Control Endpoint.
-        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors, with_handler=with_ep0_handler))
+        self.ep0 = ep0 = ResetInserter()(USB3EndpointControl(descriptors,
+            with_handler = with_ep0_handler))
         self.comb += ep0.reset.eq(link.reset)
 
         # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
@@ -86,9 +88,9 @@ class USB3DeviceCore(LiteXModule):
             CSRField("configured", size=1, description="Configured (SET_CONFIGURATION)."),
             CSRField("address",    size=7, offset=8, description="Device Address."),
         ])
-        self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets received with errors).")
-        self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets retransmissions).")
-        self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, sequence/credit errors).")
+        self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets RX errors).")
+        self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets resent).")
+        self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, errors).")
         self.comb += [
             self._status.fields.ready.eq(self.link.ready),
             self._status.fields.configured.eq(self.ep0.configured),

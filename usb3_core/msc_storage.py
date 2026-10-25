@@ -20,7 +20,7 @@ from litex.soc.interconnect import stream
 
 MSC_BLOCK_SIZE = 512
 
-# USB3 MSC Storage --------------------------------------------------------------------------------
+# USB3 MSC Storage ---------------------------------------------------------------------------------
 
 # Storage command: read/write blocks (MSC_BLOCK_SIZE) from lba.
 msc_storage_cmd_layout = [
@@ -51,10 +51,11 @@ class USB3MSCStorage(LiteXModule):
 # USB3 MSC RAM Disk --------------------------------------------------------------------------------
 
 class USB3MSCRAM(LiteXModule):
-    """Disk RAM (32-bit words): read port (adr/re/dat_r, 1 cycle latency), write port (adr/dat_w/we).
+    """Disk RAM (32-bit words): read port (adr/re/dat_r, 1 cycle latency), write port
+    (adr/dat_w/we).
 
-    Built from banks of bank_words (8K words: RAMB36 without cascades, Vivado 7-Series cascaded RAMB36
-    on large memories can fail the REQP-1962 DRC).
+    Built from banks of bank_words (8K words: RAMB36 without cascades, Vivado 7-Series cascaded
+    RAMB36 on large memories can fail the REQP-1962 DRC).
     """
     def __init__(self, words, init=None, bank_words=8192):
         init       = [] if init is None else init
@@ -168,8 +169,9 @@ class USB3MSCRAMStorage(USB3MSCStorage):
 class USB3MSCDRAM(USB3MSCStorage):
     """DRAM disk storage: LiteDRAM DMA reader/writer on native ports (from the LiteDRAM crossbar).
 
-    The disk (size bytes) starts at base (bytes) in the DRAM, data stored little-endian (as seen from
-    the CPU/Wishbone bus at main_ram + base). Port data width: multiple of 32 bits, block multiple.
+    The disk (size bytes) starts at base (bytes) in the DRAM, data stored little-endian (as seen
+    from the CPU/Wishbone bus at main_ram + base). Port data width: multiple of 32 bits, block
+    multiple.
 
     rd_port/wr_port: separate ports (each DMA drives its port's cmd), ex: crossbar.get_port("read")
     and crossbar.get_port("write").
@@ -199,7 +201,9 @@ class USB3MSCDRAM(USB3MSCStorage):
         count = Signal(32, reset_less=True)
 
         # DMA Reader (port words -> 32-bit words).
-        self.reader  = reader  = LiteDRAMDMAReader(rd_port, fifo_depth=fifo_depth, fifo_buffered=True)
+        self.reader  = reader  = LiteDRAMDMAReader(rd_port,
+            fifo_depth    = fifo_depth,
+            fifo_buffered = True)
         self.rd_conv = rd_conv = stream.Converter(data_width, 32)
         self.comb += [
             reader.sink.address.eq(adr),
@@ -209,7 +213,9 @@ class USB3MSCDRAM(USB3MSCStorage):
 
         # DMA Writer (32-bit words -> port words).
         self.wr_conv = wr_conv = stream.Converter(32, data_width)
-        self.writer  = writer  = LiteDRAMDMAWriter(wr_port, fifo_depth=fifo_depth, fifo_buffered=True)
+        self.writer  = writer  = LiteDRAMDMAWriter(wr_port,
+            fifo_depth    = fifo_depth,
+            fifo_buffered = True)
         self.comb += [
             self.sink.connect(wr_conv.sink, keep={"valid", "ready", "data"}),
             writer.sink.address.eq(adr),

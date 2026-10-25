@@ -11,8 +11,8 @@ A USB3 device exposing a disk (/dev/sdX, no driver needed) backed by a storage:
   with files, see msc_fat_image).
 - USB3MSCDRAM: DRAM through LiteDRAM DMAs (large disk, not initialized: mkfs.vfat from the host).
 
-- Bulk-Only Transport (USB MSC BOT 1.0): CBW (31 bytes) on Bulk OUT, optional data phase, CSW (13 bytes)
-  on Bulk IN. Get Max LUN/Bulk-Only Mass Storage Reset class requests (constant responses).
+- Bulk-Only Transport (USB MSC BOT 1.0): CBW (31 bytes) on Bulk OUT, optional data phase, CSW (13
+  bytes) on Bulk IN. Get Max LUN/Bulk-Only Mass Storage Reset class requests (constant responses).
 - SCSI commands: TEST UNIT READY, REQUEST SENSE, INQUIRY, MODE SENSE(6), PREVENT ALLOW MEDIUM
   REMOVAL, READ FORMAT CAPACITIES, READ CAPACITY(10), READ(10), WRITE(10), SYNCHRONIZE CACHE(10).
   Other commands fail (ILLEGAL REQUEST sense), their data phase is padded (IN) or discarded (OUT).
@@ -76,7 +76,7 @@ def msc_descriptors(in_ept=1, out_ept=2, max_burst=8, **kwargs):
 # Disk Image ---------------------------------------------------------------------------------------
 
 def msc_fat_image(size, files=None, label="USB3PIPE"):
-    """FAT disk image (mkfs.fat + mtools) with files ({name: content}), None if the tools are missing."""
+    """FAT disk image (mkfs.fat + mtools) with files ({name: content}), None without the tools."""
     files = {} if files is None else files
     try:
         with tempfile.TemporaryDirectory() as d:
@@ -105,7 +105,8 @@ def scsi_responses(blocks, vendor="EnjoyDig", product="USB3-PIPE RAMDisk", revis
         SCSI_INQUIRY : [0x00, 0x80, 0x05, 0x02, 31, 0, 0, 0] + pad(vendor, 8) + pad(product, 16) +
             pad(revision, 4),
         SCSI_MODE_SENSE_6 : [3, 0, 0, 0],
-        SCSI_READ_CAPACITY_10 : list(last_lba.to_bytes(4, "big")) + list(MSC_BLOCK_SIZE.to_bytes(4, "big")),
+        SCSI_READ_CAPACITY_10 : list(last_lba.to_bytes(4, "big")) +
+            list(MSC_BLOCK_SIZE.to_bytes(4, "big")),
         # Formatted media: capacity list header + current descriptor.
         SCSI_READ_FORMAT_CAPACITY : [0, 0, 0, 8] + list(blocks.to_bytes(4, "big")) + [0x02, 0] +
             list(MSC_BLOCK_SIZE.to_bytes(2, "big")),
@@ -168,9 +169,8 @@ class USB3MSCSCSI(LiteXModule):
             storage.cmd.blocks.eq(nblk),
         ]
 
-        # Sense response: fixed format.
-        # Fixed format: byte 0: response code, byte 2: sense key, byte 7: additional length (10), byte
-        # 12: ASC.
+        # Sense response, fixed format: byte 0: response code, byte 2: sense key, byte 7: additional
+        # length (10), byte 12: ASC.
         sense = Array([
             Cat(C(SENSE_FIXED_CURRENT, 8), C(0, 8), sense_key, C(0, 4), C(0, 8)),
             Cat(C(0, 8), C(0, 8), C(0, 8), C(10, 8)),
@@ -261,7 +261,8 @@ class USB3MSCSCSI(LiteXModule):
             ),
         ]
         decode_cases["default"] = [
-            # Unsupported: ILLEGAL REQUEST/INVALID COMMAND OPERATION CODE, data phase padded/discarded.
+            # Unsupported: ILLEGAL REQUEST/INVALID COMMAND OPERATION CODE, data phase
+            # padded/discarded.
             NextValue(sense_key, SENSE_KEY_ILLEGAL_REQUEST),
             NextValue(sense_asc, SENSE_ASC_INVALID_OPCODE),
             NextValue(status, 1),
@@ -386,7 +387,7 @@ class USB3MSCSCSI(LiteXModule):
 # USB3 MSC -----------------------------------------------------------------------------------------
 
 class USB3MSC(LiteXModule):
-    """USB3 Mass Storage device: block RAM disk (size, optional image) or storage (ex: USB3MSCDRAM)."""
+    """USB3 Mass Storage device: block RAM disk (size, optional image) or storage (USB3MSCDRAM)."""
     def __init__(self, phy, sys_clk_freq, size=512*1024, image=None, storage=None, max_burst=8,
         inquiry_product="USB3-PIPE RAMDisk", **kwargs):
         descriptors = msc_descriptors(max_burst=max_burst, **kwargs)

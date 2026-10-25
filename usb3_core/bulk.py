@@ -35,8 +35,8 @@ WR_IDLE_CYCLES = 64 # Bulk IN: writer idle cycles before a last max size packet 
 class USB3BulkIN(USB3Endpoint):
     """Bulk IN Endpoint (Device -> Host).
 
-    sink: packets to send (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end of
-    packet), packets longer than 1024 bytes are split.
+    sink: packets to send (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end
+    of packet), packets longer than 1024 bytes are split.
     flush: drop the buffered packets (and the packet being written), ex: stream restarted.
     """
     def __init__(self, ept, max_burst=8):
@@ -63,7 +63,7 @@ class USB3BulkIN(USB3Endpoint):
         snd_ptr = Signal(pbits) # Next slot to send.
         ack_seq = Signal(5)     # Sequence Number of ack_ptr's packet.
         snd_seq = Signal(5)
-        # Pointers differences/increments (modulo 2*n: explicit widths, Migen differences are signed).
+        # Pointers differences/increments (modulo 2*n: explicit widths, Migen differences signed).
         inflight = Signal(pbits) # Sent, not acknowledged.
         used     = Signal(pbits) # Written, not acknowledged.
         snd_next = Signal(pbits)
@@ -85,7 +85,8 @@ class USB3BulkIN(USB3Endpoint):
             wr_port.we.eq(sink.valid & sink.ready),
         ]
         wr_commit = Signal()
-        self.comb += wr_commit.eq(sink.valid & sink.ready & (sink.last | (wr_count == MAX_PACKET_WORDS - 1)))
+        self.comb += wr_commit.eq(sink.valid & sink.ready &
+            (sink.last | (wr_count == MAX_PACKET_WORDS - 1)))
         self.sync += [
             If(self.flush,
                 wr_count.eq(0),
@@ -101,7 +102,7 @@ class USB3BulkIN(USB3Endpoint):
         ]
 
         # Host requests (ACK TP) -------------------------------------------------------------------
-        win_seq   = Signal(5, reset_less=True) # Host window: Sequence Number of the next packet requested...
+        win_seq   = Signal(5, reset_less=True) # Host window: next requested Seq Num...
         win_nump  = Signal(5)                  # ...and number of packets requested from win_seq.
         h = self.hdr
         ack = Signal()
@@ -167,7 +168,8 @@ class USB3BulkIN(USB3Endpoint):
                 send.eq(self.tx_hp.ready),
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_DP),
-                self.tx_hp.dw1.eq(dph_dw1(seq=snd_seq, ept=ept, direction=1, length=snd_len, eob=snd_eob)),
+                self.tx_hp.dw1.eq(dph_dw1(seq=snd_seq, ept=ept, direction=1, length=snd_len,
+                    eob=snd_eob)),
                 self.tx_hp.dpp.eq(1),
             ),
             jobs.sink.valid.eq(send),
@@ -222,8 +224,8 @@ class USB3BulkIN(USB3Endpoint):
                     fc_data.eq(0),
                     fc_req.eq(0),
                     If(h.nump == 0,
-                        # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when data
-                        # is available (the host may also request again on its own).
+                        # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when
+                        # data is available (the host may also request again on its own).
                         fc_data.eq(1),
                     ).Elif(acked_ptr == wr_ptr,
                         # Request without available packet: NRDY, ERDY when data available.
@@ -263,8 +265,8 @@ class USB3BulkIN(USB3Endpoint):
 class USB3BulkOUT(USB3Endpoint):
     """Bulk OUT Endpoint (Host -> Device).
 
-    source: received packets (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end of
-    packet). Zero-length packets are dropped.
+    source: received packets (data: 32-bit words, first byte on data[0:8], be: valid bytes, last:
+    end of packet). Zero-length packets are dropped.
     """
     def __init__(self, ept, max_burst=8):
         assert max_burst in [2, 4, 8, 16]

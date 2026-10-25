@@ -63,8 +63,8 @@ EP_SYNC_ASYNC    = 0x04
 EP_SYNC_ADAPTIVE = 0x08
 EP_SYNC_SYNC     = 0x0c
 
-# U1/U2 Device Exit Latencies advertised with LPM (SuperSpeed USB Device Capability, 9.6.2.2): maximum
-# values (bU1DevExitLat: 10us, wU2DevExitLat: 2047us).
+# U1/U2 Device Exit Latencies advertised with LPM (SuperSpeed USB Device Capability, 9.6.2.2):
+# maximum values (bU1DevExitLat: 10us, wU2DevExitLat: 2047us).
 U1_DEV_EXIT_LAT = 0x0a
 U2_DEV_EXIT_LAT = 0x07ff
 
@@ -80,9 +80,9 @@ class USB3EndpointDescriptor:
     """Endpoint descriptor and its SuperSpeed Endpoint Companion (9.6.6/9.6.7).
 
     Periodic (Isochronous/Interrupt) endpoints: interval (bInterval, service interval of
-    2^(interval - 1) x 125us), wBytesPerInterval of max_packet x max_burst x (mult + 1). Isochronous:
-    sync (bmAttributes synchronization type), mult (companion bmAttributes Mult, bursts per service
-    interval - 1).
+    2^(interval - 1) x 125us), wBytesPerInterval of max_packet x max_burst x (mult + 1).
+    Isochronous: sync (bmAttributes synchronization type), mult (companion bmAttributes Mult, bursts
+    per service interval - 1).
     """
     def __init__(self, ept, direction, kind=EP_BULK, max_burst=1, max_packet=1024, interval=0,
         sync=EP_SYNC_NONE, mult=0):
@@ -104,7 +104,8 @@ class USB3EndpointDescriptor:
 
     def bytes(self):
         address = self.ept | (self.direction << 7)
-        ep   = [7, DESC_ENDPOINT, address, self.kind | self.sync] + le16(self.max_packet) + [self.interval]
+        ep   = [7, DESC_ENDPOINT, address, self.kind | self.sync] + le16(self.max_packet) + \
+            [self.interval]
         comp = [6, DESC_SS_EP_COMP, self.max_burst - 1, self.mult] + le16(self.bytes_per_interval())
         return ep + comp
 
@@ -122,8 +123,8 @@ class USB3InterfaceDescriptor:
         self.string    = string
 
     def bytes(self):
-        r  = [9, DESC_INTERFACE, self.number, self.alt, len(self.endpoints), self.cls, self.subclass,
-            self.protocol, self.string]
+        r  = [9, DESC_INTERFACE, self.number, self.alt, len(self.endpoints), self.cls,
+            self.subclass, self.protocol, self.string]
         r += self.extra
         for ep in self.endpoints:
             r += ep.bytes()
@@ -184,7 +185,8 @@ class USB3Descriptors:
         u1_exit_lat = U1_DEV_EXIT_LAT if self.with_lpm else 0
         u2_exit_lat = U2_DEV_EXIT_LAT if self.with_lpm else 0
         usb2_ext = [7, DESC_DEVICE_CAP, 0x02] + le32(0)
-        ss_cap   = [10, DESC_DEVICE_CAP, 0x03, 0x00] + le16(0x0008) + [3, u1_exit_lat] + le16(u2_exit_lat)
+        ss_cap   = [10, DESC_DEVICE_CAP, 0x03, 0x00] + le16(0x0008) + [3, u1_exit_lat] + \
+            le16(u2_exit_lat)
         caps     = usb2_ext + ss_cap
         return [5, DESC_BOS] + le16(5 + len(caps)) + [2] + caps
 
@@ -219,8 +221,8 @@ class USB3Descriptors:
         r.append((*get_descriptor, (DESC_BOS           << 8) | 0, self.bos(),           "in"))
         for i in range(len(self.strings) + 1):
             r.append((*get_descriptor, (DESC_STRING << 8) | i, self.string(i), "in"))
-        # GET_STATUS (Device: U1/U2 Enable bits inserted by the Control Endpoint, Interface/Endpoint),
-        # GET_CONFIGURATION/GET_INTERFACE.
+        # GET_STATUS (Device: U1/U2 Enable bits inserted by the Control Endpoint,
+        # Interface/Endpoint), GET_CONFIGURATION/GET_INTERFACE.
         r.append((REQ_TYPE_DEVICE_IN, REQ_GET_STATUS, None, [0x00, 0x00], "device_status"))
         for bmRequestType in [REQ_TYPE_INTERFACE_IN, REQ_TYPE_ENDPOINT_IN]:
             r.append((bmRequestType, REQ_GET_STATUS, None, [0x00, 0x00], "in"))
@@ -228,7 +230,8 @@ class USB3Descriptors:
         n_alts = max(self.alt_settings().values(), default=1)
         alts   = sum([[alt, 0, 0, 0] for alt in range(n_alts)], [])
         r.append((REQ_TYPE_INTERFACE_IN, REQ_GET_INTERFACE, None, alts, "get_interface"))
-        # SET_ADDRESS, SET_CONFIGURATION, SET/CLEAR_FEATURE, SET_INTERFACE, SET_SEL, SET_ISOCH_DELAY.
+        # SET_ADDRESS, SET_CONFIGURATION, SET/CLEAR_FEATURE, SET_INTERFACE, SET_SEL,
+        # SET_ISOCH_DELAY.
         r.append((REQ_TYPE_DEVICE_OUT, REQ_SET_ADDRESS,       None, None, "set_address"))
         r.append((REQ_TYPE_DEVICE_OUT, REQ_SET_CONFIGURATION, None, None, "set_configuration"))
         for bRequest in [REQ_SET_FEATURE, REQ_CLEAR_FEATURE]:
@@ -244,7 +247,8 @@ class USB3Descriptors:
         r.append((REQ_TYPE_DEVICE_OUT,    REQ_SET_ISOCH_DELAY, None, None, "out"))
         # Class/vendor requests.
         for bmRequestType, bRequest, response in self.class_requests:
-            r.append((bmRequestType, bRequest, None, response, "in" if response is not None else "out"))
+            kind = "in" if response is not None else "out"
+            r.append((bmRequestType, bRequest, None, response, kind))
         return r
 
 # Configurations -----------------------------------------------------------------------------------

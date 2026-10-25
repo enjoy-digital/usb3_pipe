@@ -39,7 +39,7 @@ def dpp_job_layout(n_endpoints):
 
 class USB3ProtocolLayer(LiteXModule):
     def __init__(self, link, endpoints, dev_addr):
-        self.pm_busy = Signal() # o: Pending Header Packets/DPPs or busy endpoints (U1/U2 entry rejected).
+        self.pm_busy = Signal() # o: Pending Header Packets/DPPs or busy endpoints (U1/U2 rejected).
 
         # # #
 
@@ -80,7 +80,8 @@ class USB3ProtocolLayer(LiteXModule):
         self.comb += link.rx_dpp.ready.eq(1)
 
         # RX Header Packets dispatch ---------------------------------------------------------------
-        # TP responses, with the Device Address when generated (STATUS ACK of a SET_ADDRESS: old one).
+        # TP responses, with the Device Address when generated (STATUS ACK of a SET_ADDRESS: old
+        # one).
         self.resp = resp = stream.SyncFIFO(tp_response_layout(), 4)
         is_dp    = Signal()
         is_ping  = Signal()
@@ -144,7 +145,8 @@ class USB3ProtocolLayer(LiteXModule):
                     jobs.sink.valid.eq(source.valid & source.ready & source.dpp),
                     jobs.sink.ep.eq(i),
                 ]
-            cases = If(source.valid, *grant) if cases is None else If(source.valid, *grant).Else(cases)
+            cases = If(source.valid, *grant) if cases is None else \
+                If(source.valid, *grant).Else(cases)
         self.comb += cases
         # TX DPP (in the DPHs order).
         dpp_cases = {}

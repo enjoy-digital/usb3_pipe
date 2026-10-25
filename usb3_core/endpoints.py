@@ -53,7 +53,7 @@ class USB3Endpoint(LiteXModule):
         self.pm_busy      = Signal() # o: U1/U2 entry rejected (ex: ACK TP expected, 7.2.4.2.2).
 
         # Control.
-        self.reset_seq = Signal() # i: Sequence Numbers reset (SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
+        self.reset_seq = Signal() # i: Seq Numbers reset (SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
 
         self.hdr = HeaderFields(self.hdr_dw0, self.hdr_dw1, self.hdr_dw2)
 

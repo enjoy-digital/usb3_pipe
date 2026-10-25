@@ -8,13 +8,15 @@
 
 - loopback     : Vendor Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1) (scripts/usb3_bulk.py).
 - bench        : Vendor Bulk IN counter source, Bulk OUT counter checker (scripts/usb3_bench.py).
-- cdc_uartbone : CDC-ACM serial port carrying UARTBone (litex_server --uart --uart-port /dev/ttyACMx).
+- cdc_uartbone : CDC-ACM serial port carrying UARTBone (litex_server --uart --uart-port
+                 /dev/ttyACMx).
 - console      : CDC-ACM SoC console, BIOS (litex_term /dev/ttyACMx), requires a CPU.
 - uvc          : UVC camera, YUY2 test pattern (ffplay/VLC /dev/videoX).
-- uvc_iso      : UVC camera, YUY2 test pattern, Isochronous streaming (not yet validated on hardware).
+- uvc_iso      : UVC camera, YUY2 test pattern, Isochronous streaming (not yet validated on
+                 hardware).
 - msc          : Mass Storage 512KB FAT RAM disk (/dev/sdX).
-- msc_dram     : Mass Storage DRAM disk (upper half of the DRAM, /dev/sdX, mkfs.vfat needed), requires
-                 a DRAM controller (soc.sdram) initialized by the BIOS (CPU).
+- msc_dram     : Mass Storage DRAM disk (upper half of the DRAM, /dev/sdX, mkfs.vfat needed),
+                 requires a DRAM controller (soc.sdram) initialized by the BIOS (CPU).
 - composite    : UVC camera + CDC-ACM SoC console in one device, requires a CPU.
 """
 
@@ -33,7 +35,17 @@ from usb3_core.bench       import USB3Bench
 from usb3_core.uvc         import USB3UVC, USB3UVCFunction, uvc_interfaces, UVC_MODES
 from usb3_core.msc         import USB3MSC, USB3MSCDRAM, msc_fat_image
 
-USB3_EXAMPLES = ["loopback", "bench", "cdc_uartbone", "console", "uvc", "uvc_iso", "msc", "msc_dram", "composite"]
+USB3_EXAMPLES = [
+    "loopback",
+    "bench",
+    "cdc_uartbone",
+    "console",
+    "uvc",
+    "uvc_iso",
+    "msc",
+    "msc_dram",
+    "composite",
+]
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -62,8 +74,11 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
         descriptors = USB3Descriptors(
             product      = "USB3-PIPE Camera + Console",
             device_class = DEVICE_CLASS_IAD,
-            interfaces   = uvc_interfaces(UVC_MODES, vc_interface=0, ept=1, max_burst=16, clk_freq=sys_clk_freq) +
-                cdc_acm_interfaces(comm_interface=2, notif_ept=4, in_ept=2, out_ept=3, max_burst=2))
+            interfaces   = (
+                uvc_interfaces(UVC_MODES, vc_interface=0, ept=1, max_burst=16,
+                    clk_freq=sys_clk_freq) +
+                cdc_acm_interfaces(comm_interface=2, notif_ept=4, in_ept=2, out_ept=3,
+                    max_burst=2)))
         add_cdc_acm_requests(descriptors)
         soc.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors,
             endpoints = [
@@ -75,13 +90,15 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
             with_ep0_handler = True)
         usb3_core.add_csr(with_trace=True)
         ep0 = usb3_core.ep0
-        soc.usb3_uvc = USB3UVCFunction(ep0, usb3_core.endpoints[0], usb3_core.link.reset, sys_clk_freq)
-        soc.usb3_acm = usb3_acm = USB3CDCACMFunction(ep0, usb3_core.endpoints[1], usb3_core.endpoints[2])
+        eps = usb3_core.endpoints
+        soc.usb3_uvc = USB3UVCFunction(ep0, eps[0], usb3_core.link.reset, sys_clk_freq)
+        soc.usb3_acm = usb3_acm = USB3CDCACMFunction(ep0, eps[1], eps[2])
         add_usb3_console(soc, usb3_acm)
 
     # Mass Storage RAM disk (512KB, FAT with a README): /dev/sdX.
     elif example == "msc":
-        readme = "USB3-PIPE RAM disk: USB3.0 SuperSpeed Mass Storage from an FPGA (LiteX/usb3_pipe).\n"
+        readme = "USB3-PIPE RAM disk: USB3.0 SuperSpeed Mass Storage from an FPGA " \
+                 "(LiteX/usb3_pipe).\n"
         image  = msc_fat_image(512*1024, {"README.TXT": readme})
         soc.usb3_msc = usb3_msc = USB3MSC(usb3_phy, sys_clk_freq, size=512*1024, image=image)
         usb3_msc.core.add_csr(with_trace=True)
@@ -111,7 +128,8 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
             inquiry_product = "USB3-PIPE DRAM")
         usb3_msc.core.add_csr(with_trace=True)
 
-    # UVC camera (test pattern): ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
+    # UVC camera (test pattern):
+    # ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
     elif example == "uvc":
         soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq)
         usb3_uvc.core.add_csr(with_trace=True)
@@ -143,13 +161,15 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
 
         # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (scripts/usb3_bulk.py).
         if example == "loopback":
-            soc.usb3_loopback = usb3_loopback = stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True)
+            usb3_loopback = stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True)
+            soc.usb3_loopback = usb3_loopback
             soc.comb += [
                 usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
                 usb3_loopback.source.connect(usb3_core.endpoints[0].sink),
             ]
 
-        # Bandwidth benchmark: EP1 IN counter source, EP2 OUT counter checker (scripts/usb3_bench.py).
+        # Bandwidth benchmark: EP1 IN counter source, EP2 OUT counter checker
+        # (scripts/usb3_bench.py).
         if example == "bench":
             soc.usb3_bench = usb3_bench = USB3Bench()
             soc.comb += [

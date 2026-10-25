@@ -8,8 +8,8 @@
 
 Setup stage (SETUP DP, acknowledged), optional Data stage (IN: responses from a ROM built from the
 descriptors/requests table; OUT: data acknowledged and ignored), Status stage (STATUS TP,
-acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT)/SET_INTERFACE/SET_FEATURE and
-CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) applied). GET_STATUS(Device) reports the U1/U2 Enable bits.
+acknowledged, SET_ADDRESS/SET_CONFIGURATION/CLEAR_FEATURE(ENDPOINT_HALT)/SET_INTERFACE/SET_FEATURE
+and CLEAR_FEATURE(U1_ENABLE/U2_ENABLE) applied). GET_STATUS(Device) reports the U1/U2 Enable bits.
 Unsupported requests are stalled (STALL TP).
 """
 
@@ -79,7 +79,7 @@ class USB3EndpointControl(USB3Endpoint):
         USB3Endpoint.__init__(self, ept=0, direction=0)
         self.dev_addr      = Signal(7) # o: Device Address (SET_ADDRESS).
         self.configured    = Signal()  # o: Configured (SET_CONFIGURATION != 0).
-        self.reset_seqs    = Signal()  # o: SET_CONFIGURATION: endpoints Sequence Numbers reset (pulse).
+        self.reset_seqs    = Signal()  # o: SET_CONFIGURATION: endpoints Seq Numbers reset (pulse).
         self.clear_halt    = Signal()  # o: CLEAR_FEATURE(ENDPOINT_HALT) (pulse)...
         self.clear_ept     = Signal(4) # o: ...on this endpoint...
         self.clear_dir     = Signal()  # o: ...and direction.
@@ -116,7 +116,8 @@ class USB3EndpointControl(USB3Endpoint):
             length = 0
             if response is not None:
                 data    = list(response) + [0]*((-len(response)) % 4)
-                rom    += [int.from_bytes(bytes(data[i:i+4]), "little") for i in range(0, len(data), 4)]
+                rom    += [int.from_bytes(bytes(data[i:i+4]), "little")
+                    for i in range(0, len(data), 4)]
                 # GET_INTERFACE: one word per alternate setting, 1 byte response.
                 length  = 1 if kind == "get_interface" else len(response)
             entries.append((bmRequestType, bRequest, wValue, offset, length, KINDS[kind]))
@@ -125,7 +126,8 @@ class USB3EndpointControl(USB3Endpoint):
         mem_depth    = max(len(rom) + (EP0_HANDLER_WORDS if with_handler else 0), 1)
         # Fully initialized (handler buffer zeroed).
         mem_init     = rom + [0]*(mem_depth - len(rom))
-        mem          = Memory(32, mem_depth, init=mem_init) # Not a module attribute (would be CSR-mapped).
+        # Not a module attribute (would be CSR-mapped).
+        mem          = Memory(32, mem_depth, init=mem_init)
         rd_port = mem.get_port(has_re=True)
         self.specials += mem, rd_port
 
@@ -166,14 +168,21 @@ class USB3EndpointControl(USB3Endpoint):
         default = [match_kind.eq(KIND_STALL)]
         if with_handler:
             # Class/vendor requests not in the table: request handler.
-            default = [If(bmRequestType[5:7] != 0, match_kind.eq(KIND_HANDLER)).Else(match_kind.eq(KIND_STALL))]
+            default = [
+                If(bmRequestType[5:7] != 0,
+                    match_kind.eq(KIND_HANDLER)
+                ).Else(
+                    match_kind.eq(KIND_STALL)
+                )
+            ]
         self.comb += [*default, cases]
 
-        # Alternate settings (SET_INTERFACE, reset on SET_CONFIGURATION), GET_INTERFACE response: word
-        # of the current alternate setting.
+        # Alternate settings (SET_INTERFACE, reset on SET_CONFIGURATION), GET_INTERFACE response:
+        # word of the current alternate setting.
         alt_settings = descriptors.alt_settings()
         n_alts       = max(alt_settings.values(), default=1)
-        alts         = Array(Signal(max=max(n_alts, 2)) for _ in range(max(alt_settings.keys(), default=0) + 1))
+        n_ifs        = max(alt_settings.keys(), default=0) + 1
+        alts         = Array(Signal(max=max(n_alts, 2)) for _ in range(n_ifs))
         alt_index    = Signal(max=max(len(alts), 2))
         self.comb += If(wIndex[0:8] < len(alts), alt_index.eq(wIndex[0:8]))
 
@@ -268,7 +277,7 @@ class USB3EndpointControl(USB3Endpoint):
             self.alt_setting.eq(wValue[0:8]),
         ]
 
-        # Request handler ----------------------------------------------------------------------------
+        # Request handler --------------------------------------------------------------------------
         new_setup = Signal()
         self.comb += new_setup.eq(self.hdr_strobe & setup_dph & ok)
         resp_ready = Signal()                    # Handler IN response complete.
@@ -310,7 +319,8 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_value.eq(wValue),
                 self.req_index.eq(wIndex),
                 self.req_length.eq(wLength),
-                self.req_in.ready.eq(self.req_valid & ~resp_ready & (resp_words != EP0_HANDLER_WORDS)),
+                self.req_in.ready.eq(self.req_valid & ~resp_ready &
+                    (resp_words != EP0_HANDLER_WORDS)),
 
             ]
             self.sync += [
@@ -327,7 +337,8 @@ class USB3EndpointControl(USB3Endpoint):
             ]
             # OUT Data stage: forwarded.
             self.comb += [
-                self.req_out.valid.eq(self.rx_dpp.valid & ~self.rx_dpp_setup & (kind == KIND_HANDLER)),
+                self.req_out.valid.eq(self.rx_dpp.valid & ~self.rx_dpp_setup &
+                    (kind == KIND_HANDLER)),
                 self.req_out.data.eq(self.rx_dpp.data),
                 self.req_out.last.eq(self.rx_dpp.last),
                 self.req_out.be.eq(Mux(self.rx_dpp.last, bytes_to_be(self.rx_dpp.bytes), 0b1111)),

@@ -28,17 +28,17 @@ class USB3IsoIN(USB3Endpoint):
 
     sink: service interval transfers (data: 32-bit words, first byte on data[0:8], be: valid bytes,
     last: end of the transfer) of up to max_burst x 1024 bytes (a transfer is ended after max_burst
-    packets), each sent in one service interval: 1024 bytes packets, the last one (short or not) with
-    the Last Packet Flag (LPF).
+    packets), each sent in one service interval: 1024 bytes packets, the last one (short or not)
+    with the Last Packet Flag (LPF).
     flush: drop the buffered transfers (and the transfer being written), ex: stream restarted.
 
-    Host requests (ACK TPs, 8.12.6.1): the first ACK TP of a service interval has a Sequence Number of
-    0 and NumP packets requested, the next ones (same interval) Seq Num = previous Seq Num + previous
-    NumP. On the first ACK TP, a complete buffered transfer is sent from Sequence Number 0 (packets
-    sent within the requested window), or a zero-length DP (Seq Num 0, LPF) if no complete transfer
-    is available (8.12.6.5, Table 8-33). No retries, no flow control (NRDY/ERDY), no TP response. The
-    remaining packets of a transfer interrupted by the next service interval are dropped. PING TPs
-    are answered by the Protocol Layer (PING_RESPONSE, 8.5.7).
+    Host requests (ACK TPs, 8.12.6.1): the first ACK TP of a service interval has a Sequence Number
+    of 0 and NumP packets requested, the next ones (same interval) Seq Num = previous Seq Num +
+    previous NumP. On the first ACK TP, a complete buffered transfer is sent from Sequence Number 0
+    (packets sent within the requested window), or a zero-length DP (Seq Num 0, LPF) if no complete
+    transfer is available (8.12.6.5, Table 8-33). No retries, no flow control (NRDY/ERDY), no TP
+    response. The remaining packets of a transfer interrupted by the next service interval are
+    dropped. PING TPs are answered by the Protocol Layer (PING_RESPONSE, 8.5.7).
     """
     def __init__(self, ept, max_burst=1):
         assert max_burst in [1, 2, 4, 8, 16]
@@ -93,7 +93,8 @@ class USB3IsoIN(USB3Endpoint):
         ]
         wr_commit = Signal()
         self.comb += [
-            wr_commit.eq(sink.valid & sink.ready & (sink.last | (wr_count == MAX_PACKET_WORDS - 1))),
+            wr_commit.eq(sink.valid & sink.ready &
+                (sink.last | (wr_count == MAX_PACKET_WORDS - 1))),
             transfers_inc.eq(wr_commit & wr_lpf),
         ]
         self.sync += [
@@ -105,7 +106,8 @@ class USB3IsoIN(USB3Endpoint):
                 If(wr_commit,
                     wr_count.eq(0),
                     wr_npkts.eq(Mux(wr_lpf, 0, wr_npkts + 1)),
-                    lengths[wr_ptr[0:pbits-1]].eq(4*wr_count + Mux(sink.last, be_to_bytes(sink.be), 4)),
+                    lengths[wr_ptr[0:pbits-1]].eq(4*wr_count +
+                        Mux(sink.last, be_to_bytes(sink.be), 4)),
                     lpfs[wr_ptr[0:pbits-1]].eq(wr_lpf),
                     wr_ptr.eq(wr_ptr + 1),
                 )
@@ -146,8 +148,9 @@ class USB3IsoIN(USB3Endpoint):
             ).Elif(active & (snd_seq != win_end) & jobs.sink.ready,
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_DP),
-                self.tx_hp.dw1.eq(dph_dw1(seq=snd_seq, ept=ept, direction=1, length=lengths[snd_slot],
-                    eob=snd_lpf)),
+                self.tx_hp.dw1.eq(dph_dw1(seq=snd_seq, ept=ept, direction=1,
+                    length = lengths[snd_slot],
+                    eob    = snd_lpf)),
                 self.tx_hp.dpp.eq(1),
                 send.eq(self.tx_hp.ready),
             ),
@@ -219,7 +222,8 @@ class USB3IsoIN(USB3Endpoint):
         self.comb += [
             reader.sink.valid.eq(jobs.source.valid & pend.sink.ready),
             reader.sink.adr.eq(Cat(C(0, 8), jobs.source.slot)),
-            reader.sink.length.eq(Mux(jobs.source.zlp | jobs.source.drop, 0, lengths[jobs.source.slot])),
+            reader.sink.length.eq(Mux(jobs.source.zlp | jobs.source.drop, 0,
+                lengths[jobs.source.slot])),
             jobs.source.ready.eq(reader.sink.ready & pend.sink.ready),
             pend.sink.valid.eq(jobs.source.valid & jobs.source.ready),
             pend.sink.free.eq(~jobs.source.zlp),
