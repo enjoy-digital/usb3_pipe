@@ -55,7 +55,7 @@ class USB3LinkLayer(LiteXModule):
         self.rx_dpp      = stream.Endpoint(dpp_layout() + [("ept", 4), ("setup", 1)])      # o
         self.rx_dpp_done = Signal() # o: DPP received (pulse), one per accepted DPH, in order.
         self.rx_dpp_ok   = Signal() # o: DPP received without error (with rx_dpp_done).
-        self.tx_hp       = stream.Endpoint(header_layout() + [("dpp", 1)])                 # i
+        self.tx_hp       = stream.Endpoint(tx_header_layout())                             # i
         self.tx_dpp      = stream.Endpoint(dpp_layout())                                   # i
 
         # Control/Status.

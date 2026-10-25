@@ -33,79 +33,12 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common import *
+from usb3_core.dpp    import DPPReader
 
 # Constants ----------------------------------------------------------------------------------------
 
 MAX_PACKET_SIZE  = 1024
 MAX_PACKET_WORDS = MAX_PACKET_SIZE//4
-
-# Header Fields ------------------------------------------------------------------------------------
-
-class HeaderFields:
-    """Received Header Packet fields (TP/DPH)."""
-    def __init__(self, dw0, dw1, dw2):
-        self.type      = dw0[0:5]
-        # TP.
-        self.subtype   = dw1[0:4]
-        self.retry     = dw1[6]
-        self.direction = dw1[7]
-        self.ept       = dw1[8:12]
-        self.nump      = dw1[16:21]
-        self.tp_seq    = dw1[21:26]
-        # DPH.
-        self.dp_seq    = dw1[0:5]
-        self.setup     = dw1[15]
-        self.length    = dw1[16:32]
-
-# DPP Reader ---------------------------------------------------------------------------------------
-
-class DPPReader(LiteXModule):
-    """Data Packet Payloads reader: reads the jobs (memory word address, length in bytes, 0 for a
-    zero-length DPP) from a memory read port (re, 1 cycle latency) to a continuous DPP stream (the
-    Link Layer can't stall in a DPP: the words are prefetched)."""
-    def __init__(self, rd_port, depth=16):
-        self.sink   = sink   = stream.Endpoint([("adr", len(rd_port.adr)), ("length", 11)])
-        self.source = source = stream.Endpoint(dpp_layout())
-
-        # # #
-
-        self.prefetch = prefetch = stream.SyncFIFO(dpp_layout(), depth)
-        adr    = Signal(len(rd_port.adr), reset_less=True)
-        rem    = Signal(11, reset_less=True)
-        active = Signal()
-        issue  = Signal()
-        valid  = Signal()
-        last   = Signal(reset_less=True)
-        nbytes = Signal(3, reset_less=True)
-        zlp    = Signal()
-        self.comb += [
-            sink.ready.eq(~active),
-            issue.eq(active & (prefetch.level < (depth - 4))),
-            rd_port.adr.eq(adr),
-            rd_port.re.eq(issue),
-        ]
-        self.sync += [
-            valid.eq(issue),
-            last.eq(issue & (rem <= 4)),
-            nbytes.eq(Mux(rem <= 4, rem, 4)),
-            zlp.eq(sink.valid & sink.ready & (sink.length == 0)),
-            If(sink.valid & sink.ready,
-                active.eq(sink.length != 0),
-                adr.eq(sink.adr),
-                rem.eq(sink.length),
-            ).Elif(issue,
-                adr.eq(adr + 1),
-                rem.eq(rem - 4),
-                If(rem <= 4, active.eq(0)),
-            ),
-        ]
-        self.comb += [
-            prefetch.sink.valid.eq(valid | zlp),
-            prefetch.sink.data.eq(rd_port.dat_r),
-            prefetch.sink.bytes.eq(Mux(zlp, 0, nbytes)),
-            prefetch.sink.last.eq(last | zlp),
-            prefetch.source.connect(source),
-        ]
 
 # USB3 Endpoint Base -------------------------------------------------------------------------------
 
@@ -123,9 +56,9 @@ class USB3Endpoint(LiteXModule):
         self.dpp_landed  = Signal()   # i
         self.resp_valid  = Signal()   # o
         self.resp_dw1    = Signal(32) # o
-        self.tx_hp       = stream.Endpoint(header_layout() + [("dpp", 1)]) # o
-        self.tx_dpp      = stream.Endpoint(dpp_layout())                   # o
-        self.rx_dpp      = stream.Endpoint(dpp_layout())                   # i
+        self.tx_hp       = stream.Endpoint(tx_header_layout()) # o
+        self.tx_dpp      = stream.Endpoint(dpp_layout())       # o
+        self.rx_dpp      = stream.Endpoint(dpp_layout())       # i
         self.rx_dpp_done = Signal() # i
         self.rx_dpp_ok   = Signal() # i
         self.landed      = Signal() # o: rx DPP landed in a slot (with rx_dpp_done).
@@ -158,7 +91,7 @@ class USB3BulkIN(USB3Endpoint):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=1)
         self.max_burst = max_burst
-        self.sink  = sink = stream.Endpoint([("data", 32), ("be", 4)])
+        self.sink  = sink = stream.Endpoint(endpoint_layout())
         self.flush = Signal() # i
 
         # # #
@@ -384,7 +317,7 @@ class USB3BulkOUT(USB3Endpoint):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=0)
         self.max_burst = max_burst
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
+        self.source = source = stream.Endpoint(endpoint_layout())
 
         # # #
 
@@ -497,7 +430,7 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, need_erdy.eq(0))
 
         # Reader (user) ----------------------------------------------------------------------------
-        self.fifo = fifo = stream.SyncFIFO([("data", 32), ("be", 4)], 16)
+        self.fifo = fifo = stream.SyncFIFO(endpoint_layout(), 16)
         rd_count  = Signal(9, reset_less=True)
         rd_len    = Signal(11)
         rd_words  = Signal(9)
@@ -568,7 +501,7 @@ class USB3IsoIN(USB3Endpoint):
         assert max_burst in [1, 2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=1)
         self.max_burst = max_burst
-        self.sink  = sink = stream.Endpoint([("data", 32), ("be", 4)])
+        self.sink  = sink = stream.Endpoint(endpoint_layout())
         self.flush = Signal() # i
 
         # Statistics.

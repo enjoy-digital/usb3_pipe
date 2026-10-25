@@ -35,6 +35,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3IsoIN
 from usb3_core.descriptors import *
@@ -306,7 +307,7 @@ class USB3UVCStream(LiteXModule):
         self.start  = Signal()                       # i
         self.stop   = Signal()                       # i
         self.mode   = Signal(max=max(len(modes), 2)) # i
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
+        self.source = source = stream.Endpoint(endpoint_layout())
         self.frames = Signal(32)                     # o: Frames sent.
 
         # # #

@@ -23,6 +23,7 @@ from migen import *
 from litex.soc.cores.uart import UART, Stream2Wishbone
 from litex.soc.interconnect import stream
 
+from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.endpoints   import USB3BulkIN, USB3BulkOUT
 from usb3_core.descriptors import bulk_descriptors, cdc_acm_interfaces, add_cdc_acm_requests
@@ -142,7 +143,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
 
         # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (scripts/usb3_bulk.py).
         if example == "loopback":
-            soc.usb3_loopback = usb3_loopback = stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True)
+            soc.usb3_loopback = usb3_loopback = stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True)
             soc.comb += [
                 usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
                 usb3_loopback.source.connect(usb3_core.endpoints[0].sink),

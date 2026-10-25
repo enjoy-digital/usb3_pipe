@@ -13,14 +13,14 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_core.common import be_to_bytes
+from usb3_core.common import be_to_bytes, endpoint_layout
 
 # Byte Unpacker ------------------------------------------------------------------------------------
 
 class USB3ByteUnpacker(LiteXModule):
     """32-bit words (be: valid bytes) to bytes."""
     def __init__(self):
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("be", 4)])
+        self.sink   = sink   = stream.Endpoint(endpoint_layout())
         self.source = source = stream.Endpoint([("data", 8)])
 
         # # #
@@ -46,7 +46,7 @@ class USB3BytePacker(LiteXModule):
     with be); packets are also ended at max_bytes."""
     def __init__(self, max_bytes=1024, idle_cycles=64):
         self.sink   = sink   = stream.Endpoint([("data", 8)])
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
+        self.source = source = stream.Endpoint(endpoint_layout())
 
         # # #
 

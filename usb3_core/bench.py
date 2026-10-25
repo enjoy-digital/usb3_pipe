@@ -17,12 +17,14 @@ from litex.gen import *
 from litex.soc.interconnect     import stream
 from litex.soc.interconnect.csr import *
 
+from usb3_core.common import endpoint_layout
+
 # USB3 Bench ---------------------------------------------------------------------------------------
 
 class USB3Bench(LiteXModule):
     def __init__(self, with_csr=True):
-        self.source = source = stream.Endpoint([("data", 32), ("be", 4)]) # To Bulk IN.
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("be", 4)]) # From Bulk OUT.
+        self.source = source = stream.Endpoint(endpoint_layout()) # To Bulk IN.
+        self.sink   = sink   = stream.Endpoint(endpoint_layout()) # From Bulk OUT.
 
         self.source_enable = Signal(reset=1) # i
         self.clear         = Signal()        # i: Counters clear (the next received word is not checked).

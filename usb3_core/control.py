@@ -20,7 +20,8 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common    import *
-from usb3_core.endpoints import USB3Endpoint, DPPReader
+from usb3_core.dpp       import DPPReader
+from usb3_core.endpoints import USB3Endpoint
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -104,8 +105,8 @@ class USB3EndpointControl(USB3Endpoint):
         self.req_length  = Signal(16) # o
         self.req_stall   = Signal()   # i
         self.req_done    = Signal()   # o
-        self.req_in      = stream.Endpoint([("data", 32), ("be", 4)]) # i
-        self.req_out     = stream.Endpoint([("data", 32), ("be", 4)]) # o
+        self.req_in      = stream.Endpoint(endpoint_layout()) # i
+        self.req_out     = stream.Endpoint(endpoint_layout()) # o
 
         # # #
 
