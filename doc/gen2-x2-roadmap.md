@@ -72,7 +72,7 @@ parameters of the flow control state, the framer/parser are word based (data_wid
 There is no Gen 2 (10Gbps) or dual-lane hardware on the current benches (Acorn GTP: 6.6Gbps max, single
 lane): everything below is verified in simulation only.
 
-### Gen 2x1 PHY building blocks (`usb3_pipe/gen2.py`, `test/test_gen2.py`)
+### Gen 2x1 PHY building blocks (`usb3_pipe/common.py`/`coding.py`/`scrambling.py`/`datapath.py`)
 
 - `Gen2Scrambler`: LFSR checked against **Figure 6-12** (Galois: D0 <- D22, D2/D5/D8/D16/D21 <- D(n-1)
   ^ D22, Data Out = Data In ^ D22, seed 1DBFBCh with D22 = bit 22), the test re-implements the figure
@@ -92,35 +92,40 @@ lane): everything below is verified in simulation only.
   groups of 4, LFSR Symbols extracted).
 - `Gen2RX`: descrambling (re-initialized on SYNC), TSEQ/TS1/TS2 detection (Symbols 14/15 not checked),
   Link Functionality, SDS -> Data Stream.
-- Tests: the TX output is decoded by an independent bit-serial reference model of the rules (TS
-  contents, DC Balance Symbols, SKP LFSR Symbols = reference LFSR, SKP/SYNC scheduling, Data Blocks);
-  TX -> channel (bit offset, polarity inversion, bit slip during TS1, SKP Ordered Sets shortened/
-  lengthened by 4/16/20 SKP Symbols) -> RX loopback: realignment on the next SYNC, polarity detected,
-  TS1/TS2/SDS detected, Data Blocks recovered, received SKP LFSR state equal to the RX descrambler LFSR.
+- Tests (`test/test_scrambling.py`, `test/test_coding.py`, `test/test_datapath.py`, reference models
+  in `test/model/gen2.py`): the TX output is decoded by an independent bit-serial reference model of
+  the rules (TS contents, DC Balance Symbols, SKP LFSR Symbols = reference LFSR, SKP/SYNC scheduling,
+  Data Blocks); TX -> channel (bit offset, polarity inversion, bit slip during TS1, SKP Ordered Sets
+  shortened/lengthened by 4/16/20 SKP Symbols) -> RX loopback: realignment on the next SYNC, polarity
+  detected, TS1/TS2/SDS detected, Data Blocks recovered, received SKP LFSR state equal to the RX
+  descrambler LFSR.
 
-### Gen 1x2 PHY (`usb3_pipe/ssp.py`, `usb3_pipe/x2.py`, `usb3_pipe/lanes.py`, `sim_x2.py`)
+### Gen 1x2 PHY (`usb3_pipe/lfps.py`/`ltssm.py`/`phy.py`/`lanes.py`, `sim.py --lanes 2`)
 
-- `ssp.py`: **SuperSpeedPlus Polling** on the Configuration Lane: Polling.LFPS binary representation
-  (tRepeat 6-9us = 0, 11-14us = 1, Table 6-32), **SCD1/SCD2** (6.9.4.2, LSb first), **LBPM** (PWM,
-  delimiters, Table 6-33), Polling.LFPS (SCD1 handshake) -> Polling.LFPSPlus (SCD2 handshake, end of
+- `lfps.py` (`SCDGenerator`/`SCDChecker`/`LBPMGenerator`/`LBPMChecker`) and `ltssm.py`
+  (`SSPPolling`): **SuperSpeedPlus Polling** on the Configuration Lane: Polling.LFPS binary
+  representation (tRepeat 6-9us = 0, 11-14us = 1, Table 6-32), **SCD1/SCD2** (6.9.4.2, LSb first),
+  **LBPM** (PWM, delimiters, Table 6-33), Polling.LFPS (SCD1 handshake) -> Polling.LFPSPlus (SCD2 handshake, end of
   SCD) -> **Polling.PortMatch** (PHY Capability LBPM, Table 7-13, highest common capability Table 7-14,
   4 matched sent after 2 matched received) -> **Polling.PortConfig** (PHY Ready LBPM handshake, DFP
   bit 6, bit 7 Config Done) -> Polling.RxEQ. SuperSpeed partner (no SCD in 16 Polling.LFPS bursts):
   fallback to the SuperSpeed Polling.LFPS handshake. `USB3LTSSM(ssp=True)` runs it in Polling.LFPS
   (Gen 1x1 default unchanged).
-- `x2.py` `USB3X2PHY`: two `USB3PIPE` lanes (`x2_lane=True`) under one LTSSM: LFPS on Lane 0 only
-  (Lane 1 in electrical idle, 6.13.12), Ordered Sets on both lanes, TS1/TS2 required on both lanes
-  (6.13.6), per lane scrambler seeds FFFFh/8000h (6.13.5), **per lane polarity** (6.13.7), per lane SKP
-  removal, **lanes deskew** on the TS1/TS2 COM words (re-acquired after each TSEQ/TS1 phase, markers
-  paired by arrival time within 1 word), **data striping** aligned to Lane 0 (6.13.4), 64-bit/8-bit
-  link words.
+- `phy.py` `USB3PHY(lanes=2)`: two `USB3PIPE` lanes (`x2_lane=True`) under one LTSSM: LFPS on Lane 0
+  only (SuperSpeedPlus Polling LFPS through the Lane 0 `LFPSUnit`, Lane 1 in electrical idle,
+  6.13.12), Ordered Sets on both lanes, TS1/TS2 required on both lanes (6.13.6), per lane scrambler
+  seeds FFFFh/8000h (6.13.5), **per lane polarity** (6.13.7), per lane SKP removal, **lanes deskew**
+  on the TS1/TS2 COM words (re-acquired after each TSEQ/TS1 phase, markers paired by arrival time
+  within 1 word), **data striping** aligned to Lane 0 (6.13.4), 64-bit/8-bit link words.
 - `lanes.py`: `LaneDeskew(max_skew)` pairs periodic markers by arrival timestamp.
-- `sim_x2.py` (Verilator): Host and Device `USB3X2PHY` (4 SerDes models) negotiate Gen 1x2 (SCD1/SCD2,
-  LBPM), train to U0 and exchange 64-bit PRBS packets without errors with lane-to-lane skew (Lane 0 or
-  Lane 1 late, word shifts), Lane 1 TX polarity inverted, extra SKP Ordered Sets on a single lane at a
-  time, +-300ppm (`test/test_phy_x2.py`, extra configurations with `pytest -m slow`).
-- Unit tests: `test/test_ssp.py` (SCD, LBPM, x2/x2 -> Gen 1x2, x2/x1 -> Gen 1x1, SS partner fallback),
-  `test/test_lanes.py` (periodic marker deskew in both skew directions).
+- `sim.py --lanes 2` (Verilator): Host and Device `USB3PHY(lanes=2)` (4 SerDes models) negotiate
+  Gen 1x2 (SCD1/SCD2, LBPM), train to U0 and exchange 64-bit PRBS packets without errors with
+  lane-to-lane skew (Lane 0 or Lane 1 late, word shifts), Lane 1 TX polarity inverted, extra SKP
+  Ordered Sets on a single lane at a time, +-300ppm (`test/test_phy.py` `TestPHYX2`, extra
+  configurations with `pytest -m slow`).
+- Unit tests: `test/test_lfps_ssp.py` (SCD, LBPM), `test/test_ltssm_ssp.py` (x2/x2 -> Gen 1x2,
+  x2/x1 -> Gen 1x1, SS partner fallback), `test/test_lanes.py` (periodic marker deskew in both skew
+  directions).
 
 ### Approximated / not verified
 
@@ -136,11 +141,13 @@ lane): everything below is verified in simulation only.
 - SSP Polling: no tPollingSCDLFPSTimeout, no Gen 2 capability/speed switch, no re-timer presence
   announcement/RT Config (bit 7 always de-asserted), no Polling.PortMatch re-entry/fallback after a
   training failure (Table 7-15), no cPollingTimeout/eSS.Disabled handling.
-- `USB3X2PHY`: Gen 1x1 negotiated (x2 = 0) is reported but the datapath stays x2 (no fallback to a
-  single lane datapath), the two lanes TX must run in lockstep (same clock, same SKP schedule), the
-  Recovery/U1/U2/U3 flows use the Gen 1x1 LTSSM on the Configuration Lane (Ux exit, Ping.LFPS on Lane
-  0 as required, but not exercised in x2 simulation), Lane 1 Rx.Detect/Loopback/Compliance per lane
-  not handled.
+- `USB3PHY(lanes=2)`: Gen 1x1 negotiated (x2 = 0) is reported but the datapath stays x2 (no fallback
+  to a single lane datapath), the two lanes TX must run in lockstep (same clock, same SKP schedule),
+  the Recovery/U1/U2/U3 flows use the Gen 1x1 LTSSM on the Configuration Lane (Ux exit, Ping.LFPS on
+  Lane 0 as required, but not exercised in x2 simulation), Lane 1 Rx.Detect/Loopback/Compliance per
+  lane not handled. The x2 simulation PRBS packets are separated by 0-3 cycles of Logical Idle:
+  Logical Idle gaps of 4+ cycles with the extra SKP Ordered Sets on a single lane give Device PRBS
+  errors (also seen with the former sim_x2.py, to investigate).
 - SuperSpeedPlus Link Layer (Type 1/Type 2 traffic, 4-bit HSEQ, Rx Buffer credits, DPHP, framing
   alignment of the 64-bit link words): not started, the x2 simulation uses PRBS Link-Layer stand-ins.
 
@@ -156,7 +163,7 @@ lane): everything below is verified in simulation only.
 
 ## Suggested order
 
-1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3X2PHY`); remaining:
+1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`); remaining:
    single lane fallback, SSP Link Layer, Type-C CC/Configuration Lane, hardware validation.
 2. Gen 2x1 on Kintex7 GTX/UltraScale GTH: 128b/132b blocks done in simulation; remaining: Gen 2 LTSSM
    integration (Gen 2 capability in LBPM, SYNC/TS counts, SDS), 64-bit datapath, elastic buffer, Gen 2

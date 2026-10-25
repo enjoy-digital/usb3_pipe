@@ -8,24 +8,30 @@ the standalone core ([standalone-core.md](standalone-core.md)).
 
 ```
  TX/RX pads <-> SerDes (8b/10b, LFPS, SKP, alignment) <-> PIPE (TS, scrambling, Idle) <-> LTSSM
-                usb3_pipe/serdes.py                     usb3_pipe/core.py               ltssm.py
-                                         usb3_pipe/phy.py: USB3PHY (PIPE + LTSSM)
+                usb3_pipe/serdes.py (datapath.py)       usb3_pipe/core.py               ltssm.py
+                                         usb3_pipe/phy.py: USB3PHY (PIPE(s) + LTSSM)
 ```
+
+The package is organized by function, the generation (Gen 1/Gen 2) and the lane count being
+parameters: each file has its Gen 1 part first, then its Gen 2/SuperSpeedPlus part.
 
 ## Modules
 
 | Module | File | Role |
 |---|---|---|
-| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY) at 5Gbps with their USB3 settings (SSC tolerant CDR, LFPS/OOB), TX/RX datapaths: 8b/10b (with error substitution), word alignment on COM, polarity, SKP insertion (TX, 6.4.3) and removal (RX), electrical idle/LFPS patterns. |
-| `LFPSUnit` | `lfps.py` | LFPS generation/detection (Polling, Ping, U1/U2 exit, U3 wakeup, Warm Reset), timings of 6.9. |
+| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/Ultrascale+ GTY) at 5Gbps with their USB3 settings (SSC tolerant CDR, LFPS/OOB): 8b/10b, polarity, electrical idle/LFPS patterns and the TX/RX datapaths below. |
+| `TXDatapath`/`RXDatapath` (`TXSKPInserter`, `RXSKPRemover`, `RXWordAligner`, `RXErrorSubstitution`, `RXErrorMonitor`, `RXIdleFilter`), `Gen2TX`/`Gen2RX` | `datapath.py` | Gen 1: SKP insertion (TX, 6.4.3) and removal (RX), word alignment on COM, 8b/10b errors substitution (6.3.1.4)/monitoring, electrical idle filtering, CDC/data-width. Gen 2: block transmitter/receiver (TSEQ/TS1/TS2/SYNC/SDS/SKP Ordered Sets, Data Blocks, 6.3.2.3 scrambling rules). |
+| `RX8b10bChecker`, `Gen2BlockGearbox`/`Gen2BlockAligner` | `coding.py` | 8b/10b Python model/code tables and RX checker (6.3.1), 128b/132b blocks gearbox/aligner and DC balance helpers (6.3.2, 6.4.1.2). |
+| Symbols/Ordered Sets | `common.py` | Gen 1 Symbols and TS1/TS2/TSEQ, Link Configuration, Gen 2 Block Headers, Symbols/Ordered Sets identifiers and payloads. |
+| `LFPSUnit` | `lfps.py` | LFPS generation/detection (Polling, Ping, U1/U2 exit, U3 wakeup, Warm Reset), timings of 6.9. SuperSpeedPlus LFPS signaling: SCD1/SCD2 and LBPM generators/checkers (6.9.4/6.9.5). |
 | `TSUnit` | `training.py` | TSEQ/TS1/TS2 generation and detection (Link Configuration: reset, loopback, scrambling). |
-| `Scrambler`/`Descrambler` | `scrambling.py` | Gen 1 scrambler (6.3.1.3, symbol level: SKP does not advance, COM initializes). |
+| `Scrambler`/`Descrambler`, `Gen2Scrambler` | `scrambling.py` | Gen 1 scrambler (6.3.1.3, symbol level: SKP does not advance, COM initializes), Gen 2 scrambler (6.3.2.3). |
 | `USB3PIPE` | `core.py` | PIPE: LFPS/TS units, scrambling, Logical Idle, Idle handshake, framing alignment (SHP/SDP/SLC). |
-| `USB3LTSSM` | `ltssm.py` | LTSSM (7.5): Polling, U0, Recovery, U1/U2/U3, Hot/Warm Reset, Compliance, Loopback, eSS.Inactive, PM handshake, timers. |
-| `USB3PHY` | `phy.py` | PIPE + LTSSM with the Link interface (below). |
+| `USB3LTSSM`, `SSPPolling` | `ltssm.py` | LTSSM (7.5): Polling, U0, Recovery, U1/U2/U3, Hot/Warm Reset, Compliance, Loopback, eSS.Inactive, PM handshake, timers. SuperSpeedPlus Polling substates (SCD/LBPM, PortMatch/PortConfig, 7.5.4.3-7.5.4.6) used with `USB3LTSSM(ssp=True)`. |
+| `USB3PHY` | `phy.py` | PIPE + LTSSM with the Link interface (below). `lanes=2`: Gen 1x2 (one PIPE per lane, SuperSpeedPlus Polling, lanes deskew/striping, 64-bit link words, [gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
+| `LaneStriper`/`LaneDestriper`/`LaneDeskew` | `lanes.py` | Gen 1x2 lanes striping/deskew (6.13). |
 | `USB3PHYDebug`/`USB3SerDesDebug` | `debug.py` | State history, counters, measurements CSRs ([debugging-guide.md](debugging-guide.md)). |
 | `usb3_pipe_gen` | `gen.py` | Standalone Verilog core generator. |
-| Gen 2/x2 units | `gen2.py`, `lanes.py`, `ssp.py`, `x2.py` | 128b/132b TX/RX (Ordered Sets, scrambler, gearbox, aligner), SSP Polling (SCD/LBPM), Gen 1x2 PHY (`USB3X2PHY`, [gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
 
 ## Link interface (`USB3PHY`)
 
@@ -67,6 +73,7 @@ $ ./sim.py                       # Link training, enumeration, Bulk transfers.
 $ ./sim.py --no-core --ppm 300   # PRBS Link-Layer stand-ins, clock offset.
 $ ./sim.py --host-pm             # + Host U1/U2 requests (rejected: Device Core without LPM).
 $ ./sim.py --host-lpm            # + U1/U2 entries/exits (Device Core with LPM).
+$ ./sim.py --lanes 2             # Gen 1x2: SSP Polling, two lanes, 64-bit PRBS stand-ins.
 $ ./sim.py --trace               # VCD (build/sim/gateware/sim.vcd).
 $ pytest test                    # Unit/system tests (-n auto: parallel with pytest-xdist).
 $ pytest test -m slow            # Long simulations (Verilator), not run by default.
@@ -74,7 +81,8 @@ $ pytest test -m slow            # Long simulations (Verilator), not run by defa
 
 ## Limitations
 
-- Gen 1x1 only (Gen 2/x2: [gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
+- Gen 1x1 only on hardware (Gen 1x2: simulation only, Gen 2: building blocks,
+  [gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
 - U1/U2 are rejected by the USB3 Device Core by default (LXU), accepted with `with_lpm` (simulation
   validated only).
 - The Acorn has no transceiver reference clock without a PCIe host: the 200MHz oscillator is routed
