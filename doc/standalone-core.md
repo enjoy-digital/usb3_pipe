@@ -12,8 +12,8 @@ $ usb3_pipe_gen examples/usp_device.yml    --output-dir build/usb3_usp       # U
 
 `--name` sets the core/module name (default: `usb3_pipe_core`). Ultrascale+ (`USPUSB3SerDes`: GTY
 channel PLL, OOB clock from a `USPMMCM` instead of a `S7PLL`, `XilinxUSPPlatform`) is generated the
-same way (`examples/usp_device.yml`: xcku3p as the `alibaba_xcku3p.py` target, but with a dedicated
-156.25MHz transceiver reference clock).
+same way (`examples/usp_device.yml`: xcku3p as the `bench/alibaba_xcku3p.py` target, but with a
+dedicated 156.25MHz transceiver reference clock).
 
 ## Configuration (YAML)
 

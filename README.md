@@ -64,10 +64,10 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 [> Hardware
 -----------
 - [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard) (Mini) with an Acorn
-  CLE-215+ (`acorn.py`, main development/validation target).
-- [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`kc705.py`, Kintex7 GTX) and
-  Alibaba Cloud XCKU3P board (`alibaba_xcku3p.py`, Kintex Ultrascale+ GTY): build-tested, hardware
-  validation in progress.
+  CLE-215+ (`bench/acorn.py`, main development/validation target).
+- [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`bench/kc705.py`, Kintex7
+  GTX) and Alibaba Cloud XCKU3P board (`bench/alibaba_xcku3p.py`, Kintex Ultrascale+ GTY):
+  build-tested, hardware validation in progress.
 - [SFP2USB](http://xillybus.com/sfp2usb-module) adapter (from the [XillyUSB](http://xillybus.com/xillyusb)
   project) or the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board.
 
@@ -89,20 +89,20 @@ $ pytest test             # Unit/system tests (~300), pytest -n auto: parallel (
 $ pytest test -m slow     # Long simulations (Verilator), not run by default.
 
 # Hardware: build/load (JTAG) the Bulk loopback example, check the enumeration, run a loopback.
-$ ./acorn.py --build --load --with-jtagbone
+$ ./bench/acorn.py --build --load --with-jtagbone
 $ lsusb -t
-$ ./scripts/usb3_bulk.py loopback --size 1024 --count 1000
+$ ./bench/usb3_bulk.py loopback --size 1024 --count 1000
 ```
 
 [> Demos
 --------
-Build with `./acorn.py --build --load --example <name>` (`--with-lpm`: U1/U2 on the vendor Bulk
+Build with `./bench/acorn.py --build --load --example <name>` (`--with-lpm`: U1/U2 on the vendor Bulk
 examples), see [doc/examples.md](doc/examples.md):
 
 | Example | Device | Host side |
 |---|---|---|
-| `loopback` | Vendor Bulk OUT -> Bulk IN | `scripts/usb3_bulk.py loopback` |
-| `bench` | Vendor Bulk counters source/checker | `scripts/usb3_bench.py in\|out\|both` |
+| `loopback` | Vendor Bulk OUT -> Bulk IN | `bench/usb3_bulk.py loopback` |
+| `bench` | Vendor Bulk counters source/checker | `bench/usb3_bench.py in\|out\|both` |
 | `cdc_uartbone` | CDC-ACM serial port (UARTBone) | `litex_server --uart --uart-port /dev/ttyACM0` |
 | `console` (`--cpu-type vexriscv`) | CDC-ACM LiteX BIOS console | `litex_term /dev/ttyACM0` |
 | `uvc` | UVC camera, YUY2 test pattern (480p60/720p60/1080p30/1080p60) | `ffplay -f v4l2 -video_size 1920x1080 /dev/video0`, VLC |
@@ -111,8 +111,10 @@ examples), see [doc/examples.md](doc/examples.md):
 | `msc_dram` | Mass Storage 512MB DDR3 disk (not yet validated on hardware) | `mkfs.vfat /dev/sdX`, mount |
 | `composite` (`--cpu-type vexriscv`) | UVC camera + CDC-ACM console | both at the same time |
 
-`kc705.py`/`alibaba_xcku3p.py` build the same examples (`--example`), except `msc_dram` (no DRAM
-controller in these targets); `--with-lpm` is an `acorn.py` option.
+`bench/kc705.py`/`bench/alibaba_xcku3p.py` build the same examples and debug options (`--example`,
+`--with-lpm`, `--with-serdes-debug`, `--with-analyzer`), except `msc_dram` (no DRAM controller in
+these targets). The board targets and host scripts are in `bench/` (shared SoC: `bench/usb3_soc.py`,
+shared host helpers: `bench/common.py`).
 
 [> Documentation
 ----------------

@@ -67,7 +67,7 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB
 | `USB3CoreTrace` | `trace.py` | Header Packets trace (debug). |
 | `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Parallel CRCs (equations generated from the polynoms). |
 | Host models | `host_model.py` | Scripted Host gateware model (`sim.py`), Python host models for Migen tests. |
-| Example designs | `examples.py` | `add_usb3_example()`/`USB3_EXAMPLES`: example designs shared by the targets (`acorn.py`, `kc705.py`, `alibaba_xcku3p.py`), [examples.md](examples.md). |
+| Example designs | `examples.py` | `add_usb3_example()`/`USB3_EXAMPLES`: example designs shared by the targets (`bench/acorn.py`, `bench/kc705.py`, `bench/alibaba_xcku3p.py`), [examples.md](examples.md). |
 
 ## Control requests handler
 
@@ -154,7 +154,7 @@ soc.usb3_msc = USB3MSC(phy, sys_clk_freq, storage=storage)
 
 ## Resources
 
-Out-of-context synthesis/placement, xc7a200t-3, 125MHz (`scripts/usb3_resources.py`):
+Out-of-context synthesis/placement, xc7a200t-3, 125MHz (`bench/usb3_resources.py`):
 
 | Block | LUTs | FFs | BRAM36 | WNS |
 |---|---|---|---|---|

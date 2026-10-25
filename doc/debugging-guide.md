@@ -13,10 +13,11 @@ turn every finding into a simulation test.
 - JTAG through the baseboard FT4232H (channel A). If other FTDI boards are connected, always select
   the Acorn explicitly (USB bus/device for openFPGALoader, USB location for OpenOCD): the platform
   programmer picks the first FTDI it finds.
-- `litex_server` port: the host scripts (`usb3_debug.py`, `usb3_bench.py`, `usb3_soak.py`,
-  `usb3_trace.py`, `usb3_analyzer.py`, `usb3_suspend.py`) default to the LiteX default port 1234
-  (`--port`), `scripts/acorn_run.py` starts its own `litex_server` (JTAGBone) on a dedicated port
-  (`--port`, default 1240). Use a dedicated port (ex: `litex_server --jtag --bind-port 1240` and
+- `litex_server` port: the host scripts (`bench/usb3_debug.py`, `usb3_bench.py`, `usb3_soak.py`,
+  `usb3_trace.py`, `usb3_analyzer.py`, `usb3_suspend.py`, common `--csr-csv`/`--host`/`--port`
+  arguments from `bench/common.py`) default to the LiteX default port 1234 (`--port`),
+  `bench/acorn_run.py` starts its own `litex_server` (JTAGBone) on a dedicated port (`--port`,
+  default 1240). Use a dedicated port (ex: `litex_server --jtag --bind-port 1240` and
   `--port 1240` on the scripts, as in the examples below) when another `litex_server`/Etherbone
   bridge may already listen on 1234: a client would silently talk to another board. Always check the
   identifier first (`litex_cli --port 1240 --ident` must return `USB3SoC ...`).
@@ -25,25 +26,27 @@ turn every finding into a simulation test.
 
 ```bash
 # Debug build: JTAGBone, SerDes debug (controls/measurements), LiteScope "link" probes.
-./acorn.py --build --with-jtagbone --with-serdes-debug --with-analyzer --analyzer-group link \
+./bench/acorn.py --build --with-jtagbone --with-serdes-debug --with-analyzer --analyzer-group link \
     --output-dir build/acorn_dbg
 
 # Load (SRAM) + litex_server + N link training attempts, results in build/hw_runs/<date>/.
-./scripts/acorn_run.py --build-dir build/acorn_dbg --attempts 20
+./bench/acorn_run.py --build-dir build/acorn_dbg --attempts 20
 ```
 
-`scripts/acorn_run.py` records, for each attempt: the LTSSM state/history/counters, the SerDes
-measurements and the host view (new `/var/log/kern.log` USB lines, USB ports states).
+`bench/acorn_run.py` records, for each attempt: the LTSSM state/history/counters, the SerDes
+measurements and the host view (new kernel log USB lines, USB ports states).
 
 ## Host Side
 
 Without root access, the host view comes from:
-- `/var/log/kern.log` (readable by the `adm` group): connect/enumeration/errors, ex:
+- The kernel log: `/var/log/kern.log` (readable by the `adm` group, `--kern-log` on
+  `acorn_run.py`/`usb3_debug.py`/`usb3_soak.py`/`usb3_suspend.py`, `journalctl -k` when the file is
+  missing): connect/enumeration/errors, ex:
   `usb usb6-port1: Cannot enable. Maybe the USB cable is bad?` (link not reaching U0 from the host
   point of view, the host then retries with a Warm Reset every ~4s).
 - `lsusb -t` and `/sys/bus/usb/devices/*/usb*-port*/state`.
 
-`./scripts/usb3_debug.py host` lists the SuperSpeed devices (VID/PID, strings, speed, configuration)
+`./bench/usb3_debug.py host` lists the SuperSpeed devices (VID/PID, strings, speed, configuration)
 and the last USB kernel messages. Enumeration messages arrive seconds after a link training, wait
 before reading them. Useful messages:
 - `can't read configurations, error -61`: wrong descriptor type returned (descriptors ROM/offsets).
@@ -53,10 +56,10 @@ before reading them. Useful messages:
 ## PHY Debug CSRs (always built, `usb3_pipe/debug.py: USB3PHYDebug`)
 
 ```bash
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv status   # State/counters.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv history  # Last 32 transitions.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv retrain  # PHY reset + clear.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv watch    # Print changes.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv status   # State/counters.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv history  # Last 32 transitions.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv retrain  # PHY reset + clear.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv watch    # Print changes.
 ```
 
 - `ltssm_state`, SerDes `ready`, `rx_idle`, `rx_polarity`, us timestamp.
@@ -88,40 +91,43 @@ before reading them. Useful messages:
   re-initialization):
 
 ```bash
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rxcdr-cfg            # Read.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rxcdr-cfg 0x87fe206024481010
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv drp-read 0x2a         # Any attribute.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv drp-dump drp.json     # Compare builds.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rx-check --count 12   # RX init quality.
-./scripts/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv tx-inhibit-state Polling.Active
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rxcdr-cfg            # Read.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rxcdr-cfg 0x87fe206024481010
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv drp-read 0x2a         # Any attribute.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv drp-dump drp.json     # Compare builds.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv rx-check --count 12   # RX init quality.
+./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv tx-inhibit-state Polling.Active
 ```
 
 DRP addresses: UG482 Table D-2 (ex: RXCDR_CFG 0xa8-0xad, RXLPM_HF/LF_CFG 0x2a/0x2b, RX_CM_TRIM 0x7e).
-Build-time overrides: `acorn.py --rxcdr-cfg`, `--gtp-param NAME=VALUE`, `--lpm-hold {rxeq,always}`.
+Build-time overrides (GTP bring-up/debug): `bench/acorn.py --rxcdr-cfg`, `--gtp-param NAME=VALUE`,
+`--lpm-hold {rxeq,always}`.
 
 ## LiteScope
 
 Keep captures narrow (well below 128 bits), in the sys clock domain (captures in the 250MHz RX clock
 domain do not meet timing). Groups: `link` (LTSSM/TS/LFPS/RX status), `lfps`, `ts`, `datapath`
-(SerDes RX/TX words + Link Layer RX/TX words), `phase` (RX vs TX clocks phase, `--with-serdes-debug`).
+(SerDes RX/TX words + Link Layer RX/TX words), `phase` (RX vs TX clocks phase, `--with-serdes-debug`),
+from `usb3_pipe/debug.py` (`usb3_analyzer_groups`): `--with-analyzer --analyzer-group <group>` on all
+the `bench/` targets.
 
-`scripts/usb3_analyzer.py` captures (retraining the PHY until the trigger fires) and analyzes:
+`bench/usb3_analyzer.py` captures (retraining the PHY until the trigger fires) and analyzes:
 LTSSM states, RX errors per state and longest error-free runs, the partner's TSEQ reception (known
 pattern: errors per symbol position), Link Layer packets/link commands (LGOOD/LCRD/LUP/LDN, SHP/SDP
 headers), RX vs TX clock offset profile (`phase`).
 
 ```bash
 # Link initialization after U0 entry (datapath group).
-./scripts/usb3_analyzer.py --port 1240 --csr-csv build/acorn_dbg/csr.csv \
+./bench/usb3_analyzer.py --port 1240 --csr-csv build/acorn_dbg/csr.csv \
     --analyzer-csv build/acorn_dbg/analyzer.csv capture --state U0 --offset 256
 # The partner's TSEQ (it is still in Polling.RxEQ while we are in Polling.Active).
-./scripts/usb3_analyzer.py ... capture --state Polling.RxEQ:Polling.Active
+./bench/usb3_analyzer.py ... capture --state Polling.RxEQ:Polling.Active
 # A control request (ex: SET_CONFIGURATION SETUP data word), without retraining.
-./scripts/usb3_analyzer.py ... capture --data 0x00090100 --no-retrain --offset 1024
+./bench/usb3_analyzer.py ... capture --data 0x00090100 --no-retrain --offset 1024
 # Recovered clock offset profile over ~2ms (phase group).
-./scripts/usb3_analyzer.py ... capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
+./bench/usb3_analyzer.py ... capture --state Polling.LFPS:Polling.RxEQ --subsampling 64
 # Re-analyze a capture.
-./scripts/usb3_analyzer.py analyze analyzer.vcd
+./bench/usb3_analyzer.py analyze analyzer.vcd
 ```
 
 ```bash
@@ -134,24 +140,24 @@ LTSSM state encodings: `usb3_pipe.gen.get_ltssm_states()`.
 
 ## Bulk Data And Stability
 
-The `loopback` example (`acorn.py` default) loops EP2 OUT back to EP1 IN (USB3DeviceCore Bulk
-endpoints). With the device accessible to the user (`scripts/99-usb3-pipe.rules`):
+The `loopback` example (`bench/acorn.py` default) loops EP2 OUT back to EP1 IN (USB3DeviceCore Bulk
+endpoints). With the device accessible to the user (`bench/99-usb3-pipe.rules`):
 
 ```bash
-./scripts/usb3_bulk.py info                                   # Endpoints, speed.
-./scripts/usb3_bulk.py loopback --size 1024 --count 1000      # Data check.
-./scripts/usb3_bulk.py loopback --count 1000 --random-sizes
+./bench/usb3_bulk.py info                                   # Endpoints, speed.
+./bench/usb3_bulk.py loopback --size 1024 --count 1000      # Data check.
+./bench/usb3_bulk.py loopback --count 1000 --random-sizes
 # Soak: PHY counters (U0/Recovery/U1/U2/U3 entries), enumeration and USB kernel messages every period,
 # Bulk loopback batches, periodic host reconnects (JSON lines log + summary).
-./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 --period 10 \
+./bench/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 --period 10 \
     --bulk 64 --reconnect-every 150 --log soak.jsonl
 ```
 
 Full duplex bandwidth/soak with data checked on both sides (`--example bench`):
 
 ```sh
-./scripts/usb3_bench.py both --csr-csv build/sqrl_acorn/csr.csv --port 1240
-./scripts/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 --period 30 --bench 20
+./bench/usb3_bench.py both --csr-csv build/sqrl_acorn/csr.csv --port 1240
+./bench/usb3_soak.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv --duration 300 --period 30 --bench 20
 ```
 
 ## USB3 Device Core: Header Packets trace
@@ -163,9 +169,9 @@ with the host (control transfers, bursts, NRDY/ERDY flow control, retries) are v
 analyzer.
 
 ```sh
-./scripts/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv clear
+./bench/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv clear
 # ... host activity (ex: litex_term, ffplay) ...
-./scripts/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv dump
+./bench/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv dump
  523164.672us TX TP   ERDY      ept 1 dir 1 nump  2 seq  0
  523165.952us RX TP   ACK       ept 1 dir 1 nump  2 seq  0
  523165.952us TX DPH  ept 1 dir 1 seq  0 len     1
@@ -182,14 +188,14 @@ examples (ex: `usb3_uvc_core_status`); `usb3_trace.py` autodetects it (`--prefix
 Linux autosuspends the devices with a driver (UVC, CDC-ACM, Mass Storage examples): the link goes to
 U3 after a few seconds without activity and is resumed when the device is used again. A link in U3
 must not be retrained from the debug CSRs (the host still sees its port in U3: the device ends in
-Polling.LFPS timeout -> Compliance); `scripts/acorn_run.py` reports these attempts as `suspended`.
+Polling.LFPS timeout -> Compliance); `bench/acorn_run.py` reports these attempts as `suspended`.
 
-`scripts/usb3_suspend.py` waits for the suspend, resumes the device through its device node and
+`bench/usb3_suspend.py` waits for the suspend, resumes the device through its device node and
 reports each resume as `clean` (U3 exit) or `reset` (U3 exit failed, the host reset the device),
 with the LTSSM history captured from U3 (`history_freeze`):
 
 ```sh
-$ ./scripts/usb3_suspend.py --port 1240 --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
+$ ./bench/usb3_suspend.py --port 1240 --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
 cycle 2: clean (0.6s), LTSSM: Recovery.Active Recovery.Configuration Recovery.Idle U0 ...
 cycle 0: reset (1.7s), LTSSM: Polling.ExitToRxDetect Polling.Entry Polling.LFPS ... WarmReset ...
 ```
@@ -242,7 +248,7 @@ is backing off between enumeration retries.
 
 ## Investigation Loop
 
-1. Reproduce with `scripts/acorn_run.py` and note the build command/bitstream/timing.
+1. Reproduce with `bench/acorn_run.py` and note the build command/bitstream/timing.
 2. Answer the next question with the CSRs (history, counters, measurements) before LiteScope.
 3. Capture a narrow LiteScope trace when the question is temporal.
 4. Reproduce the finding in simulation (migen unit test or `sim.py`), fix, run `pytest` and

@@ -1,5 +1,5 @@
 # USB3-PIPE standalone core: Kintex7 (GTX) USB3.0 device.
-# Similar to the KC705 target (kc705.py), with a dedicated 125MHz transceiver refclk.
+# Similar to the KC705 target (bench/kc705.py), with a dedicated 125MHz transceiver refclk.
 {
     "phy"            : "K7USB3SerDes",
     "device"         : "xc7k325t-ffg900-2",
