@@ -6,21 +6,28 @@ integrated in designs not built with LiteX (Vivado projects, other HDLs).
 ```sh
 $ usb3_pipe_gen examples/a7_device.yml     --output-dir build/usb3_pipe_core # PHY only.
 $ usb3_pipe_gen examples/a7_usb_device.yml --output-dir build/usb3_device    # PHY + Device Core.
-$ usb3_pipe_gen examples/usp_device.yml    --output-dir build/usb3_usp       # Ultrascale+ (GTY).
+$ usb3_pipe_gen examples/k7_device.yml     --output-dir build/usb3_k7        # Kintex7 (GTX).
+$ usb3_pipe_gen examples/usp_device.yml    --output-dir build/usb3_usp       # Ultrascale+ (GTY), + Device Core.
 ```
+
+`--name` sets the core/module name (default: `usb3_pipe_core`). Ultrascale+ (`USPUSB3SerDes`: GTY
+channel PLL, OOB clock from a `USPMMCM` instead of a `S7PLL`, `XilinxUSPPlatform`) is generated the
+same way (`examples/usp_device.yml`: xcku3p as the `alibaba_xcku3p.py` target, but with a dedicated
+156.25MHz transceiver reference clock).
 
 ## Configuration (YAML)
 
 | Parameter | Default | Description |
 |---|---|---|
 | `phy` | (required) | Transceiver: `A7USB3SerDes` (Artix7 GTP), `K7USB3SerDes` (Kintex7 GTX), `USPUSB3SerDes` (Ultrascale+ GTY). |
-| `device` | PHY family | FPGA device. |
-| `speedgrade` | `-1` | FPGA speedgrade (OOB clock PLL). |
+| `device` | PHY family | FPGA device (default: `xc7a`/`xc7k`/`xcku3p`). |
+| `speedgrade` | `-1` | FPGA speedgrade (OOB clock PLL/MMCM). |
 | `sys_clk_freq` | `125e6` | Core/user clock frequency (>= 125MHz). |
 | `refclk`/`refclk_freq` | `pads`/`125e6` | Transceiver reference clock: `pads` (dedicated `refclk_p/n` ports) or `sys` (core clock). |
 | `role` | `device` | `device` (Upstream Port) or `host` (Downstream Port). |
 | `with_endianness_swap` | `True` | First symbol on `tdata[31:24]` (else `tdata[7:0]`). |
 | `with_link_ctrl` | `False` | Expose the LTSSM Link-Layer control interface (PM handshake, directed transitions). |
+| `timer_scale` | `1` | LTSSM/LFPS timers scaling (simulation only, `1` for hardware). |
 | `usb_core` | `False` | Include the USB3 Device Core (device role): Bulk IN/OUT AXI-Stream endpoints. |
 | `usb_vid`/`usb_pid`/`usb_manufacturer`/`usb_product`/`usb_serial` | | Device descriptors (`usb_core`). |
 | `usb_max_burst` | `8` | Bulk endpoints MaxBurst (2/4/8/16, `usb_core`). |

@@ -3,7 +3,8 @@
 USB3PIPE implements USB 3.2 **Gen 1x1** (SuperSpeed, 5Gbps, 8b/10b, one lane). This document lists what
 **Gen 2x1** (SuperSpeedPlus 10Gbps, 128b/132b, one lane) and **Gen 1x2** (SuperSpeedPlus 2x5Gbps,
 8b/10b, two lanes) require, layer by layer, and what is already prepared. References are to the
-USB 3.2 specification (Rev 1.1).
+USB 3.2 specification (Rev 1.1). Current Gen 1x1 PHY and Device Core: [usb3-pipe.md](usb3-pipe.md),
+[usb3-core.md](usb3-core.md).
 
 Both are **SuperSpeedPlus** operation: they change the PHY *and* the Link Layer (Type 1/Type 2 traffic
 classes, 4-bit Header Sequence Numbers, Rx Buffer credits), the Protocol Layer is mostly unchanged.
@@ -12,7 +13,7 @@ classes, 4-bit Header Sequence Numbers, Rx Buffer credits), the Protocol Layer i
 
 | Mode     | Line rate     | Transceivers                         | Connector                          |
 |----------|---------------|--------------------------------------|------------------------------------|
-| Gen 1x1  | 5Gbps         | Artix7 GTP (Acorn), Kintex7 GTX      | Type-A/B, SFP2USB adapter          |
+| Gen 1x1  | 5Gbps         | Artix7 GTP (Acorn), Kintex7 GTX, Ultrascale+ GTY | Type-A/B, SFP2USB adapter |
 | Gen 2x1  | 10Gbps        | Kintex7 GTX (-2/-3), UltraScale GTH/GTY (GTP max 6.6Gbps: not possible on Artix7) | Type-A/B (10Gbps capable) or Type-C |
 | Gen 1x2  | 2x5Gbps       | 2 GTP/GTX (Artix7 possible)          | **Type-C only** (two lanes, Configuration Lane from CC) |
 

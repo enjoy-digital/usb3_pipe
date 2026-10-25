@@ -44,7 +44,7 @@ Device classes (complete devices, or functions to compose a device):
 
 ```python
 from usb3_core.cdc_acm import USB3CDCACM # LiteX UART PHY: self.uart = UART(USB3CDCACM(phy, sys_clk_freq))
-from usb3_core.uvc     import USB3UVC    # UVC camera (test pattern).
+from usb3_core.uvc     import USB3UVC    # UVC camera (test pattern, transfer="bulk" or "iso").
 from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB3MSCDRAM(...)).
 ```
 
@@ -56,16 +56,18 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB
 | `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order. |
 | `USB3BulkIN`/`USB3BulkOUT` | `bulk.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`. |
 | `USB3IsoIN` | `iso.py` | Isochronous IN endpoint (MaxBurst 1-16, Mult 0): one transfer per service interval, sent on the host ACK TPs (Seq Num 0, then Seq Num + NumP), LPF on the last packet, zero-length DP when no data, no retry/flow control, `flush`. |
-| `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), U1/U2 Enable (SET/CLEAR_FEATURE, GET_STATUS), class/vendor request handler (`with_ep0_handler`). |
-| `USB3Descriptors` | `descriptors.py` | Descriptors builder (device, configuration with SuperSpeed companions, BOS, strings, IADs). |
-| `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints, `add_csr()`. |
+| `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), U1/U2 Enable (SET/CLEAR_FEATURE, GET_STATUS), SET/GET_INTERFACE (alternate settings), class/vendor request handler (`with_ep0_handler`). |
+| `USB3Descriptors` | `descriptors.py` | Descriptors builder (device, configuration with SuperSpeed companions, alternate settings, BOS, strings, IADs), Chapter 9 requests constants, `bulk_descriptors`/`iso_in_descriptors` helpers. |
+| `USB3DeviceCore` | `device.py` | Link + Protocol + EP0 + endpoints (`with_lpm`, `with_ep0_handler`), `add_csr()`. |
 | `USB3CDCACM(Function)` | `cdc_acm.py` | CDC-ACM serial port (descriptors/class requests), LiteX UART PHY interface (`sink`/`source` bytes, `connect`). |
+| `USB3ByteUnpacker`/`USB3BytePacker` | `bridge.py` | 32-bit endpoint words (`be`/`last`) to/from byte streams (CDC-ACM). |
 | `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes, Bulk (default) or Isochronous (`transfer="iso"`) streaming. |
-| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine on a storage (stream interface): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`), storages in `msc_storage.py`. |
+| `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine (`USB3MSCSCSI`) on a storage (`USB3MSCStorage` stream interface, `msc_storage.py`): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`). |
 | `USB3Bench` | `bench.py` | Bandwidth benchmark source/checker. |
 | `USB3CoreTrace` | `trace.py` | Header Packets trace (debug). |
 | `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Parallel CRCs (equations generated from the polynoms). |
 | Host models | `host_model.py` | Scripted Host gateware model (`sim.py`), Python host models for Migen tests. |
+| Example designs | `examples.py` | `add_usb3_example()`/`USB3_EXAMPLES`: example designs shared by the targets (`acorn.py`, `kc705.py`, `alibaba_xcku3p.py`), [examples.md](examples.md). |
 
 ## Control requests handler
 
@@ -105,7 +107,7 @@ starting the service intervals: the user logic starts its stream on `ep0.set_int
 ## Composite devices
 
 Functions attach to a device's EP0/endpoints, descriptors are concatenated (see the `composite` example
-in `acorn.py`):
+in `usb3_core/examples.py`):
 
 ```python
 descriptors = USB3Descriptors(device_class=DEVICE_CLASS_IAD,

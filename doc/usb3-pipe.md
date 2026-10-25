@@ -25,7 +25,7 @@ the standalone core ([standalone-core.md](standalone-core.md)).
 | `USB3PHY` | `phy.py` | PIPE + LTSSM with the Link interface (below). |
 | `USB3PHYDebug`/`USB3SerDesDebug` | `debug.py` | State history, counters, measurements CSRs ([debugging-guide.md](debugging-guide.md)). |
 | `usb3_pipe_gen` | `gen.py` | Standalone Verilog core generator. |
-| Gen 2/x2 units | `gen2.py`, `lanes.py`, `ssp.py`, `x2.py` | 128b/132b TX/RX (Ordered Sets, scrambler, gearbox, aligner), SSP Polling (SCD/LBPM), Gen 1x2 PHY ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
+| Gen 2/x2 units | `gen2.py`, `lanes.py`, `ssp.py`, `x2.py` | 128b/132b TX/RX (Ordered Sets, scrambler, gearbox, aligner), SSP Polling (SCD/LBPM), Gen 1x2 PHY (`USB3X2PHY`, [gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
 
 ## Link interface (`USB3PHY`)
 
@@ -65,9 +65,11 @@ packets checked against captures of an xHCI host), the Device the USB3 Device Co
 ```sh
 $ ./sim.py                       # Link training, enumeration, Bulk transfers.
 $ ./sim.py --no-core --ppm 300   # PRBS Link-Layer stand-ins, clock offset.
+$ ./sim.py --host-pm             # + Host U1/U2 requests (rejected: Device Core without LPM).
 $ ./sim.py --host-lpm            # + U1/U2 entries/exits (Device Core with LPM).
 $ ./sim.py --trace               # VCD (build/sim/gateware/sim.vcd).
-$ pytest test                    # Unit/system tests (pytest -m slow: long simulations).
+$ pytest test                    # Unit/system tests (-n auto: parallel with pytest-xdist).
+$ pytest test -m slow            # Long simulations (Verilator), not run by default.
 ```
 
 ## Limitations
