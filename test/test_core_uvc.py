@@ -16,6 +16,8 @@ from litex.gen import *
 from usb3_core.host_model import *
 from usb3_core.uvc        import *
 
+from test.model.host import *
+
 # Small modes (simulation): 32x8 and 64x8 (2 frame rates), 256 bytes payloads.
 MODES        = [(32, 8, 100_000), (64, 8, 100_000), (64, 8, 50_000)]
 PAYLOAD_SIZE = 256

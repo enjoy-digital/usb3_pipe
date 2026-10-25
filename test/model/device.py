@@ -18,6 +18,8 @@ from usb3_core.descriptors import bulk_descriptors
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
 
+from test.model.host import tps, lmps, dpps
+
 # Bulk Loopback Device -----------------------------------------------------------------------------
 
 class BulkLoopbackDUT(LiteXModule):

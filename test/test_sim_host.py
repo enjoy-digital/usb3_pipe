@@ -20,13 +20,11 @@ from usb3_core.descriptors import bulk_descriptors
 
 from test.common       import get_output_dir
 from test.model.device import check_core_enumeration
+from test.model.host   import dpps
 
 pytestmark = pytest.mark.sim
 
 ROOT = Path(__file__).resolve().parents[1]
-
-def dpps(packets):
-    return [p[0] for kind, *p in packets if kind == "DPP"]
 
 class TestSimHost(unittest.TestCase):
     def run_sim(self, *args):

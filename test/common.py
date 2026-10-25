@@ -7,7 +7,9 @@
 """Shared test helpers: USB3 Gen1 reference models and stream drivers/monitors.
 
 Symbols are (byte, k) tuples. Words are 32-bit data/4-bit ctrl with the first symbol in lane 0
-(data[7:0]/ctrl[0]), as on the PIPE/SerDes streams (before USB3PIPE's EndiannessSwap).
+(data[7:0]/ctrl[0]), as on the PIPE/SerDes streams (before USB3PIPE's EndiannessSwap). The Link
+Layer words of usb3_core.host_model (words_from_symbols/symbols_from_words) use the opposite order
+(first symbol in data[31:24]/ctrl[3], after the EndiannessSwap, see swap_word).
 """
 
 import random

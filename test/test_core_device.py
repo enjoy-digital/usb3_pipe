@@ -17,6 +17,7 @@ from litex.gen import *
 
 from usb3_core.host_model import *
 
+from test.model.host   import *
 from test.model.device import BulkLoopbackDUT as DUT, check_core_enumeration
 
 class TestCoreDevice(unittest.TestCase):

@@ -16,6 +16,7 @@ from migen import *
 from usb3_core.host_model import *
 from usb3_core.common     import LCMD_LBAD
 
+from test.model.host   import *
 from test.model.device import BulkLoopbackDUT as DUT
 
 # Helpers ------------------------------------------------------------------------------------------

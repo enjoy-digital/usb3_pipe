@@ -22,7 +22,7 @@ from litedram.core       import LiteDRAMCore
 from usb3_core.host_model import *
 from usb3_core.msc        import *
 
-from test.model.host import cbw
+from test.model.host import *
 
 # Helpers ------------------------------------------------------------------------------------------
 

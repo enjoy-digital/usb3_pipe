@@ -20,6 +20,8 @@ from usb3_core.descriptors import *
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.iso         import USB3IsoIN
 
+from test.model.host import *
+
 # DUT ----------------------------------------------------------------------------------------------
 
 class DUT(LiteXModule):

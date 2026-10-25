@@ -18,6 +18,8 @@ from litex.soc.interconnect import stream
 from usb3_core.host_model import *
 from usb3_core.cdc_acm    import USB3CDCACM
 
+from test.model.host import *
+
 # DUT (CDC-ACM with echo) --------------------------------------------------------------------------
 
 class DUT(LiteXModule):

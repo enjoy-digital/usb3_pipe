@@ -17,6 +17,8 @@ from usb3_core.host_model  import *
 from usb3_core.descriptors import bulk_descriptors
 from usb3_core.device      import USB3DeviceCore
 
+from test.model.host import *
+
 # DUT (Device + test request handler) --------------------------------------------------------------
 
 GET_CUR  = 0x81

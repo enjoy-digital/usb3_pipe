@@ -16,7 +16,7 @@ from litex.gen import *
 from usb3_core.host_model import *
 from usb3_core.msc        import *
 
-from test.model.host import cbw
+from test.model.host import *
 
 SIZE = 16*1024 # 32 blocks.
 
