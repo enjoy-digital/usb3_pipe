@@ -5,6 +5,11 @@ csr.csv
 csr.json
 analyzer.csv
 *.vcd
+*.init
+*.fst
+*.gtkw
+obj_dir/
+third_party/
 
 # Python.
 __pycache__/

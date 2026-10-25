@@ -20,6 +20,10 @@ from pathlib import Path
 
 import pytest
 
+from test.common import get_output_dir
+
+pytestmark = pytest.mark.sim
+
 # Configurations -----------------------------------------------------------------------------------
 
 PRBS_WORDS = 2**18 # 1M symbols per direction.
@@ -45,7 +49,7 @@ class TestPHYLong(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         cmd  = [sys.executable, str(root / "sim.py"), "--no-core",
             "--prbs-words", str(PRBS_WORDS),
-            "--output-dir", f"build/sim_long_{name}"] + args
+            "--output-dir", str(get_output_dir(self, name))] + args
         try:
             p = subprocess.run(cmd,
                 cwd     = str(root),

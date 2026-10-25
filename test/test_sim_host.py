@@ -13,10 +13,15 @@ import subprocess
 
 from pathlib import Path
 
+import pytest
+
 from usb3_core.host_model  import *
 from usb3_core.descriptors import bulk_descriptors
 
+from test.common           import get_output_dir
 from test.test_core_device import check_core_enumeration
+
+pytestmark = pytest.mark.sim
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,7 +30,7 @@ def dpps(packets):
 
 class TestSimHost(unittest.TestCase):
     def run_sim(self, *args):
-        cmd = [sys.executable, str(ROOT / "sim.py"), "--output-dir", "build/sim_host"] + list(args)
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--output-dir", str(get_output_dir(self))] + list(args)
         p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             timeout=600)
         out = p.stdout or ""

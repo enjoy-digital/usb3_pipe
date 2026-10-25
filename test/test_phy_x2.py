@@ -18,6 +18,10 @@ from pathlib import Path
 
 import pytest
 
+from test.common import get_output_dir
+
+pytestmark = pytest.mark.sim
+
 ROOT = Path(__file__).resolve().parents[1]
 
 CONFIGS_SLOW = {
@@ -30,7 +34,7 @@ CONFIGS_SLOW = {
 
 class TestPHYX2(unittest.TestCase):
     def run_sim(self, name, args):
-        cmd = [sys.executable, str(ROOT / "sim_x2.py"), "--output-dir", f"build/sim_x2_{name}"] + args
+        cmd = [sys.executable, str(ROOT / "sim_x2.py"), "--output-dir", str(get_output_dir(self, name))] + args
         try:
             p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, timeout=1200)

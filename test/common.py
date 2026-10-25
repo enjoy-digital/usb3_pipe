@@ -11,8 +11,23 @@ Symbols are (byte, k) tuples. Words are 32-bit data/4-bit ctrl with the first sy
 """
 
 import random
+import shutil
+
+from pathlib import Path
 
 from usb3_pipe.common import COM, SKP
+
+# Test Output Directories --------------------------------------------------------------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+
+def get_output_dir(test, *names):
+    """Return a fresh build/test/<test id>[/<names>] directory (one per test/subtest: safe with
+    pytest-xdist, kept after the run for debug)."""
+    output_dir = ROOT.joinpath("build", "test", test.id().removeprefix("test."), *names)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True)
+    return output_dir
 
 # Symbols <-> Words --------------------------------------------------------------------------------
 
