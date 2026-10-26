@@ -20,6 +20,11 @@ DUT pads on the 4 baseboard debug pins (LVCMOS33):
 
 DUT UARTs 1-3 are internally looped back (TX to RX), power switch 0 drives user_led3 (on: led on).
 No UARTBone on the baseboard UART: CSRs through the USB3 control CDC-ACM or JTAGBone.
+
+Logic analyzer (DDR3 ring buffer, MT41K512M16 1GB, initialized by the VexRiscv BIOS: console on a
+stub UART) on the internal probes (AgentLab.la_probes): channels 0/1: UART0 TX/RX (debug pins 0/1),
+2-7: UART1-3 TX/RX (internal loopbacks), 8/9: GPIO0/1 (debug pins 2/3), 12: power switch 0, 16-31:
+timestamp bits 0-15 (counter). --no-dram: phase 1 instrument only (no CPU/DRAM/logic analyzer).
 """
 
 import os
@@ -38,6 +43,9 @@ from litex_boards.platforms import sqrl_acorn
 from litex.build.generic_platform import *
 
 from litex.soc.cores.clock import *
+
+from litedram.modules import MT41K512M16
+from litedram.phy     import s7ddrphy
 
 from usb3_pipe import A7USB3SerDes
 
@@ -70,10 +78,14 @@ _dut_io = [
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(LiteXModule):
-    def __init__(self, platform, sys_clk_freq):
+    def __init__(self, platform, sys_clk_freq, with_dram=True):
         self.cd_sys    = ClockDomain()
         self.cd_oob    = ClockDomain()
         self.cd_clk200 = ClockDomain()
+        if with_dram:
+            self.cd_sys4x     = ClockDomain()
+            self.cd_sys4x_dqs = ClockDomain()
+            self.cd_idelay    = ClockDomain()
 
         # # #
 
@@ -91,17 +103,36 @@ class _CRG(LiteXModule):
         pll.create_clkout(self.cd_sys, sys_clk_freq,   margin=0)
         pll.create_clkout(self.cd_oob, sys_clk_freq/8, margin=0)
 
+        # DRAM clocks (A7DDRPHY: sys4x/sys4x_dqs, IDELAYCTRL reference).
+        if with_dram:
+            pll.create_clkout(self.cd_sys4x,     4*sys_clk_freq, margin=0)
+            pll.create_clkout(self.cd_sys4x_dqs, 4*sys_clk_freq, margin=0, phase=90)
+            pll.create_clkout(self.cd_idelay,    200e6,          margin=0)
+            self.idelayctrl = S7IDELAYCTRL(self.cd_idelay)
+
 # AgentLab SoC -------------------------------------------------------------------------------------
 
 class AgentLabAcorn(AgentLabSoC):
-    def __init__(self, platform, with_jtagbone=True):
+    def __init__(self, platform, with_jtagbone=True, with_dram=True):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
-        self.crg = _CRG(platform, sys_clk_freq)
+        self.crg = _CRG(platform, sys_clk_freq, with_dram=with_dram)
 
         # AgentLabSoC ------------------------------------------------------------------------------
-        AgentLabSoC.__init__(self, platform, sys_clk_freq, with_jtagbone=with_jtagbone)
+        AgentLabSoC.__init__(self, platform, sys_clk_freq,
+            with_jtagbone = with_jtagbone,
+            cpu_type      = "vexriscv" if with_dram else None)
+
+        # DDR3 SDRAM -------------------------------------------------------------------------------
+        if with_dram:
+            self.add_agentlab_dram(
+                phy = s7ddrphy.A7DDRPHY(platform.request("ddram"),
+                    memtype          = "DDR3",
+                    nphases          = 4,
+                    sys_clk_freq     = sys_clk_freq,
+                    iodelay_clk_freq = 200e6),
+                module = MT41K512M16(sys_clk_freq, "1:4"))
 
         # USB3 SerDes ------------------------------------------------------------------------------
         usb3_serdes = A7USB3SerDes(platform,
@@ -120,6 +151,7 @@ class AgentLabAcorn(AgentLabSoC):
             "uarts" : [platform.request("dut_uart", 0), None, None, None],
             "gpio"  : platform.request("dut_gpio"),
             "power" : power_led,
+            "la"    : "probes" if with_dram else None,
         }
         self.add_agentlab(usb3_serdes, dut_pads,
             leds          = [platform.request("user_led", i) for i in range(3)],
@@ -131,6 +163,7 @@ def main():
     parser = argparse.ArgumentParser(description="AgentLab on the SQRL Acorn CLE-215+ (LiteX Acorn Baseboard Mini).")
     agentlab_args(parser, output_dir="build/agentlab_acorn")
     parser.add_argument("--no-jtagbone", action="store_true", help="Disable JTAGBone.")
+    parser.add_argument("--no-dram",     action="store_true", help="No DRAM/CPU/logic analyzer (phase 1 instrument).")
     parser.add_argument("--vivado-place-directive", default="default", help="Vivado place_design directive (see bench/acorn.py).")
     args = parser.parse_args()
 
@@ -138,7 +171,9 @@ def main():
     platform.add_extension(_usb3_io)
     platform.add_extension(sqrl_acorn._litex_acorn_baseboard_mini_io, prepend=True)
     platform.add_extension(_dut_io)
-    soc = AgentLabAcorn(platform, with_jtagbone=not args.no_jtagbone)
+    soc = AgentLabAcorn(platform,
+        with_jtagbone = not args.no_jtagbone,
+        with_dram     = not args.no_dram)
     agentlab_build(parser, args, soc, vivado_place_directive=args.vivado_place_directive)
 
 if __name__ == "__main__":
