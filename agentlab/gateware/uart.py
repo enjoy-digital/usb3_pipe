@@ -8,6 +8,7 @@
 baudrate from a CSR or the CDC-ACM line coding, RX/TX bytes events."""
 
 from migen import *
+from migen.genlib.cdc import MultiReg
 
 from litex.gen import *
 
@@ -40,6 +41,8 @@ class AgentLabUART(LiteXModule):
         self.line_coding   = Signal()   # i
         self.line_baudrate = Signal(32) # i
         self.connected     = Signal()   # i
+        self.tx_line       = Signal()   # o: TX line level.
+        self.rx_line       = Signal()   # o: RX line level (synchronized).
 
         self._baudrate    = CSRStorage(32, reset=baudrate, write_from_dev=True,
             description="Baudrate (also set by the host CDC-ACM line coding).")
@@ -54,6 +57,10 @@ class AgentLabUART(LiteXModule):
         if pads is None:
             pads = Record([("tx", 1), ("rx", 1)])
             self.comb += pads.rx.eq(pads.tx)
+
+        # Lines levels (waveforms).
+        self.comb += self.tx_line.eq(pads.tx)
+        self.specials += MultiReg(pads.rx, self.rx_line)
 
         # Baudrate (CSR or line coding) to tuning word: baudrate*2^32/clk_freq, as a multiplication
         # by a constant (baudrates up to 2^24-1).

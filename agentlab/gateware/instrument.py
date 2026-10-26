@@ -18,6 +18,7 @@ from agentlab.gateware.timebase import AgentLabTimebase
 from agentlab.gateware.events   import *
 from agentlab.gateware.gpio     import AgentLabGPIO, AgentLabPower
 from agentlab.gateware.uart     import AgentLabUART
+from agentlab.gateware.eyes     import AgentLabEyes
 
 # AgentLab -----------------------------------------------------------------------------------------
 
@@ -30,9 +31,11 @@ class AgentLab(LiteXModule):
 
     uarts[n].sink/source: DUT UARTs byte streams (to/from the CDC-ACM functions).
     source: events stream (32-bit words packets, to the events Bulk IN endpoint).
+    eyes  : Eyes renderer (with_eyes, eyes_kwargs: AgentLabEyes arguments), waveform lanes
+            sources: GPIOs, power switches, then DUT UARTs TX/RX lines (bit 0: GPIO0).
     """
     def __init__(self, sys_clk_freq, uart_pads=[None]*4, gpio_pads=None, n_gpios=0,
-        power_pads=None, n_power=0, events_fifo_depth=512):
+        power_pads=None, n_power=0, events_fifo_depth=512, with_eyes=False, eyes_kwargs={}):
         self.source = stream.Endpoint([("data", 32), ("be", 4)]) # o
 
         self._marker = CSRStorage(32, description="Marker: write to insert a marker event (value).")
@@ -108,3 +111,17 @@ class AgentLab(LiteXModule):
         self.events = events = AgentLabEvents(timestamp, ports, overflows,
             fifo_depth = events_fifo_depth)
         self.comb += events.source.connect(self.source)
+
+        # Eyes -------------------------------------------------------------------------------------
+        if with_eyes:
+            self.eyes = eyes = AgentLabEyes(**eyes_kwargs)
+            lanes = []
+            if self.n_gpios > 0:
+                lanes.append(gpio.levels)
+            if self.n_power > 0:
+                lanes.append(power.levels)
+            for uart in self.uarts:
+                lanes += [uart.tx_line, uart.rx_line]
+            self.eyes_lanes = len(Cat(*lanes))
+            assert self.eyes_lanes <= eyes.wave_width
+            self.comb += eyes.samples.eq(Cat(*lanes))
