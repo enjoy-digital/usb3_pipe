@@ -139,6 +139,7 @@ class USB3SoC(USB3BaseSoC):
             tx_pads      = platform.request("sfp_tx"),
             rx_pads      = platform.request("sfp_rx"),
             rxcdr_cfg    = rxcdr_cfg)
+        # Fabric reference clock on GTGREFCLK0 (see doc/debugging-guide.md): allowed as a warning.
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
         usb3_serdes.gtp.gtp_params.update(gtp_params) # Debug overrides (--gtp-param).
 
@@ -178,7 +179,6 @@ def main():
     parser = argparse.ArgumentParser(description="USB3-PIPE on the SQRL Acorn CLE-215+ (Artix7 GTP), LiteX Acorn Baseboard (Mini).")
     parser.add_argument("--variant",   default="mini",      help="LiteX Acorn Baseboard variant.", choices=["mini", "standard"])
     parser.add_argument("--with-dram", action="store_true", help="Enable the DDR3 SDRAM (requires a CPU, default with the msc_dram example).")
-    parser.add_argument("--vivado-place-directive", default="default", help="Vivado place_design directive (the GTP reference clock is fabric-routed on this board: RX quality depends on the placement, see doc/debugging-guide.md).")
     usb3_soc_args(parser, output_dir="build/sqrl_acorn")
     gtp_group = parser.add_argument_group(title="GTP bring-up/debug overrides")
     gtp_group.add_argument("--rxcdr-cfg", default=None,   help="GTP RXCDR_CFG override (hex).")
@@ -203,7 +203,7 @@ def main():
         gtp_params  = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)},
         lpm_hold    = args.lpm_hold,
         **usb3_soc_argdict(args))
-    usb3_soc_build(parser, args, soc, vivado_place_directive=args.vivado_place_directive)
+    usb3_soc_build(parser, args, soc)
 
 if __name__ == "__main__":
     main()

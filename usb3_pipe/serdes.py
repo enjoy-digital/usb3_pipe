@@ -185,7 +185,11 @@ class A7USB3SerDes(USB3SerDes):
         from liteiclink.serdes.gtp_7series import GTPQuadPLL, GTP
 
         # PLL / Transceiver ------------------------------------------------------------------------
-        self.pll = pll = GTPQuadPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9)
+        # Fabric reference clock: PLL from GTGREFCLK (dedicated clock network input). Routing it to
+        # GTREFCLK0 goes through general interconnect and the RX quality then depends on the build.
+        refclk_from_fabric = isinstance(refclk_pads, (Signal, ClockSignal))
+        self.pll = pll = GTPQuadPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9,
+            refclk_from_fabric = refclk_from_fabric)
         gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq)
 
         # Override GTP RX settings for USB3 --------------------------------------------------------
