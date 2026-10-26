@@ -262,6 +262,14 @@ def usb_read_fn(usb_device, interface=c.EVENTS_INTERFACE, endpoint=c.EVENTS_ENDP
             return bytes(usb_device.read(endpoint, size, timeout=timeout_ms))
         except usb.core.USBTimeoutError:
             return b""
+        except usb.core.USBError:
+            # Transaction error (EIO/EPIPE): the host controller resets its endpoint Sequence Number,
+            # not the device: CLEAR_FEATURE(ENDPOINT_HALT) resets both (the next reads work).
+            try:
+                usb_device.clear_halt(endpoint)
+            except usb.core.USBError:
+                pass
+            raise
     return read_fn
 
 def format_events(events: Sequence[Event], sys_clk_freq) -> List[str]:

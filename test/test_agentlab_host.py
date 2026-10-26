@@ -17,7 +17,7 @@ from agentlab.host import constants as c
 from agentlab.host.csr       import CSRMap, CSRs, UARTBoneBus
 from agentlab.host.uart      import DUTUart
 from agentlab.host.events    import (Event, EventParser, EventReader, pack_event, parse_record,
-    parse_records, filter_events, first_after, uart_lines)
+    parse_records, filter_events, first_after, uart_lines, usb_read_fn)
 from agentlab.host.discovery import find_device, find_devices
 
 from test.agentlab_host_fake import *
@@ -118,6 +118,34 @@ class TestEvents(unittest.TestCase):
         self.assertIsNone(reader.wait_for(lambda e: True, timeout=2.0))
         self.assertIsInstance(reader.error, OSError)
         reader.stop()
+
+    def test_usb_read_fn_error_clear_halt(self):
+        # USB I/O error: endpoint halt cleared (host/device Sequence Numbers resynchronized), error
+        # raised; timeout: no data.
+        import usb.core
+        import usb.util
+        class Device:
+            def __init__(self):
+                self.errors  = [usb.core.USBTimeoutError("timeout"), usb.core.USBError("io", 5)]
+                self.cleared = []
+            def read(self, endpoint, size, timeout):
+                if self.errors:
+                    raise self.errors.pop(0)
+                return [1, 2, 3]
+            def clear_halt(self, endpoint):
+                self.cleared.append(endpoint)
+        device = Device()
+        claim  = usb.util.claim_interface
+        usb.util.claim_interface = lambda device, interface: None
+        try:
+            read = usb_read_fn(device, interface=2, endpoint=0x8c)
+        finally:
+            usb.util.claim_interface = claim
+        self.assertEqual(read(16, 100), b"")
+        with self.assertRaises(usb.core.USBError):
+            read(16, 100)
+        self.assertEqual(device.cleared, [0x8c])
+        self.assertEqual(read(16, 100), bytes([1, 2, 3]))
 
 # CSRs ---------------------------------------------------------------------------------------------
 
