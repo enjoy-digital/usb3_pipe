@@ -235,57 +235,61 @@ class LAStreamParser:
         """Feed bytes, return True when the capture is complete."""
         if self.done:
             return True
-        self._buffer += bytes(data)
-        while not self.done:
-            if self.header is None:
-                magic = struct.pack("<I", c.LA_MAGIC)
-                i = self._buffer.find(magic)
-                while i > 0 and i % 4:
-                    i = self._buffer.find(magic, i + 1)
-                if i < 0:
-                    keep = len(self._buffer) & ~3
-                    self.skipped += keep
-                    self._buffer  = self._buffer[keep:]
-                    return False
-                self.skipped += i
-                self._buffer  = self._buffer[i:]
-                if len(self._buffer) < 4*c.LA_HEADER_WORDS:
-                    return False
-                self.header  = LAHeader.unpack(self._buffer)
-                self.overflow = bool(self.header.flags & c.LA_HEADER_OVERFLOW)
-                self._buffer = self._buffer[4*c.LA_HEADER_WORDS:]
-            elif self._block:
-                n = min(self._block, len(self._buffer)//4)
-                if n == 0:
-                    return False
-                self.samples.extend(_words(self._buffer[:4*n]))
-                self._buffer = self._buffer[4*n:]
-                self._block -= n
-                if self._block == 0 and self._last:
-                    self.done = True
-            else:
-                if len(self._buffer) < 4:
-                    return False
-                word = struct.unpack("<I", self._buffer[:4])[0]
-                if word == c.LA_MAGIC:
-                    # New capture (previous one aborted by a re-arm): restart on its header.
-                    self.restarts += 1
-                    self.header   = None
-                    self.samples  = array.array("I")
-                    self.overflow = False
-                    continue
-                self._buffer = self._buffer[4:]
-                if (word >> 24) != c.LA_BLOCK_MAGIC:
-                    raise ValueError("Bad LA block word 0x{:08x} after {} samples.".format(
-                        word, len(self.samples)))
-                flags = (word >> 16) & 0xff
-                self._block = word & 0xffff
-                self._last  = bool(flags & c.LA_BLOCK_LAST)
-                if flags & c.LA_BLOCK_OVERFLOW:
-                    self.overflow = True
-                if self._block == 0 and self._last:
-                    self.done = True
-        return True
+        buf = self._buffer + bytes(data)
+        pos = 0 # Parsed bytes of buf (buf only sliced once per feed: linear time on large feeds).
+        try:
+            while not self.done:
+                if self.header is None:
+                    magic = struct.pack("<I", c.LA_MAGIC)
+                    i = buf.find(magic, pos)
+                    while i > 0 and (i - pos) % 4:
+                        i = buf.find(magic, i + 1)
+                    if i < 0:
+                        keep = (len(buf) - pos) & ~3
+                        self.skipped += keep
+                        pos          += keep
+                        return False
+                    self.skipped += i - pos
+                    pos = i
+                    if len(buf) - pos < 4*c.LA_HEADER_WORDS:
+                        return False
+                    self.header   = LAHeader.unpack(buf[pos:pos + 4*c.LA_HEADER_WORDS])
+                    self.overflow = bool(self.header.flags & c.LA_HEADER_OVERFLOW)
+                    pos += 4*c.LA_HEADER_WORDS
+                elif self._block:
+                    n = min(self._block, (len(buf) - pos)//4)
+                    if n == 0:
+                        return False
+                    self.samples.extend(_words(buf[pos:pos + 4*n]))
+                    pos         += 4*n
+                    self._block -= n
+                    if self._block == 0 and self._last:
+                        self.done = True
+                else:
+                    if len(buf) - pos < 4:
+                        return False
+                    word = struct.unpack_from("<I", buf, pos)[0]
+                    if word == c.LA_MAGIC:
+                        # New capture (previous one aborted by a re-arm): restart on its header.
+                        self.restarts += 1
+                        self.header   = None
+                        self.samples  = array.array("I")
+                        self.overflow = False
+                        continue
+                    pos += 4
+                    if (word >> 24) != c.LA_BLOCK_MAGIC:
+                        raise ValueError("Bad LA block word 0x{:08x} after {} samples.".format(
+                            word, len(self.samples)))
+                    flags = (word >> 16) & 0xff
+                    self._block = word & 0xffff
+                    self._last  = bool(flags & c.LA_BLOCK_LAST)
+                    if flags & c.LA_BLOCK_OVERFLOW:
+                        self.overflow = True
+                    if self._block == 0 and self._last:
+                        self.done = True
+            return True
+        finally:
+            self._buffer = buf[pos:]
 
 def parse_stream(data: bytes, sys_clk_freq=c.DEFAULT_SYS_CLK_FREQ) -> LACapture:
     """Parse a complete LA capture stream."""
