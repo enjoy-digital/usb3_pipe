@@ -5,15 +5,18 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """AgentLab Instrument: one object for CSRs, DUT UARTs, power, GPIOs, timestamp/markers, events,
-logic analyzer."""
+logic analyzer and Eyes (text display, status panel, screenshots)."""
 
 import time
+import threading
 from typing import Callable, Dict, List, Optional
 
 from agentlab.host import constants as c
 from agentlab.host.csr       import CSRMap, CSRs, UARTBoneBus, RemoteClientBus
 from agentlab.host.uart      import DUTUart
-from agentlab.host.events    import EventReader, filter_events, uart_lines, usb_read_fn
+from agentlab.host.events    import EventReader, filter_events, format_events, uart_lines, usb_read_fn
+from agentlab.host.eyes      import (EyesDisplay, Frame, color_index, grab_frame, lane_names,
+    render_status, uart_tails)
 from agentlab.host.discovery import DeviceInfo, find_device, find_usb_device
 from agentlab.host.la        import (LACapture, LAStreamParser, LATrigger, parse_trigger,
     parse_samples)
@@ -33,11 +36,15 @@ class Instrument:
         sys_clk_freq : Optional[float] = None,
         device       : Optional[DeviceInfo] = None,
         sleep        : Callable[[float], None] = time.sleep,
-        clock        : Callable[[], float] = time.monotonic):
+        clock        : Callable[[], float] = time.monotonic,
+        frame_grabber: Optional[Callable[..., Frame]] = None):
         self.csrs          = csrs
         self.device        = device
         self.sleep         = sleep
         self.clock         = clock
+        self.frame_grabber = frame_grabber or grab_frame
+        self._display      = None
+        self._refresh      = None
         self._uart_factory = uart_factory
         self._uarts        = {}
         self._events_read  = events_read
@@ -114,6 +121,7 @@ class Instrument:
         return instrument
 
     def close(self):
+        self.stop_display_refresh()
         if self._events is not None:
             self._events.stop()
         for uart in self._uarts.values():
@@ -380,3 +388,148 @@ class Instrument:
         summary = summarize(capture, chans, names)
         summary["file"] = out
         return summary
+
+    # Eyes -----------------------------------------------------------------------------------------
+
+    def _constant(self, name, default=None):
+        if self.csrs is None:
+            return default
+        return self.csrs.csr_map.constants.get(name, default)
+
+    def eyes_info(self) -> Dict[str, int]:
+        """Eyes geometry (csr.csv constants, defaults otherwise)."""
+        return {k: int(self._constant("agentlab_eyes_" + k, v)) for k, v in c.EYES_DEFAULTS.items()}
+
+    @property
+    def display(self) -> EyesDisplay:
+        """Eyes text display (shadow of the gateware text grid, see EyesDisplay)."""
+        if self._display is None:
+            csrs   = self._csrs()
+            region = csrs.csr_map.regions.get(c.EYES_REGION, None)
+            if region is None:
+                raise RuntimeError("No Eyes in this gateware (memory region {} not in the CSR "
+                    "map).".format(c.EYES_REGION))
+            info = self.eyes_info()
+            self._display = EyesDisplay(csrs.bus.write, region.origin,
+                cols=info["columns"], rows=info["rows"])
+        return self._display
+
+    def display_text(self, text, col=0, row=0, fg="white", bg="black", clear=False):
+        """Write text on the Eyes display at (col, row) (newlines: next rows), clear: whole screen
+        cleared first."""
+        d = self.display
+        if clear:
+            d.clear()
+        d.text(col, row, text, fg, bg)
+        d.flush()
+
+    def display_clear(self, bg="black"):
+        self.display.clear(bg)
+        self.display.flush()
+
+    def display_waves(self, lanes=None, first=None, divider=None, period_s=None, run=None,
+        single=False, row=None, column=None, color=None):
+        """Configure the Eyes waveform lanes: lanes (count, 0: off), first lane source bit, sample
+        period (divider: sys_clk cycles - 1, or period_s), run (roll mode) / single (capture one
+        window), row/column (character position), color."""
+        csrs = self._csrs()
+        if period_s is not None:
+            divider = max(int(round(period_s*self.sys_clk_freq)) - 1, 0)
+        for name, value in [(c.CSR_EYES_WAVE_LANES, lanes), (c.CSR_EYES_WAVE_FIRST, first),
+            (c.CSR_EYES_WAVE_DIVIDER, divider), (c.CSR_EYES_WAVE_ROW, row),
+            (c.CSR_EYES_WAVE_COLUMN, column)]:
+            if value is not None:
+                csrs.write(name, int(value))
+        if color is not None:
+            csrs.write(c.CSR_EYES_WAVE_COLOR, color_index(color))
+        if run is not None or single:
+            if run is None:
+                run = csrs.read(c.CSR_EYES_WAVE_CONTROL) & 1
+            csrs.write(c.CSR_EYES_WAVE_CONTROL, int(bool(run)) | (2 if single else 0))
+
+    def status_state(self) -> Dict[str, object]:
+        """Status panel state (device time, power/GPIOs, DUT UARTs tails, last events, lanes)."""
+        state = {"title": "AgentLab Eyes"}
+        csrs  = self._csrs()
+        if self.device is not None and self.device.serial:
+            state["title"] += " - " + self.device.serial
+        state["time_s"] = self.time()
+        n_power = int(self._constant("agentlab_power", 0))
+        n_gpios = int(self._constant("agentlab_gpios", 0))
+        n_uarts = int(self._constant("agentlab_uarts", c.DUT_UART_COUNT))
+        if n_power:
+            name  = c.CSR_POWER_STATUS if c.CSR_POWER_STATUS in csrs else c.CSR_POWER_OUT
+            power = csrs.read(name)
+            state["power"] = [bool((power >> i) & 1) for i in range(n_power)]
+        if n_gpios:
+            gpio_in, gpio_oe = csrs.read(c.CSR_GPIO_IN), csrs.read(c.CSR_GPIO_OE)
+            state["gpio_in"] = [bool((gpio_in >> i) & 1) for i in range(n_gpios)]
+            state["gpio_oe"] = [bool((gpio_oe >> i) & 1) for i in range(n_gpios)]
+        try:
+            events = self.events.snapshot()
+            state["uarts"]  = uart_tails(events, n_uarts=n_uarts)
+            others = [e for e in events if e.type not in [c.EVENT_UART_RX, c.EVENT_UART_TX]]
+            state["events"] = format_events(others[-4:], self.sys_clk_freq) or ["(no events)"]
+        except RuntimeError:
+            pass
+        if c.CSR_EYES_WAVE_LANES in csrs:
+            lanes   = csrs.read(c.CSR_EYES_WAVE_LANES)
+            first   = csrs.read(c.CSR_EYES_WAVE_FIRST)
+            period  = (csrs.read(c.CSR_EYES_WAVE_DIVIDER) + 1)/self.sys_clk_freq
+            depth   = self.eyes_info()["wave_depth"]
+            running = csrs.read(c.CSR_EYES_WAVE_STATUS) & 1
+            names   = lane_names(n_gpios, n_power, n_uarts)
+            state["lanes"] = [names[i] if i < len(names) else "bit{}".format(i)
+                for i in range(first, first + lanes)]
+            state["wave"]  = "(sample period {:.3f} us, window {:.3f} ms, {})".format(
+                period*1e6, period*depth*1e3, "running" if running else "stopped")
+        return state
+
+    def display_status(self) -> Dict[str, object]:
+        """Draw the status panel on the Eyes display (one refresh), return its state."""
+        state = self.status_state()
+        render_status(self.display, state)
+        self.display.flush()
+        return state
+
+    def start_display_refresh(self, period=1.0):
+        """Refresh the status panel every period seconds (background thread)."""
+        self.stop_display_refresh()
+        stop = threading.Event()
+        def run():
+            while not stop.is_set():
+                try:
+                    self.display_status()
+                except Exception: # Device unplugged...: keep trying.
+                    pass
+                stop.wait(period)
+        thread = threading.Thread(target=run, name="agentlab-eyes", daemon=True)
+        self._refresh = (stop, thread)
+        thread.start()
+
+    def stop_display_refresh(self):
+        if self._refresh is not None:
+            stop, thread = self._refresh
+            stop.set()
+            thread.join(timeout=5.0)
+            self._refresh = None
+
+    def video_device(self) -> str:
+        """Eyes UVC capture node (/dev/videoN) of the device."""
+        if self.device is None or self.device.video_device is None:
+            raise RuntimeError("Eyes video node not found (gateware without Eyes, uvcvideo not "
+                "loaded?).")
+        return self.device.video_device
+
+    def screenshot(self, path, refresh=False, backend="auto", video_device=None,
+        timeout=10.0) -> Dict[str, object]:
+        """Grab one Eyes frame to a PNG file (refresh: redraw the status panel first)."""
+        if refresh:
+            self.display_status()
+        info   = self.eyes_info()
+        device = video_device or self.video_device()
+        frame  = self.frame_grabber(device, width=info["width"], height=info["height"],
+            backend=backend, timeout=timeout)
+        size   = frame.save_png(path)
+        return {"path": path, "width": frame.width, "height": frame.height, "bytes": size,
+            "device": device}

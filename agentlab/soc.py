@@ -11,7 +11,8 @@
 - add_agentlab_dram : DDR3 SDRAM (soc.sdram), initialized/calibrated by the BIOS (CPU, console on a
                       stub UART), dram_ready from the LiteDRAM init status (ddrctrl).
 - add_agentlab      : USB3 PHY + composite device (AgentLabUSB), AgentLab instrument on the DUT
-                      pads, logic analyzer (DRAM ring buffer).
+                      pads, logic analyzer (DRAM ring buffer), optional Eyes (UVC view, text grid
+                      Wishbone region agentlab_eyes).
 - agentlab_args/agentlab_build: common target arguments and build/load.
 
 The targets only provide their CRG, USB3 SerDes, DRAM PHY/module and DUT pads:
@@ -32,6 +33,7 @@ import os
 
 from migen import *
 
+from litex.soc.integration.soc      import SoCRegion
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder  import *
 
@@ -54,6 +56,10 @@ class AgentLabSoC(SoCCore):
     DRAM, its console goes to a stub UART (a crossover UART would block the BIOS until a host
     reads it).
     """
+    mem_map = {
+        "agentlab_eyes" : 0x9000_0000, # Eyes text grid (in the IO region of the LiteX CPUs).
+    }
+
     def __init__(self, platform, sys_clk_freq, with_uartbone=False, with_jtagbone=False,
         cpu_type=None, **kwargs):
         # SoCCore ----------------------------------------------------------------------------------
@@ -91,10 +97,11 @@ class AgentLabSoC(SoCCore):
             ~self.ddrctrl.init_error.storage)
 
     def add_agentlab(self, serdes, dut_pads, n_gpios=0, n_power=0, leds=[], leds_inverted=False,
-        la_ring_base=None, la_ring_size=None):
+        la_ring_base=None, la_ring_size=None, with_eyes=False):
         """USB3 PHY + AgentLab composite device and instrument on serdes/dut_pads, LEDs (SerDes
         ready, U0, configured). Logic analyzer with dut_pads["la"] (requires the DRAM: ring buffer
-        at la_ring_base/la_ring_size bytes, default: upper half of the DRAM)."""
+        at la_ring_base/la_ring_size bytes, default: upper half of the DRAM). with_eyes: UVC view
+        of the bench (gateware text-mode renderer, no CPU/DRAM)."""
         sys_clk_freq = self.sys_clk_freq
         uart_pads    = dut_pads.get("uarts", [None]*4)
         la_inputs    = dut_pads.get("la", None)
@@ -110,7 +117,8 @@ class AgentLabSoC(SoCCore):
 
         # USB3 Composite Device --------------------------------------------------------------------
         self.usb3 = usb3 = AgentLabUSB(usb3_phy, sys_clk_freq, n_uarts=len(uart_pads),
-            with_la=with_la)
+            with_la   = with_la,
+            with_eyes = with_eyes)
         usb3.core.add_csr()
 
         # Control: UARTBone over the USB3 control CDC-ACM (litex_server --uart --uart-port
@@ -140,7 +148,8 @@ class AgentLabSoC(SoCCore):
             power_pads = dut_pads.get("power", None),
             n_power    = n_power,
             la_inputs  = la_inputs,
-            la_kwargs  = la_kwargs)
+            la_kwargs  = la_kwargs,
+            with_eyes  = with_eyes)
 
         # Configuration constants (csr.csv, host side).
         self.add_constant("AGENTLAB_UARTS",            agentlab.n_uarts)
@@ -160,7 +169,23 @@ class AgentLabSoC(SoCCore):
             self.add_constant("AGENTLAB_LA_WORD_SAMPLES",  la.ratio)
             self.add_constant("AGENTLAB_LA_BLOCK_SAMPLES", la.block_samples)
 
-        # DUT UARTs <-> CDC-ACM functions, events -> Bulk IN.
+        # Eyes: text grid Wishbone region (one cell per 32-bit word), configuration constants.
+        if with_eyes:
+            eyes = agentlab.eyes
+            self.bus.add_slave(name="agentlab_eyes", slave=eyes.bus, region=SoCRegion(
+                origin = self.mem_map["agentlab_eyes"],
+                size   = 2**log2_int(4*eyes.cols*eyes.rows, need_pow2=False),
+                cached = False))
+            self.add_constant("AGENTLAB_EYES_INTERFACE",  usb3.map["eyes"]["interface"])
+            self.add_constant("AGENTLAB_EYES_EP",         usb3.map["eyes"]["in_ept"])
+            self.add_constant("AGENTLAB_EYES_WIDTH",      eyes.width)
+            self.add_constant("AGENTLAB_EYES_HEIGHT",     eyes.height)
+            self.add_constant("AGENTLAB_EYES_COLUMNS",    eyes.cols)
+            self.add_constant("AGENTLAB_EYES_ROWS",       eyes.rows)
+            self.add_constant("AGENTLAB_EYES_WAVE_DEPTH", eyes.wave_depth)
+            self.add_constant("AGENTLAB_EYES_WAVE_LANES", agentlab.eyes_lanes)
+
+        # DUT UARTs <-> CDC-ACM functions, events -> Bulk IN, Eyes -> UVC.
         self.comb += agentlab_usb_connect(usb3, agentlab)
 
         # Leds -------------------------------------------------------------------------------------

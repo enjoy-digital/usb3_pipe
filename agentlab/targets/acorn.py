@@ -25,6 +25,8 @@ Logic analyzer (DDR3 ring buffer, MT41K512M16 1GB, initialized by the VexRiscv B
 stub UART) on the internal probes (AgentLab.la_probes): channels 0/1: UART0 TX/RX (debug pins 0/1),
 2-7: UART1-3 TX/RX (internal loopbacks), 8/9: GPIO0/1 (debug pins 2/3), 12: power switch 0, 16-31:
 timestamp bits 0-15 (counter). --no-dram: phase 1 instrument only (no CPU/DRAM/logic analyzer).
+
+Eyes (--with-eyes, default): UVC view of the bench (interfaces 12-13, 11-12 with --no-dram, EP14 IN).
 """
 
 import os
@@ -113,7 +115,7 @@ class _CRG(LiteXModule):
 # AgentLab SoC -------------------------------------------------------------------------------------
 
 class AgentLabAcorn(AgentLabSoC):
-    def __init__(self, platform, with_jtagbone=True, with_dram=True):
+    def __init__(self, platform, with_jtagbone=True, with_dram=True, with_eyes=True):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -155,7 +157,8 @@ class AgentLabAcorn(AgentLabSoC):
         }
         self.add_agentlab(usb3_serdes, dut_pads,
             leds          = [platform.request("user_led", i) for i in range(3)],
-            leds_inverted = True)
+            leds_inverted = True,
+            with_eyes     = with_eyes)
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -164,6 +167,8 @@ def main():
     agentlab_args(parser, output_dir="build/agentlab_acorn")
     parser.add_argument("--no-jtagbone", action="store_true", help="Disable JTAGBone.")
     parser.add_argument("--no-dram",     action="store_true", help="No DRAM/CPU/logic analyzer (phase 1 instrument).")
+    parser.add_argument("--with-eyes",   action="store_true", default=True, help="Enable Eyes (UVC view of the bench, default).")
+    parser.add_argument("--no-eyes",     action="store_false", dest="with_eyes", help="Disable Eyes.")
     parser.add_argument("--vivado-place-directive", default="default", help="Vivado place_design directive (see bench/acorn.py).")
     args = parser.parse_args()
 
@@ -173,7 +178,8 @@ def main():
     platform.add_extension(_dut_io)
     soc = AgentLabAcorn(platform,
         with_jtagbone = not args.no_jtagbone,
-        with_dram     = not args.no_dram)
+        with_dram     = not args.no_dram,
+        with_eyes     = args.with_eyes)
     agentlab_build(parser, args, soc, vivado_place_directive=args.vivado_place_directive)
 
 if __name__ == "__main__":

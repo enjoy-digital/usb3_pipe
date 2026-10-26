@@ -27,6 +27,8 @@ LVCMOS25; change the IOStandard if VADJ is reprogrammed to 1.8V/3.3V):
 
 Logic analyzer ring buffer in the DDR3 SODIMM (MT8JTF12864, 1GB, initialized by the VexRiscv BIOS:
 console on a stub UART). --no-dram: phase 1 instrument only (no CPU/DRAM/logic analyzer).
+
+Eyes (--with-eyes, default): UVC view of the bench (interfaces 12-13, 11-12 with --no-dram, EP14 IN).
 """
 
 import os
@@ -128,7 +130,8 @@ class _CRG(LiteXModule):
 # AgentLab SoC -------------------------------------------------------------------------------------
 
 class AgentLabKC705(AgentLabSoC):
-    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_dram=True):
+    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_dram=True,
+        with_eyes=True):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -168,7 +171,8 @@ class AgentLabKC705(AgentLabSoC):
             "la"    : platform.request("dut_la") if with_dram else None,
         }
         self.add_agentlab(usb3_serdes, dut_pads,
-            leds = [platform.request("user_led", i) for i in range(3)])
+            leds      = [platform.request("user_led", i) for i in range(3)],
+            with_eyes = with_eyes)
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -178,6 +182,8 @@ def main():
     parser.add_argument("--no-uartbone",   action="store_true", help="Disable UARTBone (board UART).")
     parser.add_argument("--with-jtagbone", action="store_true", help="Enable JTAGBone.")
     parser.add_argument("--no-dram",       action="store_true", help="No DRAM/CPU/logic analyzer (phase 1 instrument).")
+    parser.add_argument("--with-eyes",     action="store_true", default=True, help="Enable Eyes (UVC view of the bench, default).")
+    parser.add_argument("--no-eyes",       action="store_false", dest="with_eyes", help="Disable Eyes.")
     args = parser.parse_args()
 
     platform = xilinx_kc705.Platform()
@@ -186,7 +192,8 @@ def main():
     soc = AgentLabKC705(platform,
         with_uartbone = not args.no_uartbone,
         with_jtagbone = args.with_jtagbone,
-        with_dram     = not args.no_dram)
+        with_dram     = not args.no_dram,
+        with_eyes     = args.with_eyes)
     agentlab_build(parser, args, soc)
 
 if __name__ == "__main__":

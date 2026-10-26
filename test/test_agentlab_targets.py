@@ -68,11 +68,18 @@ AGENTLAB_LA_CSRS = [
     "ddrctrl_init_error",
 ]
 
+AGENTLAB_EYES_CSRS = [f"agentlab_eyes_{name}" for name in ["wave_row", "wave_lanes",
+    "wave_column", "wave_first", "wave_color", "wave_divider", "wave_control", "wave_status",
+    "frames"]]
+
 TARGETS = {
     #  target  : (gpios, power, la word samples)
     "acorn"    : (2,  1, 4),  # DDR3 x16: 128-bit native port.
     "kc705"    : (16, 4, 16), # DDR3 x64: 512-bit native port.
 }
+
+def eyes_lanes(gpios, power):
+    return gpios + power + 2*4 # GPIOs, power switches, 4 DUT UARTs TX/RX lines.
 
 @pytest.mark.parametrize("target", list(TARGETS))
 @pytest.mark.parametrize("dram", [True, False])
@@ -100,3 +107,16 @@ def test_agentlab_target(target, dram, tmp_path):
         assert "memory_region,main_ram,0x40000000,1073741824" in csr
     else:
         assert "agentlab_la" not in csr
+    # Eyes (default): CSRs, constants, text grid region.
+    for name in AGENTLAB_EYES_CSRS:
+        assert name in registers, name
+    assert f"constant,agentlab_eyes_interface,{12 if dram else 11}" in csr # After the LA.
+    assert "constant,agentlab_eyes_ep,14" in csr
+    assert "constant,agentlab_eyes_columns,160" in csr
+    assert f"constant,agentlab_eyes_wave_lanes,{eyes_lanes(gpios, power)}" in csr
+    assert "memory_region,agentlab_eyes,0x90000000,32768,io" in csr
+
+@pytest.mark.parametrize("target", list(TARGETS))
+def test_agentlab_target_no_eyes(target, tmp_path):
+    csr = elaborate(target, tmp_path, ["--no-eyes"])
+    assert "agentlab_eyes" not in csr

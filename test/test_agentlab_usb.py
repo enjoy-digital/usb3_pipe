@@ -111,6 +111,22 @@ class TestAgentLabDescriptors(unittest.TestCase):
         self.assertEqual((ep[1], ep[2], ep[3]), (DESC_ENDPOINT, 0x80 | 12, 0x02))
         self.assertEqual(comp[2], 16 - 1) # bMaxBurst.
 
+    def test_descriptors_la_eyes(self):
+        # Logic analyzer and Eyes: LA interface 11/EP12, Eyes (VC+VS) 12-13/EP14, contiguous.
+        m = agentlab_usb_map(with_la=True, with_eyes=True)
+        self.assertEqual(m["la"],   {"interface": 11, "in_ept": 12})
+        self.assertEqual(m["eyes"], {"interface": 12, "in_ept": 14})
+        config = agentlab_descriptors(with_la=True, with_eyes=True).configuration()
+        self.assertEqual(config[2] | (config[3] << 8), len(config))
+        self.assertEqual(config[4], 14)
+        descs      = parse_descriptors(config)[1:]
+        interfaces = [d for d in descs if d[1] == DESC_INTERFACE]
+        self.assertEqual(sorted(set(d[2] for d in interfaces)), list(range(14)))
+        dut = AgentLabUSB(PHYStandIn(), sys_clk_freq=125e6, with_la=True, with_eyes=True)
+        addresses = sorted(d[2] for d in descs if d[1] == DESC_ENDPOINT)
+        core      = sorted(ep.ept | (ep.direction << 7) for ep in dut.core.endpoints)
+        self.assertEqual(addresses, core)
+
 class TestAgentLabUSB(unittest.TestCase):
     def test_enumeration_requests_uart_events(self):
         dut  = DUT()

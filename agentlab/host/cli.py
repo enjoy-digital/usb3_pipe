@@ -13,6 +13,7 @@ import time
 import argparse
 
 from agentlab.host.events import filter_events, format_events, uart_lines
+from agentlab.host.eyes   import GRAB_BACKENDS
 
 # Arguments ----------------------------------------------------------------------------------------
 
@@ -96,6 +97,33 @@ def build_parser():
     p.add_argument("--out",      default=None,        help="Output file: .vcd, .sr (sigrok/PulseView) or .json.")
     la_sub.add_parser("status", help="Logic analyzer status.")
 
+    # Eyes.
+    shot = sub.add_parser("screenshot", help="Grab one Eyes frame (UVC) to a PNG file.")
+    shot.add_argument("path", help="Output PNG file.")
+    shot.add_argument("--refresh", action="store_true", help="Redraw the status panel first.")
+    shot.add_argument("--backend", default="auto", choices=["auto"] + GRAB_BACKENDS)
+    shot.add_argument("--video",   default=None, help="UVC node override (/dev/videoN).")
+    display     = sub.add_parser("display", help="Eyes display (text grid, status, waveforms).")
+    display_sub = display.add_subparsers(dest="action", required=True)
+    p = display_sub.add_parser("status", help="Draw the status panel.")
+    p.add_argument("--follow", action="store_true", help="Refresh until Ctrl-C.")
+    p.add_argument("--period", type=float, default=1.0, help="Refresh period (seconds).")
+    p = display_sub.add_parser("text", help="Write text (\\n: next row).")
+    p.add_argument("text")
+    p.add_argument("--col",   type=int, default=0)
+    p.add_argument("--row",   type=int, default=0)
+    p.add_argument("--fg",    default="white", help="Color name or index (0-15).")
+    p.add_argument("--bg",    default="black", help="Color name or index (0-15).")
+    p.add_argument("--clear", action="store_true", help="Clear the screen first.")
+    display_sub.add_parser("clear", help="Clear the screen.")
+    p = display_sub.add_parser("waves", help="Waveform lanes configuration.")
+    p.add_argument("--lanes",     type=int,   default=None, help="Number of lanes (0: off).")
+    p.add_argument("--first",     type=int,   default=None, help="Sample bit of the first lane.")
+    p.add_argument("--period-us", type=float, default=None, help="Sample period (us).")
+    p.add_argument("--run",       action=argparse.BooleanOptionalAction, default=None,
+        help="Continuous sampling (roll mode).")
+    p.add_argument("--single",    action="store_true", help="Capture one window.")
+
     return parser
 
 # Commands -----------------------------------------------------------------------------------------
@@ -162,6 +190,36 @@ def run(args, instrument, out=None):
     elif args.cmd == "marker":
         t = instrument.marker(args.value)
         p("{} ticks ({:.9f}s)".format(t, instrument.ticks_to_s(t)))
+    elif args.cmd == "screenshot":
+        r = instrument.screenshot(args.path, refresh=args.refresh, backend=args.backend,
+            video_device=args.video)
+        p("{path}: {width}x{height}, {bytes} bytes (from {device})".format(**r))
+    elif args.cmd == "display":
+        return run_display(args, instrument, p)
+    return 0
+
+def _color(s):
+    return int(s) if s.isdigit() else s
+
+def run_display(args, instrument, p):
+    if args.action == "status":
+        instrument.display_status()
+        if args.follow:
+            try:
+                while True:
+                    time.sleep(args.period)
+                    instrument.display_status()
+            except KeyboardInterrupt:
+                pass
+    elif args.action == "text":
+        instrument.display_text(args.text.replace("\\n", "\n"), col=args.col,
+            row=args.row, fg=_color(args.fg), bg=_color(args.bg), clear=args.clear)
+    elif args.action == "clear":
+        instrument.display_clear()
+    elif args.action == "waves":
+        period = None if args.period_us is None else args.period_us*1e-6
+        instrument.display_waves(lanes=args.lanes, first=args.first, period_s=period,
+            run=args.run, single=args.single)
     return 0
 
 def run_events(args, instrument, p):

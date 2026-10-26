@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """AgentLab instrument: timebase, DUT UARTs, GPIOs, power outputs, markers and their events
-stream (phase 1), logic analyzer (phase 2). CSR names (agentlab_*, doc/agentlab.md) are the host
-API contract."""
+stream (phase 1), logic analyzer (phase 2), Eyes text-mode renderer (phase 4). CSR names
+(agentlab_*, doc/agentlab.md) are the host API contract."""
 
 from migen import *
 
@@ -20,6 +20,7 @@ from agentlab.gateware.events   import *
 from agentlab.gateware.gpio     import AgentLabGPIO, AgentLabPower
 from agentlab.gateware.uart     import AgentLabUART
 from agentlab.gateware.la       import AgentLabLA, LA_EXT_MARKER, LA_EXT_GPIO, LA_EXT_POWER
+from agentlab.gateware.eyes     import AgentLabEyes
 
 # AgentLab -----------------------------------------------------------------------------------------
 
@@ -37,9 +38,12 @@ class AgentLab(LiteXModule):
     uarts[n].sink/source: DUT UARTs byte streams (to/from the CDC-ACM functions).
     source: events stream (32-bit words packets, to the events Bulk IN endpoint).
     la.source: logic analyzer stream (32-bit words packets, to the LA Bulk IN endpoint).
+    eyes  : Eyes renderer (with_eyes, eyes_kwargs: AgentLabEyes arguments), waveform lanes
+            sources: GPIOs, power switches, then DUT UARTs TX/RX lines (bit 0: GPIO0).
     """
     def __init__(self, sys_clk_freq, uart_pads=[None]*4, gpio_pads=None, n_gpios=0,
-        power_pads=None, n_power=0, events_fifo_depth=512, la_inputs=None, la_kwargs={}):
+        power_pads=None, n_power=0, events_fifo_depth=512, la_inputs=None, la_kwargs={},
+        with_eyes=False, eyes_kwargs={}):
         self.source = stream.Endpoint([("data", 32), ("be", 4)]) # o
 
         self._marker = CSRStorage(32, description="Marker: write to insert a marker event (value).")
@@ -135,6 +139,20 @@ class AgentLab(LiteXModule):
             fifo_depth = events_fifo_depth)
         self.comb += events.source.connect(self.source)
 
+        # Eyes -------------------------------------------------------------------------------------
+        if with_eyes:
+            self.eyes = eyes = AgentLabEyes(**eyes_kwargs)
+            lanes = []
+            if self.n_gpios > 0:
+                lanes.append(gpio.levels)
+            if self.n_power > 0:
+                lanes.append(power.levels)
+            for uart in self.uarts:
+                lanes += [uart.tx_line, uart.rx_line]
+            self.eyes_lanes = len(Cat(*lanes))
+            assert self.eyes_lanes <= eyes.wave_width
+            self.comb += eyes.samples.eq(Cat(*lanes))
+
     def la_probes(self):
         """Logic analyzer internal probes (32 channels, validation without DUT pins):
 
@@ -148,7 +166,7 @@ class AgentLab(LiteXModule):
         probes = Signal(32)
         uarts  = []
         for uart in self.uarts[:4]:
-            uarts += [uart.tx_pin, uart.rx_pin]
+            uarts += [uart.tx_line, uart.rx_line]
         self.comb += [
             probes[0:2*len(self.uarts[:4])].eq(Cat(*uarts)),
             probes[16:32].eq(self.timestamp.timestamp[:16]),

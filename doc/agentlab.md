@@ -39,11 +39,16 @@ Device class 0xEF/02/01 (IADs), one configuration:
 | 0-1 | CDC-ACM | EP1 IN notif, EP2 IN/OUT data | **Control**: UARTBone (LiteX Wishbone bridge, `litex_server --uart`), access to every CSR |
 | 2-9 | CDC-ACM ×4 | EP3-EP6 IN notif, EP7-EP10 IN/OUT data | **DUT UARTs** 0-3 (`/dev/ttyACMx`), baudrate from SET_LINE_CODING |
 | 10 | Vendor | EP11 IN bulk | **Events**: timestamped records (UART bytes, GPIO edges, power, triggers) |
-| 11 | Vendor | EP12 IN bulk | **Logic analyzer** stream (samples from DDR3 / live) |
-| 12 | Vendor (CMSIS-DAP v2) | EP13 IN/OUT bulk | **JTAG/SWD** probe (OpenOCD/pyOCD/probe-rs, no driver) |
-| 13-14 | UVC | EP14 IN | **Eyes**: rendered view (framebuffer in DDR3) |
+| 11 | Vendor | EP12 IN bulk | **Logic analyzer** stream (samples from DDR3 / live) (`with_la`) |
+| 12-13 | UVC | EP14 IN bulk | **Eyes**: rendered view of the bench (gateware text-mode renderer) (`with_eyes`) |
+| next free | Vendor (CMSIS-DAP v2) | EP13 IN/OUT bulk | **JTAG/SWD** probe (OpenOCD/pyOCD/probe-rs, no driver) (phase 3, reserved) |
 
 Endpoint numbers are indicative (max 15 IN/15 OUT): the gateware descriptors are the reference.
+Interface numbers are contiguous (USB requirement): the optional functions take the next free
+interfaces in this order (logic analyzer, then Eyes: 12-13 with the logic analyzer, 11-12 without,
+`agentlab_la_interface`/`agentlab_eyes_interface`); their endpoint numbers are fixed (logic
+analyzer: EP12 IN, JTAG/SWD: EP13 reserved, Eyes: EP14 IN). The table shows both optional
+functions enabled (Acorn/KC705 targets defaults).
 
 Phase 1/2 (`agentlab/gateware/usb.py`, `agentlab_usb_map()`): interfaces 0-11/EP1-EP12 as above
 (USB3 data endpoints: Max Burst 2 for the CDC-ACM, 4 for the events, 16 for the logic analyzer;
@@ -52,6 +57,35 @@ interface 11 only with the logic analyzer, `with_la`), VID/PID 0x1d50/0x605a
 SET_CONTROL_LINE_STATE) are dispatched to the function of their interface (wIndex,
 `usb3_core.control.USB3ControlDispatcher`): each DUT UART has its own line coding/DTR. A DUT UART
 sends its RX bytes to the host only while the port is open (DTR set).
+
+Phase 4 (`with_eyes`, `--with-eyes`/`--no-eyes` on the targets, default on): UVC function (IAD,
+VideoControl + VideoStreaming, Uncompressed YUY2 1280x720 at 10 or 30 fps, bulk EP14 IN, Max Burst
+8, `usb3_core.uvc.USB3UVCFunction` with `pattern=False`: pixels from the Eyes renderer). The UVC
+class requests (PROBE/COMMIT) are dispatched to the function as the CDC-ACM ones. The configuration
+descriptor (611 bytes) takes 2 EP0 packets.
+
+## Eyes (phase 4)
+
+A UVC camera (`/dev/videoN`, VLC/OBS/ffplay, no driver) showing a view of the bench, rendered by the
+gateware on the fly (`agentlab/gateware/eyes.py`, no framebuffer, no CPU, no DRAM):
+
+- Character grid: 160x45 cells of 8x16 pixels (font: Terminus Bold 16, Latin-1 + box drawing/blocks
+  on codes 0x80-0x9f, `agentlab/gateware/eyes_font.py`), cell (16-bit): char [7:0], foreground
+  [11:8], background [15:12] (16 colors, ANSI order: black, red, green, yellow, blue, magenta,
+  cyan, white, then the bright variants). Written by the host through the `agentlab_eyes`
+  Wishbone region (csr.csv `memory_region`, one cell per 32-bit word at `4*(row*160 + col)`,
+  UARTBone burst writes: a full screen is ~29KB). Boot screen until the host writes it.
+- Waveform lanes drawn over the grid: one character row per lane, 2 pixels per sample, 512 samples
+  window (oldest on the left), live sampling of the DUT pins (sources, bit 0 first: GPIOs, power
+  switches, DUT UARTs TX/RX lines, `agentlab_eyes_wave_lanes` sources). Sampling paused while a
+  frame is rendered (coherent window), continuous (roll mode) or single capture. Phase 2 can feed
+  the logic analyzer samples to the same lanes (`AgentLabEyes.samples`).
+- Pixels generated in raster order (2 pixels/YUY2 word per cycle) when the UVC stream starts a
+  frame: ~2 BRAM36 (grid), 1 (font), 1 (samples), a few hundred LUTs.
+
+The status panel (time, power/GPIO states, DUT UARTs tails from the events stream, last events,
+lanes labels) is drawn by the host (`agentlab display status`, `Instrument.display_status()` or
+`start_display_refresh()`): the gateware only renders the grid.
 
 ## Timebase and Events Stream
 
@@ -95,11 +129,20 @@ Phase 1 details (`agentlab/gateware/events.py`):
 - Constants (csr.csv): `agentlab_uarts`, `agentlab_gpios`, `agentlab_power`,
   `agentlab_events_interface`, `agentlab_events_ep`.
 - `agentlab_la_*`: logic analyzer (see below).
-- `agentlab_video_*`: framebuffer base/format (phase 4).
+- `agentlab_eyes_wave_row`, `agentlab_eyes_wave_lanes`, `agentlab_eyes_wave_column`,
+  `agentlab_eyes_wave_first` (sample bit of the first lane), `agentlab_eyes_wave_color`: lanes
+  position/count/source/color (defaults: row 29, 16 lanes, column 32, bit 0, bright green);
+  `agentlab_eyes_wave_divider` (sample period: divider + 1 cycles, default 10us),
+  `agentlab_eyes_wave_control` (bit 0 `run`: roll mode, default 1; bit 1 `single`: capture one
+  window), `agentlab_eyes_wave_status` (`running`), `agentlab_eyes_frames` (frames rendered)
+  (phase 4).
+- Eyes constants: `agentlab_eyes_interface`, `agentlab_eyes_ep`, `agentlab_eyes_width`/`height`,
+  `agentlab_eyes_columns`/`rows`, `agentlab_eyes_wave_depth`, `agentlab_eyes_wave_lanes`; text grid
+  region `agentlab_eyes` (0x90000000).
 
 ## DRAM
 
-The logic analyzer (and the phase 4 framebuffer) use the board DDR3 (`AgentLabSoC.add_agentlab_dram`,
+The logic analyzer uses the board DDR3 (`AgentLabSoC.add_agentlab_dram`,
 both targets: 1GB, Acorn MT41K512M16/A7DDRPHY, KC705 MT8JTF12864 SODIMM/K7DDRPHY, sys_clk 125MHz
 1:4). LiteDRAM needs a CPU for the initialization/calibration: VexRiscv (integrated ROM: BIOS, 8KB
 SRAM, console on a stub UART, a crossover UART would block the BIOS until a host reads it), DRAM
@@ -110,7 +153,7 @@ also mapped as the CPU main_ram (0x40000000, L2 cache). The BIOS writes the `ddr
 `soc.sdram` (LiteDRAM crossbar) is shared: the logic analyzer takes one write and one read native
 port (`crossbar.get_port()`), ring buffer in the upper half of the DRAM (512MB at 512MB,
 `agentlab_la_ring_base/size`); the lower half is left to the CPU/BIOS (main_ram) and the other
-users (framebuffer...: further crossbar ports). `--no-dram`: phase 1 instrument only (no CPU/DRAM/
+users (further crossbar ports). `--no-dram`: phase 1 instrument only (no CPU/DRAM/
 logic analyzer).
 
 ## Logic Analyzer
@@ -194,8 +237,8 @@ Constants (csr.csv): `agentlab_la_channels`, `agentlab_la_interface` (11), `agen
 1. Control + DUT UARTs + GPIO/power + events, host library, CLI, MCP server.
 2. Logic analyzer: streaming capture through DDR3, triggers, sigrok/VCD export.
 3. JTAG/SWD: CMSIS-DAP v2 probe (VexRiscv firmware + SWD/JTAG IO core).
-4. Eyes: UVC stream of a DDR3 framebuffer rendered by the firmware (LA waveforms, UART tails,
-   status), for multimodal agents.
+4. Eyes: UVC view of the bench (gateware text-mode renderer + waveform lanes, status drawn by the
+   host), for multimodal agents and humans.
 
 ## Host Usage
 
@@ -227,6 +270,10 @@ agentlab uart read 0 --timeout 2 --baudrate 115200
 agentlab gpio set 3 0 && agentlab gpio get 3   # Drive/read GPIO3 (gpio release 3: input).
 agentlab marker 0x42                           # Marker event, prints its device time.
 agentlab events --follow --types uart_rx,gpio  # Timestamped events (--lines: UART text lines).
+agentlab display status --follow               # Eyes status panel, refreshed every second.
+agentlab display text "Hello\nWorld" --row 44 --fg bright_yellow
+agentlab display waves --lanes 11 --period-us 10 --run
+agentlab screenshot bench.png --refresh        # One UVC frame to PNG (OpenCV, ffmpeg or v4l2-ctl).
 
 # Logic analyzer: 25MHz, trigger on a falling edge of channel 0 with channel 1 high, 1000 samples
 # before the trigger, 10ms in total, channels 0-7 to a VCD (or .sr for PulseView, .json): prints a
@@ -242,6 +289,9 @@ Logic analyzer files: VCD with a 1ns timescale and times in device time (shared 
 `#t` = timestamp/sys_clk_freq), sigrok srzip (`version`, `metadata`, `logic-1-N`, plus an
 `agentlab.json` member with the start/trigger timestamps, ignored by sigrok).
 
+Eyes from any video application: `ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720
+/dev/videoN` (`agentlab info`: `video`), VLC (`v4l2:///dev/videoN`), OBS (Video Capture Device).
+
 Python:
 
 ```python
@@ -256,6 +306,8 @@ with Instrument.open(csr_csv="csr.csv", start_events=True) as lab:
         print("{:.6f}s {}".format(lab.ticks_to_s(line.timestamp), line.text))
     cap = lab.la_capture(rate="10M", trigger="rising:0", pre=100, length="1ms")
     print(cap.trigger_timestamp, len(cap.samples), cap.time(0)) # Shared timebase.
+    lab.start_display_refresh(period=1.0)       # Eyes status panel.
+    print(lab.screenshot("bench.png"))           # {"path", "width", "height", "bytes", "device"}.
 ```
 
 MCP server (stdio), e.g. for Claude Code (`.mcp.json`) or any MCP client:
@@ -272,8 +324,10 @@ MCP server (stdio), e.g. for Claude Code (`.mcp.json`) or any MCP client:
 ```
 
 Tools: `uart_read`, `uart_write`, `uart_wait_for`, `uart_log`, `power_set`, `power_cycle`,
-`gpio_set`, `gpio_get`, `events`, `timestamp`, `marker`, `la_capture`. Times are device seconds (`time_s`, shared
-timebase); the instrument is opened on the first tool call and the events reader runs from then.
+`gpio_set`, `gpio_get`, `events`, `timestamp`, `marker`, `la_capture`, `screenshot` (PNG path of
+the bench view, status panel refreshed first), `display_text`. Times are device seconds (`time_s`,
+shared timebase); the instrument is opened on the first tool call and the events reader runs from
+then.
 
 Tests: `pytest test/test_agentlab_host*.py` (fake backends, default suite), `test_agentlab_la.py`
 (logic analyzer gateware simulations with a LiteDRAM native ports model); with a device
