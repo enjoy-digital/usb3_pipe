@@ -12,7 +12,8 @@ turn every finding into a simulation test.
 - LiteX Acorn Baseboard (Mini) with the SFP2USB adapter in the SFP cage, USB3 cable to the host.
 - JTAG through the baseboard FT4232H (channel A). If other FTDI boards are connected, always select
   the Acorn explicitly (USB bus/device for openFPGALoader, USB location for OpenOCD): the platform
-  programmer picks the first FTDI it finds.
+  programmer picks the first FTDI it finds. `bench/acorn_run.py` refuses to guess when several
+  adapters match: set `USB3_PIPE_FTDI` to the Acorn sysfs USB location (ex: `5-4`).
 - `litex_server` port: the host scripts (`bench/usb3_debug.py`, `usb3_bench.py`, `usb3_soak.py`,
   `usb3_trace.py`, `usb3_analyzer.py`, `usb3_suspend.py`, common `--csr-csv`/`--host`/`--port`
   arguments from `bench/common.py`) default to the LiteX default port 1234 (`--port`),
