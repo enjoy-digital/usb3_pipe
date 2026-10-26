@@ -47,11 +47,18 @@ AGENTLAB_CSRS = [
     "usb3_core_status",
 ]
 
+AGENTLAB_EYES_CSRS = [f"agentlab_eyes_{name}" for name in ["wave_row", "wave_lanes",
+    "wave_column", "wave_first", "wave_color", "wave_divider", "wave_control", "wave_status",
+    "frames"]]
+
 TARGETS = {
     #  target  : (gpios, power)
     "acorn"    : (2,  1),
     "kc705"    : (16, 4),
 }
+
+def eyes_lanes(gpios, power):
+    return gpios + power + 2*4 # GPIOs, power switches, 4 DUT UARTs TX/RX lines.
 
 @pytest.mark.parametrize("target", list(TARGETS))
 def test_agentlab_target(target, tmp_path):
@@ -64,3 +71,16 @@ def test_agentlab_target(target, tmp_path):
     assert f"constant,agentlab_gpios,{gpios}" in csr
     assert f"constant,agentlab_power,{power}" in csr
     assert "constant,agentlab_events_ep,11" in csr
+    # Eyes (default): CSRs, constants, text grid region.
+    for name in AGENTLAB_EYES_CSRS:
+        assert name in registers, name
+    assert "constant,agentlab_eyes_interface,11" in csr
+    assert "constant,agentlab_eyes_ep,14" in csr
+    assert "constant,agentlab_eyes_columns,160" in csr
+    assert f"constant,agentlab_eyes_wave_lanes,{eyes_lanes(gpios, power)}" in csr
+    assert "memory_region,agentlab_eyes,0x90000000,32768,io" in csr
+
+@pytest.mark.parametrize("target", list(TARGETS))
+def test_agentlab_target_no_eyes(target, tmp_path):
+    csr = elaborate(target, tmp_path, ["--no-eyes"])
+    assert "agentlab_eyes" not in csr

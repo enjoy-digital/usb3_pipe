@@ -20,6 +20,8 @@ DUT pads on the 4 baseboard debug pins (LVCMOS33):
 
 DUT UARTs 1-3 are internally looped back (TX to RX), power switch 0 drives user_led3 (on: led on).
 No UARTBone on the baseboard UART: CSRs through the USB3 control CDC-ACM or JTAGBone.
+
+Eyes (--with-eyes, default): UVC view of the bench (interfaces 11-12, EP14 IN).
 """
 
 import os
@@ -94,7 +96,7 @@ class _CRG(LiteXModule):
 # AgentLab SoC -------------------------------------------------------------------------------------
 
 class AgentLabAcorn(AgentLabSoC):
-    def __init__(self, platform, with_jtagbone=True):
+    def __init__(self, platform, with_jtagbone=True, with_eyes=True):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -123,7 +125,8 @@ class AgentLabAcorn(AgentLabSoC):
         }
         self.add_agentlab(usb3_serdes, dut_pads,
             leds          = [platform.request("user_led", i) for i in range(3)],
-            leds_inverted = True)
+            leds_inverted = True,
+            with_eyes     = with_eyes)
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -131,6 +134,8 @@ def main():
     parser = argparse.ArgumentParser(description="AgentLab on the SQRL Acorn CLE-215+ (LiteX Acorn Baseboard Mini).")
     agentlab_args(parser, output_dir="build/agentlab_acorn")
     parser.add_argument("--no-jtagbone", action="store_true", help="Disable JTAGBone.")
+    parser.add_argument("--with-eyes",   action="store_true", default=True, help="Enable Eyes (UVC view of the bench, default).")
+    parser.add_argument("--no-eyes",     action="store_false", dest="with_eyes", help="Disable Eyes.")
     parser.add_argument("--vivado-place-directive", default="default", help="Vivado place_design directive (see bench/acorn.py).")
     args = parser.parse_args()
 
@@ -138,7 +143,7 @@ def main():
     platform.add_extension(_usb3_io)
     platform.add_extension(sqrl_acorn._litex_acorn_baseboard_mini_io, prepend=True)
     platform.add_extension(_dut_io)
-    soc = AgentLabAcorn(platform, with_jtagbone=not args.no_jtagbone)
+    soc = AgentLabAcorn(platform, with_jtagbone=not args.no_jtagbone, with_eyes=args.with_eyes)
     agentlab_build(parser, args, soc, vivado_place_directive=args.vivado_place_directive)
 
 if __name__ == "__main__":

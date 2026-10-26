@@ -24,6 +24,8 @@ LVCMOS25; change the IOStandard if VADJ is reprogrammed to 1.8V/3.3V):
 | LA32-LA33 P/N      | Reserved: JTAG/SWD TCK/SWCLK, TMS/SWDIO, TDI, TDO (phase 3)     |
 | LA01_CC_P          | Reserved: JTAG/SWD nRESET (phase 3)                             |
 | LA00_CC, LA01_CC_N | Unused (clock capable: external LA clock, later)                |
+
+Eyes (--with-eyes, default): UVC view of the bench (interfaces 11-12, EP14 IN).
 """
 
 import os
@@ -113,7 +115,7 @@ class _CRG(LiteXModule):
 # AgentLab SoC -------------------------------------------------------------------------------------
 
 class AgentLabKC705(AgentLabSoC):
-    def __init__(self, platform, with_uartbone=True, with_jtagbone=False):
+    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_eyes=True):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
@@ -142,7 +144,8 @@ class AgentLabKC705(AgentLabSoC):
             "power" : platform.request("dut_power"),
         }
         self.add_agentlab(usb3_serdes, dut_pads,
-            leds = [platform.request("user_led", i) for i in range(3)])
+            leds      = [platform.request("user_led", i) for i in range(3)],
+            with_eyes = with_eyes)
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -151,6 +154,8 @@ def main():
     agentlab_args(parser, output_dir="build/agentlab_kc705")
     parser.add_argument("--no-uartbone",   action="store_true", help="Disable UARTBone (board UART).")
     parser.add_argument("--with-jtagbone", action="store_true", help="Enable JTAGBone.")
+    parser.add_argument("--with-eyes",     action="store_true", default=True, help="Enable Eyes (UVC view of the bench, default).")
+    parser.add_argument("--no-eyes",       action="store_false", dest="with_eyes", help="Disable Eyes.")
     args = parser.parse_args()
 
     platform = xilinx_kc705.Platform()
@@ -158,7 +163,8 @@ def main():
     platform.add_extension(_dut_io)
     soc = AgentLabKC705(platform,
         with_uartbone = not args.no_uartbone,
-        with_jtagbone = args.with_jtagbone)
+        with_jtagbone = args.with_jtagbone,
+        with_eyes     = args.with_eyes)
     agentlab_build(parser, args, soc)
 
 if __name__ == "__main__":
