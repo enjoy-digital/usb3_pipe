@@ -104,6 +104,9 @@ class USB3BulkIN(USB3Endpoint):
         fc_eob  = Signal() # EOB sent: waiting for the acknowledgement of the sent packets.
         fc_data = Signal() # Waiting for data: ERDY when a packet is available.
         fc_req  = Signal() # ERDY sent: waiting for the host request.
+        # Short packet sent: the ACK TPs of the packets sent before it (acked < inflight) are stale
+        # (the short packet ends the host transfer), only its ACK TP reopens the window.
+        fc_short = Signal()
         fc      = Signal()
         self.comb += fc.eq(fc_eob | fc_data | fc_req)
 
@@ -161,6 +164,12 @@ class USB3BulkIN(USB3Endpoint):
             jobs.sink.slot.eq(snd_ptr[0:pbits-1]),
         ]
 
+        # ACK TPs not reopening the window: ACK TPs of the packets sent before a short packet (its
+        # own ACK TP expected), ACK TPs received while an EOB/short packet is sent.
+        ack_stale = Signal()
+        self.comb += ack_stale.eq((fc_short & (acked != inflight)) |
+            (send & (snd_eob | (snd_len != MAX_PACKET_SIZE))))
+
         self.sync += [
             If(send,
                 snd_ptr.eq(snd_ptr + 1),
@@ -172,6 +181,7 @@ class USB3BulkIN(USB3Endpoint):
                 # wait for its ACK TP (new request or NumP=0 and ERDY).
                 If(snd_len != MAX_PACKET_SIZE,
                     win_nump.eq(0),
+                    fc_short.eq(1),
                 ),
             ),
             If(self.tx_hp.valid & self.tx_hp.ready & nrdy_pending, nrdy_pending.eq(0)),
@@ -203,7 +213,9 @@ class USB3BulkIN(USB3Endpoint):
                     fc_eob.eq(0),
                     fc_data.eq(0),
                     fc_req.eq(0),
-                ).Elif(~fc_eob,
+                    fc_short.eq(0),
+                ).Elif(~fc_eob & ~ack_stale,
+                    fc_short.eq(0),
                     win_seq.eq(h.tp_seq),
                     win_nump.eq(h.nump),
                     fc_data.eq(0),
@@ -227,6 +239,7 @@ class USB3BulkIN(USB3Endpoint):
                 snd_ptr.eq(ack_ptr),
                 win_nump.eq(0),
                 fc_eob.eq(0),
+                fc_short.eq(0),
                 fc_data.eq(0),
                 fc_req.eq(0),
                 nrdy_pending.eq(0),
