@@ -28,7 +28,7 @@ DUT_UART_COUNT      = len(DUT_UART_INTERFACES)
 EVENTS_INTERFACE = 10
 EVENTS_ENDPOINT  = 0x8b # EP11 IN.
 
-# Logic analyzer (Vendor class, bulk IN, phase 2).
+# Logic analyzer (Vendor class, bulk IN).
 LA_INTERFACE = 11
 LA_ENDPOINT  = 0x8c # EP12 IN.
 
@@ -79,3 +79,46 @@ CSR_GPIO_EDGE_MASK  = "agentlab_gpio_edge_mask"  # Bit per GPIO (1: emit edge ev
 def csr_uart_baudrate(n):
     """DUT UART n baudrate CSR (fallback when SET_LINE_CODING is not used)."""
     return "agentlab_uart{}_baudrate".format(n)
+
+# Logic Analyzer -----------------------------------------------------------------------------------
+
+# Stream format (agentlab/gateware/la.py, doc/agentlab.md): header then blocks, 32-bit LE words.
+LA_MAGIC           = 0x31414c41 # "ALA1".
+LA_VERSION         = 1
+LA_HEADER_WORDS    = 12
+LA_HEADER_OVERFLOW = 0x01       # Header flags.
+LA_BLOCK_MAGIC     = 0xb1       # Block word: count (bits 0-15), flags (16-23), magic (24-31).
+LA_BLOCK_LAST      = 0x01
+LA_BLOCK_OVERFLOW  = 0x02
+
+LA_MODES = {"capture": 0, "stream": 1}
+
+LA_TRIGGER_IMMEDIATE = 0
+LA_TRIGGER_PATTERN   = 1
+LA_TRIGGER_EXTERNAL  = 2
+LA_EDGES             = {"rising": 0, "falling": 1, "edge": 2}
+LA_EXT_SOURCES       = {"marker": 0, "gpio": 1, "power": 2} # Bits of CSR_LA_TRIGGER_EXT.
+
+LA_STATES = {0: "idle", 1: "armed", 2: "triggered", 3: "readout", 4: "done", 5: "flush"}
+
+CSR_LA_MODE              = "agentlab_la_mode"              # 0: capture, 1: stream.
+CSR_LA_DIVIDER           = "agentlab_la_divider"           # samplerate = sys_clk/divider.
+CSR_LA_TRIGGER_SOURCE    = "agentlab_la_trigger_source"    # 0: immediate, 1: pattern, 2: ext.
+CSR_LA_TRIGGER_MASK      = "agentlab_la_trigger_mask"
+CSR_LA_TRIGGER_VALUE     = "agentlab_la_trigger_value"
+CSR_LA_TRIGGER_EDGE      = "agentlab_la_trigger_edge"      # enable(0), channel(1-5), polarity(6-7).
+CSR_LA_TRIGGER_EXT       = "agentlab_la_trigger_ext"       # Bits: LA_EXT_SOURCES.
+CSR_LA_PRE_TRIGGER       = "agentlab_la_pre_trigger"       # Samples before the trigger.
+CSR_LA_LENGTH            = "agentlab_la_length"            # Samples (stream mode: 0, until stop).
+CSR_LA_CONTROL           = "agentlab_la_control"           # arm(0), stop(1) (pulses).
+CSR_LA_STATUS            = "agentlab_la_status"            # state(0-2), triggered(3),
+                                                           # overflow(4), dram_ready(5).
+CSR_LA_LEVEL             = "agentlab_la_level"             # DRAM words buffered.
+CSR_LA_COUNT             = "agentlab_la_count"             # Samples captured.
+CSR_LA_TRIGGER_OFFSET    = "agentlab_la_trigger_offset"
+CSR_LA_START_TIMESTAMP   = "agentlab_la_start_timestamp"
+CSR_LA_TRIGGER_TIMESTAMP = "agentlab_la_trigger_timestamp"
+
+# Constants (csr.csv).
+CONST_LA_CHANNELS     = "agentlab_la_channels"     # Number of channels (sample bits).
+CONST_LA_RING_SAMPLES = "agentlab_la_ring_samples"

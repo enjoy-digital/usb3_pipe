@@ -11,3 +11,5 @@ from agentlab.host.events     import Event, EventReader, parse_record, parse_rec
 from agentlab.host.discovery  import DeviceInfo, find_device, find_devices
 from agentlab.host.csr        import CSRMap, CSRs, UARTBoneBus, RemoteClientBus
 from agentlab.host.uart       import DUTUart, WaitResult
+from agentlab.host.la         import (LACapture, LAHeader, LAStreamParser, LATrigger,
+    parse_stream, parse_trigger, summarize, write_vcd, write_sr)
