@@ -144,6 +144,7 @@ class AgentLabAcorn(AgentLabSoC):
             refclk_freq  = 200e6,
             tx_pads      = platform.request("sfp_tx"),
             rx_pads      = platform.request("sfp_rx"))
+        # Fabric reference clock on GTGREFCLK0 (see doc/debugging-guide.md): allowed as a warning.
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
 
         # AgentLab ---------------------------------------------------------------------------------
@@ -169,7 +170,6 @@ def main():
     parser.add_argument("--no-dram",     action="store_true", help="No DRAM/CPU/logic analyzer (phase 1 instrument).")
     parser.add_argument("--with-eyes",   action="store_true", default=True, help="Enable Eyes (UVC view of the bench, default).")
     parser.add_argument("--no-eyes",     action="store_false", dest="with_eyes", help="Disable Eyes.")
-    parser.add_argument("--vivado-place-directive", default="default", help="Vivado place_design directive (see bench/acorn.py).")
     args = parser.parse_args()
 
     platform = sqrl_acorn.Platform(with_multiboot=False)
@@ -180,7 +180,7 @@ def main():
         with_jtagbone = not args.no_jtagbone,
         with_dram     = not args.no_dram,
         with_eyes     = args.with_eyes)
-    agentlab_build(parser, args, soc, vivado_place_directive=args.vivado_place_directive)
+    agentlab_build(parser, args, soc)
 
 if __name__ == "__main__":
     main()
