@@ -103,6 +103,8 @@ class Reader:
         self.ready  = ready
         self.parser = LAStreamParser(sys_clk_freq=125e6)
         self.words  = []
+        self.bes    = []
+        self.lasts  = []
         self.errors = 0
 
     @passive
@@ -115,6 +117,8 @@ class Reader:
             if ready and (yield self.source.valid):
                 w = (yield self.source.data)
                 self.words.append(w)
+                self.bes.append((yield self.source.be))
+                self.lasts.append((yield self.source.last))
                 try:
                     self.parser.feed(w.to_bytes(4, "little"))
                 except ValueError: # Aborted capture (re-arm): restarted on the next header.
@@ -318,6 +322,15 @@ class TestAgentLabLA(unittest.TestCase):
         self.assertFalse(capture.overflow)
         check_timebase(self, capture, 4)
 
+    def test_capture_full_rate_dram_stalls(self):
+        # Full rate (divider 1), periodic DRAM stalls (as refreshes): the stalls are absorbed and
+        # caught up (FIFO on DRAM words, drained faster than the samplerate), no overflow.
+        capture, r = self.capture(dw=128, ring_size=16384, length=3000,
+            cmd_ready=lambda cycle: (cycle % 1000) >= 60)
+        self.assertEqual(len(capture.samples), 3000)
+        self.assertFalse(capture.overflow)
+        check_timebase(self, capture, 1)
+
     def test_capture_ring_full(self):
         # Capture longer than the ring (256 samples): ends when full (overflow), samples intact.
         capture, r = self.capture(dw=64, ring_size=1024, pre=10, length=400, divider=1)
@@ -368,6 +381,62 @@ class TestAgentLabLA(unittest.TestCase):
         self.assertTrue(450 < len(capture.samples) < 520)
         self.assertFalse(capture.overflow)
         check_timebase(self, capture, 3)
+
+    def test_armed_overflow(self):
+        # DRAM writes stalled while armed (no trigger): samples lost, capture ended with the samples
+        # before the overflow (up to pre-trigger, also more than captured), overflow flagged. The
+        # stream is well formed (blocks matching the header count, a single last block, all bytes
+        # valid, ended by a packet end) and the next capture works.
+        for pre in [10, 100, 1000]:
+            dut    = LADUT(ring_size=4096)
+            result = {}
+            def scenario(dram, reader):
+                yield from configure(dut.la, source=LA_TRIGGER_EXTERNAL, ext=1 << LA_EXT_MARKER,
+                    pre=pre, length=pre + 50)
+                yield from control(dut.la, arm=1)
+                yield from wait_parser(reader)
+                result["status"] = (yield from status(dut.la))
+                result["count"]  = (yield dut.la._count.status)
+                result["first"]  = reader.parser.capture
+                for _ in range(64):
+                    yield
+                result["words"] = len(reader.words)
+                # Next capture.
+                reader.parser = LAStreamParser(sys_clk_freq=125e6)
+                yield from configure(dut.la, length=40)
+                yield from control(dut.la, arm=1)
+                yield from wait_parser(reader)
+            dram, reader = run(dut, scenario, cmd_ready=lambda cycle: not (100 <= cycle < 3100))
+            capture = result["first"]
+            n = len(capture.samples)
+            self.assertEqual(result["status"], {"state": LA_STATE_DONE, "triggered": 0,
+                "overflow": 1})
+            self.assertTrue(capture.overflow)
+            self.assertEqual(capture.header.count, n)
+            self.assertEqual(result["count"], n)
+            self.assertEqual(capture.trigger_offset, n)
+            self.assertTrue(0 < n <= pre, n)
+            check_timebase(self, capture, 1)
+            # Stream: header, blocks (last one last), nothing after, packet ended.
+            words = reader.words[:result["words"]]
+            self.assertEqual(words[0], LA_MAGIC)
+            i, total, lasts = LA_HEADER_WORDS, 0, 0
+            while i < len(words):
+                self.assertEqual(words[i] >> 24, LA_BLOCK_MAGIC)
+                count = words[i] & 0xffff
+                total += count
+                i     += 1 + count
+                if (words[i - 1 - count] >> 16) & LA_BLOCK_LAST:
+                    lasts += 1
+                    break
+            self.assertEqual((i, total, lasts), (len(words), n, 1))
+            self.assertEqual(set(reader.bes[:len(words)]), {0b1111})
+            self.assertEqual(reader.lasts[len(words) - 1], 1)
+            # Next capture.
+            capture = reader.parser.capture
+            self.assertEqual(len(capture.samples), 40)
+            self.assertFalse(capture.overflow)
+            check_timebase(self, capture, 1)
 
     def test_rearm_abort(self):
         # Stop while armed (no readout), re-arm during a capture: only the last capture sent.

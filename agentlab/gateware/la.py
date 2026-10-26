@@ -10,7 +10,7 @@ Bulk IN endpoint.
 
 Datapath:
 
-    inputs -> MultiReg -> sampler (divider, trigger) -> sample FIFO -> 32-bit to DRAM words ->
+    inputs -> MultiReg -> sampler (divider, trigger) -> 32-bit to DRAM words -> sample FIFO ->
     DMA writer (ring buffer) ... DMA reader -> DRAM words to 32-bit -> skip/length filter ->
     output FIFO -> framer (capture header, blocks) -> word packer -> source (Bulk IN).
 
@@ -291,14 +291,17 @@ class AgentLabLA(LiteXModule):
             If(strobe | arm, ext_pending.eq(0)),
         ]
 
-        # Sample FIFO / DRAM words -----------------------------------------------------------------
-        self.sample_fifo = sample_fifo = ResetInserter()(
-            stream.SyncFIFO([("data", 32)], sample_fifo_depth, buffered=True))
+        # DRAM words / Sample FIFO -----------------------------------------------------------------
+        # Samples grouped in DRAM words before the FIFO: the FIFO drains at up to one DRAM word per
+        # cycle (ratio x the full samplerate), the DRAM stalls (refresh, bank/row changes) absorbed
+        # at the full samplerate are caught up (a 32-bit FIFO drains at most at the samplerate).
         self.upconverter = upconverter = ResetInserter()(stream.Converter(32, dw))
+        self.sample_fifo = sample_fifo = ResetInserter()(
+            stream.SyncFIFO([("data", dw)], max(sample_fifo_depth//ratio, 2), buffered=True))
         self.comb += [
-            sample_fifo.reset.eq(reset),
             upconverter.reset.eq(reset),
-            sample_fifo.source.connect(upconverter.sink),
+            sample_fifo.reset.eq(reset),
+            upconverter.source.connect(sample_fifo.sink),
         ]
 
         # Capture FSM ------------------------------------------------------------------------------
@@ -331,8 +334,8 @@ class AgentLabLA(LiteXModule):
             cand_ts.eq(Mux(k == 0, timestamp, start_ts)),
             pre_cand.eq(Mux(k < pre, k, pre)),
             start_cand.eq(k - pre_cand),
-            accepted.eq(push & sample_fifo.sink.ready),
-            lost.eq(push & ~sample_fifo.sink.ready & sampling),
+            accepted.eq(push & upconverter.sink.ready),
+            lost.eq(push & ~upconverter.sink.ready & sampling),
         ]
 
         self.fsm = fsm = FSM(reset_state="IDLE")
@@ -346,7 +349,7 @@ class AgentLabLA(LiteXModule):
         fsm.act("ARMED",
             sampling.eq(1),
             push.eq(strobe),
-            sample_fifo.sink.data.eq(sample),
+            upconverter.sink.data.eq(sample),
             If(stop,
                 NextState("IDLE"),
             ).Elif(accepted & hit,
@@ -366,7 +369,7 @@ class AgentLabLA(LiteXModule):
         fsm.act("TRIGGERED",
             sampling.eq(1),
             push.eq(strobe),
-            sample_fifo.sink.data.eq(sample),
+            upconverter.sink.data.eq(sample),
             If(lost | stop | (accepted & ~unbounded & (post_cnt == (post - 1))),
                 do_end.eq(1),
                 NextState("ALIGN"),
@@ -375,7 +378,7 @@ class AgentLabLA(LiteXModule):
         # Pad the last DRAM word (padding samples not counted, dropped at the readout).
         fsm.act("ALIGN",
             push.eq(k[:ratio_bits] != 0) if ratio_bits else push.eq(0),
-            sample_fifo.sink.data.eq(0),
+            upconverter.sink.data.eq(0),
             If(~push, NextState("READOUT")),
         )
         fsm.act("READOUT",
@@ -386,7 +389,7 @@ class AgentLabLA(LiteXModule):
         for state in ["ARMED", "TRIGGERED", "ALIGN", "READOUT", "DONE"]:
             fsm.act(state, If(arm, NextState("FLUSH")))
         self.comb += [
-            sample_fifo.sink.valid.eq(push),
+            upconverter.sink.valid.eq(push),
             self.flush.eq(arm),
         ]
 
@@ -455,10 +458,10 @@ class AgentLabLA(LiteXModule):
             fifo_buffered=True)
         self.comb += [
             full.eq(started & (wr_words >= (rd_done + ring_words))),
-            writer.sink.valid.eq(upconverter.source.valid & ~full & ~reset),
+            writer.sink.valid.eq(sample_fifo.source.valid & ~full & ~reset),
             writer.sink.address.eq(base_word + (wr_words & ring_mask)),
-            writer.sink.data.eq(upconverter.source.data),
-            upconverter.source.ready.eq(writer.sink.ready & ~full),
+            writer.sink.data.eq(sample_fifo.source.data),
+            sample_fifo.source.ready.eq(writer.sink.ready & ~full),
         ]
         self.sync += [
             If(writer.sink.valid & writer.sink.ready,
