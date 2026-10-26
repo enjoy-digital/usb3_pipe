@@ -113,8 +113,11 @@ def test_agentlab_target(target, dram, tmp_path):
     assert f"constant,agentlab_eyes_interface,{12 if dram else 11}" in csr # After the LA.
     assert "constant,agentlab_eyes_ep,14" in csr
     assert "constant,agentlab_eyes_columns,160" in csr
-    assert f"constant,agentlab_eyes_wave_lanes,{eyes_lanes(gpios, power)}" in csr
+    assert f"constant,agentlab_eyes_lanes,{eyes_lanes(gpios, power)}" in csr
     assert "memory_region,agentlab_eyes,0x90000000,32768,io" in csr
+    # Constants and CSRs share the generated C accessors namespace (<name>_read).
+    constants = {l.split(",")[1] for l in csr.splitlines() if l.startswith("constant,")}
+    assert not constants & set(registers)
 
 @pytest.mark.parametrize("target", list(TARGETS))
 def test_agentlab_target_no_eyes(target, tmp_path):

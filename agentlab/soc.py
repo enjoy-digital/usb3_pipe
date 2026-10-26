@@ -183,7 +183,7 @@ class AgentLabSoC(SoCCore):
             self.add_constant("AGENTLAB_EYES_COLUMNS",    eyes.cols)
             self.add_constant("AGENTLAB_EYES_ROWS",       eyes.rows)
             self.add_constant("AGENTLAB_EYES_WAVE_DEPTH", eyes.wave_depth)
-            self.add_constant("AGENTLAB_EYES_WAVE_LANES", agentlab.eyes_lanes)
+            self.add_constant("AGENTLAB_EYES_LANES",      agentlab.eyes_lanes)
 
         # DUT UARTs <-> CDC-ACM functions, events -> Bulk IN, Eyes -> UVC.
         self.comb += agentlab_usb_connect(usb3, agentlab)

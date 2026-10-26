@@ -137,8 +137,8 @@ Phase 1 details (`agentlab/gateware/events.py`):
   window), `agentlab_eyes_wave_status` (`running`), `agentlab_eyes_frames` (frames rendered)
   (phase 4).
 - Eyes constants: `agentlab_eyes_interface`, `agentlab_eyes_ep`, `agentlab_eyes_width`/`height`,
-  `agentlab_eyes_columns`/`rows`, `agentlab_eyes_wave_depth`, `agentlab_eyes_wave_lanes`; text grid
-  region `agentlab_eyes` (0x90000000).
+  `agentlab_eyes_columns`/`rows`, `agentlab_eyes_wave_depth`, `agentlab_eyes_lanes` (lanes sources);
+  text grid region `agentlab_eyes` (0x90000000).
 
 ## DRAM
 
