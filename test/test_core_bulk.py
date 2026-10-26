@@ -403,6 +403,46 @@ class TestCoreBulkINFlush(unittest.TestCase):
         self.assertEqual([seq for seq, _ in host.dps], list(range(len(host.dps))))
         self.assertEqual(host.data, sum(old[:sent], []) + new)
 
+    def test_bulk_in_short_packet_stale_ack(self):
+        # Max size packet + short packet (transfer end) sent in the same burst, ACK TP of the max
+        # size packet received after the short packet was sent: stale (the host transfer ended), the
+        # window stays closed until the ACK TP of the short packet. Previously it reopened the
+        # window: the next packets were sent without host request (found on hardware with the logic
+        # analyzer stream mode: blocks of 1024 + 4 bytes, I/O errors on the second read).
+        n    = 8
+        dut  = USB3BulkIN(ept=1, max_burst=n)
+        host = EndpointHost(dut, n)
+        data = [[(t << 16) | i for i in range(MAX_PACKET_WORDS + 1)] for t in range(3)]
+        def write(words):
+            for i, w in enumerate(words):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(w)
+                yield dut.sink.be.eq(0b1111)
+                yield dut.sink.last.eq(i == len(words) - 1)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+        def scenario():
+            # Transfers buffered (next ones available while sending), then read by the host.
+            for words in data:
+                yield from write(words)
+            for _ in range(128):
+                yield
+            for _ in data:
+                host.request()
+                for _ in range(4096):
+                    if not host.pending:
+                        break
+                    yield
+                for _ in range(512):
+                    yield
+        run_simulation(dut, [scenario(), host.generator()])
+        self.assertEqual(host.errors, [])
+        self.assertEqual([(seq, length) for seq, length in host.dps],
+            [(i, MAX_PACKET_SIZE if i % 2 == 0 else 4) for i in range(6)])
+        self.assertEqual(host.data, sum(data, []))
+
     def test_bulk_in_flush_buffered(self):
         self.flush_test(sent=0)
 
