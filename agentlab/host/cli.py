@@ -80,6 +80,22 @@ def build_parser():
     marker = sub.add_parser("marker", help="Emit a marker event.")
     marker.add_argument("value", type=lambda x: int(x, 0), nargs="?", default=0)
 
+    # Logic Analyzer.
+    la     = sub.add_parser("la", help="Logic analyzer.")
+    la_sub = la.add_subparsers(dest="action", required=True)
+    p = la_sub.add_parser("capture", help="Capture (prints a JSON summary).")
+    p.add_argument("--channels", default=None,        help="Channels saved/summarized (ex: 0-7,12; default: all).")
+    p.add_argument("--names",    default=None,        help="Channel names (comma separated, one per channel).")
+    p.add_argument("--rate",     default=None,        help="Samplerate in Hz (k/M suffixes; default: sys_clk).")
+    p.add_argument("--trigger",  default="immediate", help="immediate, chN=0|1, rising:N, falling:N, edge:N (comma separated), marker, gpio, power.")
+    p.add_argument("--pre",      default="0",         help="Pre-trigger samples (or duration: 10us).")
+    p.add_argument("--length",   default="4096",      help="Samples (or duration: 10ms), pre-trigger included; stream mode: 0, until --duration.")
+    p.add_argument("--mode",     default="capture",   choices=["capture", "stream"])
+    p.add_argument("--duration", type=float, default=None, help="Stream mode with length 0: stop after (seconds).")
+    p.add_argument("--timeout",  type=float, default=10.0, help="Trigger/capture timeout (seconds).")
+    p.add_argument("--out",      default=None,        help="Output file: .vcd, .sr (sigrok/PulseView) or .json.")
+    la_sub.add_parser("status", help="Logic analyzer status.")
+
     return parser
 
 # Commands -----------------------------------------------------------------------------------------
@@ -127,6 +143,22 @@ def run(args, instrument, out=None):
     elif args.cmd == "timestamp":
         t = instrument.timestamp()
         p("{} ticks ({:.9f}s)".format(t, instrument.ticks_to_s(t)))
+    elif args.cmd == "la":
+        if args.action == "status":
+            p(json.dumps(instrument.la_status(), indent=2))
+        elif args.action == "capture":
+            summary = instrument.la_capture_summary(
+                channels = args.channels,
+                names    = args.names,
+                out      = args.out,
+                rate     = args.rate,
+                trigger  = args.trigger,
+                pre      = args.pre,
+                length   = args.length,
+                mode     = args.mode,
+                duration = args.duration,
+                timeout  = args.timeout)
+            p(json.dumps(summary, indent=2))
     elif args.cmd == "marker":
         t = instrument.marker(args.value)
         p("{} ticks ({:.9f}s)".format(t, instrument.ticks_to_s(t)))
@@ -176,7 +208,7 @@ def main(argv=None, instrument_factory=open_instrument):
         return 2
     try:
         return run(args, instrument)
-    except (RuntimeError, OSError, KeyError) as e:
+    except (RuntimeError, OSError, KeyError, ValueError, TimeoutError) as e:
         print("agentlab: {}".format(e), file=sys.stderr)
         return 2
     finally:

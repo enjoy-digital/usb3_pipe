@@ -4,15 +4,17 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""AgentLab USB3 composite device (doc/agentlab.md), phase 1:
+"""AgentLab USB3 composite device (doc/agentlab.md):
 
 | Interface(s) | Class         | Endpoints                              | Function           |
 |--------------|---------------|----------------------------------------|--------------------|
 | 0-1          | CDC-ACM       | EP1 IN notif, EP2 IN/OUT data          | Control (UARTBone) |
 | 2-9          | CDC-ACM x4    | EP3-EP6 IN notif, EP7-EP10 IN/OUT data | DUT UARTs 0-3      |
 | 10           | Vendor (0xff) | EP11 IN bulk                           | Events             |
+| 11           | Vendor (0xff) | EP12 IN bulk                           | Logic analyzer     |
 
-Interfaces 11+/EP12+ reserved for the next phases (logic analyzer, JTAG/SWD, UVC).
+Logic analyzer interface only with_la. Interfaces 12+/EP13+ reserved for the next phases
+(JTAG/SWD, UVC).
 """
 
 from migen import *
@@ -33,10 +35,11 @@ AGENTLAB_PRODUCT = "AgentLab"
 
 CDC_MAX_BURST    = 2
 EVENTS_MAX_BURST = 4
+LA_MAX_BURST     = 16
 
 # Interfaces/Endpoints Map -------------------------------------------------------------------------
 
-def agentlab_usb_map(n_uarts=4):
+def agentlab_usb_map(n_uarts=4, with_la=False):
     """Interfaces/endpoints numbers: {function: {"interface", "notif_ept", "in_ept", "out_ept"}}."""
     m = {}
     m["control"] = {"interface": 0, "notif_ept": 1, "in_ept": 2, "out_ept": 2}
@@ -45,16 +48,18 @@ def agentlab_usb_map(n_uarts=4):
         m[f"uart{n}"] = {"interface": 2 + 2*n, "notif_ept": 3 + n, "in_ept": data_ept,
             "out_ept": data_ept}
     m["events"] = {"interface": 2 + 2*n_uarts, "in_ept": 3 + 2*n_uarts}
+    if with_la:
+        m["la"] = {"interface": 3 + 2*n_uarts, "in_ept": 4 + 2*n_uarts}
     return m
 
 # Descriptors --------------------------------------------------------------------------------------
 
-def agentlab_descriptors(n_uarts=4, **kwargs):
+def agentlab_descriptors(n_uarts=4, with_la=False, **kwargs):
     """AgentLab composite device descriptors (CDC-ACM class requests handled by the functions)."""
     kwargs.setdefault("vid",     AGENTLAB_VID)
     kwargs.setdefault("pid",     AGENTLAB_PID)
     kwargs.setdefault("product", AGENTLAB_PRODUCT)
-    m = agentlab_usb_map(n_uarts)
+    m = agentlab_usb_map(n_uarts, with_la)
     interfaces = []
     for name in ["control"] + [f"uart{n}" for n in range(n_uarts)]:
         f = m[name]
@@ -67,6 +72,10 @@ def agentlab_descriptors(n_uarts=4, **kwargs):
     interfaces.append(USB3InterfaceDescriptor(m["events"]["interface"], cls=0xff, endpoints=[
         USB3EndpointDescriptor(m["events"]["in_ept"], direction=1, max_burst=EVENTS_MAX_BURST),
     ]))
+    if with_la:
+        interfaces.append(USB3InterfaceDescriptor(m["la"]["interface"], cls=0xff, endpoints=[
+            USB3EndpointDescriptor(m["la"]["in_ept"], direction=1, max_burst=LA_MAX_BURST),
+        ]))
     return USB3Descriptors(device_class=DEVICE_CLASS_IAD, interfaces=interfaces, **kwargs)
 
 # AgentLab USB -------------------------------------------------------------------------------------
@@ -77,9 +86,10 @@ class AgentLabUSB(LiteXModule):
     control     : CDC-ACM function (byte streams sink/source) for UARTBone.
     uarts[n]    : DUT UARTs CDC-ACM functions (sink/source, connect, baudrate/line_coding).
     events      : events Bulk IN endpoint sink (32-bit words packets).
+    la/la_flush : logic analyzer Bulk IN endpoint sink (32-bit words packets) and flush (with_la).
     """
-    def __init__(self, phy, sys_clk_freq, n_uarts=4, timer_scale=1, **kwargs):
-        self.map = m = agentlab_usb_map(n_uarts)
+    def __init__(self, phy, sys_clk_freq, n_uarts=4, with_la=False, timer_scale=1, **kwargs):
+        self.map = m = agentlab_usb_map(n_uarts, with_la)
         names = ["control"] + [f"uart{n}" for n in range(n_uarts)]
 
         # # #
@@ -95,11 +105,14 @@ class AgentLabUSB(LiteXModule):
             )
         events_in = USB3BulkIN(ept=m["events"]["in_ept"], max_burst=EVENTS_MAX_BURST)
         eps = sum([list(endpoints[name]) for name in names], []) + [events_in]
+        if with_la:
+            la_in = USB3BulkIN(ept=m["la"]["in_ept"], max_burst=LA_MAX_BURST)
+            eps.append(la_in)
         assert len([ep for ep in eps if ep.direction == 1]) <= 15
         assert len([ep for ep in eps if ep.direction == 0]) <= 15
 
         # USB3 Device Core.
-        descriptors = agentlab_descriptors(n_uarts, **kwargs)
+        descriptors = agentlab_descriptors(n_uarts, with_la, **kwargs)
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
             endpoints        = sorted(eps, key=lambda ep: (ep.ept, ep.direction)),
             timer_scale      = timer_scale,
@@ -124,11 +137,17 @@ class AgentLabUSB(LiteXModule):
         # Events.
         self.events = events_in.sink
 
+        # Logic Analyzer.
+        if with_la:
+            self.la       = la_in.sink
+            self.la_flush = la_in.flush
+
 # AgentLab USB <-> Instrument ----------------------------------------------------------------------
 
 def agentlab_usb_connect(usb, agentlab):
     """Connections of an AgentLab instrument to its USB3 composite device (DUT UARTs <-> CDC-ACM
-    functions with their line coding/connection, events -> Bulk IN): comb statements."""
+    functions with their line coding/connection, events/logic analyzer -> Bulk IN): comb
+    statements."""
     r = []
     for uart, function in zip(agentlab.uarts, usb.uarts):
         r += [
@@ -139,4 +158,9 @@ def agentlab_usb_connect(usb, agentlab):
             uart.connected.eq(function.connect),
         ]
     r += [agentlab.source.connect(usb.events)]
+    if agentlab.with_la:
+        r += [
+            agentlab.la.source.connect(usb.la),
+            usb.la_flush.eq(agentlab.la.flush),
+        ]
     return r

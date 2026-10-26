@@ -87,11 +87,29 @@ class TestAgentLabDescriptors(unittest.TestCase):
 
     def test_core_endpoints(self):
         # Every endpoint descriptor has its core endpoint (and conversely).
-        dut = AgentLabUSB(PHYStandIn(), sys_clk_freq=125e6)
-        descs = parse_descriptors(agentlab_descriptors().configuration())
-        addresses = sorted(d[2] for d in descs if d[1] == DESC_ENDPOINT)
-        core      = sorted(ep.ept | (ep.direction << 7) for ep in dut.core.endpoints)
-        self.assertEqual(addresses, core)
+        for with_la in [False, True]:
+            dut = AgentLabUSB(PHYStandIn(), sys_clk_freq=125e6, with_la=with_la)
+            descs = parse_descriptors(agentlab_descriptors(with_la=with_la).configuration())
+            addresses = sorted(d[2] for d in descs if d[1] == DESC_ENDPOINT)
+            core      = sorted(ep.ept | (ep.direction << 7) for ep in dut.core.endpoints)
+            self.assertEqual(addresses, core)
+
+    def test_descriptors_la(self):
+        # Logic analyzer: vendor interface 11, EP12 IN bulk, Max Burst 16.
+        m = agentlab_usb_map(with_la=True)
+        self.assertEqual(m["la"], {"interface": 11, "in_ept": 12})
+        config = agentlab_descriptors(with_la=True).configuration()
+        self.assertEqual(config[2] | (config[3] << 8), len(config))
+        self.assertLessEqual(len(config), 512)
+        self.assertEqual(config[4], 12)
+        descs      = parse_descriptors(config)[1:]
+        interfaces = [d for d in descs if d[1] == DESC_INTERFACE]
+        self.assertEqual([d[2] for d in interfaces], list(range(12)))
+        la = descs.index([d for d in interfaces if d[2] == 11][0])
+        self.assertEqual((descs[la][4], descs[la][5]), (1, 0xff))
+        ep, comp = descs[la + 1], descs[la + 2]
+        self.assertEqual((ep[1], ep[2], ep[3]), (DESC_ENDPOINT, 0x80 | 12, 0x02))
+        self.assertEqual(comp[2], 16 - 1) # bMaxBurst.
 
 class TestAgentLabUSB(unittest.TestCase):
     def test_enumeration_requests_uart_events(self):

@@ -40,6 +40,8 @@ class AgentLabUART(LiteXModule):
         self.line_coding   = Signal()   # i
         self.line_baudrate = Signal(32) # i
         self.connected     = Signal()   # i
+        self.tx_pin        = Signal()   # o: TX line (logic analyzer probe).
+        self.rx_pin        = Signal()   # o: RX line (logic analyzer probe).
 
         self._baudrate    = CSRStorage(32, reset=baudrate, write_from_dev=True,
             description="Baudrate (also set by the host CDC-ACM line coding).")
@@ -54,6 +56,10 @@ class AgentLabUART(LiteXModule):
         if pads is None:
             pads = Record([("tx", 1), ("rx", 1)])
             self.comb += pads.rx.eq(pads.tx)
+        self.comb += [
+            self.tx_pin.eq(pads.tx),
+            self.rx_pin.eq(pads.rx),
+        ]
 
         # Baudrate (CSR or line coding) to tuning word: baudrate*2^32/clk_freq, as a multiplication
         # by a constant (baudrates up to 2^24-1).

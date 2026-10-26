@@ -4,7 +4,8 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""AgentLab Instrument: one object for CSRs, DUT UARTs, power, GPIOs, timestamp/markers, events."""
+"""AgentLab Instrument: one object for CSRs, DUT UARTs, power, GPIOs, timestamp/markers, events,
+logic analyzer."""
 
 import time
 from typing import Callable, Dict, List, Optional
@@ -14,6 +15,8 @@ from agentlab.host.csr       import CSRMap, CSRs, UARTBoneBus, RemoteClientBus
 from agentlab.host.uart      import DUTUart
 from agentlab.host.events    import EventReader, filter_events, uart_lines, usb_read_fn
 from agentlab.host.discovery import DeviceInfo, find_device, find_usb_device
+from agentlab.host.la        import (LACapture, LAStreamParser, LATrigger, parse_trigger,
+    parse_samples)
 
 # Instrument ---------------------------------------------------------------------------------------
 
@@ -26,16 +29,20 @@ class Instrument:
     def __init__(self, csrs: Optional[CSRs] = None,
         uart_factory : Optional[Callable[[int], DUTUart]] = None,
         events_read  : Optional[Callable[[int, int], bytes]] = None,
+        la_read      : Optional[Callable[[int, int], bytes]] = None,
         sys_clk_freq : Optional[float] = None,
         device       : Optional[DeviceInfo] = None,
-        sleep        : Callable[[float], None] = time.sleep):
+        sleep        : Callable[[float], None] = time.sleep,
+        clock        : Callable[[], float] = time.monotonic):
         self.csrs          = csrs
         self.device        = device
         self.sleep         = sleep
+        self.clock         = clock
         self._uart_factory = uart_factory
         self._uarts        = {}
         self._events_read  = events_read
         self._events       = None
+        self._la_read      = la_read
         if sys_clk_freq is None and csrs is not None:
             sys_clk_freq = csrs.csr_map.sys_clk_freq
         self.sys_clk_freq  = float(sys_clk_freq or c.DEFAULT_SYS_CLK_FREQ)
@@ -91,8 +98,17 @@ class Instrument:
                 events_read.fn = usb_read_fn(find_usb_device(device))
             return events_read.fn(size, timeout_ms)
 
+        def la_read(size, timeout_ms):
+            # Bound lazily: only claims the logic analyzer interface when captures are made.
+            if not hasattr(la_read, "fn"):
+                if device is None:
+                    raise RuntimeError("Logic analyzer needs the USB device (not found).")
+                la_read.fn = usb_read_fn(find_usb_device(device), interface=c.LA_INTERFACE,
+                    endpoint=c.LA_ENDPOINT)
+            return la_read.fn(size, timeout_ms)
+
         instrument = cls(csrs=csrs, uart_factory=uart_factory, events_read=events_read,
-            sys_clk_freq=sys_clk_freq, device=device)
+            la_read=la_read, sys_clk_freq=sys_clk_freq, device=device)
         if start_events and device is not None:
             instrument.events
         return instrument
@@ -227,3 +243,140 @@ class Instrument:
         """DUT UART RX text lines (with device timestamps) from the events stream."""
         events = self.events_between(since=since, until=until, types="uart_rx", source=index)
         return uart_lines(events)
+
+    # Logic Analyzer -------------------------------------------------------------------------------
+
+    def _la_constant(self, name, default=None):
+        return self._csrs().csr_map.constants.get(name, default)
+
+    @property
+    def la_channels(self) -> int:
+        """Logic analyzer channels."""
+        return int(self._la_constant(c.CONST_LA_CHANNELS, 32))
+
+    @property
+    def la_ring_samples(self) -> Optional[int]:
+        """Logic analyzer DRAM ring buffer depth (samples): capture mode maximum length."""
+        n = self._la_constant(c.CONST_LA_RING_SAMPLES)
+        return None if n is None else int(n)
+
+    def la_divider(self, rate=None) -> int:
+        """Divider for a samplerate (Hz, k/M suffixes, None: sys_clk), samplerate = sys_clk/div."""
+        if rate is None:
+            return 1
+        from agentlab.host.la import parse_number
+        return max(1, int(round(self.sys_clk_freq/parse_number(rate))))
+
+    def la_configure(self, rate=None, trigger=None, pre=0, length=4096, mode="capture") -> Dict:
+        """Configure the logic analyzer (not armed). rate: samplerate (Hz, "25M"); trigger:
+        LATrigger or spec string (see agentlab.host.la.parse_trigger); pre/length: samples or
+        durations ("10us"); mode: "capture" (DRAM ring buffer, then readout) or "stream"
+        (continuous, length 0: until la_stop). Returns the configuration (CSR values)."""
+        csrs     = self._csrs()
+        divider  = self.la_divider(rate)
+        rate_hz  = self.sys_clk_freq/divider
+        pre      = parse_samples(pre, rate_hz)
+        length   = parse_samples(length, rate_hz)
+        trig     = trigger if isinstance(trigger, LATrigger) else parse_trigger(trigger)
+        if mode not in c.LA_MODES:
+            raise ValueError("Invalid LA mode {} (capture or stream).".format(mode))
+        ring = self.la_ring_samples
+        if mode == "capture" and length <= 0:
+            raise ValueError("Capture mode needs a length > 0.")
+        if length and pre >= length:
+            raise ValueError("Pre-trigger ({}) must be < length ({}).".format(pre, length))
+        if ring is not None and mode == "capture" and length > ring:
+            raise ValueError("Length {} exceeds the ring buffer ({} samples): use stream "
+                "mode.".format(length, ring))
+        if ring is not None and pre > ring//2:
+            raise ValueError("Pre-trigger {} exceeds half the ring buffer ({} samples).".format(
+                pre, ring//2))
+        if length >= 2**32:
+            raise ValueError("Length {} too large (32-bit).".format(length))
+        csrs.write(c.CSR_LA_MODE,           c.LA_MODES[mode])
+        csrs.write(c.CSR_LA_DIVIDER,        divider)
+        csrs.write(c.CSR_LA_TRIGGER_SOURCE, trig.source)
+        csrs.write(c.CSR_LA_TRIGGER_MASK,   trig.mask)
+        csrs.write(c.CSR_LA_TRIGGER_VALUE,  trig.value)
+        csrs.write(c.CSR_LA_TRIGGER_EDGE,   trig.edge_csr)
+        csrs.write(c.CSR_LA_TRIGGER_EXT,    trig.ext)
+        csrs.write(c.CSR_LA_PRE_TRIGGER,    pre)
+        csrs.write(c.CSR_LA_LENGTH,         length)
+        return {"mode": mode, "divider": divider, "samplerate_hz": rate_hz, "pre": pre,
+            "length": length, "trigger": trig}
+
+    def la_arm(self):
+        self._csrs().write(c.CSR_LA_CONTROL, 0b01)
+
+    def la_stop(self):
+        """Stop: armed: abort (nothing sent), triggered: end the capture (stream mode)."""
+        self._csrs().write(c.CSR_LA_CONTROL, 0b10)
+
+    def la_status(self) -> Dict:
+        csrs   = self._csrs()
+        status = csrs.read(c.CSR_LA_STATUS)
+        return {
+            "state"      : c.LA_STATES.get(status & 0x7, "unknown"),
+            "triggered"  : bool((status >> 3) & 1),
+            "overflow"   : bool((status >> 4) & 1),
+            "dram_ready" : bool((status >> 5) & 1),
+            "count"      : csrs.read(c.CSR_LA_COUNT),
+            "level"      : csrs.read(c.CSR_LA_LEVEL),
+        }
+
+    def la_capture(self, rate=None, trigger=None, pre=0, length=4096, mode="capture",
+        timeout=10.0, duration=None, transfer_size=1 << 20) -> LACapture:
+        """Configure, arm and read a capture (LACapture: samples in the shared timebase).
+
+        timeout : seconds to wait for the trigger/end of the capture (no trigger: capture aborted,
+                  TimeoutError).
+        duration: stream mode with length 0: stop after duration seconds.
+        """
+        if self._la_read is None:
+            raise RuntimeError("No logic analyzer backend.")
+        self.la_configure(rate=rate, trigger=trigger, pre=pre, length=length, mode=mode)
+        status = self.la_status()
+        if not status["dram_ready"]:
+            raise RuntimeError("Logic analyzer DRAM not ready (DRAM initialization failed?).")
+        parser = LAStreamParser(self.sys_clk_freq)
+        self.la_arm()
+        start   = self.clock()
+        stopped = False
+        while not parser.done:
+            data = self._la_read(transfer_size, 100)
+            if data:
+                parser.feed(data)
+                continue
+            elapsed = self.clock() - start
+            if duration is not None and not stopped and elapsed > duration:
+                self.la_stop()
+                stopped = True
+            if elapsed > timeout + (duration or 0):
+                status = self.la_status()
+                if not status["triggered"]:
+                    self.la_stop()
+                    raise TimeoutError("Logic analyzer: no trigger after {:.1f}s.".format(
+                        elapsed))
+                raise TimeoutError("Logic analyzer: capture incomplete after {:.1f}s "
+                    "({} samples received, status {}).".format(elapsed, len(parser.samples),
+                    status))
+        return parser.capture
+
+    def la_capture_summary(self, channels=None, names=None, out=None, **kwargs) -> Dict:
+        """la_capture, write `out` (.vcd/.sr/.json) and return a summary (agentlab.host.la.summarize)
+        of the selected channels ("0-7,12", list or None: all) with the file path."""
+        from agentlab.host.la import parse_channels, summarize, write_capture
+        capture = self.la_capture(**kwargs)
+        chans   = parse_channels(channels, capture.channels)
+        if isinstance(names, str):
+            names = names.split(",")
+        if names is not None and len(names) == len(chans):
+            full = ["ch{}".format(i) for i in range(capture.channels)]
+            for ch, name in zip(chans, names):
+                full[ch] = name
+            names = full
+        if out is not None:
+            write_capture(capture, out, channels=chans, names=names)
+        summary = summarize(capture, chans, names)
+        summary["file"] = out
+        return summary

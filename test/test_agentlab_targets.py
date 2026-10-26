@@ -47,20 +47,56 @@ AGENTLAB_CSRS = [
     "usb3_core_status",
 ]
 
+AGENTLAB_LA_CSRS = [
+    "agentlab_la_mode",
+    "agentlab_la_divider",
+    "agentlab_la_trigger_source",
+    "agentlab_la_trigger_mask",
+    "agentlab_la_trigger_value",
+    "agentlab_la_trigger_edge",
+    "agentlab_la_trigger_ext",
+    "agentlab_la_pre_trigger",
+    "agentlab_la_length",
+    "agentlab_la_control",
+    "agentlab_la_status",
+    "agentlab_la_level",
+    "agentlab_la_count",
+    "agentlab_la_trigger_offset",
+    "agentlab_la_start_timestamp",
+    "agentlab_la_trigger_timestamp",
+    "ddrctrl_init_done",
+    "ddrctrl_init_error",
+]
+
 TARGETS = {
-    #  target  : (gpios, power)
-    "acorn"    : (2,  1),
-    "kc705"    : (16, 4),
+    #  target  : (gpios, power, la word samples)
+    "acorn"    : (2,  1, 4),  # DDR3 x16: 128-bit native port.
+    "kc705"    : (16, 4, 16), # DDR3 x64: 512-bit native port.
 }
 
 @pytest.mark.parametrize("target", list(TARGETS))
-def test_agentlab_target(target, tmp_path):
-    csr = elaborate(target, tmp_path)
+@pytest.mark.parametrize("dram", [True, False])
+def test_agentlab_target(target, dram, tmp_path):
+    csr = elaborate(target, tmp_path, [] if dram else ["--no-dram"])
     registers = [line.split(",")[1] for line in csr.splitlines() if line.startswith("csr_register")]
     for name in AGENTLAB_CSRS:
         assert name in registers, name
-    gpios, power = TARGETS[target]
+    for name in AGENTLAB_LA_CSRS:
+        assert (name in registers) == dram, name
+    gpios, power, word_samples = TARGETS[target]
     assert "constant,agentlab_uarts,4" in csr
     assert f"constant,agentlab_gpios,{gpios}" in csr
     assert f"constant,agentlab_power,{power}" in csr
     assert "constant,agentlab_events_ep,11" in csr
+    if dram:
+        # Logic analyzer: 32 channels, EP12, ring buffer in the upper half of the 1GB DDR3.
+        assert "constant,agentlab_la_channels,32" in csr
+        assert "constant,agentlab_la_interface,11" in csr
+        assert "constant,agentlab_la_ep,12" in csr
+        assert f"constant,agentlab_la_ring_base,{512*2**20}" in csr
+        assert f"constant,agentlab_la_ring_size,{512*2**20}" in csr
+        assert f"constant,agentlab_la_ring_samples,{128*2**20}" in csr
+        assert f"constant,agentlab_la_word_samples,{word_samples}" in csr
+        assert "memory_region,main_ram,0x40000000,1073741824" in csr
+    else:
+        assert "agentlab_la" not in csr

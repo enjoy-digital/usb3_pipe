@@ -20,10 +20,13 @@ LVCMOS25; change the IOStandard if VADJ is reprogrammed to 1.8V/3.3V):
 | LA05_P / LA05_N    | DUT UART3 TX / RX                                               |
 | LA06-LA13 P/N      | DUT GPIO0-15 (LA06_P: GPIO0, LA06_N: GPIO1, ... LA13_N: GPIO15) |
 | LA14_P/N, LA15_P/N | DUT power switches 0-3 (LA14_P: 0, LA14_N: 1, LA15_P: 2, ...)   |
-| LA16-LA31 P/N      | Reserved: logic analyzer channels 0-31 (phase 2)                |
+| LA16-LA31 P/N      | Logic analyzer channels 0-31 (LA16_P: 0, LA16_N: 1, ... LA31_N) |
 | LA32-LA33 P/N      | Reserved: JTAG/SWD TCK/SWCLK, TMS/SWDIO, TDI, TDO (phase 3)     |
 | LA01_CC_P          | Reserved: JTAG/SWD nRESET (phase 3)                             |
 | LA00_CC, LA01_CC_N | Unused (clock capable: external LA clock, later)                |
+
+Logic analyzer ring buffer in the DDR3 SODIMM (MT8JTF12864, 1GB, initialized by the VexRiscv BIOS:
+console on a stub UART). --no-dram: phase 1 instrument only (no CPU/DRAM/logic analyzer).
 """
 
 import os
@@ -42,6 +45,9 @@ from litex_boards.platforms import xilinx_kc705
 from litex.build.generic_platform import *
 
 from litex.soc.cores.clock import *
+
+from litedram.modules import MT8JTF12864
+from litedram.phy     import s7ddrphy
 
 from usb3_pipe import K7USB3SerDes
 
@@ -79,7 +85,7 @@ _dut_io = [
     # DUT power switches.
     ("dut_power", 0, Pins(_lpc_pins(["14", "15"])), IOStandard("LVCMOS25")),
 
-    # Logic analyzer channels (phase 2).
+    # Logic analyzer channels.
     ("dut_la", 0, Pins(_lpc_pins(["16", "17_CC", "18_CC", "19", "20", "21", "22", "23",
         "24", "25", "26", "27", "28", "29", "30", "31"])), IOStandard("LVCMOS25")),
 
@@ -97,9 +103,12 @@ _dut_io = [
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(LiteXModule):
-    def __init__(self, platform, sys_clk_freq):
+    def __init__(self, platform, sys_clk_freq, with_dram=True):
         self.cd_sys = ClockDomain()
         self.cd_oob = ClockDomain()
+        if with_dram:
+            self.cd_sys4x  = ClockDomain()
+            self.cd_idelay = ClockDomain()
 
         # # #
 
@@ -110,19 +119,35 @@ class _CRG(LiteXModule):
         pll.create_clkout(self.cd_sys, sys_clk_freq,   margin=0)
         pll.create_clkout(self.cd_oob, sys_clk_freq/8, margin=0)
 
+        # DRAM clocks (K7DDRPHY: sys4x, IDELAYCTRL reference).
+        if with_dram:
+            pll.create_clkout(self.cd_sys4x,  4*sys_clk_freq, margin=0)
+            pll.create_clkout(self.cd_idelay, 200e6,          margin=0)
+            self.idelayctrl = S7IDELAYCTRL(self.cd_idelay)
+
 # AgentLab SoC -------------------------------------------------------------------------------------
 
 class AgentLabKC705(AgentLabSoC):
-    def __init__(self, platform, with_uartbone=True, with_jtagbone=False):
+    def __init__(self, platform, with_uartbone=True, with_jtagbone=False, with_dram=True):
         sys_clk_freq = int(125e6)
 
         # CRG --------------------------------------------------------------------------------------
-        self.crg = _CRG(platform, sys_clk_freq)
+        self.crg = _CRG(platform, sys_clk_freq, with_dram=with_dram)
 
         # AgentLabSoC ------------------------------------------------------------------------------
         AgentLabSoC.__init__(self, platform, sys_clk_freq,
             with_uartbone = with_uartbone,
-            with_jtagbone = with_jtagbone)
+            with_jtagbone = with_jtagbone,
+            cpu_type      = "vexriscv" if with_dram else None)
+
+        # DDR3 SDRAM -------------------------------------------------------------------------------
+        if with_dram:
+            self.add_agentlab_dram(
+                phy = s7ddrphy.K7DDRPHY(platform.request("ddram"),
+                    memtype      = "DDR3",
+                    nphases      = 4,
+                    sys_clk_freq = sys_clk_freq),
+                module = MT8JTF12864(sys_clk_freq, "1:4"))
 
         # USB3 SerDes ------------------------------------------------------------------------------
         # GTX reference clock: 125MHz SGMII oscillator, dedicated to the GTX Quad 117 (SFP/SMA).
@@ -140,6 +165,7 @@ class AgentLabKC705(AgentLabSoC):
             "uarts" : [platform.request("dut_uart", n) for n in range(4)],
             "gpio"  : platform.request("dut_gpio"),
             "power" : platform.request("dut_power"),
+            "la"    : platform.request("dut_la") if with_dram else None,
         }
         self.add_agentlab(usb3_serdes, dut_pads,
             leds = [platform.request("user_led", i) for i in range(3)])
@@ -151,6 +177,7 @@ def main():
     agentlab_args(parser, output_dir="build/agentlab_kc705")
     parser.add_argument("--no-uartbone",   action="store_true", help="Disable UARTBone (board UART).")
     parser.add_argument("--with-jtagbone", action="store_true", help="Enable JTAGBone.")
+    parser.add_argument("--no-dram",       action="store_true", help="No DRAM/CPU/logic analyzer (phase 1 instrument).")
     args = parser.parse_args()
 
     platform = xilinx_kc705.Platform()
@@ -158,7 +185,8 @@ def main():
     platform.add_extension(_dut_io)
     soc = AgentLabKC705(platform,
         with_uartbone = not args.no_uartbone,
-        with_jtagbone = args.with_jtagbone)
+        with_jtagbone = args.with_jtagbone,
+        with_dram     = not args.no_dram)
     agentlab_build(parser, args, soc)
 
 if __name__ == "__main__":

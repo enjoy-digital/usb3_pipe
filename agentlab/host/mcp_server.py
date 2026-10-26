@@ -10,8 +10,11 @@ The tools are plain methods of `AgentLabTools` (testable without the `mcp` packa
 `mcp` Python SDK (FastMCP) is only imported to serve them.
 """
 
+import os
 import sys
+import time
 import argparse
+import tempfile
 from typing import List, Optional
 
 from agentlab.host.events import uart_lines
@@ -26,6 +29,7 @@ class AgentLabTools:
         "power_set", "power_cycle",
         "gpio_set", "gpio_get",
         "events", "timestamp", "marker",
+        "la_capture",
     ]
 
     def __init__(self, instrument_factory):
@@ -210,6 +214,43 @@ class AgentLabTools:
         """
         ticks = self.instrument.marker(value)
         return {"value": value, "timestamp": ticks, "time_s": self.instrument.ticks_to_s(ticks)}
+
+    # Logic Analyzer -------------------------------------------------------------------------------
+
+    def la_capture(self, channels: Optional[str] = None, rate_hz: Optional[float] = None,
+        trigger: str = "immediate", pre: str = "0", length: str = "4096",
+        mode: str = "capture", names: Optional[str] = None, out: Optional[str] = None,
+        timeout_s: float = 10.0, duration_s: Optional[float] = None) -> dict:
+        """Capture DUT digital signals with the logic analyzer and summarize them.
+
+        Args:
+            channels: channels to save/summarize, e.g. "0-7,12" (null: all).
+            rate_hz: samplerate in Hz (null: max, sys_clk 125MHz; actual rate = sys_clk/divider).
+            trigger: "immediate", or comma separated pattern/edge terms "ch3=1", "rising:2",
+                "falling:2", "edge:2" (all must match), or "marker" (trigger on the next marker
+                tool call), "gpio" (GPIO edge event), "power" (power switch change).
+            pre: samples kept before the trigger (or a duration like "10us").
+            length: total samples (pre-trigger included) or a duration like "5ms".
+            mode: "capture" (DRAM buffer, up to the ring size) or "stream" (continuous through
+                DRAM, length "0" with duration_s: until stopped).
+            names: optional channel names, comma separated, one per selected channel.
+            out: output file (.vcd, .sr for sigrok/PulseView, .json); null: a .vcd in the temp
+                directory.
+            timeout_s: maximum wait for the trigger/capture end.
+            duration_s: stream mode with length "0": capture duration.
+        Returns:
+            {"samples", "samplerate_hz", "start_time_s", "trigger_time_s", "duration_s",
+             "overflow", "file", "channels": {name: {"initial", "final", "edges", "rising",
+             "falling", "first_edges": [{"time_s", "level"}], "duty", "frequency_hz"?}}}.
+            Times are device seconds (same timebase as events/uart_log).
+        """
+        if out is None:
+            d   = os.path.join(tempfile.gettempdir(), "agentlab")
+            os.makedirs(d, exist_ok=True)
+            out = os.path.join(d, "la_{}.vcd".format(time.strftime("%Y%m%d_%H%M%S")))
+        return self.instrument.la_capture_summary(channels=channels, names=names, out=out,
+            rate=rate_hz, trigger=trigger, pre=pre, length=length, mode=mode, timeout=timeout_s,
+            duration=duration_s)
 
 # Server -------------------------------------------------------------------------------------------
 

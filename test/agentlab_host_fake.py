@@ -11,6 +11,7 @@ from agentlab.host.csr        import CSRMap, CSRs
 from agentlab.host.uart       import DUTUart
 from agentlab.host.events     import Event, pack_event
 from agentlab.host.instrument import Instrument
+from agentlab.host.la         import LAHeader, pack_stream
 
 SYS_CLK_FREQ = 125e6
 
@@ -27,7 +28,23 @@ CSR_REGISTERS = [
     (c.CSR_GPIO_IN,            1, "ro"),
     (c.CSR_GPIO_EDGE_MASK,     1, "rw"),
     (c.csr_uart_baudrate(0),   1, "rw"),
+    (c.CSR_LA_MODE,              1, "rw"),
+    (c.CSR_LA_DIVIDER,           1, "rw"),
+    (c.CSR_LA_TRIGGER_SOURCE,    1, "rw"),
+    (c.CSR_LA_TRIGGER_MASK,      1, "rw"),
+    (c.CSR_LA_TRIGGER_VALUE,     1, "rw"),
+    (c.CSR_LA_TRIGGER_EDGE,      1, "rw"),
+    (c.CSR_LA_TRIGGER_EXT,       1, "rw"),
+    (c.CSR_LA_PRE_TRIGGER,       1, "rw"),
+    (c.CSR_LA_LENGTH,            1, "rw"),
+    (c.CSR_LA_CONTROL,           1, "rw"),
+    (c.CSR_LA_STATUS,            1, "ro"),
+    (c.CSR_LA_LEVEL,             1, "ro"),
+    (c.CSR_LA_COUNT,             2, "ro"),
 ]
+
+LA_CHANNELS     = 16
+LA_RING_SAMPLES = 1 << 20
 
 def csr_csv(base=0xf0000000):
     lines = [
@@ -42,6 +59,8 @@ def csr_csv(base=0xf0000000):
         addr += 4*size
     lines.append("constant,config_clock_frequency,{},,".format(int(SYS_CLK_FREQ)))
     lines.append("constant,config_csr_data_width,32,,")
+    lines.append("constant,{},{},,".format(c.CONST_LA_CHANNELS, LA_CHANNELS))
+    lines.append("constant,{},{},,".format(c.CONST_LA_RING_SAMPLES, LA_RING_SAMPLES))
     lines.append("memory_region,csr,0x{:08x},65536,io".format(base))
     return "\n".join(lines) + "\n"
 
@@ -67,6 +86,7 @@ class FakeCSRBus:
         self.mem     = {}
         self.log     = [] # (time, name, value) of CSR writes.
         self.names   = {r.addr: r.name for r in csr_map.registers.values()}
+        self.hooks   = {} # name -> fn(value) called on writes.
 
     def ticks(self):
         return int(self.clock()*SYS_CLK_FREQ)
@@ -81,6 +101,8 @@ class FakeCSRBus:
             oe  = self.mem.get(self.csr_map[c.CSR_GPIO_OE].addr, 0)
             out = self.mem.get(self.csr_map[c.CSR_GPIO_OUT].addr, 0)
             return [(out & oe) | (~oe & 0xffffffff)]
+        if reg is not None and reg.name == c.CSR_LA_STATUS:
+            return [self.mem.get(addr, 0) | (1 << 5)] # DRAM ready.
         return [self.mem.get(addr + 4*i, 0) for i in range(length)]
 
     def write(self, addr, datas):
@@ -88,6 +110,8 @@ class FakeCSRBus:
             self.mem[addr + 4*i] = d
         name = self.names.get(addr, "0x{:08x}".format(addr))
         self.log.append((self.clock(), name, datas[0] if len(datas) == 1 else datas))
+        if name in self.hooks:
+            self.hooks[name](datas[0] if len(datas) == 1 else datas)
 
     def close(self):
         pass
@@ -190,6 +214,52 @@ class FakeEventsEndpoint:
             return self.transfers.pop(0)
         return b""
 
+# Fake Logic Analyzer ------------------------------------------------------------------------------
+
+class FakeLA:
+    """Logic analyzer: on arm, a capture of the configured length is queued on the LA endpoint.
+    Samples: counter (sample k = first + k: channel n toggles every 2^n samples), trigger on the
+    sample pre-trigger (pattern triggers not evaluated), start timestamp: arm time."""
+    def __init__(self, bus, split=4096, first=0x100, trigger=True):
+        self.bus       = bus
+        self.split     = split
+        self.first     = first
+        self.trigger   = trigger # False: never triggers (timeout tests).
+        self.transfers = []
+        self.arms      = 0
+        self.stops     = 0
+        bus.hooks[c.CSR_LA_CONTROL] = self.control
+
+    def csr(self, name):
+        return self.bus.mem.get(self.bus.csr_map[name].addr, 0)
+
+    def control(self, value):
+        if value & 0b10:
+            self.stops += 1
+        if not value & 0b01:
+            return
+        self.arms += 1
+        if not self.trigger:
+            return
+        divider = max(self.csr(c.CSR_LA_DIVIDER), 1)
+        pre     = self.csr(c.CSR_LA_PRE_TRIGGER)
+        length  = self.csr(c.CSR_LA_LENGTH) or 1000
+        start   = self.bus.ticks()
+        header  = LAHeader(version=c.LA_VERSION, channels=LA_CHANNELS,
+            mode=self.csr(c.CSR_LA_MODE), flags=0, divider=divider, block_samples=256,
+            trigger_offset=pre, count=length, start_timestamp=start,
+            trigger_timestamp=start + pre*divider)
+        mask    = (1 << LA_CHANNELS) - 1
+        data    = pack_stream(header, [(self.first + k) & mask for k in range(length)])
+        self.transfers += [data[i:i + self.split] for i in range(0, len(data), self.split)]
+        self.bus.mem[self.bus.csr_map[c.CSR_LA_STATUS].addr] = 4 | (1 << 3) # Done, triggered.
+
+    def __call__(self, size, timeout_ms):
+        if self.transfers:
+            return self.transfers.pop(0)
+        self.bus.clock.sleep(timeout_ms/1000)
+        return b""
+
 # Fake Instrument ----------------------------------------------------------------------------------
 
 def uart_events(text, source=0, t0=0, dt=1000, typ=c.EVENT_UART_RX):
@@ -207,6 +277,8 @@ def make_instrument(uart_chunks=None, events=None):
     endpoint = FakeEventsEndpoint()
     if events:
         endpoint.push_events(events)
+    la = FakeLA(bus)
     instrument = Instrument(csrs=CSRs(bus, csr_map), uart_factory=uart_factory,
-        events_read=endpoint, sleep=clock.sleep)
-    return instrument, {"clock": clock, "bus": bus, "ports": ports, "endpoint": endpoint}
+        events_read=endpoint, la_read=la, sleep=clock.sleep, clock=clock)
+    return instrument, {"clock": clock, "bus": bus, "ports": ports, "endpoint": endpoint,
+        "la": la}
