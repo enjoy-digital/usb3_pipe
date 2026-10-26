@@ -25,6 +25,11 @@ Phase 1 DUT pins (details in the targets docstrings):
   tests), UART1-3 internally looped back, power switch 0 on user_led3. CSRs through the USB control
   CDC-ACM or JTAGBone (no UARTBone on the baseboard UART).
 
+Phase 2: logic analyzer channels 0-31 on the KC705 LA16-LA31 P/N (LA16_P: 0, LA16_N: 1, ...); on
+the Acorn, internal probes (`AgentLab.la_probes`): 0/1 UART0 TX/RX (debug pins H5/J5), 2-7 UART1-3
+TX/RX (internal loopbacks), 8/9 GPIO0/1 (debug pins J2/K2), 12 power switch 0, 16-31 timestamp bits
+0-15 (counter: checks the samples/timebase integrity).
+
 ## USB Composite Device
 
 Device class 0xEF/02/01 (IADs), one configuration:
@@ -40,8 +45,9 @@ Device class 0xEF/02/01 (IADs), one configuration:
 
 Endpoint numbers are indicative (max 15 IN/15 OUT): the gateware descriptors are the reference.
 
-Phase 1 (`agentlab/gateware/usb.py`, `agentlab_usb_map()`): interfaces 0-10/EP1-EP11 as above
-(USB3 data endpoints: Max Burst 2 for the CDC-ACM, 4 for the events), VID/PID 0x1d50/0x605a
+Phase 1/2 (`agentlab/gateware/usb.py`, `agentlab_usb_map()`): interfaces 0-11/EP1-EP12 as above
+(USB3 data endpoints: Max Burst 2 for the CDC-ACM, 4 for the events, 16 for the logic analyzer;
+interface 11 only with the logic analyzer, `with_la`), VID/PID 0x1d50/0x605a
 (USB3-PIPE), product string "AgentLab". The CDC-ACM class requests (SET/GET_LINE_CODING,
 SET_CONTROL_LINE_STATE) are dispatched to the function of their interface (wIndex,
 `usb3_core.control.USB3ControlDispatcher`): each DUT UART has its own line coding/DTR. A DUT UART
@@ -88,9 +94,89 @@ Phase 1 details (`agentlab/gateware/events.py`):
   (buffered records).
 - Constants (csr.csv): `agentlab_uarts`, `agentlab_gpios`, `agentlab_power`,
   `agentlab_events_interface`, `agentlab_events_ep`.
-- `agentlab_la_*`: channels, samplerate divider, trigger (mask/value/edge), pre-trigger depth,
-  capture length, arm/status (phase 2).
+- `agentlab_la_*`: logic analyzer (see below).
 - `agentlab_video_*`: framebuffer base/format (phase 4).
+
+## DRAM
+
+The logic analyzer (and the phase 4 framebuffer) use the board DDR3 (`AgentLabSoC.add_agentlab_dram`,
+both targets: 1GB, Acorn MT41K512M16/A7DDRPHY, KC705 MT8JTF12864 SODIMM/K7DDRPHY, sys_clk 125MHz
+1:4). LiteDRAM needs a CPU for the initialization/calibration: VexRiscv (integrated ROM: BIOS, 8KB
+SRAM, console on a stub UART, a crossover UART would block the BIOS until a host reads it), DRAM
+also mapped as the CPU main_ram (0x40000000, L2 cache). The BIOS writes the `ddrctrl_init_done`/
+`ddrctrl_init_error` CSRs: `soc.dram_ready` (init done without error) enables the logic analyzer
+(arm ignored before, `agentlab_la_status.dram_ready`).
+
+`soc.sdram` (LiteDRAM crossbar) is shared: the logic analyzer takes one write and one read native
+port (`crossbar.get_port()`), ring buffer in the upper half of the DRAM (512MB at 512MB,
+`agentlab_la_ring_base/size`); the lower half is left to the CPU/BIOS (main_ram) and the other
+users (framebuffer...: further crossbar ports). `--no-dram`: phase 1 instrument only (no CPU/DRAM/
+logic analyzer).
+
+## Logic Analyzer
+
+`agentlab/gateware/la.py` (`AgentLabLA`): N channels (<= 32: KC705 32 FMC pins, Acorn 32 internal
+probes), inputs synchronized (2 sys_clk cycles: timestamps are the synchronized samples instants),
+sampled at sys_clk/divider (125MHz max), samples are 32-bit words (channel n on bit n).
+
+- From the arm, every sample is written to the DRAM ring buffer (LiteDRAM DMA writer) and checked
+  against the trigger: immediate, pattern (`(sample & mask) == (value & mask)`, optionally with an
+  edge on one channel: rising/falling/any), or external (marker CSR write, GPIO edge event of the
+  GPIOs enabled in `agentlab_gpio_edge_mask`, power switch change: on the next sample).
+- On the trigger (sample t), the capture starts at `t - min(pre_trigger, t)` (offset in the header)
+  and continues `length - pre_trigger` samples from the trigger (trigger included). The trigger
+  also emits an event (type 0x05, value: trigger sample, timestamp: trigger sample time).
+- Capture mode: the readout (LiteDRAM DMA reader -> Bulk IN) starts at the end of the capture
+  (length <= ring buffer: 128M samples, ~1s at 125MHz).
+- Stream mode: the readout starts on the trigger, the ring buffer is a FIFO absorbing the USB stalls
+  (sustained rate limited by USB: ~350-400MB/s, divider >= 2 for 32-bit samples). A full ring (host
+  not keeping up) ends the capture (overflow, all samples before it are sent); length 0: until stop.
+- After the trigger the writer never overwrites unread samples; samples lost (DRAM/ring full) end
+  the capture with the overflow flag. Arm restarts from any state (previous capture flushed, the
+  Bulk IN endpoint flushed); stop: armed: abort (nothing sent), triggered: end of the capture.
+- Timing: sample k is at `start_timestamp + k*divider` (shared timebase, sys_clk ticks).
+
+Stream format (EP12 IN, 32-bit little-endian words), per capture:
+
+| Words | Field |
+|---|---|
+| 0 | magic 0x31414c41 ("ALA1") |
+| 1 | version (bits 0-7, 1), channels (8-15), mode (16-23, 0: capture, 1: stream), flags (24-31, bit 0: overflow, capture mode) |
+| 2 | divider (samplerate = sys_clk_freq/divider) |
+| 3 | block samples (B, 256) |
+| 4 | trigger offset (samples from the capture start) |
+| 5 | reserved (0) |
+| 6-7 | sample count (64-bit; capture mode: exact, stream mode: expected, 0: until stop) |
+| 8-9 | start timestamp (64-bit, sys_clk ticks, sample 0) |
+| 10-11 | trigger timestamp (64-bit) |
+
+Then blocks until the last one: a block word (count: bits 0-15, flags: bits 16-23, bit 0: last
+block, bit 1: overflow, magic 0xb1: bits 24-31) followed by count samples (B, last block <= B, can
+be 0). The stream is sent continuously (packets of up to 1024 bytes, ended after ~1us without data).
+
+CSRs:
+
+| CSR | Description |
+|---|---|
+| `agentlab_la_mode` | 0: capture, 1: stream |
+| `agentlab_la_divider` | samplerate = sys_clk_freq/divider (0/1: sys_clk_freq) |
+| `agentlab_la_trigger_source` | 0: immediate, 1: pattern (mask/value, edge), 2: external |
+| `agentlab_la_trigger_mask`, `agentlab_la_trigger_value` | pattern: channels compared, values |
+| `agentlab_la_trigger_edge` | enable (bit 0), channel (bits 1-5), polarity (bits 6-7: 0 rising, 1 falling, 2 any) |
+| `agentlab_la_trigger_ext` | external sources: marker (bit 0), GPIO edge (bit 1), power (bit 2) |
+| `agentlab_la_pre_trigger` | samples before the trigger |
+| `agentlab_la_length` | samples (pre-trigger included); stream mode: 0, until stop |
+| `agentlab_la_control` | arm (bit 0), stop (bit 1) (write 1: pulse) |
+| `agentlab_la_status` | state (bits 0-2: 0 idle, 1 armed, 2 triggered, 3 readout, 4 done, 5 flush), triggered (3), overflow (4), dram_ready (5) |
+| `agentlab_la_level` | DRAM words buffered (not read) |
+| `agentlab_la_count` | samples captured (64-bit) |
+| `agentlab_la_trigger_offset` | trigger sample from the capture start |
+| `agentlab_la_start_timestamp`, `agentlab_la_trigger_timestamp` | 64-bit |
+
+Constants (csr.csv): `agentlab_la_channels`, `agentlab_la_interface` (11), `agentlab_la_ep` (12),
+`agentlab_la_ring_base`, `agentlab_la_ring_size` (bytes from the DRAM start),
+`agentlab_la_ring_samples`, `agentlab_la_word_samples` (samples per DRAM word),
+`agentlab_la_block_samples`.
 
 ## Host
 
@@ -141,7 +227,20 @@ agentlab uart read 0 --timeout 2 --baudrate 115200
 agentlab gpio set 3 0 && agentlab gpio get 3   # Drive/read GPIO3 (gpio release 3: input).
 agentlab marker 0x42                           # Marker event, prints its device time.
 agentlab events --follow --types uart_rx,gpio  # Timestamped events (--lines: UART text lines).
+
+# Logic analyzer: 25MHz, trigger on a falling edge of channel 0 with channel 1 high, 1000 samples
+# before the trigger, 10ms in total, channels 0-7 to a VCD (or .sr for PulseView, .json): prints a
+# JSON summary (per channel levels, edges, first edges, frequency, duty cycle).
+agentlab la capture --rate 25M --trigger "falling:0,ch1=1" --pre 1000 --length 10ms \
+    --channels 0-7 --out capture.vcd
+agentlab la capture --trigger marker --length 1M --out boot.sr  # Trigger on the next marker.
+agentlab la capture --mode stream --length 0 --duration 2 --rate 10M --out long.sr
+agentlab la status
 ```
+
+Logic analyzer files: VCD with a 1ns timescale and times in device time (shared with the events:
+`#t` = timestamp/sys_clk_freq), sigrok srzip (`version`, `metadata`, `logic-1-N`, plus an
+`agentlab.json` member with the start/trigger timestamps, ignored by sigrok).
 
 Python:
 
@@ -155,6 +254,8 @@ with Instrument.open(csr_csv="csr.csv", start_events=True) as lab:
     print(r.groups, r.elapsed)
     for line in lab.uart_lines(index=0, since=lab.ticks_to_s(t0)):
         print("{:.6f}s {}".format(lab.ticks_to_s(line.timestamp), line.text))
+    cap = lab.la_capture(rate="10M", trigger="rising:0", pre=100, length="1ms")
+    print(cap.trigger_timestamp, len(cap.samples), cap.time(0)) # Shared timebase.
 ```
 
 MCP server (stdio), e.g. for Claude Code (`.mcp.json`) or any MCP client:
@@ -171,8 +272,9 @@ MCP server (stdio), e.g. for Claude Code (`.mcp.json`) or any MCP client:
 ```
 
 Tools: `uart_read`, `uart_write`, `uart_wait_for`, `uart_log`, `power_set`, `power_cycle`,
-`gpio_set`, `gpio_get`, `events`, `timestamp`, `marker`. Times are device seconds (`time_s`, shared
+`gpio_set`, `gpio_get`, `events`, `timestamp`, `marker`, `la_capture`. Times are device seconds (`time_s`, shared
 timebase); the instrument is opened on the first tool call and the events reader runs from then.
 
-Tests: `pytest test/test_agentlab_host*.py` (fake backends, default suite); with a device
+Tests: `pytest test/test_agentlab_host*.py` (fake backends, default suite), `test_agentlab_la.py`
+(logic analyzer gateware simulations with a LiteDRAM native ports model); with a device
 connected: `AGENTLAB_CSR_CSV=... pytest -m hw test/test_agentlab_host_hw.py`.
