@@ -182,11 +182,14 @@ class AgentLabEyes(LiteXModule):
         self.specials += text_mem, text_bus, text_rd, font_mem, font_rd, wave_mem, wave_wr, wave_rd
 
         # Text grid Wishbone slave (one cell per word, single cycle writes, reads with 1 cycle
-        # latency).
+        # latency). The SoC bus gives the slave the full word address: only the low bits index the
+        # grid (region aligned on its power of 2 size).
+        adr = Signal(bits_for(cols*rows - 1))
         self.comb += [
-            text_bus.adr.eq(bus.adr),
+            adr.eq(bus.adr),
+            text_bus.adr.eq(adr),
             text_bus.dat_w.eq(bus.dat_w[:16]),
-            text_bus.we.eq(bus.cyc & bus.stb & bus.we & ~bus.ack & (bus.adr < cols*rows)),
+            text_bus.we.eq(bus.cyc & bus.stb & bus.we & ~bus.ack & (adr < cols*rows)),
             bus.dat_r.eq(text_bus.dat_r),
         ]
         self.sync += [

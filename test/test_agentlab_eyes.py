@@ -96,9 +96,9 @@ class TestEyesRenderer(unittest.TestCase):
         def generator():
             # Text grid through the Wishbone slave (+ read back).
             for i, cell in enumerate(cells):
-                yield from eyes.bus.write(i, cell | 0xdead0000)
+                yield from eyes.bus.write(0x24000000 + i, cell | 0xdead0000) # Full SoC word address.
             for i in [0, 5, len(cells) - 1]:
-                self.assertEqual((yield from eyes.bus.read(i)), cells[i])
+                self.assertEqual((yield from eyes.bus.read(0x24000000 + i)), cells[i])
             # Waveform: 2 lanes from bit 1 on rows 1-2, column 2, single capture.
             yield eyes._wave_row.storage.eq(1)
             yield eyes._wave_lanes.storage.eq(2)
