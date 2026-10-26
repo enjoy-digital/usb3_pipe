@@ -185,6 +185,29 @@ class TestAgentLabEvents(unittest.TestCase):
         self.assertEqual(ends, [255, 399])
         self.assertEqual([r[2] for r in decode_records(col.words)], list(range(100)))
 
+    def test_packer_min_period(self):
+        # Bursts of 10 words every 60 cycles (idle in between): packets ended at each burst, or
+        # with min_period, at most every min_period cycles (bursts merged in the host transfers).
+        for min_period, ends in [(0, [9, 19, 29, 39, 49, 59, 69, 79]), (200, [9, 39, 79])]:
+            dut = AgentLabWordPacker(idle_cycles=8, min_period=min_period)
+            col = Collector(dut.source)
+            def gen():
+                for burst in range(8):
+                    for i in range(10):
+                        yield dut.sink.valid.eq(1)
+                        yield dut.sink.data.eq(10*burst + i)
+                        yield
+                        while not (yield dut.sink.ready):
+                            yield
+                    yield dut.sink.valid.eq(0)
+                    for _ in range(50):
+                        yield
+                for _ in range(400):
+                    yield
+            run_simulation(dut, [gen(), col.generator()])
+            self.assertEqual(col.words, list(range(80)))
+            self.assertEqual([i for i, last in enumerate(col.lasts) if last], ends)
+
 # GPIO / Power -------------------------------------------------------------------------------------
 
 class VectorDUT(LiteXModule):

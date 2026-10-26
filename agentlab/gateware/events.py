@@ -132,8 +132,13 @@ class AgentLabVectorEvents(LiteXModule):
 class AgentLabWordPacker(LiteXModule):
     """32-bit words stream to USB3 packets: a word is held until the next one (packet continues) or
     idle_cycles without word (packet ended: last, the host gets the data promptly); packets are also
-    ended at max_bytes."""
-    def __init__(self, max_bytes=1024, idle_cycles=128):
+    ended at max_bytes.
+
+    min_period: packets ended on idle (short packets: they end the host transfers) at most every
+    min_period cycles (data held up to min_period cycles): a slow stream (ex: data in bursts) fills
+    the host transfers instead of ending them at each burst.
+    """
+    def __init__(self, max_bytes=1024, idle_cycles=128, min_period=0):
         self.sink   = sink   = stream.Endpoint([("data", 32)])
         self.source = source = stream.Endpoint([("data", 32), ("be", 4)])
 
@@ -143,11 +148,21 @@ class AgentLabWordPacker(LiteXModule):
         pending   = Signal() # Word held.
         pkt_words = Signal(max=max_bytes//4)
         at_max    = Signal()
+        idle_end  = Signal() # Packet ended on idle.
         self.idle = idle = WaitTimer(idle_cycles)
+        if min_period:
+            period = Signal(max=min_period + 1, reset=min_period) # Since the last idle end.
+            self.sync += [
+                If(period != min_period, period.eq(period + 1)),
+                If(source.valid & source.ready & ~sink.valid & ~at_max, period.eq(0)),
+            ]
+            self.comb += idle_end.eq(idle.done & (period == min_period))
+        else:
+            self.comb += idle_end.eq(idle.done)
         self.comb += [
             idle.wait.eq(~sink.valid & pending),
             at_max.eq(pkt_words == (max_bytes//4 - 1)),
-            source.valid.eq(pending & (sink.valid | idle.done | at_max)),
+            source.valid.eq(pending & (sink.valid | idle_end | at_max)),
             source.data.eq(out),
             source.last.eq(~sink.valid | at_max),
             source.be.eq(0b1111),

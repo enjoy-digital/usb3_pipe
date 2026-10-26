@@ -94,6 +94,7 @@ class LADUT(LiteXModule):
             ring_size     = ring_size,
             block_samples = block_samples,
             idle_cycles   = 16,
+            packet_period = 512,
             **{"sample_fifo_depth": 64, "output_fifo_depth": 64, "dma_fifo_depth": 8, **kwargs})
 
 class Reader:
@@ -482,7 +483,7 @@ class InstrumentDUT(LiteXModule):
         self.agentlab = AgentLab(125e6, uart_pads=[None]*4, n_gpios=2, n_power=1,
             la_inputs = "probes",
             la_kwargs = dict(write_port=self.wport, read_port=self.rport, ring_base=0,
-                ring_size=4096, block_samples=16, idle_cycles=16))
+                ring_size=4096, block_samples=16, idle_cycles=16, packet_period=512))
 
 class TestAgentLabLAInstrument(unittest.TestCase):
     def test_probes_marker_trigger_event(self):

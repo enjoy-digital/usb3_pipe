@@ -108,13 +108,16 @@ class AgentLabLA(LiteXModule):
     ext_trigger   : external trigger events (pulses, LA_EXT_* bits).
     dram_ready    : DRAM initialized (arm ignored when 0).
     trigger_event : pulse on the trigger (trigger_value: trigger sample), for the events stream.
+
+    packet_period : short packets (end of the host transfers) at most every packet_period cycles.
     """
     def __init__(self, inputs, timestamp, write_port, read_port, ring_base, ring_size,
         block_samples      = 256,
         sample_fifo_depth  = 1024,
         output_fifo_depth  = 1024,
         dma_fifo_depth     = 64,
-        idle_cycles        = 128):
+        idle_cycles        = 128,
+        packet_period      = 2**17):
         n = len(inputs)
         assert 1 <= n <= 32
         dw         = write_port.data_width
@@ -627,7 +630,11 @@ class AgentLabLA(LiteXModule):
         ]
 
         # Packets (USB3 Bulk IN) -------------------------------------------------------------------
-        self.packer = packer = ResetInserter()(AgentLabWordPacker(idle_cycles=idle_cycles))
+        # Short packets (end of the host transfers) at most every packet_period cycles (~1ms at
+        # 125MHz): stream mode blocks (bursts) fill the host transfers.
+        self.packer = packer = ResetInserter()(AgentLabWordPacker(
+            idle_cycles = idle_cycles,
+            min_period  = packet_period))
         self.comb += [
             packer.reset.eq(reset),
             framed.connect(packer.sink),
