@@ -16,7 +16,8 @@ test pattern (color bars, moving marker, moving luma band) in several modes sele
   VideoStreaming (Uncompressed YUY2 format, one frame descriptor per mode, Bulk IN endpoint or
   alternate settings 0/1 without/with an Isochronous IN endpoint).
 - USB3UVCControl: VS PROBE/COMMIT requests (EP0 request handler).
-- USB3UVCStream  : test pattern generator and payloads (12-byte payload header: FID/EOF/PTS/SCR).
+- USB3UVCStream  : test pattern generator (or external pixels, pattern=False) and payloads (12-byte
+  payload header: FID/EOF/PTS/SCR).
 - USB3UVC        : complete device (USB3DeviceCore + control + stream).
 
 Bulk streaming (UVC 1.1 2.4.3.2.2, default): payloads of dwMaxPayloadTransferSize bytes (header +
@@ -316,14 +317,22 @@ class USB3UVCStream(LiteXModule):
     start (pulse): start streaming in mode (stream restarted), stop (pulse): stop streaming.
     source: payloads (to the Bulk IN endpoint, or the Isochronous IN endpoint: one payload per
     service interval, last: end of payload).
+    frame_start (pulse): start of a frame (frame timer tick).
+
+    pattern=False: the frames pixels are taken from sink (YUY2 words: Y0 U Y1 V, width*height/2
+    words per frame, from the first pixel of the frame after frame_start) instead of the test
+    pattern (ex: a video renderer).
     """
-    def __init__(self, modes, clk_freq, payload_size=UVC_PAYLOAD_SIZE, bulk=True):
+    def __init__(self, modes, clk_freq, payload_size=UVC_PAYLOAD_SIZE, bulk=True, pattern=True):
         check_modes(modes, payload_size, bulk)
-        self.start  = Signal()                       # i
-        self.stop   = Signal()                       # i
-        self.mode   = Signal(max=max(len(modes), 2)) # i
-        self.source = source = stream.Endpoint(endpoint_layout())
-        self.frames = Signal(32)                     # o: Frames sent.
+        self.start       = Signal()                       # i
+        self.stop        = Signal()                       # i
+        self.mode        = Signal(max=max(len(modes), 2)) # i
+        self.source      = source = stream.Endpoint(endpoint_layout())
+        self.frames      = Signal(32)                     # o: Frames sent.
+        self.frame_start = Signal()                       # o
+        if not pattern:
+            self.sink    = sink = stream.Endpoint([("data", 32)]) # i: Pixels (YUY2 words).
 
         # # #
 
@@ -412,6 +421,7 @@ class USB3UVCStream(LiteXModule):
         fsm.act("IDLE",
             If(started, NextState("WAIT"))
         )
+        self.comb += self.frame_start.eq(fsm.ongoing("WAIT") & tick)
         fsm.act("WAIT",
             If(tick,
                 NextValue(timer, interval - 1),
@@ -441,12 +451,16 @@ class USB3UVCStream(LiteXModule):
                 )
             )
         )
+        if pattern:
+            pixels = [source.valid.eq(1), source.data.eq(Cat(y0, u, y1, v))]
+        else:
+            pixels = [source.valid.eq(sink.valid), source.data.eq(sink.data),
+                sink.ready.eq(source.ready)]
         fsm.act("DATA",
-            source.valid.eq(1),
+            *pixels,
             source.be.eq(0b1111),
-            source.data.eq(Cat(y0, u, y1, v)),
             source.last.eq((p_words == 1) | (f_words == 1)),
-            If(source.ready,
+            If(source.valid & source.ready,
                 NextValue(p_words, p_words - 1),
                 NextValue(f_words, f_words - 1),
                 # Pattern position.
@@ -488,15 +502,23 @@ class USB3UVCFunction(LiteXModule):
     SET_INTERFACE of the VideoStreaming interface to a non-zero alternate setting (committed mode),
     stopped by alternate setting 0 (uvcvideo stream off) or a link reset.
     The buffered packets are flushed on start/stop.
+
+    pattern=False: frames pixels from sink (YUY2 words, see USB3UVCStream, frame_start: start of a
+    frame) instead of the test pattern.
     """
     def __init__(self, ep0, video_in, link_reset, clk_freq, modes=UVC_MODES,
         payload_size = UVC_PAYLOAD_SIZE,
-        vs_interface = 1):
+        vs_interface = 1,
+        pattern      = True):
         iso = isinstance(video_in, USB3IsoIN)
         if iso:
             assert payload_size <= video_in.max_burst*1024
         self.control = control = USB3UVCControl(ep0, modes, payload_size, clk_freq, vs_interface)
-        self.stream  = stream  = USB3UVCStream(modes, clk_freq, payload_size, bulk=not iso)
+        self.stream  = stream  = USB3UVCStream(modes, clk_freq, payload_size, bulk=not iso,
+            pattern=pattern)
+        self.frame_start = stream.frame_start
+        if not pattern:
+            self.sink = stream.sink
 
         # # #
 
