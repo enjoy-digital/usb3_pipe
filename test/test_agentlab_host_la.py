@@ -208,6 +208,31 @@ class TestLAInstrument(unittest.TestCase):
             with self.assertRaises(ValueError):
                 i.la_capture(**kwargs)
 
+    def test_stream_duration_continuous(self):
+        # Stream mode with data on every read (the stream never pauses): stopped at the duration.
+        i, f = make_instrument()
+        clock, la = f["clock"], f["la"]
+        header = LAHeader(version=c.LA_VERSION, channels=32, mode=c.LA_MODES["stream"], flags=0,
+            divider=1, block_samples=256, trigger_offset=0, count=0, start_timestamp=0,
+            trigger_timestamp=0)
+        data   = pack_stream(header, list(range(256*1000)))
+        chunks = [data[k:k + 4096] for k in range(0, len(data), 4096)]
+        state  = {"read": 0, "at_stop": None}
+        def la_read(size, timeout_ms):
+            clock.sleep(0.01)
+            if la.stops and state["at_stop"] is None:
+                state["at_stop"] = state["read"]
+            if la.stops:
+                rest = b"".join(chunks[state["read"]:]); state["read"] = len(chunks)
+                return rest
+            state["read"] += 1
+            return chunks[state["read"] - 1] if state["read"] <= len(chunks) else b""
+        i._la_read = la_read
+        capture = i.la_capture(mode="stream", length=0, duration=0.5, timeout=1.0)
+        self.assertEqual(la.stops, 1)
+        self.assertLess(state["at_stop"], len(chunks)//2) # Stopped at ~0.5s (50 reads).
+        self.assertEqual(len(capture.samples), 256*1000)
+
     def test_timeout(self):
         i, f = make_instrument()
         f["la"].trigger = False

@@ -351,14 +351,15 @@ class Instrument:
         start   = self.clock()
         stopped = False
         while not parser.done:
-            data = self._la_read(transfer_size, 100)
-            if data:
-                parser.feed(data)
-                continue
+            data    = self._la_read(transfer_size, 100)
             elapsed = self.clock() - start
+            # Duration (stream mode): checked on every read, the stream never pauses.
             if duration is not None and not stopped and elapsed > duration:
                 self.la_stop()
                 stopped = True
+            if data:
+                parser.feed(data)
+                continue
             if elapsed > timeout + (duration or 0):
                 status = self.la_status()
                 if not status["triggered"]:
