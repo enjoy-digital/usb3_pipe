@@ -88,17 +88,17 @@ class RX8b10bChecker(LiteXModule):
         # # #
 
         table = code_8b10b_table(lsb_first)
-        rom   = Memory(4, 1024, init=[e[0] | (e[1] << 1) | (e[2] << 2) | (e[3] << 3) for e in table])
-        self.specials += rom
+        rom   = {code: e[0] | (e[1] << 1) | (e[2] << 2) | (e[3] << 3) for code, e in enumerate(table)}
 
-        # Code lookup, registered (as the decoders outputs).
+        # Code lookup (distributed ROM), registered (as the decoders outputs). A block RAM would
+        # absorb the decoders input register as its address register: transceiver RX data to the
+        # block RAM address in one RX clock cycle (250MHz), missing timing on large designs.
         lookups = []
         for decoder in decoders:
-            port = rom.get_port(async_read=True)
-            self.specials += port
-            lookup = Signal(4)
-            self.comb += port.adr.eq(decoder.input)
-            self.sync += lookup.eq(port.dat_r)
+            lookup_comb = Signal(4, attr={("rom_style", "distributed")})
+            lookup      = Signal(4)
+            self.comb += Case(decoder.input, {code: lookup_comb.eq(v) for code, v in rom.items()})
+            self.sync += lookup.eq(lookup_comb)
             lookups.append(lookup)
 
         # Errors and running disparity.
