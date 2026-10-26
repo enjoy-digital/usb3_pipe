@@ -7,7 +7,8 @@
 """AgentLab device discovery (Linux sysfs) and CDC-ACM interface to /dev/ttyACMx mapping.
 
 sysfs layout: /sys/bus/usb/devices/<dev>/idVendor, ... and the CDC-ACM ttys under
-/sys/bus/usb/devices/<dev>:<cfg>.<intf>/tty/ttyACMx.
+/sys/bus/usb/devices/<dev>:<cfg>.<intf>/tty/ttyACMx, the UVC (Eyes) video nodes under the
+VideoControl interface: /sys/bus/usb/devices/<dev>:<cfg>.<intf>/video4linux/videoN.
 """
 
 import os
@@ -30,10 +31,16 @@ class DeviceInfo:
     product    : Optional[str]  = None
     speed      : Optional[str]  = None # Mbps, as reported by sysfs ("5000" for SuperSpeed).
     ttys       : Dict[int, str] = field(default_factory=dict) # Interface number -> /dev/ttyACMx.
+    videos     : Dict[int, str] = field(default_factory=dict) # Interface number -> /dev/videoN.
 
     @property
     def control_tty(self) -> Optional[str]:
         return self.ttys.get(c.CONTROL_INTERFACE, None)
+
+    @property
+    def video_device(self) -> Optional[str]:
+        """Eyes UVC capture node (/dev/videoN), None without Eyes (or uvcvideo)."""
+        return self.videos[min(self.videos)] if self.videos else None
 
     def uart_tty(self, index) -> Optional[str]:
         if not (0 <= index < c.DUT_UART_COUNT):
@@ -51,6 +58,7 @@ class DeviceInfo:
             "speed"   : self.speed,
             "control" : self.control_tty,
             "uarts"   : [self.uart_tty(i) for i in range(c.DUT_UART_COUNT)],
+            "video"   : self.video_device,
         }
 
 # Discovery ----------------------------------------------------------------------------------------
@@ -72,6 +80,23 @@ def _tty_map(sysfs_root, name) -> Dict[int, str]:
         for tty in glob.glob(os.path.join(intf_dir, "tty", "tty*")):
             ttys[intf] = "/dev/" + os.path.basename(tty)
     return ttys
+
+def _video_map(sysfs_root, name) -> Dict[int, str]:
+    """UVC capture nodes: the video4linux node of index 0 of each interface (index 1: metadata)."""
+    videos = {}
+    for intf_dir in glob.glob(os.path.join(sysfs_root, name + ":*.*")):
+        try:
+            intf = int(intf_dir.rsplit(".", 1)[1])
+        except ValueError:
+            continue
+        nodes = []
+        for node in glob.glob(os.path.join(intf_dir, "video4linux", "video*")):
+            index = _read(os.path.join(node, "index"))
+            nodes.append((int(index) if index and index.isdigit() else 0,
+                int(os.path.basename(node)[5:] or 0), os.path.basename(node)))
+        if nodes:
+            videos[intf] = "/dev/" + min(nodes)[2]
+    return videos
 
 def _intf_class(sysfs_root, name, intf) -> Optional[int]:
     for intf_dir in glob.glob(os.path.join(sysfs_root, "{}:*.{}".format(name, intf))):
@@ -114,6 +139,7 @@ def find_devices(vid=c.USB_VID, pid=c.USB_PID, sysfs_root=SYSFS_USB_DEVICES,
             product    = _read(os.path.join(path, "product")),
             speed      = _read(os.path.join(path, "speed")),
             ttys       = _tty_map(sysfs_root, name),
+            videos     = _video_map(sysfs_root, name),
         ))
     return devices
 

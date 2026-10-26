@@ -32,9 +32,15 @@ EVENTS_ENDPOINT  = 0x8b # EP11 IN.
 LA_INTERFACE = 11
 LA_ENDPOINT  = 0x8c # EP12 IN.
 
+# Eyes (UVC, phase 4): VideoControl interface (next free interface: 11 without the logic analyzer
+# and JTAG/SWD functions, also in the csr.csv constant agentlab_eyes_interface), VideoStreaming
+# interface + 1, bulk IN.
+EYES_ENDPOINT = 0x8e # EP14 IN.
+
 # USB interface classes.
 USB_CLASS_CDC        = 0x02
 USB_CLASS_CDC_DATA   = 0x0a
+USB_CLASS_VIDEO      = 0x0e
 USB_CLASS_VENDOR     = 0xff
 
 # Timebase -----------------------------------------------------------------------------------------
@@ -75,6 +81,31 @@ CSR_GPIO_OE         = "agentlab_gpio_oe"         # Bit per GPIO (1: output).
 CSR_GPIO_OUT        = "agentlab_gpio_out"        # Bit per GPIO (output level).
 CSR_GPIO_IN         = "agentlab_gpio_in"         # Bit per GPIO (input level).
 CSR_GPIO_EDGE_MASK  = "agentlab_gpio_edge_mask"  # Bit per GPIO (1: emit edge events).
+
+# Eyes (doc/agentlab.md): text grid Wishbone region (csr.csv memory_region), CSRs, constants.
+EYES_REGION           = "agentlab_eyes"              # Cell of (col, row): word row*cols + col.
+CSR_EYES_WAVE_ROW     = "agentlab_eyes_wave_row"     # First character row of the lanes.
+CSR_EYES_WAVE_LANES   = "agentlab_eyes_wave_lanes"   # Number of lanes (0: none).
+CSR_EYES_WAVE_COLUMN  = "agentlab_eyes_wave_column"  # First character column (2 pixels/sample).
+CSR_EYES_WAVE_FIRST   = "agentlab_eyes_wave_first"   # Sample bit of the first lane.
+CSR_EYES_WAVE_COLOR   = "agentlab_eyes_wave_color"   # Lanes color (palette index).
+CSR_EYES_WAVE_DIVIDER = "agentlab_eyes_wave_divider" # Sample period: divider + 1 sys_clk cycles.
+CSR_EYES_WAVE_CONTROL = "agentlab_eyes_wave_control" # Bit 0: run (roll mode), bit 1: single.
+CSR_EYES_WAVE_STATUS  = "agentlab_eyes_wave_status"  # Bit 0: running.
+CSR_EYES_FRAMES       = "agentlab_eyes_frames"       # Frames rendered.
+
+EYES_DEFAULTS = { # Used when the csr.csv does not provide the agentlab_eyes_* constants.
+    "width"      : 1280,
+    "height"     : 720,
+    "columns"    : 160,
+    "rows"       : 45,
+    "wave_depth" : 512,
+}
+
+# Eyes palette (cell colors [11:8] foreground, [15:12] background, gateware EYES_PALETTE).
+EYES_COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "gray",
+    "bright_red", "bright_green", "bright_yellow", "bright_blue", "bright_magenta", "bright_cyan",
+    "bright_white"]
 
 def csr_uart_baudrate(n):
     """DUT UART n baudrate CSR (fallback when SET_LINE_CODING is not used)."""

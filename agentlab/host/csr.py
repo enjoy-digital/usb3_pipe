@@ -29,9 +29,16 @@ class CSRRegister:
     mode : str  # "rw", "ro" or "wo".
 
 @dataclass
+class CSRMemoryRegion:
+    name   : str
+    origin : int
+    size   : int # Bytes.
+
+@dataclass
 class CSRMap:
-    registers : Dict[str, CSRRegister] = field(default_factory=dict)
-    constants : Dict[str, object]      = field(default_factory=dict)
+    registers : Dict[str, CSRRegister]     = field(default_factory=dict)
+    constants : Dict[str, object]          = field(default_factory=dict)
+    regions   : Dict[str, CSRMemoryRegion] = field(default_factory=dict)
 
     @property
     def data_width(self) -> int:
@@ -77,6 +84,8 @@ class CSRMap:
                 )
             elif kind == "constant":
                 csr_map.constants[name] = _parse_constant(value)
+            elif kind == "memory_region":
+                csr_map.regions[name] = CSRMemoryRegion(name, int(value, 0), int(row[3], 0))
         return csr_map
 
     @classmethod
@@ -91,6 +100,8 @@ class CSRMap:
                 mode = reg["type"],
             )
         csr_map.constants.update(d.get("constants", {}))
+        for name, region in d.get("memories", {}).items():
+            csr_map.regions[name] = CSRMemoryRegion(name, int(region["base"]), int(region["size"]))
         return csr_map
 
 def _parse_constant(value):

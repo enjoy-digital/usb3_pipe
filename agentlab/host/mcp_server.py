@@ -10,8 +10,10 @@ The tools are plain methods of `AgentLabTools` (testable without the `mcp` packa
 `mcp` Python SDK (FastMCP) is only imported to serve them.
 """
 
+import os
 import sys
 import argparse
+import tempfile
 from typing import List, Optional
 
 from agentlab.host.events import uart_lines
@@ -26,6 +28,7 @@ class AgentLabTools:
         "power_set", "power_cycle",
         "gpio_set", "gpio_get",
         "events", "timestamp", "marker",
+        "screenshot", "display_text",
     ]
 
     def __init__(self, instrument_factory):
@@ -210,6 +213,44 @@ class AgentLabTools:
         """
         ticks = self.instrument.marker(value)
         return {"value": value, "timestamp": ticks, "time_s": self.instrument.ticks_to_s(ticks)}
+
+    # Eyes -----------------------------------------------------------------------------------------
+
+    def screenshot(self, path: Optional[str] = None, refresh: bool = True) -> dict:
+        """Take a screenshot of the bench view (Eyes UVC camera, 1280x720 PNG): status panel with
+        the device time, power/GPIO states, the 4 DUT consoles tails, last events and live
+        waveforms of the DUT pins. Open the returned PNG file to look at it.
+
+        Args:
+            path: output PNG path (default: a new file in the temporary directory).
+            refresh: redraw the status panel first (set false to keep text written with
+                display_text).
+        Returns:
+            {"path", "width", "height", "bytes", "device": /dev/videoN, "time_s": device time}.
+        """
+        if path is None:
+            fd, path = tempfile.mkstemp(prefix="agentlab_screenshot_", suffix=".png")
+            os.close(fd)
+        r = self.instrument.screenshot(path, refresh=refresh)
+        return {**r, "time_s": self._now()["time_s"]}
+
+    def display_text(self, text: str, col: int = 0, row: int = 0, fg: str = "white",
+        bg: str = "black", clear: bool = False) -> dict:
+        """Write text on the bench view (Eyes display: 160 columns x 45 rows of 8x16 pixels), e.g.
+        to annotate a screenshot for a human watching the camera.
+
+        Args:
+            text: text to write (newlines continue on the next rows at the same column).
+            col / row: position (0-159 / 0-44).
+            fg / bg: colors: black, red, green, yellow, blue, magenta, cyan, white, gray,
+                bright_red, bright_green, bright_yellow, bright_blue, bright_magenta, bright_cyan,
+                bright_white.
+            clear: clear the screen first.
+        Returns:
+            {"col", "row", "chars": number of characters written}.
+        """
+        self.instrument.display_text(text, col=col, row=row, fg=fg, bg=bg, clear=clear)
+        return {"col": col, "row": row, "chars": len(text)}
 
 # Server -------------------------------------------------------------------------------------------
 
