@@ -174,10 +174,15 @@ sampled at sys_clk/divider (125MHz max), samples are 32-bit words (channel n on 
 - Stream mode: the readout starts on the trigger, the ring buffer is a FIFO absorbing the USB stalls
   (sustained rate limited by USB: ~350-400MB/s, divider >= 2 for 32-bit samples). A full ring (host
   not keeping up) ends the capture (overflow, all samples before it are sent); length 0: until stop.
+  Stream data reaches the host within ~1ms (USB packets end on idle at most every 2^17 sys_clk
+  cycles, so the host transfers are filled instead of ending on each block).
 - After the trigger the writer never overwrites unread samples; samples lost (DRAM/ring full) end
   the capture with the overflow flag. Arm restarts from any state (previous capture flushed, the
   Bulk IN endpoint flushed); stop: armed: abort (nothing sent), triggered: end of the capture.
 - Timing: sample k is at `start_timestamp + k*divider` (shared timebase, sys_clk ticks).
+- Validated on the Acorn (internal probes, timestamp channels 16-31 checked sample by sample):
+  capture at 125/25/1MHz, 16M samples at 125MHz through the DDR3 (~105MB/s readout), marker
+  trigger with pre-trigger, stream 2s at ~10MHz (~42MB/s, no overflow).
 
 Stream format (EP12 IN, 32-bit little-endian words), per capture:
 
