@@ -38,7 +38,9 @@ class USB3BulkIN(USB3Endpoint):
 
     sink: packets to send (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end
     of packet), packets longer than 1024 bytes are split.
-    flush: drop the buffered packets (and the packet being written), ex: stream restarted.
+    flush: drop the buffered packets (and the packet being written), ex: stream restarted. The
+    packets already sent (DPHs out) are kept until acknowledged (or retried/reset): the Sequence
+    Numbers stay in sync with the host.
     """
     def __init__(self, ept, max_burst=8):
         assert max_burst in [2, 4, 8, 16]
@@ -74,6 +76,14 @@ class USB3BulkIN(USB3Endpoint):
             snd_next.eq(snd_ptr + 1),
             snd_seq.eq(ack_seq + inflight),
         ]
+
+        # Flush: the packets not sent ([snd_ptr, flush_ptr)) are dropped once the sent ones are
+        # acknowledged (inflight == 0: Sequence Numbers kept, sending held until then); the packets
+        # written after the flush (from flush_ptr) are kept.
+        flushing  = Signal()
+        flush_ptr = Signal(pbits)
+        next_ptr  = Signal(pbits) # Next packet to send (flushed packets skipped).
+        self.comb += next_ptr.eq(Mux(flushing, flush_ptr, snd_ptr))
 
         # Host requests (ACK TP) -------------------------------------------------------------------
         win_seq   = Signal(5, reset_less=True) # Host window: next requested Seq Num...
@@ -113,7 +123,8 @@ class USB3BulkIN(USB3Endpoint):
         self.comb += [
             wr_busy.eq(sink.valid | (wr_idle != WR_IDLE_CYCLES)),
             snd_last.eq(snd_next == wr_ptr),
-            avail.eq((snd_ptr != wr_ptr) & ~(snd_last & wr_busy & (snd_len == MAX_PACKET_SIZE))),
+            avail.eq((snd_ptr != wr_ptr) & ~flushing &
+                ~(snd_last & wr_busy & (snd_len == MAX_PACKET_SIZE))),
             in_win.eq(((snd_seq - win_seq) & 0x1f) < win_nump),
             snd_len.eq(lengths[snd_ptr[0:pbits-1]]),
             # EOB: last available packet, window not exhausted and not a short packet (8.6.3).
@@ -174,7 +185,7 @@ class USB3BulkIN(USB3Endpoint):
                 fc_data.eq(1),
             ),
             # Data available: ERDY.
-            If(fc_data & ~nrdy_pending & ~erdy_pending & (wr_ptr != snd_ptr),
+            If(fc_data & ~nrdy_pending & ~erdy_pending & (wr_ptr != next_ptr),
                 fc_data.eq(0),
                 erdy_pending.eq(1),
             ),
@@ -201,7 +212,9 @@ class USB3BulkIN(USB3Endpoint):
                         # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when
                         # data is available (the host may also request again on its own).
                         fc_data.eq(1),
-                    ).Elif(acked_ptr == wr_ptr,
+                    ).Elif(Mux(flushing,
+                        (acked_ptr == snd_ptr) & (flush_ptr == wr_ptr),
+                        acked_ptr == wr_ptr),
                         # Request without available packet: NRDY, ERDY when data available.
                         nrdy_pending.eq(1),
                         fc_data.eq(1),
@@ -220,8 +233,12 @@ class USB3BulkIN(USB3Endpoint):
                 erdy_pending.eq(0),
             ),
             If(self.flush,
-                ack_ptr.eq(wr_ptr),
-                snd_ptr.eq(wr_ptr),
+                flushing.eq(1),
+                flush_ptr.eq(wr_ptr),
+            ).Elif(flushing & (inflight == 0),
+                flushing.eq(0),
+                ack_ptr.eq(flush_ptr),
+                snd_ptr.eq(flush_ptr),
             ),
         ]
 
