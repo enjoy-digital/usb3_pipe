@@ -213,10 +213,21 @@ GTGREFCLK0. Open investigation.
 
 The Acorn has no transceiver reference clock without a PCIe host (MGTREFCLK0 is the PCIe edge
 connector clock, measured at 0Hz on the LiteX Acorn Baseboard Mini): the GTP reference clock is the
-200MHz oscillator routed through the fabric to GTREFCLK0 (UG482: GTREFCLK should be driven by an
-IBUFDS_GTE2, GTGREFCLK is reserved for internal testing, the REQP-49 DRC is lowered to a warning).
-This works, but it is outside the
-recommended GTP clocking.
+200MHz oscillator from the fabric (BUFG). `A7USB3SerDes` then drives it to GTGREFCLK0
+(PLL0REFCLKSEL=0b111, LiteICLink `refclk_from_fabric`): the clock reaches the GTPE2_COMMON through
+the clock network. UG482 reserves GTGREFCLK for internal testing (the REQP-49 DRC is lowered to a
+warning), but it is the only fabric clock input of the GTP PLL that does not go through general
+interconnect.
+
+**RX quality depending on the build (fabric clock on GTREFCLK0):** previous versions routed the
+oscillator to GTREFCLK0 (REQP-49 DRC lowered to a warning). The clock then reaches the GTPE2_COMMON
+through general interconnect, and the RX quality depended on the place and route: some builds kept a
+clean link, others never reached a stable U0 (continuous Recovery, Warm Resets, Polling.LFPS), always
+the same for a given bitstream. Timing slack, the FPGA load (32k toggling flip-flops) and the logic
+placed near the GTP had no effect. On the same designs, GTGREFCLK0 gave stable links on every build
+(13/13 loads, against 0/9 for the unstable GTREFCLK0 builds). If the link is unstable on a design
+with a fabric reference clock, check that the PLL uses GTGREFCLK (`PLL0REFCLKSEL` = 3'd7 in the
+generated Verilog).
 
 **RX stuck in 16-bit mode (liteiclink < enjoy-digital/liteiclink#54):** the GTP RX init clears
 RX_DATA_WIDTH bit 11 (DRP 0x011) during the RX PMA reset, then restores it. Before the fix, an RX
