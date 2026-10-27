@@ -286,9 +286,13 @@ class USB3PHY(LiteXModule):
             serdes.gen2_tx_data.eq(gen2_pipe.tx_data),
             gen2_pipe.rx_data.eq(serdes.gen2_rx_data),
         ]
-        # LTSSM <-> Gen 1 PIPE / Gen2PIPE.
+        # LTSSM <-> Gen 1 PIPE / Gen2PIPE. No comma alignment at Gen 2: the transceiver comma aligner
+        # would slip bits on comma-like patterns of the raw 128b/132b words (block alignment by the
+        # Gen 2 RX datapath).
         for name, width, direction in LTSSM_PIPE_INTERFACE:
-            if name not in GEN2_PIPE_INTERFACE:
+            if name == "serdes_rx_align":
+                self.comb += pipe.serdes_rx_align.eq(ltssm.serdes_rx_align & ~gen2_active)
+            elif name not in GEN2_PIPE_INTERFACE:
                 self.comb += connect_ltssm_pipe_signal(ltssm, pipe, name, direction)
             elif direction == "o":
                 self.comb += [
