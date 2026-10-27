@@ -113,15 +113,25 @@ def usb_attr(dev, name):
     except OSError:
         return None
 
-def usb_find_device(product):
-    """Return (busnum, devnum, location) of the USB device with the given product string."""
-    for dev in glob.glob(f"{USB_SYSFS}/*"):
-        if usb_attr(dev, "product") == product:
-            busnum   = int(usb_attr(dev, "busnum"))
-            devnum   = int(usb_attr(dev, "devnum"))
-            location = Path(dev).name.replace("-", ":", 1) # OpenOCD ftdi_location (bus:ports).
-            return busnum, devnum, location
-    raise RuntimeError(f"USB device '{product}' not found.")
+def usb_find_device(product, location=None):
+    """Return (busnum, devnum, location) of the USB device with the given product string.
+
+    Several boards can use the same adapter (ex: FT4232H "Quad RS232-HS"): the device is then
+    selected by its sysfs location (location or $USB3_PIPE_FTDI, ex: 5-4), never guessed.
+    """
+    location = location or os.environ.get("USB3_PIPE_FTDI")
+    devs = [dev for dev in glob.glob(f"{USB_SYSFS}/*") if usb_attr(dev, "product") == product]
+    if location is not None:
+        devs = [dev for dev in devs if Path(dev).name == location]
+    if len(devs) != 1:
+        found = [Path(dev).name for dev in devs]
+        raise RuntimeError(f"USB device '{product}': {len(devs)} match(es) {found}, select one with "
+            "$USB3_PIPE_FTDI (sysfs location, ex: 5-4).")
+    dev      = devs[0]
+    busnum   = int(usb_attr(dev, "busnum"))
+    devnum   = int(usb_attr(dev, "devnum"))
+    location = Path(dev).name.replace("-", ":", 1) # OpenOCD ftdi_location (bus:ports).
+    return busnum, devnum, location
 
 def usb_ports_state():
     """USB hub ports link states ({port: state})."""
