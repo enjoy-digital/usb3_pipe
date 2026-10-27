@@ -10,7 +10,8 @@
   electrical idle filtering, clock domain crossing and data-width adaptation between the
   transceiver and the sys clock domain.
 - Gen 2: block transmitter/receiver (Gen2TX/Gen2RX): TSEQ/TS1/TS2/SYNC/SDS/SKP Ordered Sets, Data
-  Blocks and scrambling rules (6.3.2.3), see doc/gen2-x2-roadmap.md.
+  Blocks and scrambling rules (6.3.2.3), and the transceiver words <-> blocks datapaths
+  (Gen2TXDatapath/Gen2RXDatapath, 40-bit at 250MHz for 10Gbps), see doc/gen2-x2-roadmap.md.
 """
 
 from functools import reduce
@@ -29,7 +30,7 @@ from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2
 from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
 from usb3_pipe.coding     import RX8b10bChecker
 from usb3_pipe.coding     import GEN2_DC_REDUCE_ONES, GEN2_DC_REDUCE_ZEROS, popcount
-from usb3_pipe.coding     import gen2_block_layout
+from usb3_pipe.coding     import gen2_block_layout, Gen2BlockGearbox, Gen2BlockAligner
 from usb3_pipe.scrambling import GEN2_LFSR_SEED, Gen2Scrambler
 
 # RX SKP Remover (6.4.3) ---------------------------------------------------------------------------
@@ -491,7 +492,7 @@ class Gen2TX(LiteXModule):
 
         # # #
 
-        self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed)
+        self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed, per_byte_advance=False)
 
         # Block selection --------------------------------------------------------------------------
         tx_os        = Signal()
@@ -565,19 +566,19 @@ class Gen2TX(LiteXModule):
                 # Bypass, advance.
                 source.header.eq(BLOCK_HEADER_CONTROL),
                 scrambler.i.eq(_symbols(gen2_sds_payload())),
-                scrambler.advance.eq(0xffff),
+                scrambler.advance.eq(1),
             ).Elif(sel_data,
                 # Scrambled, advance (Logical Idle: 00h Symbols).
                 source.header.eq(BLOCK_HEADER_DATA),
                 scrambler.i.eq(Mux(idle, 0, sink.data)),
-                scrambler.advance.eq(0xffff),
+                scrambler.advance.eq(1),
                 scrambler.scramble.eq(0xffff),
                 sink.ready.eq(source.ready),
             ).Elif(sel_ts,
                 # Symbol 0 bypass/advance, Symbols 1-15 scrambled (14/15 DC Balance override below).
                 source.header.eq(BLOCK_HEADER_CONTROL),
                 scrambler.i.eq(ts_payload),
-                scrambler.advance.eq(0xffff),
+                scrambler.advance.eq(1),
                 scrambler.scramble.eq(0xfffe),
             )
         ]
@@ -589,14 +590,24 @@ class Gen2TX(LiteXModule):
         # still advances).
         self.dc_balance = dc_balance = Signal((11, True))
         ones_11   = Signal((9, True))
-        ones_15   = Signal((9, True))
+        ones_13   = Signal(5)
+        ones_14   = Signal(4)
+        ones_15   = Signal(4)
+        ones      = Signal((9, True))
         balance   = Signal((12, True))
         magnitude = Signal(11)
         ts_out    = Signal(128)
         sym14     = Signal(8)
         sym15     = Signal(8)
+        def dc_ones(i):
+            return Mux(balance > 0, bin(GEN2_DC_REDUCE_ONES[i]).count("1"),
+                                    bin(GEN2_DC_REDUCE_ZEROS[i]).count("1"))
         self.comb += [
+            # Popcounts computed in parallel (logic depth): Symbols 0-11, 12-13, 14, 15.
             ones_11.eq(popcount(Cat(source.header, scrambler.o[0:96]))),
+            ones_13.eq(popcount(scrambler.o[96:112])),
+            ones_14.eq(popcount(scrambler.o[112:120])),
+            ones_15.eq(popcount(scrambler.o[120:128])),
             balance.eq(dc_balance + 2*ones_11 - 100),
             magnitude.eq(Mux(balance < 0, -balance, balance)),
             sym14.eq(scrambler.o[112:120]),
@@ -608,10 +619,12 @@ class Gen2TX(LiteXModule):
                 sym15.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1])),
             ),
             ts_out.eq(Cat(scrambler.o[0:112], sym14, sym15)),
-            ones_15.eq(popcount(Cat(source.header, ts_out))),
+            ones.eq(ones_11 + ones_13 +
+                Mux(magnitude > 31, dc_ones(0), ones_14) +
+                Mux(magnitude > 15, dc_ones(1), ones_15)),
         ]
         new_balance = Signal((12, True))
-        self.comb += new_balance.eq(dc_balance + 2*ones_15 - 132)
+        self.comb += new_balance.eq(dc_balance + 2*ones - 132)
 
         # Output -----------------------------------------------------------------------------------
         lfsr = scrambler.state
@@ -696,24 +709,33 @@ class Gen2RX(LiteXModule):
     bypass), SYNC Ordered Sets re-initialize it (SKP Ordered Sets are removed by the aligner and do not
     advance it). TSEQ/TS1/TS2 detection on Symbols 0-13 (Symbols 14/15 not checked, 6.4.1.2.2, Link
     Functionality excluded): rx_tseq/rx_ts1/rx_ts2 pulse every n_ts consecutive Ordered Sets (SKP and
-    SYNC Ordered Sets are not interruptions). The Data Blocks following an SDS are output on source.
+    SYNC Ordered Sets are not interruptions), tseq/ts1/ts2/sync/sds/unknown pulse on each received
+    control block. The Data Blocks following an SDS are output on source.
+
+    Pipeline (250MHz with one block every 3.3 cycles): descrambling, then the Ordered Sets matching
+    (registered), the outputs follow the input blocks by 1 (source, rx_sync, rx_sds) to 3 cycles.
     """
     def __init__(self, seed=GEN2_LFSR_SEED, n_ts=8):
         self.sink   = sink   = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
         self.source = source = stream.Endpoint([("data", 128)])
 
-        self.rx_tseq     = Signal()  # o (pulse)
-        self.rx_ts1      = Signal()  # o (pulse)
-        self.rx_ts2      = Signal()  # o (pulse)
-        self.rx_sync     = Signal()  # o (pulse)
-        self.rx_sds      = Signal()  # o (pulse)
-        self.link_config = Signal(8) # o: Link Functionality of the last TS1/TS2.
-        self.data_stream = Signal()  # o: Receiving the Data Stream (after an SDS).
+        self.rx_tseq     = Signal()   # o: n_ts consecutive TSEQ received (pulse).
+        self.rx_ts1      = Signal()   # o: n_ts consecutive TS1 received (pulse).
+        self.rx_ts2      = Signal()   # o: n_ts consecutive TS2 received (pulse).
+        self.rx_sync     = Signal()   # o: SYNC Ordered Set received (pulse).
+        self.rx_sds      = Signal()   # o: SDS Ordered Set received (pulse).
+        self.tseq        = Signal()   # o: TSEQ Ordered Set received (pulse).
+        self.ts1         = Signal()   # o: TS1 Ordered Set received (pulse).
+        self.ts2         = Signal()   # o: TS2 Ordered Set received (pulse).
+        self.unknown     = Signal()   # o: Unknown control block received (pulse).
+        self.link_config = Signal(8)  # o: Link Functionality of the last TS1/TS2.
+        self.data_stream = Signal()   # o: Receiving the Data Stream (after an SDS).
         self.lfsr        = Signal(23) # o: Descrambler LFSR state.
 
         # # #
 
-        self.descrambler = descrambler = Gen2Scrambler(nbytes=16, seed=seed)
+        # Descrambling -----------------------------------------------------------------------------
+        self.descrambler = descrambler = Gen2Scrambler(nbytes=16, seed=seed, per_byte_advance=False)
         self.comb += self.lfsr.eq(descrambler.state)
 
         control = Signal()
@@ -732,23 +754,43 @@ class Gen2RX(LiteXModule):
                 If(is_sync,
                     descrambler.init.eq(sink.valid)
                 ).Elif(is_sds,
-                    descrambler.advance.eq(0xffff)
+                    descrambler.advance.eq(1)
                 ).Else(
-                    descrambler.advance.eq(0xffff),
+                    descrambler.advance.eq(1),
                     descrambler.scramble.eq(0xfffe)
                 )
             ).Else(
-                descrambler.advance.eq(0xffff),
+                descrambler.advance.eq(1),
                 descrambler.scramble.eq(0xffff)
-            ),
-            source.valid.eq(sink.valid & ~control & self.data_stream),
-            source.data.eq(descrambler.o),
-            self.rx_sync.eq(sink.valid & is_sync),
-            self.rx_sds.eq(sink.valid & is_sds),
+            )
         ]
 
-        # Training Sequences detection.
-        o = descrambler.o
+        # Descrambled block (registered).
+        valid   = Signal()
+        ctl     = Signal()
+        sync    = Signal()
+        sds     = Signal()
+        o       = Signal(128)
+        self.sync += [
+            valid.eq(sink.valid),
+            ctl.eq(control),
+            sync.eq(is_sync),
+            sds.eq(is_sds),
+            o.eq(descrambler.o),
+        ]
+        self.comb += [
+            source.valid.eq(valid & ~ctl & self.data_stream),
+            source.data.eq(o),
+            self.rx_sync.eq(valid & sync),
+            self.rx_sds.eq(valid & sds),
+        ]
+        self.sync += [
+            If(valid & ctl,
+                self.data_stream.eq(sds)
+            )
+        ]
+
+        # Training Sequences detection -------------------------------------------------------------
         def ts_match(identifier, with_link_config):
             sym = [o[8*i:8*(i+1)] for i in range(14)]
             checks = [sym[i] == identifier for i in list(range(4)) + list(range(6, 14))]
@@ -756,37 +798,126 @@ class Gen2RX(LiteXModule):
             if not with_link_config:
                 checks.append(sym[5] == 0)
             return reduce(and_, checks)
-        matches = {
-            "tseq" : ts_match(GEN2_TSEQ, False),
-            "ts1"  : ts_match(GEN2_TS1,  True),
-            "ts2"  : ts_match(GEN2_TS2,  True),
-        }
-        for name, m in matches.items():
-            matched = Signal(name=f"{name}_matched")
-            count   = Signal(max=n_ts, name=f"{name}_count")
-            pulse   = getattr(self, f"rx_{name}")
-            self.comb += matched.eq(sink.valid & control & ~is_sync & ~is_sds & m)
+        valid_d = Signal()
+        sync_d  = Signal()
+        lc_d    = Signal(8)
+        self.sync += [
+            valid_d.eq(valid),
+            sync_d.eq(sync),
+            lc_d.eq(o[40:48]),
+        ]
+        matches = []
+        for name, identifier in [("tseq", GEN2_TSEQ), ("ts1", GEN2_TS1), ("ts2", GEN2_TS2)]:
+            m     = getattr(self, name)
+            count = Signal(max=n_ts, name=f"{name}_count")
+            pulse = getattr(self, f"rx_{name}")
+            match = ts_match(identifier, name != "tseq")
             self.sync += [
+                m.eq(valid & ctl & ~sync & ~sds & match),
                 pulse.eq(0),
-                If(matched,
+                If(m,
                     If(count == (n_ts - 1),
                         count.eq(0),
                         pulse.eq(1)
                     ).Else(
                         count.eq(count + 1)
                     )
-                ).Elif(sink.valid & ~is_sync,
+                ).Elif(valid_d & ~sync_d,
                     count.eq(0)
                 )
             ]
             if name != "tseq":
-                self.sync += If(matched, self.link_config.eq(o[40:48]))
-        self.sync += [
-            If(sink.valid & control,
-                If(is_sds,
-                    self.data_stream.eq(1)
-                ).Else(
-                    self.data_stream.eq(0)
-                )
-            )
+                self.sync += If(m, self.link_config.eq(lc_d))
+            matches.append(match)
+        self.sync += self.unknown.eq(valid & ctl & ~sync & ~sds & ~reduce(or_, matches))
+
+# Gen 2 TX/RX Datapaths ----------------------------------------------------------------------------
+
+# Gen 2 transceiver words: 40-bit at 250MHz for 10Gbps (raw data, transceiver 8b/10b bypassed), same
+# TX/RX clocks as Gen 1 (20-bit at 250MHz for 5Gbps).
+GEN2_DATA_WIDTH = 40
+
+class Gen2TXDatapath(LiteXModule):
+    """Gen 2 TX datapath: Gen2TX -> register stage -> Gen2BlockGearbox: continuous data_width-bit
+    transceiver words (bit 0 transmitted first), in the transceiver TX clock domain. Controls/sink
+    on tx (Gen2TX)."""
+    def __init__(self, data_width=GEN2_DATA_WIDTH, **kwargs):
+        self.tx      = tx      = Gen2TX(**kwargs)
+        self.buffer  = buffer  = stream.Buffer(gen2_block_layout())
+        self.gearbox = gearbox = Gen2BlockGearbox(data_width)
+        self.sink    = tx.sink
+        self.source  = gearbox.source
+
+        # # #
+
+        self.comb += [
+            tx.source.connect(buffer.sink),
+            buffer.source.connect(gearbox.sink),
         ]
+
+GEN2_RX_COUNTERS = [
+    # (name, description).
+    ("blocks",        "Blocks (SKP Ordered Sets excluded)."),
+    ("header_errors", "Block Headers with a corrected bit error."),
+    ("align_errors",  "Alignment losses (undefined Block Header/SKP Ordered Set)."),
+    ("sync",          "SYNC Ordered Sets."),
+    ("tseq",          "TSEQ Ordered Sets."),
+    ("ts1",           "TS1 Ordered Sets."),
+    ("ts2",           "TS2 Ordered Sets."),
+    ("sds",           "SDS Ordered Sets."),
+    ("skp",           "SKP Ordered Sets."),
+    ("unknown",       "Unknown control blocks."),
+]
+
+class Gen2RXDatapath(LiteXModule):
+    """Gen 2 RX datapath: data_width-bit transceiver words (bit 0 received first, continuous) ->
+    Gen2BlockAligner (SYNC block alignment, polarity, SKP Ordered Sets) -> Gen2RX (descrambling,
+    Ordered Sets detection), in the transceiver RX clock domain.
+
+    Status (aligned/locked/polarity/data_stream/link_config) and 32-bit event counters
+    (GEN2_RX_COUNTERS, `{name}_count`, cleared with clear) for the hardware bring-up (Gen2RXDebug).
+    Data Blocks (after an SDS) on source, Training Sequences pulses on rx (Gen2RX).
+    """
+    def __init__(self, data_width=GEN2_DATA_WIDTH, n_ts=8):
+        self.sink   = sink   = stream.Endpoint([("data", data_width)])
+        self.source = source = stream.Endpoint([("data", 128)])
+        self.clear  = Signal() # i: Counters clear.
+
+        # # #
+
+        self.aligner = aligner = Gen2BlockAligner(data_width)
+        self.rx      = rx      = Gen2RX(n_ts=n_ts)
+        self.comb += [
+            sink.connect(aligner.sink),
+            aligner.source.connect(rx.sink),
+            rx.source.connect(source),
+        ]
+
+        # Status.
+        self.aligned     = aligner.aligned
+        self.locked      = aligner.locked
+        self.polarity    = aligner.polarity
+        self.data_stream = rx.data_stream
+        self.link_config = rx.link_config
+
+        # Counters.
+        events = {
+            "blocks"        : aligner.source.valid,
+            "header_errors" : aligner.source.valid & aligner.source.header_error,
+            "align_errors"  : aligner.error,
+            "sync"          : rx.rx_sync,
+            "tseq"          : rx.tseq,
+            "ts1"           : rx.ts1,
+            "ts2"           : rx.ts2,
+            "sds"           : rx.rx_sds,
+            "skp"           : aligner.skp,
+            "unknown"       : rx.unknown,
+        }
+        for name, _ in GEN2_RX_COUNTERS:
+            count = Signal(32, name=f"{name}_count")
+            setattr(self, f"{name}_count", count)
+            self.sync += If(self.clear,
+                count.eq(0)
+            ).Elif(events[name],
+                count.eq(count + 1)
+            )

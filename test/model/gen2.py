@@ -5,7 +5,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """Gen 2 (128b/132b) bit-serial reference models of the USB 3.2 rules (6.3.2 encoding/scrambling,
-6.4.1.2 Ordered Sets/DC balance, 6.4.3.3 SKP Ordered Sets)."""
+6.4.1.2 Ordered Sets/DC balance, 6.4.3.3 SKP Ordered Sets) and a channel model (bit offset,
+polarity, bit slips/errors, SKP Ordered Sets edits)."""
+
+import random
 
 from usb3_pipe.common     import *
 from usb3_pipe.coding     import GEN2_DC_REDUCE_ONES, GEN2_DC_REDUCE_ZEROS
@@ -49,12 +52,12 @@ def int_to_bits(value, n):
 def bits_to_int(bits):
     return sum(b << i for i, b in enumerate(bits))
 
-def bits_from_words(words):
-    return [b for w in words for b in int_to_bits(w, 32)]
+def bits_from_words(words, width=32):
+    return [b for w in words for b in int_to_bits(w, width)]
 
-def words_from_bits(bits):
-    bits = bits + [0]*((-len(bits)) % 32)
-    return [bits_to_int(bits[32*i:32*(i+1)]) for i in range(len(bits)//32)]
+def words_from_bits(bits, width=32):
+    bits = bits + [0]*((-len(bits)) % width)
+    return [bits_to_int(bits[width*i:width*(i+1)]) for i in range(len(bits)//width)]
 
 def popcount(bits):
     return sum(bits)
@@ -126,3 +129,35 @@ class Gen2ReferenceDecoder:
                 self.blocks.append(("DATA", pos, 132, symbols_to_int(data)))
             pos += 132
         return self.blocks
+
+# Channel Model ------------------------------------------------------------------------------------
+
+def gen2_channel(bits, blocks, skp_edits={}, slips=[], flips=[], offset=0, invert=False, seed=0):
+    """Channel on a Gen 2 bit stream decoded by Gen2ReferenceDecoder (blocks):
+    - skp_edits: {SKP Ordered Set index: SKP Symbols added/removed} (re-timers clock compensation).
+    - slips:     [(position, +1: bit inserted/-1: bit removed)] (CDR bit slips).
+    - flips:     [position] (bit errors).
+    - offset:    random bits first, invert: polarity inversion.
+    Positions are in the original stream. Returns the bits and the SKP Symbols count of each SKP
+    Ordered Set after the edits."""
+    rng   = random.Random(seed)
+    bits  = list(bits)
+    skps  = [b for b in blocks if b[0] == "SKP"]
+    edits = [(skps[i][1] + 4, "skp", delta) for i, delta in skp_edits.items()]
+    edits += [(pos, "slip", delta) for pos, delta in slips]
+    edits += [(pos, "flip", None) for pos in flips]
+    for pos, kind, delta in sorted(edits, key=lambda e: e[0], reverse=True):
+        if kind == "skp":
+            if delta > 0:
+                bits[pos:pos] = int_to_bits(GEN2_SKP, 8)*delta
+            else:
+                del bits[pos:pos+8*(-delta)]
+        elif kind == "slip":
+            if delta > 0:
+                bits[pos:pos] = [rng.getrandbits(1)]
+            else:
+                del bits[pos]
+        else:
+            bits[pos] ^= 1
+    bits = [rng.getrandbits(1) for _ in range(offset)] + [b ^ int(invert) for b in bits]
+    return bits, [b[3] + skp_edits.get(i, 0) for i, b in enumerate(skps)]
