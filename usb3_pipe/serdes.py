@@ -24,7 +24,7 @@ from usb3_pipe.datapath import TXDatapath, RXDatapath
 class USB3SerDes(LiteXModule):
     """USB3 SerDes on a LiteICLink transceiver.
 
-    Common part of the transceivers: 5Gbps, 20-bit with 8b/10b, TX/RX buffers (no clock aligner, word
+    Common part of the transceivers: 5Gbps, 20-bit (or 40-bit) with 8b/10b, TX/RX buffers (no clock aligner, word
     alignment done in the RX datapath), TX/RX datapaths (SKP insertion/removal, CDC, word alignment),
     LFPS (TX pattern/electrical idle, filtered RX electrical idle), RX decode errors (Warm Reset LFPS
     detection) and timing constraints. Transceivers specific parts (PLL, USB3 parameters overrides,
@@ -68,10 +68,11 @@ class USB3SerDes(LiteXModule):
         )
         return refclk
 
-    def add_transceiver(self, name, xcvr_cls, pll, tx_pads, rx_pads, sys_clk_freq):
-        """Transceiver channel (added as name) with the TX/RX datapaths."""
+    def add_transceiver(self, name, xcvr_cls, pll, tx_pads, rx_pads, sys_clk_freq, data_width=20):
+        """Transceiver channel (added as name) with the TX/RX datapaths (data_width: 20 or 40 bits,
+        2 or 4 symbols per transceiver clock cycle)."""
         xcvr = xcvr_cls(pll, tx_pads, rx_pads, sys_clk_freq,
-            data_width       = 20,
+            data_width       = data_width,
             clock_aligner    = False,
             tx_buffer_enable = True,
             rx_buffer_enable = True,
@@ -86,9 +87,10 @@ class USB3SerDes(LiteXModule):
         # time: no TS1/TS2 detected. The bytes rotation is handled by the RXWordAligner.
         getattr(xcvr, name + "_params").update(p_ALIGN_COMMA_WORD=1)
         xcvr.add_stream_endpoints()
-        self.tx_datapath     = tx_datapath     = TXDatapath("tx")
+        phy_dw = 8*(data_width//10)
+        self.tx_datapath     = tx_datapath     = TXDatapath("tx", phy_dw=phy_dw)
         self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx")
-        self.rx_datapath     = rx_datapath     = RXDatapath("rx")
+        self.rx_datapath     = rx_datapath     = RXDatapath("rx", phy_dw=phy_dw)
         self.comb += [
             xcvr.tx_enable.eq(self.enable),
             xcvr.rx_enable.eq(self.enable & ~self.rx_reset),
@@ -108,7 +110,7 @@ class USB3SerDes(LiteXModule):
         decode errors (Warm Reset LFPS detection)."""
         self.comb += [
             xcvr.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
-            xcvr.tx_pattern.eq(self.tx_pattern),
+            xcvr.tx_pattern.eq(Replicate(self.tx_pattern[0], len(xcvr.tx_pattern))), # Constant words.
         ]
         self.rx_idle_filter  = RXIdleFilter(rx_idle)
         self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
@@ -261,23 +263,39 @@ class A7USB3SerDes(USB3SerDes):
 # Xilinx Ultrascale+ USB3 Serializer/Deserializer --------------------------------------------------
 
 class USPUSB3SerDes(USB3SerDes):
-    """Ultrascale+ GTY USB3 SerDes (CPLL, reference clock from dedicated pads or from the fabric)."""
-    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads):
+    """Ultrascale+ GTY USB3 SerDes (reference clock from dedicated pads or from the fabric).
+
+    gen2_capable: QPLL at 10Gbps, 40-bit transceiver data (4 symbols per cycle), Gen 1 (5Gbps) with
+    the /2 TX/RX rate (125MHz transceiver clocks), 10Gbps selected with `rate_10g` (Gen 2, raw
+    128b/132b blocks: transceiver raw symbols). Else CPLL at 5Gbps, 20-bit (250MHz).
+    """
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
+        gen2_capable=False):
         USB3SerDes.__init__(self)
+        self.rate_10g = Signal() # i: 10Gbps line rate (gen2_capable).
 
         # # #
 
-        from liteiclink.serdes.gty_ultrascale import GTYChannelPLL, GTY
+        from liteiclink.serdes.gty_ultrascale import GTYChannelPLL, GTYQuadPLL, GTY
 
         # PLL / Transceiver ------------------------------------------------------------------------
         refclk_from_fabric = isinstance(refclk_pads, (Signal, ClockSignal))
         refclk = self.get_refclk(refclk_pads, buffer="IBUFDS_GTE4")
-        self.pll = pll = GTYChannelPLL(refclk, refclk_freq, 5e9)
-        gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq)
-        assert pll.config['d'] == 1 # 5Gbps.
+        if gen2_capable:
+            self.pll = pll = GTYQuadPLL(refclk, refclk_freq, 10e9, refclk_from_fabric=refclk_from_fabric)
+            gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq, data_width=40)
+            # TX/RX rate: /2 (5Gbps, Gen 1) or /1 (10Gbps, Gen 2) from the 10Gbps QPLL.
+            self.comb += [
+                gty.tx_rate.eq(Mux(self.rate_10g, 0b001, 0b010)),
+                gty.rx_rate.eq(Mux(self.rate_10g, 0b001, 0b010)),
+            ]
+        else:
+            self.pll = pll = GTYChannelPLL(refclk, refclk_freq, 5e9)
+            gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq)
+        assert pll.config['d'] == 1 # 5Gbps (CPLL) / 10Gbps (QPLL).
 
-        # Fabric reference clock: CPLL from GTGREFCLK.
-        if refclk_from_fabric:
+        # Fabric reference clock: CPLL from GTGREFCLK (the QPLL is configured by GTYQuadPLL).
+        if refclk_from_fabric and not gen2_capable:
             gty.gty_params.update(
                 i_GTREFCLK0     = 0,
                 i_GTGREFCLK     = refclk,

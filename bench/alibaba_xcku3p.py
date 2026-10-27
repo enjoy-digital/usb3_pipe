@@ -50,7 +50,7 @@ class _CRG(LiteXModule):
 # USB3SoC ------------------------------------------------------------------------------------------
 
 class USB3SoC(USB3BaseSoC):
-    def __init__(self, platform, sfp=0, refclk="sfp",
+    def __init__(self, platform, sfp=0, refclk="sfp", gen2_capable=False,
         with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
         usb3_kwargs={}, **kwargs):
         sys_clk_freq = int(125e6)
@@ -70,7 +70,8 @@ class USB3SoC(USB3BaseSoC):
             refclk_pads  = {"sfp": platform.request("sfp_mgt_clk"), "clk100": ClockSignal("clk100")}[refclk],
             refclk_freq  = {"sfp": 156.25e6, "clk100": 100e6}[refclk],
             tx_pads      = platform.request("sfp_tx", sfp),
-            rx_pads      = platform.request("sfp_rx", sfp))
+            rx_pads      = platform.request("sfp_rx", sfp),
+            gen2_capable = gen2_capable)
 
         # USB3 (PHY, Debug, Core, Leds) ------------------------------------------------------------
         add_usb3_device(self, usb3_serdes,
@@ -85,15 +86,17 @@ class USB3SoC(USB3BaseSoC):
 
 def main():
     parser = argparse.ArgumentParser(description="USB3-PIPE on the Alibaba Cloud XCKU3P board (Kintex Ultrascale+ GTY).")
-    parser.add_argument("--sfp",    default=0,     type=int, help="SFP cage (SFP2USB adapter, 0: NIC1).", choices=[0, 1])
-    parser.add_argument("--refclk", default="sfp", help="GTY reference clock: SFP MGT clock (156.25MHz) or 100MHz oscillator (fabric).", choices=["sfp", "clk100"])
+    parser.add_argument("--sfp",          default=0,     type=int, help="SFP cage (SFP2USB adapter, 0: NIC1).", choices=[0, 1])
+    parser.add_argument("--refclk",       default="sfp", help="GTY reference clock: SFP MGT clock (156.25MHz) or 100MHz oscillator (fabric).", choices=["sfp", "clk100"])
+    parser.add_argument("--gen2-capable", action="store_true", help="Gen 2 capable clocking (QPLL 10Gbps, 40-bit, Gen 1 at /2 rate).")
     usb3_soc_args(parser, output_dir="build/alibaba_xcku3p", with_uartbone=False) # No UART: JTAGBone.
     args = parser.parse_args()
 
     platform = alibaba_xcku3p.Platform()
     soc = USB3SoC(platform,
-        sfp         = args.sfp,
-        refclk      = args.refclk,
+        sfp          = args.sfp,
+        refclk       = args.refclk,
+        gen2_capable = args.gen2_capable,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)
 

@@ -198,8 +198,9 @@ class RXErrorSubstitution(LiteXModule):
     Substitutes received 8b/10b decode errors and disparity errors with K28.4 symbols (6.3.1.4).
     """
     def __init__(self, serdes, clock_domain):
-        self.sink   = stream.Endpoint([("data", 16), ("ctrl", 2)])
-        self.source = stream.Endpoint([("data", 16), ("ctrl", 2)])
+        n = len(serdes.decoders)
+        self.sink   = stream.Endpoint([("data", 8*n), ("ctrl", n)])
+        self.source = stream.Endpoint([("data", 8*n), ("ctrl", n)])
 
         # # #
 
