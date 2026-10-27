@@ -100,6 +100,13 @@ class USB3DebugClient:
         if hasattr(self.bus.regs, f"{self.name}_history_freeze"):
             self.reg("history_freeze").write(int(enable))
 
+    def history_u3_exit(self):
+        # Restart the history on the next U3 exit (one shot). Returns False when not supported.
+        if not hasattr(self.bus.regs, f"{self.name}_history_u3_exit"):
+            return False
+        self.reg("history_u3_exit").write(1)
+        return True
+
     def clear(self):
         self.reg("clear").write(1)
         if hasattr(self.bus.regs, "usb3_serdes_debug_rx_errors_clear"):

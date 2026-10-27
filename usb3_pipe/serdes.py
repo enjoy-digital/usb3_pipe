@@ -78,6 +78,12 @@ class USB3SerDes(LiteXModule):
             rx_polarity      = self.rx_polarity)
         self.add_module(name=name, module=xcvr)
         self.xcvr_name = name
+        # Comma alignment on any byte: USB3 Ordered Sets start with consecutive COMs (4 for the
+        # TS1/TS2), with 2 symbols per word half of them are on odd bytes. Aligning commas on even
+        # bytes only (LiteICLink default) made the aligner slide on every Ordered Set when the first
+        # COM was received on an odd byte (ex: after a U3 exit), duplicating/dropping a symbol each
+        # time: no TS1/TS2 detected. The bytes rotation is handled by the RXWordAligner.
+        getattr(xcvr, name + "_params").update(p_ALIGN_COMMA_WORD=1)
         xcvr.add_stream_endpoints()
         self.tx_datapath     = tx_datapath     = TXDatapath("tx")
         self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx")

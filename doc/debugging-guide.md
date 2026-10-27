@@ -12,7 +12,8 @@ turn every finding into a simulation test.
 - LiteX Acorn Baseboard (Mini) with the SFP2USB adapter in the SFP cage, USB3 cable to the host.
 - JTAG through the baseboard FT4232H (channel A). If other FTDI boards are connected, always select
   the Acorn explicitly (USB bus/device for openFPGALoader, USB location for OpenOCD): the platform
-  programmer picks the first FTDI it finds.
+  programmer picks the first FTDI it finds. `bench/acorn_run.py` refuses to guess when several
+  adapters match: set `USB3_PIPE_FTDI` to the Acorn sysfs USB location (ex: `5-4`).
 - `litex_server` port: the host scripts (`bench/usb3_debug.py`, `usb3_bench.py`, `usb3_soak.py`,
   `usb3_trace.py`, `usb3_analyzer.py`, `usb3_suspend.py`, common `--csr-csv`/`--host`/`--port`
   arguments from `bench/common.py`) default to the LiteX default port 1234 (`--port`),
@@ -196,18 +197,40 @@ with the LTSSM history captured from U3 (`history_freeze`):
 
 ```sh
 $ ./bench/usb3_suspend.py --port 1240 --dev /dev/video0 --cycles 8 --csr-csv build/sqrl_acorn/csr.csv
-cycle 2: clean (0.6s), LTSSM: Recovery.Active Recovery.Configuration Recovery.Idle U0 ...
-cycle 0: reset (1.7s), LTSSM: Polling.ExitToRxDetect Polling.Entry Polling.LFPS ... WarmReset ...
+cycle 2: clean (0.6s), LTSSM: Recovery.Active@0.0ms Recovery.Configuration@0.0ms Recovery.Idle@0.0ms U0@0.0ms
+cycle 0: reset (1.7s), LTSSM: Recovery.Active@0.0ms eSS.Inactive@12.0ms Polling.ExitToRxDetect@24.0ms ...
 ```
 
-On the Acorn (composite example, xHCI host), ~40-70% of the resumes are clean, the others end with
-a host reset (functional, ~2.5s resume). Two failure modes are seen:
-- U3 -> Rx.Detect/Polling (Warm Reset from the host): the host U3 wakeup LFPS was not detected.
-- U3 -> Recovery.Active -> eSS.Inactive (12ms timeout): wakeup handshake done but no TS1 received
-  after the long Electrical Idle.
+The history restarts on the U3 exit (`history_u3_exit` trigger, armed by `usb3_suspend.py`): a
+failed exit retraining for longer than the history depth, or a host wakeup starting before the
+history is armed, is still captured from its first transition. Times are relative to the U3 exit.
+LiteScope captures of a failed exit: trigger on `eSS.Inactive` (only reached when Recovery.Active
+times out), with a large offset to see the end of Recovery.Active (`--no-retrain`: never retrain a
+link in U3). Linux desktop camera services (PipeWire) also open/resume UVC devices on their own.
 
-Not improved by: RXBUF_RESET_ON_EIDLE, a GTP RX re-initialization on U3 exit, the reference clock on
-GTGREFCLK0. Open investigation.
+On the Acorn (composite example, AMD xHCI host), ~50% of the resumes are clean (2026-10, GTGREFCLK0
+reference clock), the others end with a host reset (functional, ~1.7s resume). All the failures
+are now captured the same way:
+- U3 wakeup handshake completed on our side: the host wakeup LFPS is detected (80us), our 1ms
+  response LFPS is sent, then Recovery.Active.
+- The host keeps a non idle line for ~8ms after our response (`lfps` group: `rx_idle` low), then
+  the line goes idle. On a clean exit, Recovery.Configuration follows within microseconds.
+- During Recovery.Active, no TS1/TS2 is detected and 30-65% of the received symbols are 8b/10b
+  errors (`ts` group, substituted K28.4); at the end of Recovery.Active the RX is idle and the RX vs
+  TX clocks offset is exactly 0ppm (`phase` group, not tracking the host SSC as in U0).
+- Recovery.Active times out (12ms) -> eSS.Inactive -> Rx.Detect/Polling; the host Warm Resets the
+  port ~600ms after the wakeup.
+
+Not improved by (same composite design, 24 cycles each unless noted):
+- RXBUF_RESET_ON_EIDLE, a GTP RX re-initialization on U3 exit (earlier builds).
+- A GTP RX re-initialization while in U3, before the resume (7/12 clean vs 5/12).
+- `RXCDR_HOLD_DURING_EIDLE=0` (13/24), `RXCDR_FR/PH_RESET_ON_EIDLE=1` (16/24).
+- The time spent in U3 before the resume (0/3/10s: no correlation).
+- Extending our response LFPS while the host LFPS is received (with RX word alignment during the
+  handshake: 13/24; without: 4/24).
+
+Open investigation: the receiver does not decode the host signal following the LFPS exchange on
+~half of the exits (CDR/RX lock after the LFPS, or what the host transmits then).
 
 ## Transceiver Reference Clock (Acorn)
 
