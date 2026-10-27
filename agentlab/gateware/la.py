@@ -132,7 +132,7 @@ class AgentLabLA(LiteXModule):
         assert ring_words >= 4
         log2_int(ring_words) # Power of 2.
         assert block_samples < 2**16
-        assert output_fifo_depth >= block_samples
+        assert output_fifo_depth > block_samples # Registered full block decision (see BLOCK).
         self.n             = n
         self.ratio         = ratio
         self.ring_base     = ring_base
@@ -570,11 +570,20 @@ class AgentLabLA(LiteXModule):
         blk_cnt    = Signal(16)
         blk_last   = Signal()
         last_ready = Signal()
-        self.comb += [
-            remaining.eq(total - emitted),
+        blk_ready  = Signal()
+        # Block decisions registered (timing), sound one cycle later: the output FIFO level and
+        # remaining only decrease together (one sample read per cycle at most), total is fixed once
+        # ended. Full block: level >= block_samples + 1 the previous cycle (level >= block_samples).
+        self.comb += remaining.eq(total - emitted)
+        self.sync += [
             last_ready.eq(ended & (remaining <= block_samples) & (output_fifo.level >= remaining)),
-            blk_count.eq(Mux(last_ready, remaining, block_samples)),
+            blk_ready.eq(output_fifo.level >= (block_samples + 1)),
+            If(reset,
+                last_ready.eq(0),
+                blk_ready.eq(0),
+            ),
         ]
+        self.comb += blk_count.eq(Mux(last_ready, remaining, block_samples))
         self.framer = framer = ResetInserter()(FSM(reset_state="IDLE"))
         self.comb += framer.reset.eq(reset)
         framer.act("IDLE",
@@ -590,7 +599,7 @@ class AgentLabLA(LiteXModule):
             ),
         )
         framer.act("BLOCK",
-            framed.valid.eq(last_ready | (output_fifo.level >= block_samples)),
+            framed.valid.eq(last_ready | blk_ready),
             framed.data.eq(Cat(blk_count,
                 last_ready, overflow & last_ready, C(0, 6),
                 C(LA_BLOCK_MAGIC, 8))),
@@ -635,10 +644,16 @@ class AgentLabLA(LiteXModule):
         self.packer = packer = ResetInserter()(AgentLabWordPacker(
             idle_cycles = idle_cycles,
             min_period  = packet_period))
+        # Output register (timing: the framer/packer valid logic is not chained with the USB3 Bulk
+        # IN endpoint/Protocol Layer), reset with the datapath (no stale word after a flush).
+        self.output_buffer = output_buffer = ResetInserter()(
+            stream.Buffer([("data", 32), ("be", 4)], pipe_valid=True, pipe_ready=False))
         self.comb += [
             packer.reset.eq(reset),
+            output_buffer.reset.eq(reset),
             framed.connect(packer.sink),
-            packer.source.connect(self.source),
+            packer.source.connect(output_buffer.sink),
+            output_buffer.source.connect(self.source),
         ]
 
         # Status -----------------------------------------------------------------------------------
