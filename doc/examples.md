@@ -151,10 +151,16 @@ ffplay/VLC while using `litex_term /dev/ttyACM0`.
 ## Other targets
 
 `bench/kc705.py` (KC705, Kintex7 GTX, `--connector sfp|sma`) and `bench/alibaba_xcku3p.py` (Alibaba
-Cloud XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`) share the SoC (`bench/usb3_soc.py`: example
-designs and common options `--example`, `--cpu-type`, `--with-lpm`, `--with-serdes-debug`,
-`--with-analyzer`) and are build-tested, hardware validation in progress (results above are from the
-Acorn):
+Cloud XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`, `--refclk sfp|clk100`) share the SoC
+(`bench/usb3_soc.py`: example designs and common options `--example`, `--cpu-type`, `--with-lpm`,
+`--with-serdes-debug`, `--with-analyzer`). Results above are from the Acorn.
+
+- XCKU3P: validated on hardware with the SFP2USB adapter in the NIC1 SFP cage (`--sfp 0`, default),
+  GTY reference clock from the SFP MGT clock (156.25MHz, `--refclk sfp`, default): bench example IN
+  446MB/s, OUT 450MB/s, full duplex, 0 errors, retrains/soak without Recovery (RX polarity inverted
+  on this board, detected by the LTSSM). JTAG: Digilent JTAG-HS2 (`openFPGALoader -c digilent_hs2`,
+  OpenOCD `cpld/xilinx-xcu.cfg` with `CHIP XCKU3P` for JTAGBone).
+- KC705: build-tested, hardware validation in progress.
 
 | Target | Build directory | Not available |
 |---|---|---|
