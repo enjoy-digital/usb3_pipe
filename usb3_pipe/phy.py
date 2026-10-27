@@ -89,6 +89,10 @@ class USB3PHY(LiteXModule):
     - lanes=2 (Gen 1x2, 6.13): serdes is a list of 2 SerDes (Lane 0: Configuration Lane), 64-bit
       data/8-bit ctrl link words (Symbol 0 on data[0:8], no endianness swap). x2 is the negotiated
       Gen 1x2 operation (PHY Capability LBPM, x2_capable: advertised capability).
+    - gen2_capable: Gen 2 (10Gbps) capability advertised in SuperSpeedPlus Polling (SCD1/SCD2, PHY
+      Capability LBPM, also used with lanes=1), gen2 is the negotiated Gen 2 operation. The Gen 2
+      speed switch/datapath (Gen2TXDatapath/Gen2RXDatapath) and Gen 2 LTSSM are not integrated yet
+      (doc/gen2-x2-roadmap.md): training continues at Gen 1 speed after Polling.LFPS.
 
     Link interface (what a USB3 Link Layer needs from the PHY, the Link Layer does not have to know
     the PHY internals):
@@ -99,7 +103,7 @@ class USB3PHY(LiteXModule):
       signals are the LTSSM ones (same Signal objects); undriven inputs keep their reset values.
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
-        timer_scale=1, lanes=1, x2_capable=True, deskew_depth=8):
+        timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8):
         assert role in ["device", "host"]
         assert lanes in [1, 2]
         serdes = [serdes] if lanes == 1 else serdes
@@ -108,16 +112,22 @@ class USB3PHY(LiteXModule):
 
         # PIPE(s) / LTSSM --------------------------------------------------------------------------
         if lanes == 1:
+            ssp = gen2_capable # SuperSpeedPlus Polling (Gen 2x1 capability).
             self.pipe  = pipe  = USB3PIPE(serdes[0],
                 sys_clk_freq         = sys_clk_freq,
                 with_endianness_swap = with_endianness_swap,
-                timer_scale          = timer_scale)
+                timer_scale          = timer_scale,
+                ssp                  = ssp)
             self.pipes = [pipe]
-            self.ltssm = ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
+            self.ltssm = ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale,
+                ssp=ssp)
             self.comb += connect_ltssm_pipe(ltssm, pipe)
             self.comb += ltssm.ds_port.eq(role == "host")
+            if ssp:
+                self.add_ssp_polling(pipe, serdes[0], sys_clk_freq, role, timer_scale,
+                    x2_capable=False, gen2_capable=True)
         else:
-            self.add_lanes(serdes, sys_clk_freq, role, timer_scale, x2_capable)
+            self.add_lanes(serdes, sys_clk_freq, role, timer_scale, x2_capable, gen2_capable)
             ltssm = self.ltssm
 
         # SerDes RX Re-initialization --------------------------------------------------------------
@@ -155,7 +165,7 @@ class USB3PHY(LiteXModule):
         self.ltssm_state  = Signal(len(ltssm.fsm.state))
         self.comb += self.ltssm_state.eq(ltssm.fsm.state)
 
-    def add_lanes(self, serdes, sys_clk_freq, role, timer_scale, x2_capable):
+    def add_lanes(self, serdes, sys_clk_freq, role, timer_scale, x2_capable, gen2_capable=False):
         """Gen 1x2 (6.13): one USB3PIPE per lane under a single LTSSM, Lane 0 is the Configuration
         Lane.
 
@@ -219,19 +229,33 @@ class USB3PHY(LiteXModule):
         ]
 
         # SuperSpeedPlus Polling (Lane 0) ----------------------------------------------------------
-        self.ssp = ssp = SSPPolling(sys_clk_freq, timer_scale=timer_scale, x2_capable=x2_capable)
-        self.x2  = Signal() # o: Gen 1x2 negotiated.
+        self.add_ssp_polling(pipes[0], serdes[0], sys_clk_freq, role, timer_scale,
+            x2_capable=x2_capable, gen2_capable=gen2_capable)
+
+    def add_ssp_polling(self, pipe, serdes, sys_clk_freq, role, timer_scale, x2_capable,
+        gen2_capable):
+        """SuperSpeedPlus Polling (SCD1/SCD2, LBPM PHY Capability/Ready, SSPPolling,
+        7.5.4.3-7.5.4.6) on the Configuration Lane in Polling.LFPS: x2/gen2 are the negotiated
+        lanes/speed."""
+        self.ssp  = ssp = SSPPolling(sys_clk_freq, timer_scale=timer_scale,
+            x2_capable   = x2_capable,
+            gen2_capable = gen2_capable)
+        self.x2   = Signal() # o: Gen X2 (two lanes) negotiated.
+        self.gen2 = Signal() # o: Gen 2 (10Gbps) negotiated.
         self.comb += [
-            ssp.start.eq(ltssm.ssp_polling),
+            ssp.start.eq(self.ltssm.ssp_polling),
             ssp.ds_port.eq(role == "host"),
-            ssp.idle.eq(serdes[0].rx_idle),
-            ltssm.ssp_done.eq(ssp.done),
-            ltssm.ssp_fallback.eq(ssp.ss_fallback),
-            # Lane 0 TX: SuperSpeedPlus Polling LFPS, else the PIPE (LFPS/electrical idle/data).
-            pipes[0].lfps_tx_ssp.eq(ssp.tx_active),
-            pipes[0].lfps_tx_ssp_lfps.eq(ssp.tx_lfps),
+            ssp.idle.eq(serdes.rx_idle),
+            self.ltssm.ssp_done.eq(ssp.done),
+            self.ltssm.ssp_fallback.eq(ssp.ss_fallback),
+            # TX: SuperSpeedPlus Polling LFPS, else the PIPE (LFPS/electrical idle/data).
+            pipe.lfps_tx_ssp.eq(ssp.tx_active),
+            pipe.lfps_tx_ssp_lfps.eq(ssp.tx_lfps),
         ]
-        self.sync += If(ssp.done, self.x2.eq(ssp.x2))
+        self.sync += If(ssp.done,
+            self.x2.eq(ssp.x2),
+            self.gen2.eq(ssp.gen2),
+        )
 
     def add_lanes_datapath(self, deskew_depth):
         """Gen 1x2 datapath: data striping (6.13.4): 64-bit/8-bit link words (Symbol 0 on

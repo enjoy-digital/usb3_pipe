@@ -12,6 +12,9 @@ payload Symbols in order, each Symbol LSB first. The Block Header values (0011b 
 are read with bit 0 as the LSB (data: bit 0 = 1 transmitted first).
 """
 
+from functools import reduce
+from operator import and_, or_
+
 from migen import *
 
 from litex.gen import *
@@ -136,23 +139,25 @@ def gen2_block_layout():
 # Gen 2 Block Gearbox (TX) -------------------------------------------------------------------------
 
 class Gen2BlockGearbox(LiteXModule):
-    """Blocks to 32-bit words: 132-bit blocks (Block Header + 128-bit payload) or 196-bit SKP blocks
-    (skp=1, Block Header + 192-bit payload). The output is continuous (source.valid always set once
-    started), the block sink is accepted when there is room."""
-    def __init__(self):
+    """Blocks to data_width-bit words (transceiver words, bit 0 transmitted first): 132-bit blocks
+    (Block Header + 128-bit payload) or 196-bit SKP blocks (skp=1, Block Header + 192-bit payload).
+    The output is continuous (source.valid always set once started), the block sink is accepted when
+    there is room (one block every 132/data_width cycles on average)."""
+    def __init__(self, data_width=32):
         self.sink   = sink   = stream.Endpoint(gen2_block_layout())
-        self.source = source = stream.Endpoint([("data", 32)])
+        self.source = source = stream.Endpoint([("data", data_width)])
 
         # # #
 
-        buf   = Signal(196 + 32)
-        level = Signal(max=196 + 32 + 1)
+        dw    = data_width
+        buf   = Signal(196 + dw)
+        level = Signal(max=196 + dw + 1)
         out   = Signal()
         self.comb += [
-            out.eq((level >= 32) & source.ready),
-            source.valid.eq(level >= 32),
-            source.data.eq(buf[0:32]),
-            sink.ready.eq((level - Mux(out, 32, 0)) <= 32),
+            out.eq((level >= dw) & source.ready),
+            source.valid.eq(level >= dw),
+            source.data.eq(buf[0:dw]),
+            sink.ready.eq((level - Mux(out, dw, 0)) <= dw),
         ]
         block   = Signal(196)
         length  = Signal(8)
@@ -165,12 +170,12 @@ class Gen2BlockGearbox(LiteXModule):
                 length.eq(132),
             )
         ]
-        shifted = Signal(196 + 32)
-        rlevel  = Signal(max=196 + 32 + 1)
+        shifted = Signal(196 + dw)
+        rlevel  = Signal(max=196 + dw + 1)
         self.comb += [
             If(out,
-                shifted.eq(buf[32:]),
-                rlevel.eq(level - 32),
+                shifted.eq(buf[dw:]),
+                rlevel.eq(level - dw),
             ).Else(
                 shifted.eq(buf),
                 rlevel.eq(level),
@@ -178,7 +183,7 @@ class Gen2BlockGearbox(LiteXModule):
         ]
         self.sync += [
             If(sink.valid & sink.ready,
-                buf.eq(shifted | (Cat(block, Constant(0, 32)) << rlevel)),
+                buf.eq(shifted | (Cat(block, Constant(0, dw)) << rlevel)),
                 level.eq(rlevel + length),
             ).Else(
                 buf.eq(shifted),
@@ -189,150 +194,298 @@ class Gen2BlockGearbox(LiteXModule):
 # Gen 2 Block Aligner (RX) -------------------------------------------------------------------------
 
 class Gen2BlockAligner(LiteXModule):
-    """32-bit words to blocks with block alignment (6.4.1.2.4).
+    """data_width-bit words (transceiver words, bit 0 received first) to blocks with block alignment
+    (6.4.1.2.4), one word per cycle (sink always ready).
 
-    - Unaligned: the 132-bit SYNC Ordered Set block is searched at 32 bit offsets per cycle (the input
-      rate). A SYNC received inverted (polarity inversion, 6.4.2.2) toggles the polarity (the buffer is
-      flushed and the next SYNC is used for the alignment).
-    - Aligned: blocks are extracted with the alignment, an SDS Ordered Set moves to Locked.
+    - Unaligned: the 132-bit SYNC Ordered Set block is searched at the data_width bit offsets of
+      each new word. A SYNC received inverted (polarity inversion, 6.4.2.2) toggles the polarity
+      (new words and buffered bits inverted, decodes valid one cycle later) and is used for the
+      alignment.
+    - Aligned: blocks are extracted with the alignment, an SDS Ordered Set moves to Locked. A SYNC
+      received with a different alignment realigns (error pulse): a bit slip can keep valid Block
+      Headers (ex: TSEQ, Symbol 0 bit 0 = 1 seen as a corrected Control Block Header).
     - Locked: blocks are extracted with the alignment.
     In Aligned/Locked, an undefined Block Header (2 bits or more from 0011b/1100b) moves back to
     Unaligned (error pulse), single bit errors are corrected (header_error). SKP Ordered Sets (control
-    block starting with SKP or SKPEND) are consumed by groups of 4 Symbols until SKPEND (4 to 36 SKP
-    Symbols, multiple of 4, 6.4.3.3): they are not output, skp pulses with the received LFSR state.
+    block starting with SKP or SKPEND) are consumed by Dwords of 4 SKP Symbols until SKPEND (0 to 36
+    SKP Symbols, multiple of 4, 6.4.3.3): they are not output, skp pulses with the received LFSR
+    state.
 
-    Approximation: SYNC Ordered Sets received with a different alignment in Aligned are not detected
-    (the alignment is only acquired in Unaligned).
+    Implementation (40-bit words at 250MHz for 10Gbps): the last words are kept in a window and
+    blocks are read at a bit pointer in a small range (2**k >= data_width + 24 positions: pointer
+    moves by the consumed length minus data_width each cycle). The per position decodes (Block
+    Header, SKP Dwords/SKPEND, SYNC) are computed on the incoming window and registered with it: the
+    pointer loop is a small mux, the length decision and an adder. The SYNC search is done one word
+    ahead and its offset registered. Outputs are registered (1 cycle).
+
+    Approximation: a SYNC received with a different alignment while a SKP Ordered Set is consumed
+    does not realign (the next one does).
 
     The source must always be ready (one block every 132 bits).
     """
-    def __init__(self):
-        self.sink   = sink   = stream.Endpoint([("data", 32)])
+    def __init__(self, data_width=32):
+        self.sink   = sink   = stream.Endpoint([("data", data_width)])
         self.source = source = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
 
         self.polarity  = Signal()   # o
         self.aligned   = Signal()   # o
         self.locked    = Signal()   # o
-        self.error     = Signal()   # o: Undefined Block Header (pulse).
+        self.error     = Signal()   # o: Undefined Block Header/SKP Ordered Set (pulse).
         self.skp       = Signal()   # o: SKP Ordered Set received (pulse).
         self.skp_lfsr  = Signal(23) # o: SKP Ordered Set LFSR state (valid with skp).
         self.skp_count = Signal(6)  # o: SKP Ordered Set SKP Symbols (valid with skp).
 
         # # #
 
-        n   = 256
-        buf   = Signal(n)
-        level = Signal(max=n + 1)
+        dw   = data_width
+        kr   = log2_int(dw + 24, need_pow2=False)
+        r    = 2**kr        # Pointer range (blocks read at ptr < r).
+        n    = r + 131 + dw # Window (+ SYNC search one word ahead).
+        npos = r + 37       # SKP Dwords/SKPEND decode positions (ptr + 0/4/32/36).
 
-        consumed = Signal(max=n + 1)
-        flush    = Signal()
-
-        # Block Header decoding (single bit error correction: distance 4 between the two headers).
-        header  = buf[0:4]
-        dist_d  = Signal(3)
-        dist_c  = Signal(3)
+        # Window (oldest bits at the bottom) -------------------------------------------------------
+        win      = Signal(n)
+        win_next = Signal(n)
+        data     = Signal(dw)
+        toggle   = Signal() # Polarity toggle (buffered bits inverted on the next cycle).
+        toggle_d = Signal()
         self.comb += [
-            dist_d.eq(popcount(header ^ BLOCK_HEADER_DATA)),
-            dist_c.eq(popcount(header ^ BLOCK_HEADER_CONTROL)),
+            sink.ready.eq(1),
+            data.eq(sink.data ^ Replicate(self.polarity, dw)),
+            If(sink.valid,
+                win_next.eq(Cat(win[dw:] ^ Replicate(toggle_d, n - dw), data))
+            ).Else(
+                win_next.eq(win ^ Replicate(toggle_d, n))
+            )
         ]
-        invalid = Signal()
-        control = Signal()
-        self.comb += [
-            invalid.eq((dist_d > 1) & (dist_c > 1)),
-            control.eq(dist_c <= 1),
+        self.sync += [
+            win.eq(win_next),
+            toggle_d.eq(toggle),
         ]
-        sym0 = buf[4:12]
 
-        # SYNC search (32 offsets).
-        match     = Signal(32)
-        match_inv = Signal(32)
-        for k in range(32):
-            self.comb += [
-                match[k].eq(buf[k:k+132]     == GEN2_SYNC_BITS),
-                match_inv[k].eq(buf[k:k+132] == (~GEN2_SYNC_BITS & (2**132 - 1))),
+        # Per position decodes (registered with the window) ----------------------------------------
+        ctl_pos   = Signal(r)    # Control Block Header (single bit error corrected).
+        inv_pos   = Signal(r)    # Undefined Block Header.
+        skp_pos   = Signal(r)    # Control Block Header + SKP/SKPEND Symbol 0.
+        dword_pos = Signal(npos) # SKP Dword (4 SKP Symbols).
+        end_pos   = Signal(npos) # SKPEND Symbol.
+        for p in range(r):
+            header = win_next[p:p+4]
+            dist_d = popcount(header ^ BLOCK_HEADER_DATA)
+            dist_c = popcount(header ^ BLOCK_HEADER_CONTROL)
+            sym0   = win_next[p+4:p+12]
+            self.sync += [
+                ctl_pos[p].eq(dist_c <= 1),
+                inv_pos[p].eq((dist_d > 1) & (dist_c > 1)),
+                skp_pos[p].eq((dist_c <= 1) & ((sym0 == GEN2_SKP) | (sym0 == GEN2_SKPEND))),
             ]
-        offset = Signal(5)
-        for k in reversed(range(32)):
-            self.comb += If(match[k], offset.eq(k))
+        for p in range(npos):
+            self.sync += [
+                dword_pos[p].eq(win_next[p:p+32] == GEN2_SKP*0x01010101),
+                end_pos[p].eq(  win_next[p:p+8]  == GEN2_SKPEND),
+            ]
 
+        # SYNC search (registered, 2 stages) -------------------------------------------------------
+        # Offsets r to r + dw - 1 of the window (00h/FFh Symbols pairs shared), then the first match
+        # offset: used one word later (window shifted), the SYNC is then at r - dw + offset (pointer
+        # range).
+        sync_pos     = Signal(dw)
+        sync_inv_pos = Signal(dw)
+        pairs        = {}
+        pairs_inv    = {}
+        for q in range(r + 4, n - 15):
+            pairs[q]     = Signal(name=f"sync_pair{q}")
+            pairs_inv[q] = Signal(name=f"sync_pair_inv{q}")
+            self.sync += [
+                pairs[q].eq(    win_next[q:q+16] == 0xff00),
+                pairs_inv[q].eq(win_next[q:q+16] == 0x00ff),
+            ]
+        for k in range(dw):
+            p = r + k
+            self.comb += [
+                sync_pos[k].eq((win[p:p+4] == BLOCK_HEADER_CONTROL) &
+                    reduce(and_, [pairs[p + 4 + 16*i] for i in range(8)])),
+                sync_inv_pos[k].eq((win[p:p+4] == (~BLOCK_HEADER_CONTROL & 0xf)) &
+                    reduce(and_, [pairs_inv[p + 4 + 16*i] for i in range(8)])),
+            ]
+        # Offset encoding (OR trees): at most one SYNC match per word (SYNC pattern, 132-bit block).
+        sync_offset     = Signal(max=dw)
+        sync_inv_offset = Signal(max=dw)
+        for j in range(len(sync_offset)):
+            ks = [k for k in range(dw) if (k >> j) & 1]
+            self.comb += [
+                sync_offset[j].eq(    reduce(or_, [sync_pos[k]     for k in ks])),
+                sync_inv_offset[j].eq(reduce(or_, [sync_inv_pos[k] for k in ks])),
+            ]
+        sync_hit     = Signal()
+        sync_inv_hit = Signal()
+        sync_ptr     = Signal(max=n + 1)
+        sync_inv_ptr = Signal(max=n + 1)
+        self.sync += [
+            sync_hit.eq(    (sync_pos     != 0) & sink.valid & ~toggle & ~toggle_d),
+            sync_inv_hit.eq((sync_inv_pos != 0) & sink.valid & ~toggle & ~toggle_d),
+            sync_ptr.eq(    r - dw + sync_offset),
+            sync_inv_ptr.eq(r - dw + sync_inv_offset),
+        ]
+
+        # Pointer / decisions ----------------------------------------------------------------------
+        ptr      = Signal(max=n + 1)
+        ptr_base = Signal(max=n + 1)
+        ptr_next = Signal((bits_for(n + 132) + 1, True))
+        avail    = Signal()
+        idx      = Signal(kr)
+        inv      = Signal(r)
+        skp      = Signal(r)
+        dwords   = Signal(npos)
+        ends     = Signal(npos)
+        self.comb += [
+            avail.eq(ptr < r),
+            idx.eq(ptr[:kr]),
+            inv.eq(inv_pos >> idx),
+            skp.eq(skp_pos >> idx),
+            dwords.eq(dword_pos >> idx),
+            ends.eq(end_pos >> idx),
+        ]
+
+        consumed  = Signal(8)
+        error     = Signal()
+        drop      = Signal() # Alignment lost.
+        found     = Signal() # SYNC found (Unaligned/realignment), SYNC block output.
+        realign   = Signal()
+        extract   = Signal()
+        skp_done  = Signal()
+        skp_end   = Signal(6) # SKPEND position (from ptr).
         skp_count = Signal(6)
+        skp_total = Signal(6)
+        self.comb += [
+            ptr_next.eq(ptr_base + consumed - Mux(sink.valid, dw, 0)),
+            drop.eq(error | (self.aligned & (ptr_next < 0))),
+            self.error.eq(drop | realign),
+        ]
+
         self.fsm = fsm = FSM(reset_state="UNALIGNED")
         fsm.act("UNALIGNED",
-            If(level >= (132 + 31),
-                If(match != 0,
-                    consumed.eq(offset),
-                    NextState("BLOCK")
-                ).Elif(match_inv != 0,
-                    flush.eq(1),
-                    NextValue(self.polarity, ~self.polarity)
+            If(sync_hit,
+                found.eq(1),
+                ptr_base.eq(sync_ptr),
+            ).Elif(sync_inv_hit,
+                found.eq(1),
+                toggle.eq(1),
+                ptr_base.eq(sync_inv_ptr),
+                NextValue(self.polarity, ~self.polarity)
+            ),
+            If(found,
+                consumed.eq(132),
+                If(toggle,
+                    NextState("POLARITY")
                 ).Else(
-                    consumed.eq(32)
+                    NextState("BLOCK")
                 )
             )
+        )
+        fsm.act("POLARITY",
+            # Buffered bits inverted, decodes not valid for this cycle.
+            self.aligned.eq(1),
+            ptr_base.eq(ptr),
+            NextState("BLOCK"),
+            If(drop, NextState("UNALIGNED"))
         )
         fsm.act("BLOCK",
             self.aligned.eq(1),
-            If(level >= 132,
-                If(invalid,
-                    self.error.eq(1),
-                    NextValue(self.locked, 0),
-                    NextState("UNALIGNED")
-                ).Elif(control & ((sym0 == GEN2_SKP) | (sym0 == GEN2_SKPEND)),
-                    consumed.eq(4),
-                    NextValue(skp_count, 0),
-                    NextState("SKP")
+            ptr_base.eq(ptr),
+            # SYNC at a position that is not the next block start (the block at ptr is a 132-bit
+            # block ending after the SYNC start, or the SYNC start is already passed): realignment.
+            If(sync_hit & (~avail | ((sync_ptr != ptr) & ~skp[0])),
+                found.eq(1),
+                realign.eq(1),
+                ptr_base.eq(sync_ptr),
+                consumed.eq(132),
+            ).Elif(avail,
+                If(inv[0],
+                    error.eq(1)
+                ).Elif(skp[0],
+                    # SKP Dwords after the Block Header until SKPEND (up to 2 Dwords per cycle).
+                    If(ends[4],
+                        consumed.eq(36),
+                        skp_done.eq(1),
+                        skp_end.eq(4),
+                        skp_total.eq(0),
+                    ).Elif(dwords[4] & ends[36],
+                        consumed.eq(68),
+                        skp_done.eq(1),
+                        skp_end.eq(36),
+                        skp_total.eq(4),
+                    ).Elif(dwords[4] & dwords[36],
+                        consumed.eq(68),
+                        NextValue(skp_count, 8),
+                        NextState("SKP")
+                    ).Else(
+                        error.eq(1)
+                    )
                 ).Else(
                     consumed.eq(132),
-                    source.valid.eq(1),
-                    If(control & (sym0 == GEN2_SDS),
-                        NextValue(self.locked, 1)
-                    )
+                    extract.eq(1),
                 )
-            )
+            ),
+            If(drop, NextState("UNALIGNED"))
         )
         fsm.act("SKP",
             self.aligned.eq(1),
-            If(level >= 32,
-                consumed.eq(32),
-                If(buf[0:8] == GEN2_SKPEND,
-                    self.skp.eq(1),
-                    NextState("BLOCK")
-                ).Elif((buf[0:32] == 0xcccccccc) & (skp_count < 36),
-                    NextValue(skp_count, skp_count + 4)
+            ptr_base.eq(ptr),
+            If(avail,
+                If(ends[0],
+                    consumed.eq(32),
+                    skp_done.eq(1),
+                    skp_end.eq(0),
+                    skp_total.eq(skp_count),
+                ).Elif(dwords[0] & ends[32] & (skp_count <= 32),
+                    consumed.eq(64),
+                    skp_done.eq(1),
+                    skp_end.eq(32),
+                    skp_total.eq(skp_count + 4),
+                ).Elif(dwords[0] & dwords[32] & (skp_count <= 28),
+                    consumed.eq(64),
+                    NextValue(skp_count, skp_count + 8),
                 ).Else(
-                    self.error.eq(1),
-                    NextValue(self.locked, 0),
-                    NextState("UNALIGNED")
+                    error.eq(1)
                 )
-            )
+            ),
+            If(skp_done, NextState("BLOCK")),
+            If(drop, NextState("UNALIGNED"))
         )
-        self.comb += [
-            self.skp_lfsr.eq(Cat(buf[24:32], buf[16:24], buf[8:15])),
-            self.skp_count.eq(skp_count),
-            source.header.eq(Mux(control, BLOCK_HEADER_CONTROL, BLOCK_HEADER_DATA)),
-            source.data.eq(buf[4:132]),
-            source.header_error.eq((dist_d != 0) & (dist_c != 0)),
-        ]
+        self.sync += ptr.eq(ptr_next)
 
-        # Buffer: words (polarity corrected) appended at level, blocks/offsets removed from the bottom.
-        data      = Signal(32)
-        remaining = Signal(n)
-        rlevel    = Signal(max=n + 1)
+        # Outputs (registered) ---------------------------------------------------------------------
+        bits     = Signal(132)
+        lfsr     = Signal(24)
+        out_bits = Signal(132)
         self.comb += [
-            data.eq(sink.data ^ Replicate(self.polarity, 32)),
-            remaining.eq(buf >> consumed),
-            rlevel.eq(level - consumed),
-            sink.ready.eq(level <= (n - 32)),
+            bits.eq(win >> idx),
+            Case(skp_end, {e: lfsr.eq(bits[e+8:e+32]) for e in [0, 4, 32, 36]}),
         ]
         self.sync += [
-            If(flush,
-                buf.eq(0),
-                level.eq(0),
-            ).Elif(sink.valid & sink.ready,
-                buf.eq(remaining | (Cat(data, Constant(0, n - 32)) << rlevel)),
-                level.eq(rlevel + 32),
-            ).Else(
-                buf.eq(remaining),
-                level.eq(rlevel),
-            )
+            source.valid.eq((found | extract) & ~drop),
+            out_bits.eq(Mux(found, GEN2_SYNC_BITS, bits)),
+            self.skp.eq(skp_done & ~drop),
+            self.skp_count.eq(skp_total),
+            self.skp_lfsr.eq(Cat(lfsr[16:24], lfsr[8:16], lfsr[0:7])),
+        ]
+        out_dist_d = Signal(3)
+        out_dist_c = Signal(3)
+        out_ctl    = Signal()
+        self.comb += [
+            out_dist_d.eq(popcount(out_bits[0:4] ^ BLOCK_HEADER_DATA)),
+            out_dist_c.eq(popcount(out_bits[0:4] ^ BLOCK_HEADER_CONTROL)),
+            out_ctl.eq(out_dist_c <= 1),
+            source.header.eq(Mux(out_ctl, BLOCK_HEADER_CONTROL, BLOCK_HEADER_DATA)),
+            source.data.eq(out_bits[4:132]),
+            source.header_error.eq((out_dist_d != 0) & (out_dist_c != 0)),
+        ]
+        self.sync += [
+            If(source.valid & out_ctl & (out_bits[4:12] == GEN2_SDS),
+                self.locked.eq(1)
+            ),
+            If(self.error,
+                self.locked.eq(0)
+            ),
         ]

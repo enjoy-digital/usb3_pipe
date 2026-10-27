@@ -168,11 +168,14 @@ class Gen2Scrambler(LiteXModule):
 
     Per byte: advance[i] (the LFSR advances 8 bits) and scramble[i] (the byte is XORed with the LFSR
     output, only meaningful when advancing). init re-initializes the LFSR to the seed (SYNC Ordered Set).
+
+    per_byte_advance=False: advance is a single bit for all the bytes (blocks: all advance or none),
+    the keys/next state are computed directly from the current state (logic depth).
     """
-    def __init__(self, nbytes=4, seed=GEN2_LFSR_SEED):
+    def __init__(self, nbytes=4, seed=GEN2_LFSR_SEED, per_byte_advance=True):
         self.ce       = Signal()          # i
         self.init     = Signal()          # i
-        self.advance  = Signal(nbytes)    # i
+        self.advance  = Signal(nbytes if per_byte_advance else 1) # i
         self.scramble = Signal(nbytes)    # i
         self.i        = Signal(8*nbytes)  # i
         self.o        = Signal(8*nbytes)  # o
@@ -182,25 +185,36 @@ class Gen2Scrambler(LiteXModule):
 
         cur   = Signal(23, reset=seed)
         state = cur
+        masks = [1 << n for n in range(23)]
         self.comb += self.state.eq(cur)
         for b in range(nbytes):
-            masks = [1 << n for n in range(23)]
+            advance = self.advance[b] if per_byte_advance else self.advance
+            if per_byte_advance:
+                masks = [1 << n for n in range(23)]
             key   = Signal(8)
             for n in range(8):
                 self.comb += key[n].eq(lfsr_xor(state, masks[22]))
                 masks = gen2_lfsr_advance(masks)
-            self.comb += If(self.advance[b] & self.scramble[b],
+            self.comb += If(advance & self.scramble[b],
                 self.o[8*b:8*(b+1)].eq(self.i[8*b:8*(b+1)] ^ key)
             ).Else(
                 self.o[8*b:8*(b+1)].eq(self.i[8*b:8*(b+1)])
             )
-            new = Signal(23)
-            self.comb += If(self.advance[b],
-                new.eq(Cat(*[lfsr_xor(state, mask) for mask in masks]))
+            if per_byte_advance:
+                new = Signal(23)
+                self.comb += If(advance,
+                    new.eq(Cat(*[lfsr_xor(state, mask) for mask in masks]))
+                ).Else(
+                    new.eq(state)
+                )
+                state = new
+        if not per_byte_advance:
+            state = Signal(23)
+            self.comb += If(self.advance,
+                state.eq(Cat(*[lfsr_xor(cur, mask) for mask in masks]))
             ).Else(
-                new.eq(state)
+                state.eq(cur)
             )
-            state = new
         self.sync += [
             If(self.init,
                 cur.eq(seed)
@@ -208,4 +222,3 @@ class Gen2Scrambler(LiteXModule):
                 cur.eq(state)
             )
         ]
-

@@ -401,10 +401,15 @@ class USB3PIPESim(SoCMini):
     - lane_skp:         Extra SKP Ordered Sets (2 Symbols) on the Host Lane 1 then Lane 0 every
                         lane_skp cycles in U0 (per lane SKP differences, 0 = disabled, >= 4096 for
                         the model).
+
+    gen2_capable (lanes=1): Host and Device advertise Gen 2x1 in the SuperSpeedPlus Polling
+    (SCD1/SCD2, LBPM), Gen 2 negotiated (no Gen 2 speed switch yet: training continues at Gen 1
+    speed).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
-        host_lpm=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096):
+        host_lpm=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
+        gen2_capable=False):
         assert lanes in [1, 2]
         assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
         sys_clk_freq = int(133e6)
@@ -448,7 +453,8 @@ class USB3PIPESim(SoCMini):
                 role                 = role,
                 timer_scale          = timer_scale,
                 with_endianness_swap = (lanes == 1),
-                lanes                = lanes))
+                lanes                = lanes,
+                gen2_capable         = gen2_capable))
             if lanes == 1:
                 self.add_module(name=f"{name}_usb3_serdes", module=serdes[0])
             else:
@@ -544,6 +550,8 @@ class USB3PIPESim(SoCMini):
                         )
                     )
                 ]
+            if (lanes > 1) or gen2_capable:
+                self.add_ssp_status(phys[name], name, sync, timer)
             if lanes > 1:
                 self.add_lanes_status(phys[name], name, sync, timer)
 
@@ -630,16 +638,20 @@ class USB3PIPESim(SoCMini):
                 )
             ]
 
-    def add_lanes_status(self, phy, name, sync, timer):
-        """Gen 1x2 status: SuperSpeedPlus Polling states (with negotiated x2) and lanes deskew."""
+    def add_ssp_status(self, phy, name, sync, timer):
+        """SuperSpeedPlus Polling states (with negotiated x2/gen2)."""
         label = {"host": "HOST", "dev": "DEV "}[name]
         phy.ssp.finalize() # Elaborate the FSM to expose its encoding.
         ssp = phy.ssp.fsm
         for state, value in ssp.encoding.items():
             sync += If((ssp.next_state != ssp.state) & (ssp.next_state == value),
-                Display("[%08d] {} SSP entering {} state (x2: %d)".format(label, state),
-                    timer, phy.ssp.x2)
+                Display("[%08d] {} SSP entering {} state (x2: %d, gen2: %d)".format(label, state),
+                    timer, phy.ssp.x2, phy.ssp.gen2)
             )
+
+    def add_lanes_status(self, phy, name, sync, timer):
+        """Gen 1x2 status: lanes deskew."""
+        label = {"host": "HOST", "dev": "DEV "}[name]
         aligned_d = Signal()
         sync += aligned_d.eq(phy.deskew_aligned)
         sync += If(phy.deskew_aligned & ~aligned_d,
@@ -670,6 +682,7 @@ def main():
     parser.add_argument("--lane1-delay",   default=1,           help="Host to Device Lane 1 delay (words, --lanes 2).")
     parser.add_argument("--lane1-word-shift", default=2,        help="Device Lane 1 RX word shift (symbols, --lanes 2).")
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
+    parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -695,7 +708,8 @@ def main():
         lanes            = lanes,
         lane_delays      = (int(args.lane0_delay), int(args.lane1_delay)),
         lane1_word_shift = int(args.lane1_word_shift),
-        lane_skp         = int(args.lane_skp))
+        lane_skp         = int(args.lane_skp),
+        gen2_capable     = args.gen2_capable)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

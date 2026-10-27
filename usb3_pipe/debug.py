@@ -22,7 +22,8 @@ from litex.soc.cores.freqmeter import FreqMeter
 
 from liteiclink.serdes.common import DRPControl
 
-from usb3_pipe.common import K
+from usb3_pipe.common   import K
+from usb3_pipe.datapath import GEN2_RX_COUNTERS
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -325,6 +326,61 @@ class USB3SerDesDebug(LiteXModule):
 
         # RX errors.
         self.rx_errors = USB3RXErrorsDebug(gt.decoders, serdes.rx_substitution.checker)
+
+# Gen 2 RX Debug -----------------------------------------------------------------------------------
+
+class Gen2RXDebug(LiteXModule):
+    """Gen 2 RX Debug (CSRs, hardware bring-up of a Gen2RXDatapath).
+
+    - status: aligned [0], locked [1], polarity [2], data_stream [3], link_config [15:8].
+    - `{name}_count`: GEN2_RX_COUNTERS (blocks, header/alignment errors, SYNC/TSEQ/TS1/TS2/SDS/SKP
+      Ordered Sets, unknown control blocks), synchronized to the sys clock domain (BusSynchronizer).
+    - clear: clears the counters (write).
+    LiteScope probes: gen2_rx_analyzer_signals().
+    """
+    def __init__(self, rx_datapath, clock_domain="rx"):
+        self._clear  = CSR()
+        self._status = CSRStatus(16, description="Status: aligned [0], locked [1], polarity [2], "
+            "data_stream [3], link_config [15:8].")
+
+        # # #
+
+        # Clear (sys -> rx).
+        self.clear_ps = clear_ps = PulseSynchronizer("sys", clock_domain)
+        self.comb += [
+            clear_ps.i.eq(self._clear.re),
+            rx_datapath.clear.eq(clear_ps.o),
+        ]
+
+        # Status (quasi-static, rx -> sys).
+        status = Cat(rx_datapath.aligned, rx_datapath.locked, rx_datapath.polarity,
+            rx_datapath.data_stream, Constant(0, 4), rx_datapath.link_config)
+        self.specials += MultiReg(status, self._status.status)
+
+        # Counters (rx -> sys).
+        for name, description in GEN2_RX_COUNTERS:
+            csr  = CSRStatus(32, name=f"{name}_count", description=f"Gen 2 RX {description}")
+            sync = BusSynchronizer(32, clock_domain, "sys")
+            self.submodules += sync
+            setattr(self, f"_{name}_count", csr)
+            self.comb += [
+                sync.i.eq(getattr(rx_datapath, f"{name}_count")),
+                csr.status.eq(sync.o),
+            ]
+
+def gen2_rx_analyzer_signals(rx_datapath):
+    """LiteScope probes of a Gen2RXDatapath (RX clock domain): status, aligner/receiver events and
+    blocks."""
+    aligner = rx_datapath.aligner
+    rx      = rx_datapath.rx
+    return [
+        aligner.aligned, aligner.locked, aligner.polarity, aligner.error,
+        aligner.skp, aligner.skp_count,
+        aligner.source.valid, aligner.source.header, aligner.source.header_error,
+        aligner.source.data,
+        rx.rx_sync, rx.rx_sds, rx.tseq, rx.ts1, rx.ts2, rx.unknown,
+        rx.rx_tseq, rx.rx_ts1, rx.rx_ts2, rx.link_config, rx.data_stream,
+    ]
 
 # USB3 Analyzer Groups -----------------------------------------------------------------------------
 
