@@ -15,7 +15,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE
+from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE, EndiannessSwap
 from usb3_pipe.core       import USB3PIPE, Gen2PIPE, GEN2_PIPE_INTERFACE
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
@@ -131,7 +131,7 @@ class USB3PHY(LiteXModule):
                 self.add_ssp_polling(pipe, serdes[0], sys_clk_freq, role, timer_scale,
                     x2_capable=False, gen2_capable=True)
             if ssp and getattr(serdes[0], "gen2_capable", False):
-                self.add_gen2(pipe, serdes[0])
+                self.add_gen2(pipe, serdes[0], with_endianness_swap)
             else:
                 self.comb += connect_ltssm_pipe(ltssm, pipe)
         else:
@@ -150,8 +150,11 @@ class USB3PHY(LiteXModule):
 
         # Endpoints --------------------------------------------------------------------------------
         if lanes == 1:
-            self.sink   = pipe.sink
-            self.source = pipe.source
+            if hasattr(self, "gen2_pipe"):
+                self.add_gen2_datapath(pipe)
+            else:
+                self.sink   = pipe.sink
+                self.source = pipe.source
         else:
             self.add_lanes_datapath(deskew_depth)
 
@@ -270,13 +273,39 @@ class USB3PHY(LiteXModule):
         """PHY reset (sys clock domain)."""
         return self.reset_sys
 
-    def add_gen2(self, pipe, serdes):
+    def add_gen2_datapath(self, pipe):
+        """Link Layer words: Gen2PIPE (Gen 2 packet framing) while gen2_active, else Gen 1 PIPE."""
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        gen2_sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        gen2_source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        if self.gen2_endianness_swap:
+            # Gen2PIPE words: Symbol 0 on data[0:8], PHY words: Symbol 0 on data[24:32].
+            self.submodules += EndiannessSwap(gen2_sink, self.gen2_pipe.sink)
+            self.submodules += EndiannessSwap(self.gen2_pipe.source, gen2_source)
+        else:
+            self.comb += [
+                gen2_sink.connect(self.gen2_pipe.sink),
+                self.gen2_pipe.source.connect(gen2_source),
+            ]
+        self.comb += [
+            If(self.gen2_active,
+                sink.connect(gen2_sink),
+                gen2_source.connect(source),
+            ).Else(
+                sink.connect(pipe.sink),
+                pipe.source.connect(source),
+            )
+        ]
+
+    def add_gen2(self, pipe, serdes, with_endianness_swap=True):
         """Gen 2x1 operation (gen2_capable SerDes): once Gen 2 is negotiated in the SuperSpeedPlus
         Polling, the line rate switches to 10Gbps (serdes.rate_10g) and the LTSSM Training Sequences
         and Idle Symbol handshake (GEN2_PIPE_INTERFACE) are done by the Gen2PIPE on the raw
         transceiver words (128b/132b blocks), the LFPS stay on the Gen 1 PIPE (LFPSUnit). Back to
         5Gbps for the next SuperSpeedPlus Polling."""
         ltssm = self.ltssm
+        self.gen2_endianness_swap = with_endianness_swap
         self.gen2_pipe = gen2_pipe = Gen2PIPE()
         self.gen2_active = gen2_active = Signal() # o: Gen 2 operation (10Gbps).
         self.sync += gen2_active.eq(self.gen2 & ~ltssm.ssp_polling)
