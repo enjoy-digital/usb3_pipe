@@ -70,7 +70,7 @@ class RXRawSnapshot(LiteXModule):
     across RX re-initializations) with their flags, stopped `depth//2` words after a trigger
     (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs (oldest word
     at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
-    def __init__(self, rx_raw, flags, depth=1024):
+    def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr"):
         from migen.genlib.cdc import MultiReg, PulseSynchronizer
         from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
         self._arm     = CSR()
@@ -83,15 +83,15 @@ class RXRawSnapshot(LiteXModule):
         # # #
 
         mem = Memory(len(rx_raw) + len(flags), depth)
-        wr  = mem.get_port(write_capable=True, clock_domain="rx_nr")
+        wr  = mem.get_port(write_capable=True, clock_domain=clock_domain)
         rd  = mem.get_port(clock_domain="sys")
         self.specials += mem, wr, rd
-        arm_ps = PulseSynchronizer("sys", "rx_nr")
+        arm_ps = PulseSynchronizer("sys", clock_domain)
         self.submodules += arm_ps
         sel  = Signal(len(self._trigger.storage))
         done = Signal()
         self.specials += [
-            MultiReg(self._trigger.storage, sel, "rx_nr"),
+            MultiReg(self._trigger.storage, sel, clock_domain),
             MultiReg(done, self._done.status),
         ]
         armed = Signal()
@@ -99,7 +99,8 @@ class RXRawSnapshot(LiteXModule):
         adr   = Signal(max=depth)
         start = Signal(max=depth)
         self.comb += arm_ps.i.eq(self._arm.re)
-        self.sync.rx_nr += [
+        sync = getattr(self.sync, clock_domain)
+        sync += [
             If(arm_ps.o,
                 armed.eq(1), done.eq(0), post.eq(0)
             ).Elif(~done,
@@ -150,6 +151,36 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         aligner.polarity,                                                   # 5.
         aligner.source.valid,                                               # 6.
     ))
+    # TX raw words snapshot (tx_nr: reset-less tx clock), trigger 0: Data Block with Link Layer data
+    # sent, 1: Gen 2 TX enabled.
+    if hasattr(phy, "gen2_pipe"):
+        soc.cd_tx_nr = ClockDomain(reset_less=True)
+        soc.comb += soc.cd_tx_nr.clk.eq(ClockSignal("tx"))
+        packer = phy.gen2_pipe.tx_packer
+        soc.usb3_gen2_tx_snapshot = RXRawSnapshot(phy.gen2_pipe.tx_data, clock_domain="tx_nr",
+            flags=Cat(packer.source.valid & packer.source.ready, packer.source.last))
+    # PHY Gen2PIPE events (sys): TS1/TS2 (8 consecutive) pulses at the Gen2PIPE and LTSSM inputs, PHY
+    # Gen 2 RX aligner status.
+    if hasattr(phy, "gen2_pipe"):
+        from migen.genlib.cdc import MultiReg
+        gp = phy.gen2_pipe
+        soc.usb3_gen2_events = CSRStatus(32*5, description="In U0: ts_rx_ts1 (LTSSM), ts_rx_ts2, "
+            "ts_rx_ts2_reset cycles, PHY Gen2RX TS1 blocks, monitor TS1 blocks.")
+        counts = [Signal(32) for _ in range(5)]
+        u0 = phy.ltssm.u0
+        for c, e in zip(counts[:3], [phy.ltssm.ts_rx_ts1, phy.ltssm.ts_rx_ts2, phy.ltssm.ts_rx_ts2_reset]):
+            soc.sync += If(u0 & e, c.eq(c + 1))
+        u0_rx = Signal()
+        soc.specials += MultiReg(u0, u0_rx, "rx_nr")
+        for c, e in zip(counts[3:], [gp.rx.rx.ts1, gen2_rx.rx.ts1]):
+            c_rx = Signal(32)
+            soc.sync.rx_nr += If(u0_rx & e, c_rx.eq(c_rx + 1))
+            soc.specials += MultiReg(c_rx, c) # Quasi-static reads only.
+        soc.comb += soc.usb3_gen2_events.status.eq(Cat(*counts))
+        aligner = gp.rx.aligner
+        soc.usb3_gen2_phy_rx_status = CSRStatus(8, description="PHY Gen 2 RX: aligned, locked, polarity, data_stream.")
+        soc.specials += MultiReg(Cat(aligner.aligned, aligner.locked, aligner.polarity, gp.rx.data_stream),
+            soc.usb3_gen2_phy_rx_status.status[0:4])
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
