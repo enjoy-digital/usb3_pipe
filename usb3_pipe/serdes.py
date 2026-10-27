@@ -10,6 +10,7 @@ idle, filtered RX electrical idle, RX decode errors).
 """
 
 from migen import *
+from migen.genlib.cdc import PulseSynchronizer
 
 from litex.gen import *
 
@@ -234,6 +235,25 @@ class A7USB3SerDes(USB3SerDes):
             i_TXELECIDLE       = self.tx_idle
         )
         self.add_lfps(gtp, rx_idle)
+
+        # RX status (debug: comma realignment, elastic buffer), synchronized to sys ----------------
+        rx_realign    = Signal()
+        rx_bufstatus  = Signal(3)
+        self.rx_realign  = Signal()
+        self.rx_buferror = Signal()
+        gtp.gtp_params.update(
+            o_RXBYTEREALIGN = rx_realign,
+            o_RXBUFSTATUS   = rx_bufstatus,
+        )
+        realign_ps  = PulseSynchronizer("rx", "sys")
+        buferror_ps = PulseSynchronizer("rx", "sys")
+        self.submodules += realign_ps, buferror_ps
+        self.comb += [
+            realign_ps.i.eq(rx_realign),
+            buferror_ps.i.eq(rx_bufstatus[2]),
+            self.rx_realign.eq(realign_ps.o),
+            self.rx_buferror.eq(buferror_ps.o),
+        ]
 
         # Timing constraints -----------------------------------------------------------------------
         self.add_timing_constraints(platform, sys_clk, gtp)

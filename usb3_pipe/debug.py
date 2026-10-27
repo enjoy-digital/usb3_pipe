@@ -328,7 +328,7 @@ class USB3SerDesDebug(LiteXModule):
 
 # USB3 Analyzer Groups -----------------------------------------------------------------------------
 
-USB3_ANALYZER_GROUPS = ["link", "lfps", "ts", "datapath", "phase"]
+USB3_ANALYZER_GROUPS = ["link", "lfps", "ts", "datapath", "phase", "u3"]
 
 def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
     """LiteScope probes groups of a USB3PHY/USB3SerDes (bench/usb3_analyzer.py), returns a dict
@@ -338,6 +338,8 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
     - ts       : LTSSM + TS detections/generation, SerDes RX/TX streams.
     - datapath : LTSSM + SerDes and PHY RX/TX streams, SKP removal.
     - phase    : LTSSM + RX vs TX clocks phase (requires serdes_debug: USB3SerDesDebug).
+    - u3       : LTSSM + U3 exit: LFPS TX/RX, TS1 detection, SerDes RX stream, RX vs TX clocks phase
+                 (requires serdes_debug).
     """
     pipe  = phy.pipe
     ltssm = phy.ltssm
@@ -382,4 +384,10 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
             serdes_debug.rx_tx_phase,
             serdes.rx_idle, serdes.rx_errors,
         ]
+        groups["u3"] = link_signals + [
+            serdes.tx_idle, serdes.tx_lfps, serdes.rx_idle, serdes.rx_errors,
+            pipe.lfps_rx_wakeup_u3, pipe.ts_rx_ts1, pipe.ts_tx_ts1,
+            serdes.source.valid, serdes.source.data, serdes.source.ctrl,
+            serdes_debug.rx_tx_phase,
+        ] + [getattr(serdes, name) for name in ["rx_realign", "rx_buferror"] if hasattr(serdes, name)]
     return groups
