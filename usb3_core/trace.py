@@ -92,3 +92,93 @@ class USB3CoreTrace(LiteXModule):
             rd_port.adr.eq(self._index.storage),
             self._data.status.eq(rd_port.dat_r),
         ]
+
+# USB3 Link Trace ----------------------------------------------------------------------------------
+
+LINK_TRACE_EVENTS = ["rx_lc", "tx_lc", "rx_hp", "tx_hp", "u0_rise", "u0_fall", "recovery"]
+
+class USB3LinkTrace(LiteXModule):
+    """Link Layer events trace (debug, bench/usb3_trace.py link): Link Commands (RX: received and
+    checked, TX: transmission started), Header Packets (RX: received and checked, LMPs included,
+    TX: transmission started), U0 entry/exit and Recovery requests (with causes).
+
+    Entry (96-bit): timestamp[0:32] (sys clock cycles), events[32:39], rx_lc_info[39:50],
+    tx_lc_sel[50:61], rx_hp[61:77] (type, LMP subtype, seq, ok, accept, seq error), tx_hp[77:87]
+    (seq, type, retry), recovery causes[87:92] (seq error, LGOOD, LCRD, PENDING_HP, CREDIT_HP).
+
+    Modes: linear (stops when full) or circular (stops on a U0 exit: the last entries before it are
+    kept, oldest at the write pointer), keep-alive filter (LUP/LDN only entries and ITPs dropped).
+    """
+    def __init__(self, link, depth=1024):
+        self._control = CSRStorage(fields=[
+            CSRField("enable", size=1, reset=1, description="Trace enable (stops when full)."),
+            CSRField("clear",  size=1, pulse=True, description="Trace clear (timestamp reset)."),
+            CSRField("circular", size=1, description="Circular, stops on a U0 exit."),
+            CSRField("filter",   size=1, description="Drop LUP/LDN only entries and ITPs."),
+        ])
+        self._count   = CSRStatus(16, description="Recorded entries.")
+        self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
+        self._index = CSRStorage(16, description="Entry to read.")
+        self._data  = CSRStatus(96,  description="Entry.")
+
+        # # #
+
+        mem     = Memory(96, depth)
+        wr_port = mem.get_port(write_capable=True)
+        rd_port = mem.get_port(async_read=True)
+        self.specials += mem, wr_port, rd_port
+
+        timestamp = Signal(32)
+        count     = Signal(16)
+        pointer   = Signal(max=depth)
+        stopped   = Signal()
+        u0_d      = Signal()
+        self.sync += [
+            timestamp.eq(timestamp + 1),
+            u0_d.eq(link.dbg_u0),
+        ]
+        events = Signal(7)
+        self.comb += events.eq(Cat(
+            link.dbg_rx_lc, link.dbg_tx_lc, link.dbg_rx_hp, link.dbg_tx_hp,
+            link.dbg_u0 & ~u0_d, ~link.dbg_u0 & u0_d, link.dbg_recovery))
+        entry = Signal(96)
+        # Keep-alive filter: LUP (TX), LDN (RX) and ITPs (with their LGOOD_n/LCRD_x) dropped.
+        keepalive = Signal()
+        itp       = Signal()
+        self.comb += [
+            itp.eq(link.dbg_rx_hp & (link.dbg_rx_hp_info[0:5] == TYPE_ITP)),
+            keepalive.eq(
+                (~link.dbg_rx_lc | (link.dbg_rx_lc_info == 0x580) | (link.dbg_rx_lc_info[7:11] == 0)) &
+                (~link.dbg_tx_lc | (link.dbg_tx_lc_sel  == 0x400) | (link.dbg_tx_lc_sel[7:11]  == 0)) &
+                (~link.dbg_rx_hp | itp) & ~link.dbg_tx_hp & (events[4:7] == 0)),
+        ]
+        record = Signal()
+        self.comb += [
+            entry.eq(Cat(timestamp, events, link.dbg_rx_lc_info, link.dbg_tx_lc_sel,
+                link.dbg_rx_hp_info, link.dbg_tx_hp_info, link.dbg_recovery_cause)),
+            record.eq((events != 0) & self._control.fields.enable & ~stopped &
+                ~(self._control.fields.filter & keepalive)),
+            wr_port.adr.eq(pointer),
+            wr_port.dat_w.eq(entry),
+            wr_port.we.eq(record & (self._control.fields.circular | (count < depth))),
+        ]
+        self.sync += [
+            If(wr_port.we,
+                pointer.eq(Mux(pointer == (depth - 1), 0, pointer + 1)),
+                If(count != depth, count.eq(count + 1)),
+                If(self._control.fields.circular & events[5], stopped.eq(1)),
+            ),
+            If(self._control.fields.clear,
+                count.eq(0),
+                pointer.eq(0),
+                stopped.eq(0),
+                timestamp.eq(0),
+            ),
+        ]
+        self.comb += [
+            self._count.status.eq(count),
+            self._pointer.status.eq(pointer),
+            rd_port.adr.eq(self._index.storage),
+            self._data.status.eq(rd_port.dat_r),
+        ]
+

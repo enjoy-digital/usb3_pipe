@@ -457,11 +457,12 @@ class USB3LinkLayer(LiteXModule):
         tx_dw1       = Signal(32)
         self.comb += [
             lmp_push.eq(adv_received & ~tx_full & (portcap_pending | portcfg_pending)),
+            # SuperSpeedPlus operation: Link Speed and Num HP Buffers fields reserved (zero, 8.4.5).
             If(portcap_pending,
-                lmp_push_dw0.eq(PORT_CAP_DW0),
-                lmp_push_dw1.eq(PORT_CAP_DW1),
+                lmp_push_dw0.eq(Mux(ssp, PORT_CAP_DW0 & ~(0x7f << 9), PORT_CAP_DW0)),
+                lmp_push_dw1.eq(Mux(ssp, PORT_CAP_DW1 & ~0xff,        PORT_CAP_DW1)),
             ).Else(
-                lmp_push_dw0.eq(PORT_CFG_RESP_DW0),
+                lmp_push_dw0.eq(Mux(ssp, PORT_CFG_RESP_DW0 & ~(0x7f << 9), PORT_CFG_RESP_DW0)),
             ),
             self.tx_hp.ready.eq(self.ready & ~tx_full & ~lmp_push & ~pm_accepted),
             If(lmp_push,
@@ -706,6 +707,22 @@ class USB3LinkLayer(LiteXModule):
                 t_pending_hp.done |
                 t_credit_hp.done)),
         ]
+        # Debug (USB3LinkTrace): Link Commands/Header Packets events, Recovery causes.
+        self.dbg_rx_lc     = lc_check
+        self.dbg_rx_lc_info = lc_info
+        self.dbg_tx_lc     = tx_sent_lc
+        self.dbg_tx_lc_sel = lc_sel
+        self.dbg_rx_hp     = hp_check
+        self.dbg_rx_hp_info = Cat(hp_w[0][0:5], hp_w[0][5:9], hp_seq[0:4] if sw == 4 else Cat(hp_seq, C(0, 1)),
+            hp_ok, hp_accept, rx_hp_seqer)
+        self.dbg_tx_hp     = tx_sent_hp
+        self.dbg_tx_hp_info = Cat(send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
+            tx_dws[send_seq[0:2]][0:5], tx_sent[send_seq[0:2]])
+        self.dbg_u0        = u0
+        self.dbg_recovery  = recovery
+        self.dbg_recovery_cause = Cat(rx_hp_seqer, lc_lgood & adv_received & ~lgood_ok,
+            lc_lcrd & ~lcrd_ok, t_pending_hp.done, t_credit_hp.done)
+
         self.sync += [
             # Header Packets received.
             If(hp_accept, rx_seq.eq((rx_seq + 1) & seq_mask)),
@@ -728,7 +745,8 @@ class USB3LinkLayer(LiteXModule):
                 If(sel_lxu,   lxu_pending.eq(0)),
                 If(sel_lup,   lup_pending.eq(0)),
             ),
-            If(t_lup.done, lup_pending.eq(1)),
+            If(t_lup.done & ~lup_pending, lup_pending.eq(1)), # done stays set 1 cycle after.
+
 
             # Local Rx Header Buffer credits (LCRD_x/LCRD1_x/LCRD2_x on each freed Rx Header Buffer).
             lcrd_pending.eq(lcrd_pending + (rx_pop & ~rx_pop_t2) - (tx_sent_lc & sel_lcrd)),
