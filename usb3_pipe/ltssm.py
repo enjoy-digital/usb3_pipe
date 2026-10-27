@@ -1122,34 +1122,42 @@ class USB3LTSSM(LiteXModule):
 # SuperSpeedPlus Polling (7.5.4.3-7.5.4.6) ---------------------------------------------------------
 
 class SSPPolling(LiteXModule):
-    """SuperSpeedPlus Polling substates (7.5.4.3-7.5.4.6) on the Configuration Lane, Gen 1 speeds.
+    """SuperSpeedPlus Polling substates (7.5.4.3-7.5.4.6) on the Configuration Lane.
 
     start (level, LTSSM in Polling.LFPS) runs: Polling.LFPS (SCD1 transmitted, 2 SCD1 sent after a SCD1/
     SCD2 is received) -> Polling.LFPSPlus (SCD2, 2 SCD2 sent after a SCD2 is received, end of SCD) ->
     Polling.PortMatch (PHY Capability LBPMs, the port with the higher capability adjusts to the
     partner's, 4 matched LBPMs sent after 2 consecutive matched received) -> Polling.PortConfig (PHY
     Ready LBPMs, 4 sent after 2 consecutive identical received, the DFP PHY Ready bit 7 de-asserted)
-    -> done (level until start is released), x2 = negotiated Gen 1x2 (Table 7-14).
+    -> done (level until start is released), x2/gen2 = negotiated lanes/speed (Table 7-14): Gen 1x1
+    (x2=0, gen2=0), Gen 1x2 (x2=1), Gen 2x1 (gen2=1), Gen 2x2 (x2=1, gen2=1).
+
+    The PHY Capability LBPM advertises x2_capable (bit 5) and gen2_capable (bit 2, Table 7-13), the
+    common capability is the AND of both ports capabilities. On done with gen2, the PHY has to
+    switch to 10Gbps (Gen 2 transceiver rate/datapath, Gen2TXDatapath/Gen2RXDatapath) before
+    Polling.RxEQ (Gen 2 TSEQ/TS1/TS2 with SYNC/SDS, not yet in USB3LTSSM).
 
     16 consecutive Polling.LFPS bursts received without SCD (SuperSpeed partner, 7.5.4.3.1) after
     4 SCD1 sent: ss_fallback (level until start is released), the LTSSM continues with the SuperSpeed
     Polling.LFPS handshake. tPollingLBPMLFPSTimeout (12ms) in PortMatch/PortConfig: fail.
 
-    Not implemented: tPollingSCDLFPSTimeout, re-timers presence announcement/RT Config, Gen 2,
-    PortMatch re-entry/capability fallback after a training failure (Table 7-15).
+    Not implemented: tPollingSCDLFPSTimeout, re-timers presence announcement/RT Config, PortMatch
+    re-entry/capability fallback after a training failure (Table 7-15).
     """
-    def __init__(self, sys_clk_freq, timer_scale=1, x2_capable=True):
-        self.start       = Signal() # i
-        self.ds_port     = Signal() # i
-        self.x2_capable  = Signal(reset=int(x2_capable)) # i
-        self.idle        = Signal() # i: RX electrical idle (Configuration Lane).
-        self.tx_lfps     = Signal() # o: LFPS burst (else electrical idle).
-        self.tx_active   = Signal() # o: SSP LFPS transmission (tx_lfps drives the transmitter).
-        self.done        = Signal() # o
-        self.x2          = Signal() # o
-        self.ss_fallback = Signal() # o
-        self.fail        = Signal() # o
-        self.state       = Signal(4) # o: (debug).
+    def __init__(self, sys_clk_freq, timer_scale=1, x2_capable=True, gen2_capable=False):
+        self.start        = Signal() # i
+        self.ds_port      = Signal() # i
+        self.x2_capable   = Signal(reset=int(x2_capable))   # i
+        self.gen2_capable = Signal(reset=int(gen2_capable)) # i
+        self.idle         = Signal() # i: RX electrical idle (Configuration Lane).
+        self.tx_lfps      = Signal() # o: LFPS burst (else electrical idle).
+        self.tx_active    = Signal() # o: SSP LFPS transmission (tx_lfps drives the transmitter).
+        self.done         = Signal() # o
+        self.x2           = Signal() # o: Gen X2 (two lanes) negotiated.
+        self.gen2         = Signal() # o: Gen 2 (10Gbps) negotiated.
+        self.ss_fallback  = Signal() # o
+        self.fail         = Signal() # o
+        self.state        = Signal(4) # o: (debug).
 
         # # #
 
@@ -1176,7 +1184,8 @@ class SSPPolling(LiteXModule):
         own_cap      = Signal(8)
         tx_cap       = Signal(8)
         partner_x2   = Signal()
-        self.comb += own_cap.eq(lbpm_phy_capability(x2=False) | (self.x2_capable << 5))
+        self.comb += own_cap.eq(lbpm_phy_capability() | (self.gen2_capable << 2) |
+            (self.x2_capable << 5))
 
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
@@ -1185,6 +1194,7 @@ class SSPPolling(LiteXModule):
             NextValue(plain_count, 0),
             NextValue(timer,       0),
             NextValue(self.x2,     0),
+            NextValue(self.gen2,   0),
             If(self.start,
                 NextState("POLLING-LFPS")
             )
@@ -1248,7 +1258,7 @@ class SSPPolling(LiteXModule):
             NextValue(timer, timer + 1),
             If(lbpm_chk.received,
                 If(lbpm_chk.data[0:2] == LBPM_PHY_CAPABILITY,
-                    # Highest common capability (Gen 1: x2 when both are x2 capable, Table 7-14).
+                    # Highest common capability (x2/Gen 2 when both are capable, Table 7-14).
                     NextValue(tx_cap, lbpm_chk.data & tx_cap),
                     NextValue(partner_x2, lbpm_chk.data[5]),
                 ),
@@ -1267,7 +1277,8 @@ class SSPPolling(LiteXModule):
                 )
             ),
             If(tx_count == 4,
-                NextValue(self.x2, tx_cap[5]),
+                NextValue(self.x2,   tx_cap[5]),
+                NextValue(self.gen2, tx_cap[2]),
                 NextValue(rx_count, 0),
                 NextValue(tx_count, 0),
                 NextState("POLLING-PORTCONFIG")

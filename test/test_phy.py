@@ -64,6 +64,24 @@ class TestPHY(unittest.TestCase):
                 "---- tail ----\n" + out[-4000:]
             )
 
+    def test_phy_gen2_capable(self):
+        # Gen 2x1 capable Host/Device (sim.py --gen2-capable): SuperSpeedPlus Polling with Gen 2
+        # negotiated on both sides (training then continues at Gen 1 speed: no Gen 2 speed switch).
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--gen2-capable",
+            "--output-dir", str(get_output_dir(self))]
+        try:
+            p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            self.fail("Simulation timeout.")
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        for side in ["HOST", r"DEV\s"]:
+            self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: 0, gen2: 1\)", tail)
+            self.assertRegex(out, side + r"\s*entering U0 state", tail)
+        self.assertIn("HOST script done", out, tail)
+
 # Gen 1x2 (sim.py --lanes 2) -----------------------------------------------------------------------
 
 CONFIGS_SLOW = {
@@ -89,7 +107,7 @@ class TestPHYX2(unittest.TestCase):
         self.assertNotIn("Simulation timeout", out, f"{name}: No PRBS completion." + tail)
         for side in ["HOST", r"DEV\s"]:
             # SuperSpeedPlus Polling done with Gen 1x2 negotiated.
-            self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: 1\)", tail)
+            self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: 1, gen2: 0\)", tail)
             # Single link training to U0, lanes deskewed.
             u0 = re.findall(side + r"\s*entering U0 state", out)
             self.assertEqual(len(u0), 1, f"{name}: {side} entered U0 {len(u0)} times." + tail)
