@@ -14,7 +14,9 @@ import pytest
 from migen import *
 
 from usb3_core.host_model import *
-from usb3_core.common     import LCMD_LBAD
+from usb3_core.common     import LCMD_LBAD, TYPE_TP, TYPE_DP, TP_SUB_ACK, TP_SUB_NRDY, TP_SUB_ERDY
+from usb3_core.endpoints  import MAX_PACKET_SIZE, MAX_PACKET_WORDS
+from usb3_core.bulk       import USB3BulkIN
 
 from test.model.host   import *
 from test.model.device import BulkLoopbackDUT as DUT
@@ -272,6 +274,184 @@ class TestCoreBulk(unittest.TestCase):
             yield from host.wait(lambda: len(host.dpps) >= 2)
             self.assertEqual([d for d in host.dpps[:2]], [(payload(0), True), (payload(1), True)])
         run_pyhost(dut, host, scenario(), tx_ready_rate=0.9)
+
+# Bulk IN Flush (Endpoint level) -------------------------------------------------------------------
+
+class EndpointHost:
+    """xHCI-like host on the Protocol Layer interface of a Bulk IN Endpoint: requests (ACK TP, NumP
+    = n) when a transfer is pending (after an ERDY when flow controlled), checks the DPs (Sequence
+    Number, in the window, DPH length), ACKs each DP (ack_latency cycles after its DPP, NumP=0 after
+    a short packet: transfer complete)."""
+    def __init__(self, ep, n, ack_latency=200):
+        self.ep, self.n, self.ack_latency = ep, n, ack_latency
+        self.seq       = 0     # Next expected Sequence Number.
+        self.window    = 0
+        self.pending   = False # Transfer pending.
+        self.wait_erdy = False
+        self.data      = []    # Received words.
+        self.dphs      = 0     # DPHs received.
+        self.dps       = []    # (seq, length).
+        self.errors    = []
+        self.acks      = []    # (cycle, nump, seq).
+        self.cycle     = 0
+
+    def ack_dw1(self, nump, seq):
+        return TP_SUB_ACK | (1 << 7) | (self.ep.ept << 8) | (nump << 16) | ((seq % 32) << 21)
+
+    def request(self):
+        self.pending = True
+        if not self.wait_erdy:
+            self.window = self.n
+            self.acks.append((self.cycle, self.n, self.seq))
+
+    @passive
+    def generator(self):
+        ep   = self.ep
+        dphs = []
+        dpp  = []
+        yield ep.tx_hp.ready.eq(1)
+        yield ep.tx_dpp.ready.eq(1)
+        while True:
+            strobe = len(self.acks) > 0 and self.acks[0][0] <= self.cycle
+            if strobe:
+                _, nump, seq = self.acks.pop(0)
+                yield ep.hdr_dw0.eq(TYPE_TP)
+                yield ep.hdr_dw1.eq(self.ack_dw1(nump, seq))
+            yield ep.hdr_strobe.eq(strobe)
+            yield
+            self.cycle += 1
+            if (yield ep.tx_hp.valid):
+                dw0, dw1 = (yield ep.tx_hp.dw0), (yield ep.tx_hp.dw1)
+                if (dw0 & 0x1f) == TYPE_DP:
+                    dphs.append((dw1 & 0x1f, dw1 >> 16))
+                    self.dphs += 1
+                elif (dw1 & 0xf) == TP_SUB_NRDY:
+                    self.window    = 0
+                    self.wait_erdy = True
+                elif (dw1 & 0xf) == TP_SUB_ERDY:
+                    self.wait_erdy = False
+                    if self.pending:
+                        self.request()
+            if (yield ep.tx_dpp.valid):
+                dpp.append((yield ep.tx_dpp.data))
+                if (yield ep.tx_dpp.last):
+                    seq, length = dphs.pop(0)
+                    self.dps.append((seq, length))
+                    if length != 4*len(dpp):
+                        self.errors.append("DP {}: length {}, DPP {} bytes".format(seq, length, 4*len(dpp)))
+                    elif seq != self.seq or self.window == 0:
+                        self.errors.append("DP {}: expected {} (window {})".format(seq, self.seq, self.window))
+                    else:
+                        self.seq   += 1
+                        self.data  += dpp
+                        short       = length < MAX_PACKET_SIZE
+                        self.window = 0 if short else self.n
+                        self.pending &= not short
+                        self.acks.append((self.cycle + self.ack_latency, self.window, self.seq))
+                    dpp = []
+
+class TestCoreBulkINFlush(unittest.TestCase):
+    def flush_test(self, sent):
+        # Flush (stream restarted) after `sent` DPs sent (not acknowledged yet), the old stream
+        # continuing: the packets not sent are dropped, the new stream is sent next.
+        n    = 2
+        dut  = USB3BulkIN(ept=1, max_burst=n)
+        host = EndpointHost(dut, n)
+        old  = [[0xa000_0000 | (p << 16) | i for i in range(MAX_PACKET_WORDS)] for p in range(2*n)]
+        new  = [0xb000_0000 | i for i in range(300)]
+        state = {"flushed": False}
+        def write(words, last):
+            # Old stream (not last) interrupted by the flush (as the LA packer reset on arm).
+            stop = lambda: state["flushed"] and not last
+            for i, w in enumerate(words):
+                if stop():
+                    break
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(w)
+                yield dut.sink.be.eq(0b1111)
+                yield dut.sink.last.eq(last and (i == len(words) - 1))
+                yield
+                while not (yield dut.sink.ready) and not stop():
+                    yield
+            yield dut.sink.valid.eq(0)
+        def writer():
+            for packet in old:
+                yield from write(packet, last=False)
+            while not state["flushed"]:
+                yield
+            for _ in range(64):
+                yield
+            yield from write(new, last=True)
+        def scenario():
+            if sent:
+                host.request()
+                while host.dphs < sent:
+                    yield
+            else:
+                for _ in range(1024): # Slots full, nothing requested.
+                    yield
+            state["flushed"] = True
+            yield dut.flush.eq(1)
+            yield
+            yield dut.flush.eq(0)
+            for _ in range(2000):
+                if not host.pending:
+                    host.request()
+                yield
+        run_simulation(dut, [scenario(), writer(), host.generator()])
+        self.assertEqual(host.errors, [])
+        self.assertEqual([seq for seq, _ in host.dps], list(range(len(host.dps))))
+        self.assertEqual(host.data, sum(old[:sent], []) + new)
+
+    def test_bulk_in_short_packet_stale_ack(self):
+        # Max size packet + short packet (transfer end) sent in the same burst, ACK TP of the max
+        # size packet received after the short packet was sent: stale (the host transfer ended), the
+        # window stays closed until the ACK TP of the short packet. Previously it reopened the
+        # window: the next packets were sent without host request (found on hardware with the logic
+        # analyzer stream mode: blocks of 1024 + 4 bytes, I/O errors on the second read).
+        n    = 8
+        dut  = USB3BulkIN(ept=1, max_burst=n)
+        host = EndpointHost(dut, n)
+        data = [[(t << 16) | i for i in range(MAX_PACKET_WORDS + 1)] for t in range(3)]
+        def write(words):
+            for i, w in enumerate(words):
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(w)
+                yield dut.sink.be.eq(0b1111)
+                yield dut.sink.last.eq(i == len(words) - 1)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+        def scenario():
+            # Transfers buffered (next ones available while sending), then read by the host.
+            for words in data:
+                yield from write(words)
+            for _ in range(128):
+                yield
+            for _ in data:
+                host.request()
+                for _ in range(4096):
+                    if not host.pending:
+                        break
+                    yield
+                for _ in range(512):
+                    yield
+        run_simulation(dut, [scenario(), host.generator()])
+        self.assertEqual(host.errors, [])
+        self.assertEqual([(seq, length) for seq, length in host.dps],
+            [(i, MAX_PACKET_SIZE if i % 2 == 0 else 4) for i in range(6)])
+        self.assertEqual(host.data, sum(data, []))
+
+    def test_bulk_in_flush_buffered(self):
+        self.flush_test(sent=0)
+
+    def test_bulk_in_flush_inflight(self):
+        # Flush while DPs are sent and not acknowledged yet: the host ACK TPs of the sent DPs are
+        # still accepted (Sequence Numbers kept in sync with the host). Previously the pointers
+        # jumped over them: ACK TPs rejected, new stream sent with already used Sequence Numbers,
+        # NRDY/ERDY loop (endpoint wedged).
+        self.flush_test(sent=2)
 
 if __name__ == "__main__":
     unittest.main()
