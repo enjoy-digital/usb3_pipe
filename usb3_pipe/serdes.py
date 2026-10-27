@@ -273,7 +273,8 @@ class USPUSB3SerDes(USB3SerDes):
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
         gen2_capable=False):
         USB3SerDes.__init__(self)
-        self.rate_10g = Signal() # i: 10Gbps line rate (gen2_capable).
+        self.gen2_capable = gen2_capable
+        self.rate_10g     = Signal() # i: 10Gbps line rate (gen2_capable).
 
         # # #
 

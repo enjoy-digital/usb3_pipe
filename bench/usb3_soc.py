@@ -21,6 +21,8 @@ import common # Repository root on the path.
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
@@ -63,6 +65,99 @@ class USB3BaseSoC(SoCCore):
 
 # USB3 Device --------------------------------------------------------------------------------------
 
+class RXRawSnapshot(LiteXModule):
+    """Raw RX words snapshot (bring-up): circular capture of the raw words (rx_nr: reset-less rx clock, kept
+    across RX re-initializations) with their flags, stopped `depth//2` words after a trigger
+    (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs (oldest word
+    at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
+    def __init__(self, rx_raw, flags, depth=1024):
+        from migen.genlib.cdc import MultiReg, PulseSynchronizer
+        from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
+        self._arm     = CSR()
+        self._trigger = CSRStorage(bits_for(len(flags) - 1))
+        self._done    = CSRStatus()
+        self._index   = CSRStorage(bits_for(depth - 1))
+        self._data0   = CSRStatus(32)
+        self._data1   = CSRStatus(32)
+
+        # # #
+
+        mem = Memory(len(rx_raw) + len(flags), depth)
+        wr  = mem.get_port(write_capable=True, clock_domain="rx_nr")
+        rd  = mem.get_port(clock_domain="sys")
+        self.specials += mem, wr, rd
+        arm_ps = PulseSynchronizer("sys", "rx_nr")
+        self.submodules += arm_ps
+        sel  = Signal(len(self._trigger.storage))
+        done = Signal()
+        self.specials += [
+            MultiReg(self._trigger.storage, sel, "rx_nr"),
+            MultiReg(done, self._done.status),
+        ]
+        armed = Signal()
+        post  = Signal(max=depth)
+        adr   = Signal(max=depth)
+        start = Signal(max=depth)
+        self.comb += arm_ps.i.eq(self._arm.re)
+        self.sync.rx_nr += [
+            If(arm_ps.o,
+                armed.eq(1), done.eq(0), post.eq(0)
+            ).Elif(~done,
+                adr.eq(adr + 1),
+                If(armed & (flags >> sel)[0],
+                    armed.eq(0), post.eq(depth//2)
+                ).Elif(post != 0,
+                    post.eq(post - 1),
+                    If(post == 1, done.eq(1), start.eq(adr + 1))
+                )
+            )
+        ]
+        self.comb += [
+            wr.adr.eq(adr),
+            wr.dat_w.eq(Cat(rx_raw, flags)),
+            wr.we.eq(~done),
+            rd.adr.eq(start + self._index.storage),
+            self._data0.status.eq(rd.dat_r[:32]),
+            self._data1.status.eq(rd.dat_r[32:]),
+        ]
+
+def add_usb3_gen2_rx(soc, serdes, phy):
+    """Gen 2 bring-up (M1): 10Gbps line rate once Gen 2 is negotiated in SuperSpeedPlus Polling
+    (rate CSR: 0 auto, 1 force 5Gbps, 2 force 10Gbps) and Gen 2 RX datapath on the raw transceiver
+    symbols with its debug CSRs (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters)."""
+    from litex.soc.interconnect.csr import CSRStorage, CSRStatus
+    from usb3_pipe.datapath import Gen2RXDatapath
+    from usb3_pipe.debug import Gen2RXDebug
+    xcvr = getattr(serdes, serdes.xcvr_name)
+    soc.usb3_gen2_rate = CSRStorage(2, description="Line rate: 0 auto (negotiated), 1 5Gbps, 2 10Gbps.")
+    rate = soc.usb3_gen2_rate.storage
+    soc.comb += serdes.rate_10g.eq(
+        (rate == 2) | ((rate == 0) & phy.gen2 & ~phy.ltssm.ssp_polling))
+    # Gen 2 RX datapath/counters in a reset-less RX clock domain: kept across the RX
+    # re-initializations (rate changes), counters accumulated over the 10Gbps periods.
+    soc.cd_rx_nr = ClockDomain(reset_less=True)
+    soc.comb += soc.cd_rx_nr.clk.eq(ClockSignal("rx"))
+    gen2_rx = ClockDomainsRenamer("rx_nr")(Gen2RXDatapath())
+    soc.usb3_gen2_rx_datapath = gen2_rx
+    soc.comb += [
+        gen2_rx.sink.valid.eq(1),
+        gen2_rx.sink.data.eq(xcvr.rx_raw),
+        gen2_rx.source.ready.eq(1),
+    ]
+    soc.usb3_gen2_rx = Gen2RXDebug(gen2_rx, clock_domain="rx_nr")
+    aligner = gen2_rx.aligner
+    soc.usb3_gen2_snapshot = RXRawSnapshot(xcvr.rx_raw, flags=Cat(
+        aligner.source.valid & aligner.source.header_error,                 # 0: Header error.
+        aligner.source.valid & aligner.source.header_error & aligner.locked, # 1: Header error (locked).
+        aligner.error,                                                      # 2: Alignment error.
+        aligner.aligned,                                                    # 3.
+        aligner.locked,                                                     # 4.
+        aligner.polarity,                                                   # 5.
+        aligner.source.valid,                                               # 6.
+    ))
+    soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
+    soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
+
 def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     with_serdes_debug = False,
     with_core         = True,
@@ -80,10 +175,14 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     soc.usb3_serdes = serdes
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
+    gen2_capable = hasattr(serdes, "rate_10g") and getattr(serdes, "gen2_capable", False)
     soc.usb3_phy = usb3_phy = USB3PHY(
         serdes       = serdes,
         sys_clk_freq = sys_clk_freq,
-        role         = "device")
+        role         = "device",
+        gen2_capable = gen2_capable)
+    if gen2_capable:
+        add_usb3_gen2_rx(soc, serdes, usb3_phy)
 
     # USB3 PHY/SerDes Debug ------------------------------------------------------------------------
     soc.usb3_debug = USB3PHYDebug(usb3_phy, serdes, sys_clk_freq)
