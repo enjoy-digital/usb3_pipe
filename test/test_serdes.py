@@ -57,5 +57,20 @@ class TestSerDes(unittest.TestCase):
         self.assertEqual(_input(common, "GTREFCLK0").value, 0)
         self.assertEqual(_input(common, "PLL0REFCLKSEL").value, 0b111)
 
+    def test_a7_comma_alignment_any_byte(self):
+        # USB3 Ordered Sets start with consecutive COMs: commas aligned on any byte.
+        platform = XilinxPlatform("xc7a200t-fbg484-3", io=[])
+        serdes   = A7USB3SerDes(platform,
+            sys_clk      = Signal(),
+            sys_clk_freq = 125e6,
+            refclk_pads  = _pads("p", "n"),
+            refclk_freq  = 100e6,
+            tx_pads      = _pads("p", "n"),
+            rx_pads      = _pads("p", "n"))
+        channel = _instance(serdes.get_fragment(), "GTPE2_CHANNEL")
+        word = [item.value for item in channel.items
+            if isinstance(item, Instance.Parameter) and item.name == "ALIGN_COMMA_WORD"]
+        self.assertEqual([w.value if hasattr(w, "value") else w for w in word], [1])
+
 if __name__ == "__main__":
     unittest.main()
