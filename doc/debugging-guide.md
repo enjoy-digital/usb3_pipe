@@ -228,8 +228,17 @@ Not improved by (same composite design, 24 cycles each unless noted):
 - Extending our response LFPS while the host LFPS is received (with RX word alignment during the
   handshake: 13/24; without: 4/24).
 
-Open investigation: the receiver does not decode the host signal following the LFPS exchange on
-~half of the exits (CDR/RX lock after the LFPS, or what the host transmits then).
+**Root cause (fixed, `ALIGN_COMMA_WORD=1`):** the end of the failed Recovery.Active was misleading.
+Captured from the end of our response LFPS (`u3` analyzer group, trigger `U3 & tx_lfps` then
+`~tx_lfps`), the failed exits show the host TS1/TS2 decoded (CDR locked, SSC tracked) but each
+Ordered Set received as `COM x5 00 00 D10.2 x9`: the GTP comma aligner slid on every Ordered Set
+(`rx_realign`, ~1100 pulses in 32us). With 2 symbols per word, aligning commas on even bytes only
+(`ALIGN_COMMA_WORD=2`) conflicts with the consecutive COMs of the USB3 Ordered Sets when the first
+one is received on an odd byte (random after the U3 Electrical Idle). Commas are now aligned on any
+byte (the RXWordAligner handles the bytes rotation): 72/72 clean resumes.
+
+LiteScope note: CSR writes through litex_server/JTAGBone are buffered, read a CSR after arming
+(`analyzer.run()`) before triggering the event to capture.
 
 ## Transceiver Reference Clock (Acorn)
 
