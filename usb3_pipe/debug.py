@@ -90,6 +90,9 @@ class USB3PHYDebug(LiteXModule):
         self._history_time   = CSRStatus(32, description="History entry timestamp (us).")
         self._history_freeze = CSRStorage(
             description="Keep the first transitions after a clear (else the last ones).")
+        self._history_u3_exit = CSRStorage(
+            description="Write 1: restart the history on the next U3 exit (with history_freeze: "
+            "the first transitions after the U3 exit are kept).")
         history_count = self._history_count.status
         history       = Memory(8 + 32, depth)
         history_wr    = history.get_port(write_capable=True)
@@ -99,11 +102,23 @@ class USB3PHYDebug(LiteXModule):
         state_d = Signal(8)
         self.comb += state.eq(phy.ltssm_state)
         self.sync += state_d.eq(state)
+
+        # U3 exit restart (one shot): the transition out of U3 is written as the first entry.
+        u3_exit_armed = Signal()
+        u3_exit       = Signal()
+        self.comb += u3_exit.eq(u3_exit_armed & (state_d == phy.ltssm_states["U3"]) &
+            (state != state_d))
+        self.sync += If(self._history_u3_exit.re,
+            u3_exit_armed.eq(self._history_u3_exit.storage)
+        ).Elif(u3_exit,
+            u3_exit_armed.eq(0)
+        )
+
         self.comb += [
-            history_wr.adr.eq(history_count),
+            history_wr.adr.eq(Mux(u3_exit, 0, history_count)),
             history_wr.dat_w.eq(Cat(state, timestamp)),
-            history_wr.we.eq((state != state_d) &
-                ~(self._history_freeze.storage & (history_count >= depth))),
+            history_wr.we.eq((state != state_d) & (u3_exit |
+                ~(self._history_freeze.storage & (history_count >= depth)))),
             # Read relative to the oldest entry still in memory.
             If(history_count > depth,
                 history_rd.adr.eq(history_count + self._history_index.storage)
@@ -115,6 +130,8 @@ class USB3PHYDebug(LiteXModule):
         ]
         self.sync += If(clear,
             history_count.eq(0)
+        ).Elif(u3_exit,
+            history_count.eq(1)
         ).Elif(history_wr.we,
             history_count.eq(history_count + 1)
         )

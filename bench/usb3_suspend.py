@@ -12,7 +12,8 @@ Waits for the host to suspend the device (U3, Linux autosuspend of devices with 
 CDC-ACM, Mass Storage), resumes it by opening its device node, then checks the resume:
 - clean: U3 exit (LFPS wakeup handshake, Recovery, U0), no reset from the host.
 - reset: the U3 exit failed and the host reset the device (kernel "reset SuperSpeed USB device").
-The LTSSM history is captured from U3 (history_freeze) to see where the U3 exit failed.
+The LTSSM history is captured from the U3 exit (history_u3_exit trigger, history_freeze) to see
+where the U3 exit failed, with times relative to the U3 exit.
 
 Requires a litex_server connected to the SoC (USB3PHYDebug) and read access to the kernel log
 (/var/log/kern.log: adm group, --kern-log, journalctl -k when missing).
@@ -48,6 +49,7 @@ def main():
     parser.add_argument("--dev",     required=True,           help="Device node used to resume the device (/dev/videoX, /dev/ttyACMx).")
     parser.add_argument("--cycles",  default=8,  type=int,    help="Suspend/resume cycles.")
     parser.add_argument("--timeout", default=30, type=float,  help="Suspend wait timeout (s).")
+    parser.add_argument("--states",  default=8,  type=int,    help="LTSSM states printed per cycle.")
     add_remote_args(parser)
     add_kern_log_args(parser)
     args = parser.parse_args()
@@ -68,9 +70,10 @@ def main():
                 results["no_suspend"] += 1
                 continue
 
-            # Capture the LTSSM history from U3, resume.
+            # Capture the LTSSM history from the U3 exit (gateware trigger, else from now), resume.
             dbg.history_freeze(True)
-            dbg.clear()
+            if not dbg.history_u3_exit():
+                dbg.clear()
             kern.new_lines()
             ok, duration = resume(args.dev)
             time.sleep(1.0)
@@ -79,8 +82,10 @@ def main():
             reset = any("reset SuperSpeed" in l for l in kern.new_lines())
             result = "failed" if not ok else ("reset" if reset else "clean")
             results[result] += 1
+            t0 = history[0][0] if history else 0
             print(f"cycle {cycle}: {result} ({duration:.1f}s), LTSSM: " +
-                " ".join(state for _, state in history[:8]) + (" ..." if len(history) > 8 else ""))
+                " ".join(f"{state}@{(t - t0)/1000:.1f}ms" for t, state in history[:args.states]) +
+                (" ..." if len(history) > args.states else ""))
     finally:
         bus.close()
         kern.close()
