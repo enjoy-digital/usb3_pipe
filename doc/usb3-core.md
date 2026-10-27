@@ -174,6 +174,6 @@ A complete Acorn design (PHY + core + debug + bench) uses ~6000 LUTs (4.5% of th
   endpoints can be declared with a Bulk IN endpoint (ex: CDC-ACM notifications, never sent).
 - U1/U2 rejected by default (descriptors advertise 0 exit latencies: hosts disable LPM). With
   `with_lpm`: host initiated U1/U2 entry only (no device initiated entry, U1/U2 Enable only reported),
-  validated in simulation only (not on hardware yet). U3 entry/exit through the LTSSM (not validated
-  on hardware).
+  validated in simulation only (not on hardware yet: the AMD xHCI host of the bench never enables
+  USB3 LPM). U3 entry/exit (Linux autosuspend/resume) validated on hardware.
 - Function remote wakeup, LTM, PTM not supported.
