@@ -19,8 +19,8 @@ from test.model.gen2 import int_to_bits, bits_from_words, words_from_bits
 # Gen 2 --------------------------------------------------------------------------------------------
 
 class TestGen2Coding(unittest.TestCase):
-    def test_gearbox_aligner_roundtrip(self):
-        # Blocks (SYNC first, data/control, SKP Ordered Sets of 4-36 SKP Symbols) -> gearbox -> bit
+    def gearbox_aligner_roundtrip_test(self, data_width=32):
+        # Blocks (SYNC first, data/control, SKP Ordered Sets of 0-36 SKP Symbols) -> gearbox -> bit
         # offset -> aligner: blocks recovered after the SYNC, SKP removed, Block Header single bit
         # error corrected.
         rng    = random.Random(1)
@@ -48,7 +48,7 @@ class TestGen2Coding(unittest.TestCase):
         expected = [(h, d) for h, d, *_ in [b for b in blocks if b[0] != "SKP"]]
 
         # TX gearbox (132-bit blocks only, SKP payloads are checked through the TX tests).
-        tx = Gen2BlockGearbox()
+        tx = Gen2BlockGearbox(data_width)
         words = []
         normal = [b for b in blocks if b[0] != "SKP"]
         def tx_generator(dut):
@@ -70,8 +70,8 @@ class TestGen2Coding(unittest.TestCase):
                 yield
         run_simulation(tx, [tx_generator(tx), tx_checker(tx)])
         ref = [b for h, p, _ in normal for b in int_to_bits(h, 4) + int_to_bits(p, 128)]
-        self.assertGreaterEqual(32*len(words), len(ref) - 31)
-        self.assertEqual(bits_from_words(words)[:len(ref)], ref[:32*len(words)])
+        self.assertGreaterEqual(data_width*len(words), len(ref) - (data_width - 1))
+        self.assertEqual(bits_from_words(words, data_width)[:len(ref)], ref[:data_width*len(words)])
 
         # Channel: random bit offset, a Block Header single bit error.
         offset = 37
@@ -79,11 +79,11 @@ class TestGen2Coding(unittest.TestCase):
         bits[offset + 132*3 + 1] ^= 1
 
         # RX aligner.
-        rx  = Gen2BlockAligner()
+        rx  = Gen2BlockAligner(data_width)
         out = []
         skp = []
         def rx_generator(dut):
-            for w in words_from_bits(bits):
+            for w in words_from_bits(bits, data_width):
                 yield dut.sink.valid.eq(1)
                 yield dut.sink.data.eq(w)
                 yield
@@ -92,7 +92,7 @@ class TestGen2Coding(unittest.TestCase):
             yield dut.sink.valid.eq(0)
         def rx_checker(dut):
             yield dut.source.ready.eq(1)
-            for _ in range(len(bits)//32 + 64):
+            for _ in range(len(bits)//data_width + 64):
                 if (yield dut.source.valid):
                     out.append(((yield dut.source.header), (yield dut.source.data),
                         (yield dut.source.header_error)))
@@ -106,3 +106,13 @@ class TestGen2Coding(unittest.TestCase):
         self.assertEqual([i for i, (h, p, e) in enumerate(out) if e], [3])
         self.assertEqual([n for n, l in skp], skps)
         self.assertEqual([l for n, l in skp], [0x123456 + i for i in range(64) if i % 10 == 5])
+
+    def test_gearbox_aligner_roundtrip(self):
+        self.gearbox_aligner_roundtrip_test(data_width=32)
+
+    def test_gearbox_aligner_roundtrip_40(self):
+        # Hardware width (40-bit words at 250MHz).
+        self.gearbox_aligner_roundtrip_test(data_width=40)
+
+    def test_gearbox_aligner_roundtrip_64(self):
+        self.gearbox_aligner_roundtrip_test(data_width=64)
