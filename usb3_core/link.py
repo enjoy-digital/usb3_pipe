@@ -814,10 +814,14 @@ class USB3LinkLayer(LiteXModule):
 
             # U0 entry: Header Sequence Number/Rx Header Buffer Credit Advertisements (7.2.4.1.1).
             If(u0_rise,
-                lgood_seq.eq((rx_seq - 1) & seq_mask),
-                lcrd_pending.eq(LINK_HP_BUFFERS - (rx_buffer.level - rx_t2_level)),
+                # Advertisement: last received Header Sequence Number (reset value when the link
+                # reset coincides with the U0 entry, ex: short Polling.Idle at Gen 2).
+                lgood_seq.eq(Mux(self.reset, seq_mask, (rx_seq - 1) & seq_mask)),
+                lcrd_pending.eq(Mux(self.reset, LINK_HP_BUFFERS,
+                    LINK_HP_BUFFERS - (rx_buffer.level - rx_t2_level))),
                 lcrd_idx.eq(0),
-                lcrd2_pending.eq(Mux(ssp, LINK_HP_BUFFERS - rx_t2_level, 0)),
+                lcrd2_pending.eq(Mux(ssp, Mux(self.reset, LINK_HP_BUFFERS,
+                    LINK_HP_BUFFERS - rx_t2_level), 0)),
                 lcrd2_idx.eq(0),
                 remote_credits.eq(0),
                 remote_lcrd_idx.eq(0),
