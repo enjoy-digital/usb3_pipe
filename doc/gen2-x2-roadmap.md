@@ -33,8 +33,9 @@ pairs routed to transceivers (and CC handling for the Configuration Lane/orienta
   of Data Stream), Gen 2 SKP (SKPEND, LFSR in SKP, 6.4.3.2).
 - **Speed negotiation** (7.5.4): SCD1/SCD2 LFPS patterns in Polling.LFPS, **LBPM** (LFPS Based PWM
   Messaging) in Polling.PortMatch/PortConfig, Gen 1 fallback. New LTSSM substates.
-- **Datapath**: 10Gbps = 1.25GB/s: 64-bit at 156.25MHz or 128-bit at 78.125MHz (32-bit is not
-  sustainable).
+- **Datapath**: 10Gbps on 40-bit raw transceiver words at 250MHz (same TX/RX clocks as Gen 1 on
+  20-bit words at 5Gbps), blocks (128-bit payloads) in the transceiver clock domains; Link Layer side:
+  1.25GB/s = 64-bit at 156.25MHz or 128-bit at 78.125MHz (32-bit is not sustainable).
 
 ### Gen 1x2
 - Two `USB3SerDes`/PIPE lanes: 8b/10b, SKP, word alignment and polarity **per lane** (6.13.7).
@@ -85,20 +86,36 @@ lane): everything below is verified in simulation only.
   with remainder, up to 2 pending, after SYNC/TS1/TS2/SDS/Logical Idle/end of packet only, never after
   TSEQ, SYNC priority, 20 SKP + SKPEND + LFSR Symbols of Table 6-13), SDS then Data Blocks (Logical
   Idle 00h blocks when no data).
-- `Gen2BlockGearbox`: 132-bit and 196-bit (SKP) blocks to 32-bit words.
-- `Gen2BlockAligner`: **SYNC based block alignment** (Unaligned/Aligned/Locked, 6.4.1.2.4, 32 offsets
-  searched per cycle), **polarity inversion on SYNC** (6.4.2.2), Block Header single bit correction /
+- `Gen2BlockGearbox(data_width)`: 132-bit and 196-bit (SKP) blocks to 32/40/64-bit words.
+- `Gen2BlockAligner(data_width)`: **SYNC based block alignment** (Unaligned/Aligned/Locked,
+  6.4.1.2.4, data_width offsets searched per cycle, **realignment on a SYNC received with a different
+  alignment**: a bit slip in TSEQ keeps valid looking Block Headers), **polarity inversion on SYNC**
+  (6.4.2.2, the inverted SYNC is used for the alignment), Block Header single bit correction /
   undefined header -> Unaligned (6.3.2.4), **variable length SKP Ordered Sets** (0-36 SKP Symbols by
-  groups of 4, LFSR Symbols extracted).
+  groups of 4, LFSR Symbols extracted). Hardware structure: window of the last words, block read at a
+  bit pointer in a 64 positions range (40-bit), registered per position decodes (Block Header, SKP
+  Dwords/SKPEND, SYNC), short pointer loop, registered outputs.
 - `Gen2RX`: descrambling (re-initialized on SYNC), TSEQ/TS1/TS2 detection (Symbols 14/15 not checked),
-  Link Functionality, SDS -> Data Stream.
+  Link Functionality, SDS -> Data Stream, per Ordered Set pulses (TSEQ/TS1/TS2/SYNC/SDS/unknown
+  control block), register stages after the descrambler and the matching.
+- `Gen2Scrambler(per_byte_advance=False)` for blocks: keys/next state from the current state (no per
+  byte chain).
+- `Gen2TXDatapath`/`Gen2RXDatapath` (`datapath.py`, `GEN2_DATA_WIDTH = 40`): transceiver words <->
+  blocks at the hardware width in the transceiver TX/RX clock domains (Gen2TX -> register stage ->
+  gearbox, aligner -> Gen2RX), continuous words (one per cycle, RX always ready), RX status and 32-bit
+  counters (blocks, corrected headers, alignment losses, SYNC/TSEQ/TS1/TS2/SDS/SKP, unknown control
+  blocks). `Gen2RXDebug` (`debug.py`): status/counters CSRs (sys clock domain), LiteScope probes list
+  (`gen2_rx_analyzer_signals`).
 - Tests (`test/test_scrambling.py`, `test/test_coding.py`, `test/test_datapath.py`, reference models
   in `test/model/gen2.py`): the TX output is decoded by an independent bit-serial reference model of
   the rules (TS contents, DC Balance Symbols, SKP LFSR Symbols = reference LFSR, SKP/SYNC scheduling,
-  Data Blocks); TX -> channel (bit offset, polarity inversion, bit slip during TS1, SKP Ordered Sets
-  shortened/lengthened by 4/16/20 SKP Symbols) -> RX loopback: realignment on the next SYNC, polarity
-  detected, TS1/TS2/SDS detected, Data Blocks recovered, received SKP LFSR state equal to the RX
-  descrambler LFSR.
+  Data Blocks) at 32 and 40-bit; gearbox -> aligner roundtrip at 32/40/64-bit (SKP Ordered Sets of
+  0-36 SKP Symbols, header bit error); `Gen2TXDatapath` -> channel model (`gen2_channel`: bit offset,
+  polarity inversion, bit slips during TSEQ/TS1, Block Header bit error, SKP Ordered Sets
+  shortened/lengthened) -> `Gen2RXDatapath` loopback at 32 and 40-bit with continuous words:
+  realignment on the next SYNC, polarity detected, TSEQ/TS1/TS2/SDS detected, Data Blocks recovered,
+  received SKP LFSR state equal to the RX descrambler LFSR, counters checked against the reference
+  decode.
 
 ### Gen 1x2 PHY (`usb3_pipe/lfps.py`/`ltssm.py`/`phy.py`/`lanes.py`, `sim.py --lanes 2`)
 
@@ -110,7 +127,12 @@ lane): everything below is verified in simulation only.
   4 matched sent after 2 matched received) -> **Polling.PortConfig** (PHY Ready LBPM handshake, DFP
   bit 6, bit 7 Config Done) -> Polling.RxEQ. SuperSpeed partner (no SCD in 16 Polling.LFPS bursts):
   fallback to the SuperSpeed Polling.LFPS handshake. `USB3LTSSM(ssp=True)` runs it in Polling.LFPS
-  (Gen 1x1 default unchanged).
+  (Gen 1x1 default unchanged). **Gen 2 capability**: `SSPPolling(gen2_capable=True)` advertises Gen 2
+  (PHY Capability LBPM bit 2) and reports the negotiated `gen2`; `USB3PHY(lanes=1, gen2_capable=True)`
+  runs the SuperSpeedPlus Polling on a single lane as a Gen 2x1 port (`phy.gen2`), then continues the
+  training at Gen 1 speed (no speed switch yet). Tests: `test/test_ltssm_ssp.py` (Gen 2x1/Gen 2x1,
+  Gen 2x2 host/Gen 2x1 device, Gen 1x1 SSP host/Gen 2x1 device, LBPMs decoded on the wire),
+  `sim.py --gen2-capable` (`test/test_phy.py`: Gen 2 negotiated by both PHYs, then U0 at Gen 1).
 - `phy.py` `USB3PHY(lanes=2)`: two `USB3PIPE` lanes (`x2_lane=True`) under one LTSSM: LFPS on Lane 0
   only (SuperSpeedPlus Polling LFPS through the Lane 0 `LFPSUnit`, Lane 1 in electrical idle,
   6.13.12), Ordered Sets on both lanes, TS1/TS2 required on both lanes (6.13.6), per lane scrambler
@@ -132,15 +154,20 @@ lane): everything below is verified in simulation only.
 - Gen 2 Block Header bit order: "0011b" read with bit 0 as LSB, bit 0 transmitted first (Figure 6-11);
   SKP LFSR Symbol 4N+1 bit 7 = ~LFSR[22] as Table 6-13 (6.4.3.3 rule 6 mentions an even parity
   instead). To check against a Gen 2 capture.
-- `Gen2BlockAligner` does not re-align on a SYNC received with a different alignment in the Aligned
-  phase (alignment only acquired in Unaligned), SKP/SKPEND Symbols are matched exactly (no multi-bit
-  error tolerance). DC Balance includes the Block Header bits.
-- `Gen2TX`/`Gen2RX` are block-level (one block per cycle), not yet a 64-bit 156.25MHz datapath, no Gen 2
-  elastic buffer (SKP add/remove at the receiver), no Gen 2 LTSSM integration (TSEQ/TS count, SYNC
-  in Polling/Recovery, Disable Scrambling from the first Data Block).
-- SSP Polling: no tPollingSCDLFPSTimeout, no Gen 2 capability/speed switch, no re-timer presence
-  announcement/RT Config (bit 7 always de-asserted), no Polling.PortMatch re-entry/fallback after a
-  training failure (Table 7-15), no cPollingTimeout/eSS.Disabled handling.
+- `Gen2BlockAligner`: a SYNC with a different alignment received while a SKP Ordered Set is consumed
+  does not realign (the next SYNC does), polarity only toggled in Unaligned, SKP/SKPEND Symbols are
+  matched exactly (no multi-bit error tolerance). DC Balance includes the Block Header bits.
+- Timing at 250MHz estimated only (Yosys LUT6 mapping, no Vivado run): aligner <= 9 LUT levels
+  (SYNC/pointer paths, adders mapped as LUTs: carry chains in Vivado), `Gen2RX` 4; the `Gen2TX` DC
+  Balance (popcounts -> running balance -> Symbols 14/15) is the deepest path (to check, can be
+  pipelined: a block is accepted every 3.3 cycles at 40-bit).
+- No Gen 2 elastic buffer (SKP add/remove at the receiver), no Gen 2 LTSSM integration (TSEQ/TS
+  count, SYNC in Polling/Recovery, Disable Scrambling from the first Data Block).
+- LBPM PHY Capability Gen 2 bit (bit 2) and the Table 7-14 common capability as the AND of both
+  capabilities: from the spec reading, to confirm with a Gen 2 host.
+- SSP Polling: no tPollingSCDLFPSTimeout, no speed switch to Gen 2 after Polling.PortConfig, no
+  re-timer presence announcement/RT Config (bit 7 always de-asserted), no Polling.PortMatch
+  re-entry/fallback after a training failure (Table 7-15), no cPollingTimeout/eSS.Disabled handling.
 - `USB3PHY(lanes=2)`: Gen 1x1 negotiated (x2 = 0) is reported but the datapath stays x2 (no fallback
   to a single lane datapath), the two lanes TX must run in lockstep (same clock, same SKP schedule),
   the Recovery/U1/U2/U3 flows use the Gen 1x1 LTSSM on the Configuration Lane (Ux exit, Ping.LFPS on
@@ -161,11 +188,34 @@ lane): everything below is verified in simulation only.
 - A protocol analyzer/capture (or a Gen 2 PHY with PIPE access) to validate the Gen 2 bit order/LFSR
   against real traffic.
 
+## Gen 2x1 hardware milestones
+
+**M1: Gen 2 capability exchange and Gen 2 RX** (UltraScale+ GTY, Gen 2 host): the device advertises
+Gen 2x1 in Polling (`USB3PHY(gen2_capable=True)`), the host switches to 10Gbps and sends Gen 2
+TSEQ/TS1, `Gen2RXDatapath` block-aligns, descrambles and counts them (`Gen2RXDebug` CSRs, LiteScope).
+Remaining for M1:
+- Gen 2 transceiver configuration: QPLL0 at 10Gbps (Gen 1: RXOUT_DIV/TXOUT_DIV 2), raw 40-bit words
+  (`data_width=40`, fabric 8b/10b bypassed, comma alignment off), TX/RX clocks unchanged at 250MHz;
+  rate switch on `phy.gen2` after Polling.PortConfig (DRP: OUT_DIV, RX/TX_DATA_WIDTH 20 <-> 40, or
+  40-bit at both speeds with Gen 1 at 125MHz), Gen 2 CDR/equalizer settings, RX electrical idle/LFPS
+  detection at Gen 2.
+- Gen 2 path wiring in the SerDes (`USPUSB3SerDes`): raw RX words to `Gen2RXDatapath`, TX words from
+  `Gen2TXDatapath` (TSEQ/TS1 for the host to progress, or electrical idle for a first test), bench
+  target with the CSRs/LiteScope probes.
+- To check on hardware: bit order (RX word bit 0 = first received bit, Block Header bit 0 first), SKP
+  LFSR Symbol bit 7, LBPM Gen 2 bit, host behavior when the device does not answer the Gen 2
+  training.
+
+**M2: Gen 2 link training to U0**: Gen 2 LTSSM (Polling.RxEQ/Active/Configuration/Idle with TSEQ
+counts, SYNC, TS1/TS2 counts, SDS and Logical Idle Data Blocks, Recovery with SYNC/TS1/TS2), Gen 2
+elastic buffer (SKP Ordered Sets add/remove), Gen 2 timers (Table 7-7), Disable Scrambling, then the
+Link Layer datapath at 1.25GB/s and the SuperSpeedPlus Link Layer (above).
+
 ## Suggested order
 
 1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`); remaining:
    single lane fallback, SSP Link Layer, Type-C CC/Configuration Lane, hardware validation.
-2. Gen 2x1 on Kintex7 GTX/UltraScale GTH: 128b/132b blocks done in simulation; remaining: Gen 2 LTSSM
-   integration (Gen 2 capability in LBPM, SYNC/TS counts, SDS), 64-bit datapath, elastic buffer, Gen 2
-   transceiver configuration.
+2. Gen 2x1 on UltraScale+ GTY (or Kintex7 GTX/UltraScale GTH): 128b/132b blocks, 40-bit TX/RX
+   datapaths and Gen 2 capability in the SSP Polling done in simulation; next: the hardware
+   milestones above.
 3. Gen 2x2 (20Gbps) on UltraScale+ GTY: combination of both, 7 buffers.
