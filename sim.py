@@ -419,7 +419,8 @@ class USB3PIPESim(SoCMini):
 
     gen2 (lanes=1, gen2_capable): SerDes models with Gen 2 raw words, the training continues at Gen 2
     (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0, Link Layer packets with the
-    Gen 2 framing in the Data Blocks (the Host model and Device Core Link Layers are SuperSpeed ones).
+    Gen 2 framing in the Data Blocks, SuperSpeedPlus Link Layer (Host script and Device Core: 4-bit
+    Header Sequence Numbers, Type 1/Type 2 credits, Transfer Types).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
@@ -490,7 +491,7 @@ class USB3PIPESim(SoCMini):
                 # Gen 2: no Gen 1 SKP Ordered Sets/packets offsets in the script (Gen 2 SKP Ordered
                 # Sets by the Gen2TX, packets re-aligned by the Gen 2 framing).
                 host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp and not gen2, latency=host_latency,
-                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm).steps))
+                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()

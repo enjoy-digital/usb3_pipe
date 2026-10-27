@@ -31,7 +31,9 @@ from litex.gen import *
 
 from litex.soc.interconnect.csr import *
 
+from usb3_core.common    import TT_CONTROL, TT_ISOCHRONOUS, TT_BULK
 from usb3_core.link      import USB3LinkLayer
+from usb3_core.iso       import USB3IsoIN
 from usb3_core.protocol  import USB3ProtocolLayer
 from usb3_core.control   import USB3EndpointControl
 from usb3_core.trace     import USB3CoreTrace
@@ -50,8 +52,12 @@ class USB3DeviceCore(LiteXModule):
         if with_lpm:
             descriptors.enable_lpm()
 
-        # Link Layer.
-        self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
+        # Link Layer (Transfer Types of the endpoints for SuperSpeedPlus operation).
+        ssp_tt = {0: TT_CONTROL}
+        for ep in endpoints:
+            ssp_tt[ep.ept] = TT_ISOCHRONOUS if isinstance(ep, USB3IsoIN) else TT_BULK
+        self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale,
+            ssp_tt=ssp_tt)
         self.comb += link.lpm_enable.eq(with_lpm)
 
         # Control Endpoint.

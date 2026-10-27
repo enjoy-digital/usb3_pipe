@@ -83,6 +83,12 @@ TYPE_TP  = 0x04
 TYPE_DP  = 0x08
 TYPE_ITP = 0x0c
 
+# Transfer Type (TT) of the ACK TPs and DPHs in SuperSpeedPlus operation (DW1[14:12], 8.2).
+TT_CONTROL     = 0b100
+TT_ISOCHRONOUS = 0b101
+TT_BULK        = 0b110
+TT_INTERRUPT   = 0b111
+
 # LMP Subtypes (8.4).
 LMP_SUB_SET_LINK_FUNC = 1
 LMP_SUB_U2_INACT      = 2
