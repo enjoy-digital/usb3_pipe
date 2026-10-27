@@ -54,9 +54,10 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 -----------
 - [LiteX Acorn Baseboard](https://github.com/enjoy-digital/litex-acorn-baseboard) (Mini) with an Acorn
   CLE-215+ (`bench/acorn.py`, main development/validation target).
+- Alibaba Cloud XCKU3P board (`bench/alibaba_xcku3p.py`, Kintex Ultrascale+ GTY, SFP2USB adapter in
+  the NIC1 SFP cage): validated on hardware (bench example: IN 446MB/s, OUT 450MB/s, 0 errors).
 - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`bench/kc705.py`, Kintex7
-  GTX) and Alibaba Cloud XCKU3P board (`bench/alibaba_xcku3p.py`, Kintex Ultrascale+ GTY):
-  build-tested, hardware validation in progress.
+  GTX): build-tested, hardware validation in progress.
 - [SFP2USB](http://xillybus.com/sfp2usb-module) adapter (from the [XillyUSB](http://xillybus.com/xillyusb)
   project) or the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board.
 
