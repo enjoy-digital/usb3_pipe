@@ -82,7 +82,7 @@ class Gen2FramingLoopback(Module):
         units_started = Signal(16)
         self.sync += [
             If(fifo.sink.valid & fifo.sink.ready & fifo.sink.last, units_written.eq(units_written + 1)),
-            If(packer.unit_start, units_started.eq(units_started + 1)),
+            If(packer.unit_end, units_started.eq(units_started + 1)),
         ]
         self.comb += packer.units_available.eq(units_written != units_started)
 
@@ -158,3 +158,77 @@ class TestGen2Framing(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Gen2LinkTX (sys -> tx clock domains) ---------------------------------------------------------------
+
+UNITS_DELAY = 8
+
+class Gen2LinkTXLoopback(Module):
+    """Gen2LinkTX (sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx clock domain,
+    a block every 3 or 4 cycles, Idle Data Blocks when no block) -> Gen2RXFraming (tx clock domain)."""
+    def __init__(self):
+        from usb3_pipe.framing import Gen2LinkTX
+        self.link_tx = link_tx = Gen2LinkTX(units_delay=UNITS_DELAY)
+        rx = ClockDomainsRenamer("tx")(Gen2RXFraming())
+        self.rx = rx
+        self.submodules += link_tx, rx
+        timer = Signal(4)
+        slot  = Signal()
+        self.sync.tx += If(timer == 9, timer.eq(0)).Else(timer.eq(timer + 1))
+        self.comb += slot.eq((timer == 2) | (timer == 5) | (timer == 9)) # 3/3/4 cycles: 40-bit gearbox.
+        idle  = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
+        block = Signal(128)
+        block_valid = Signal()
+        self.comb += link_tx.source.ready.eq(slot)
+        self.sync.tx += [
+            block_valid.eq(slot),
+            If(slot, block.eq(Mux(link_tx.source.valid, link_tx.source.data, idle))),
+        ]
+        half = Signal()
+        hold = Signal(128)
+        self.sync.tx += If(block_valid, hold.eq(block), half.eq(1)).Elif(half, half.eq(0))
+        rx_fifo = ClockDomainsRenamer("tx")(stream.SyncFIFO([("data", 64)], 8))
+        self.submodules += rx_fifo
+        self.comb += [
+            rx_fifo.sink.valid.eq(block_valid | half),
+            rx_fifo.sink.data.eq(Mux(block_valid, block[0:64], hold[64:128])),
+            rx_fifo.source.connect(rx.sink),
+            rx.source.ready.eq(1),
+        ]
+
+class TestGen2LinkTX(unittest.TestCase):
+    def test_link_tx_cdc(self):
+        rng   = random.Random(7)
+        units = random_units(rng, 24)
+        words = [w for u in units for w in u]
+        out   = []
+        dut   = Gen2LinkTXLoopback()
+        def generator(dut):
+            for data, ctrl in words:
+                yield dut.link_tx.sink.valid.eq(1)
+                yield dut.link_tx.sink.data.eq(data)
+                yield dut.link_tx.sink.ctrl.eq(ctrl)
+                yield
+                while not (yield dut.link_tx.sink.ready):
+                    yield
+                if rng.random() < 0.3:
+                    yield dut.link_tx.sink.valid.eq(0)
+                    for _ in range(rng.randrange(1, 4)):
+                        yield
+            yield dut.link_tx.sink.valid.eq(0)
+        @passive
+        def checker(dut):
+            while True:
+                if (yield dut.rx.source.valid):
+                    data   = (yield dut.rx.source.data)
+                    ctrl   = (yield dut.rx.source.ctrl)
+                    nwords = (yield dut.rx.source.words)
+                    for w in range(nwords):
+                        out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                yield
+        def timeout(dut):
+            for _ in range(len(words)*4 + 2000):
+                yield
+        run_simulation(dut, {"sys": [generator(dut), timeout(dut)], "tx": [checker(dut)]},
+            clocks={"sys": 8, "tx": 4})
+        self.assertEqual(out, words)

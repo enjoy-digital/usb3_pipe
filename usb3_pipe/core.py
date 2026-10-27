@@ -21,8 +21,7 @@ from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
 from usb3_pipe.datapath import RXWordAligner, Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH
 from usb3_pipe.datapath import GEN2_IDLE_BLOCK
-from usb3_pipe.framing  import Gen2RXFraming, Gen2TXFramer, Gen2TXPacker
-from usb3_pipe.framing  import gen2_link_layout, gen2_tx_unit_layout
+from usb3_pipe.framing  import Gen2RXFraming, Gen2LinkTX, gen2_link_layout
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -408,29 +407,15 @@ class Gen2PIPE(LiteXModule):
         ]
 
         # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
-        self.tx_framer = tx_framer = Gen2TXFramer()
-        self.tx_buffer = tx_buffer = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
-            stream.AsyncFIFO(gen2_tx_unit_layout(), tx_buffer_depth, buffered=True))
-        self.tx_packer = tx_packer = ClockDomainsRenamer("tx")(Gen2TXPacker())
+        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth)
         self.comb += [
-            self.sink.connect(tx_framer.sink, omit={"valid", "ready"}),
-            tx_framer.sink.valid.eq(self.sink.valid & self.tx_ready),
-            self.sink.ready.eq(tx_framer.sink.ready & self.tx_ready),
-            tx_framer.source.connect(tx_buffer.sink),
-            tx_buffer.source.connect(tx_packer.sink),
-            tx_packer.source.connect(tx.sink),
+            self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
+            link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
+            self.sink.ready.eq(link_tx.sink.ready & self.tx_ready),
+            link_tx.source.connect(tx.sink),
+            link_tx.flush.eq(~self.tx_ready),
         ]
-        # Complete units in the buffer (store and forward): units written (sys) vs started (tx).
-        units_written = GrayCounter(16)
-        units_started = ClockDomainsRenamer("tx")(GrayCounter(16))
-        self.submodules += units_written, units_started
-        units_written_tx = Signal(16)
-        self.specials += MultiReg(units_written.q, units_written_tx, "tx")
-        self.comb += [
-            units_written.ce.eq(tx_buffer.sink.valid & tx_buffer.sink.ready & tx_buffer.sink.last),
-            units_started.ce.eq(tx_packer.unit_start),
-            tx_packer.units_available.eq(units_written_tx != units_started.q),
-        ]
+        self.tx_packer = link_tx.packer
 
         # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
         # Blocks buffered (one block every 3.3 cycles, not held by the Gen 2 RX datapath), 8 bytes

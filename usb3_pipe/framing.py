@@ -20,6 +20,7 @@ framing Ordered Sets at word boundaries.
 """
 
 from migen import *
+from migen.genlib.cdc import MultiReg, GrayCounter
 
 from litex.gen import *
 
@@ -400,7 +401,8 @@ class Gen2TXPacker(LiteXModule):
         self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout())
         self.source          = source = stream.Endpoint([("data", 128)])
         self.units_available = Signal() # i: A complete unit is available on sink.
-        self.unit_start      = Signal() # o: A unit is started (pulse).
+        self.unit_end        = Signal() # o: A unit is read (pulse, last entry).
+        self.flush           = Signal() # i: Discard the sink entries (link not in U0).
 
         # # #
 
@@ -433,9 +435,9 @@ class Gen2TXPacker(LiteXModule):
         rd       = Signal()
         self.comb += [
             fill_eff.eq(Mux(out_fire, Mux(fill >= 16, fill - 16, 0), fill)),
-            rd.eq(sink.valid & (in_unit | self.units_available) & (fill_eff <= 16)),
-            sink.ready.eq(rd),
-            self.unit_start.eq(rd & ~in_unit),
+            rd.eq(sink.valid & ~self.flush & (in_unit | self.units_available) & (fill_eff <= 16)),
+            sink.ready.eq(rd | self.flush),
+            self.unit_end.eq(sink.valid & sink.ready & sink.last),
         ]
         buf_shift = Signal(8*24)
         self.comb += buf_shift.eq(Mux(out_fire, buf >> 128, buf))
@@ -443,7 +445,10 @@ class Gen2TXPacker(LiteXModule):
         self.comb += Case(fill_eff, {f: placed.eq((buf_shift & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
             for f in range(17)})
         self.sync += [
-            If(rd,
+            If(self.flush,
+                fill.eq(0),
+                in_unit.eq(0),
+            ).Elif(rd,
                 buf.eq(placed),
                 fill.eq(fill_eff + sink.bytes),
                 in_unit.eq(~sink.last),
@@ -452,7 +457,9 @@ class Gen2TXPacker(LiteXModule):
                 fill.eq(fill_eff),
             ),
             # A unit ended: its last block is padded with Idle Symbols unless the next unit follows.
-            If(rd & sink.last,
+            If(self.flush,
+                ending.eq(0)
+            ).Elif(rd & sink.last,
                 ending.eq(1)
             ).Elif(rd,
                 ending.eq(0)
@@ -460,3 +467,54 @@ class Gen2TXPacker(LiteXModule):
                 ending.eq(0)
             ),
         ]
+
+# Gen 2 Link TX ------------------------------------------------------------------------------------
+
+class Gen2LinkTX(LiteXModule):
+    """Link Layer words (sys clock domain) -> Gen2TXFramer -> units buffer (sys -> tx) ->
+    Gen2TXPacker -> Data Blocks payloads (tx clock domain, to Gen2TX).
+
+    Units are stored and forwarded: a unit is started once completely written in the buffer and
+    visible on its read side. Flushed while the link is not in U0 (stale units of a previous U0
+    period, units cut by a link state change). The units written count is moved to the tx clock domain (gray coded)
+    and delayed to cover the buffer CDC latency (else the packer could start a unit whose last
+    entries are not yet readable: Idle Symbols inside a packet).
+    """
+    def __init__(self, buffer_depth=512, units_delay=8):
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 128)])
+        self.flush  = Signal() # i: Flush (sys clock domain, link not in U0): framer reset, buffer drained.
+
+        # # #
+
+        self.framer = framer = ResetInserter()(Gen2TXFramer())
+        flush_tx = Signal()
+        self.specials += MultiReg(self.flush, flush_tx, "tx")
+        self.comb += framer.reset.eq(self.flush)
+        self.buffer = buffer = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
+            stream.AsyncFIFO(gen2_tx_unit_layout(), buffer_depth, buffered=True))
+        self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker())
+        self.comb += [
+            sink.connect(framer.sink),
+            framer.source.connect(buffer.sink),
+            buffer.source.connect(packer.sink),
+            packer.source.connect(source),
+        ]
+
+        # Complete units in the buffer: units written (sys) vs read (tx), units cut by a flush are not
+        # counted (no last entry).
+        units_written = GrayCounter(16)
+        units_read    = ClockDomainsRenamer("tx")(GrayCounter(16))
+        self.submodules += units_written, units_read
+        units_written_tx = Signal(16)
+        self.specials += MultiReg(units_written.q, units_written_tx, "tx")
+        units_written_d = [Signal(16) for _ in range(units_delay)]
+        self.sync.tx += [units_written_d[0].eq(units_written_tx)] + [
+            units_written_d[i].eq(units_written_d[i-1]) for i in range(1, units_delay)]
+        self.comb += [
+            units_written.ce.eq(buffer.sink.valid & buffer.sink.ready & buffer.sink.last),
+            units_read.ce.eq(packer.unit_end),
+            packer.units_available.eq(units_written_d[-1] != units_read.q),
+            packer.flush.eq(flush_tx),
+        ]
+
