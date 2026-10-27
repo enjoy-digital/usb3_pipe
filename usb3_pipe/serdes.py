@@ -51,6 +51,7 @@ class USB3SerDes(LiteXModule):
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align      = Signal()        # i
         self.rx_reset      = Signal()        # i: RX re-initialization (PMA/CDR/PCS reset sequence).
+        self.rx_reinit     = Signal()        # RX re-initialization request of the SerDes itself (ex: rate change).
 
         self.rx_idle_stretch = 0    # rx_idle stretch (cycles) of the RX idle filter (add_lfps).
         self.xcvr_name       = None # Transceiver submodule name (add_transceiver).
@@ -93,7 +94,7 @@ class USB3SerDes(LiteXModule):
         self.rx_datapath     = rx_datapath     = RXDatapath("rx", phy_dw=phy_dw)
         self.comb += [
             xcvr.tx_enable.eq(self.enable),
-            xcvr.rx_enable.eq(self.enable & ~self.rx_reset),
+            xcvr.rx_enable.eq(self.enable & ~self.rx_reset & ~self.rx_reinit),
             self.ready.eq(xcvr.tx_ready & xcvr.rx_ready),
             xcvr.rx_align.eq(self.rx_align),
             self.sink.connect(tx_datapath.sink),
@@ -289,6 +290,18 @@ class USPUSB3SerDes(USB3SerDes):
                 gty.tx_rate.eq(Mux(self.rate_10g, 0b001, 0b010)),
                 gty.rx_rate.eq(Mux(self.rate_10g, 0b001, 0b010)),
             ]
+            # RX re-initialization (~1us) on rate changes (CDR/PCS restart at the new rate).
+            rate_10g_d = Signal()
+            reinit     = Signal(max=int(sys_clk_freq*1e-6) + 1)
+            self.sync += [
+                rate_10g_d.eq(self.rate_10g),
+                If(self.rate_10g != rate_10g_d,
+                    reinit.eq(int(sys_clk_freq*1e-6))
+                ).Elif(reinit != 0,
+                    reinit.eq(reinit - 1)
+                )
+            ]
+            self.comb += self.rx_reinit.eq(reinit != 0)
         else:
             self.pll = pll = GTYChannelPLL(refclk, refclk_freq, 5e9)
             gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq)
