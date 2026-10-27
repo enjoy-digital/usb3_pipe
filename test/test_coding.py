@@ -6,13 +6,18 @@
 
 """128b/132b (Gen 2) block gearbox/aligner (6.3.2, 6.4.1.2.4) against bit-serial reference models."""
 
+import os
+import re
 import random
+import shutil
+import tempfile
+import subprocess
 import unittest
 
 from migen import *
 
 from usb3_pipe.common import *
-from usb3_pipe.coding import Gen2BlockGearbox, Gen2BlockAligner
+from usb3_pipe.coding import Gen2BlockGearbox, Gen2BlockAligner, popcount
 
 from test.model.gen2 import int_to_bits, bits_from_words, words_from_bits
 
@@ -116,3 +121,35 @@ class TestGen2Coding(unittest.TestCase):
 
     def test_gearbox_aligner_roundtrip_64(self):
         self.gearbox_aligner_roundtrip_test(data_width=64)
+
+    @unittest.skipIf(shutil.which("yosys") is None, "yosys not found")
+    def test_popcount_verilog(self):
+        # popcount compared to constants in the generated Verilog (Verilog expression widths are not
+        # reproduced by the Migen simulator): evaluated with yosys for all 4-bit values.
+        from migen.fhdl import verilog
+        i   = Signal(4)
+        le1 = Signal()
+        gt1 = Signal()
+        cnt = Signal(3)
+        m   = Module()
+        m.comb += [
+            le1.eq(popcount(i) <= 1),
+            gt1.eq(popcount(i) > 1),
+            cnt.eq(popcount(i)),
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "popcount.v")
+            verilog.convert(m, ios={i, le1, gt1, cnt}, name="popcount").write(f)
+            script = f"read_verilog {f}; prep -top popcount; " + "; ".join(
+                f"eval -set {i.backtrace[-1][0]} {v} -show {le1.backtrace[-1][0]},{gt1.backtrace[-1][0]},{cnt.backtrace[-1][0]}"
+                for v in range(16))
+            log = subprocess.run(["yosys", "-p", script], capture_output=True, text=True, check=True).stdout
+        # "Eval result: { \\le1 \\gt1 \\cnt } = 5'xyzzz."
+        results = [int(x, 2) for x in re.findall(r"Eval result: .* = 5'([01]+)", log)]
+        values  = sum([[r >> 4, (r >> 3) & 1, r & 0b111] for r in results], [])
+        expected = []
+        for v in range(16):
+            n = bin(v).count("1")
+            expected += [int(n <= 1), int(n > 1), n]
+        self.assertEqual(values, expected)
+

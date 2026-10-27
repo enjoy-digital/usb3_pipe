@@ -129,8 +129,13 @@ GEN2_DC_REDUCE_ONES  = (0x20, 0x08)
 GEN2_DC_REDUCE_ZEROS = (0xdf, 0xf7)
 
 def popcount(bits):
-    """Number of bits set (combinatorial)."""
-    return Reduce("ADD", [bits[i] for i in range(len(bits))])
+    """Number of bits set (combinatorial).
+
+    The bits are zero-extended to the result width: in Verilog, a sum of 1-bit operands compared to
+    a constant (ex: popcount(x) > 1) is evaluated on the operands width (1-bit, sum modulo 2), the
+    Migen simulator does not reproduce it."""
+    w = bits_for(len(bits))
+    return Reduce("ADD", [Cat(bits[i], Constant(0, w - 1)) for i in range(len(bits))])
 
 def gen2_block_layout():
     """TX blocks: Block Header + payload (128-bit, 192-bit for SKP Ordered Sets: skp=1)."""
