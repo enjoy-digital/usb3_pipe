@@ -30,6 +30,7 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 | Enumeration | SuperSpeed (5000M), standard Linux drivers (usbfs, cdc_acm, uvcvideo, usb-storage) |
 | Bulk bandwidth | IN 446 MB/s, OUT 449 MB/s, full duplex 376 + 400 MB/s (~90% of 5Gbps 8b/10b) |
 | Stability | 139 GB full duplex transferred with data checked: 0 errors, no retry/Recovery |
+| Suspend/Resume | Linux autosuspend (U3) and resume: 72/72 clean resumes (~0.6s) |
 | Demos | Bulk loopback/benchmark, LiteX BIOS console (CDC-ACM), UVC camera up to 1080p60 (Bulk) or 1080p30 (Isochronous), Mass Storage RAM disk (and DDR3 disk), composite camera + console |
 
 [> Features

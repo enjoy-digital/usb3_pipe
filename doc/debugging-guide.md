@@ -208,9 +208,10 @@ LiteScope captures of a failed exit: trigger on `eSS.Inactive` (only reached whe
 times out), with a large offset to see the end of Recovery.Active (`--no-retrain`: never retrain a
 link in U3). Linux desktop camera services (PipeWire) also open/resume UVC devices on their own.
 
-On the Acorn (composite example, AMD xHCI host), ~50% of the resumes are clean (2026-10, GTGREFCLK0
-reference clock), the others end with a host reset (functional, ~1.7s resume). All the failures
-are now captured the same way:
+On the Acorn (uvc/composite examples, AMD xHCI host), all the resumes are clean (72/72, ~0.6s).
+
+Before the comma alignment fix below, ~50% of the resumes were clean, the others ended with a host
+reset (functional, ~1.7s resume). The failures were all captured the same way:
 - U3 wakeup handshake completed on our side: the host wakeup LFPS is detected (80us), our 1ms
   response LFPS is sent, then Recovery.Active.
 - The host keeps a non idle line for ~8ms after our response (`lfps` group: `rx_idle` low), then
@@ -221,7 +222,7 @@ are now captured the same way:
 - Recovery.Active times out (12ms) -> eSS.Inactive -> Rx.Detect/Polling; the host Warm Resets the
   port ~600ms after the wakeup.
 
-Not improved by (same composite design, 24 cycles each unless noted):
+Not improved by (same composite design, 24 cycles each unless noted, before the fix):
 - RXBUF_RESET_ON_EIDLE, a GTP RX re-initialization on U3 exit (earlier builds).
 - A GTP RX re-initialization while in U3, before the resume (7/12 clean vs 5/12).
 - `RXCDR_HOLD_DURING_EIDLE=0` (13/24), `RXCDR_FR/PH_RESET_ON_EIDLE=1` (16/24).
