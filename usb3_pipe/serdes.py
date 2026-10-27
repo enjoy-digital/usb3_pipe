@@ -56,6 +56,13 @@ class USB3SerDes(LiteXModule):
         self.rx_idle_stretch = 0    # rx_idle stretch (cycles) of the RX idle filter (add_lfps).
         self.xcvr_name       = None # Transceiver submodule name (add_transceiver).
 
+        # Gen 2 (gen2_capable SerDes): 10Gbps line rate and raw transceiver words (Gen2PIPE).
+        self.gen2_capable   = False
+        self.rate_10g       = Signal()   # i: 10Gbps line rate.
+        self.gen2_tx_enable = Signal()   # i: Transmit gen2_tx_data (raw words, 8b/10b bypassed).
+        self.gen2_tx_data   = Signal(40) # i: Raw TX words (tx clock domain, bit 0 first).
+        self.gen2_rx_data   = Signal(40) # o: Raw RX words (rx clock domain, bit 0 first).
+
     def get_refclk(self, refclk_pads, buffer="IBUFDS_GTE2"):
         """Transceiver reference clock: from dedicated pads (buffer) or a fabric clock."""
         if isinstance(refclk_pads, (Signal, ClockSignal)):
@@ -274,7 +281,6 @@ class USPUSB3SerDes(USB3SerDes):
         gen2_capable=False):
         USB3SerDes.__init__(self)
         self.gen2_capable = gen2_capable
-        self.rate_10g     = Signal() # i: 10Gbps line rate (gen2_capable).
 
         # # #
 
@@ -303,6 +309,12 @@ class USPUSB3SerDes(USB3SerDes):
                 )
             ]
             self.comb += self.rx_reinit.eq(reinit != 0)
+            # Raw words (Gen 2).
+            self.comb += [
+                gty.tx_raw_enable.eq(self.gen2_tx_enable),
+                gty.tx_raw.eq(self.gen2_tx_data),
+                self.gen2_rx_data.eq(gty.rx_raw),
+            ]
         else:
             self.pll = pll = GTYChannelPLL(refclk, refclk_freq, 5e9)
             gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq)
