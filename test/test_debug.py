@@ -13,7 +13,7 @@ from migen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import K
-from usb3_pipe.debug  import USB3PHYDebug, USB3PHY_DEBUG_HISTORY_DEPTH
+from usb3_pipe.debug  import USB3PHYDebug, USB3LanesDebug, USB3PHY_DEBUG_HISTORY_DEPTH
 
 # Fake PHY/SerDes ----------------------------------------------------------------------------------
 
@@ -23,14 +23,16 @@ PIPE_EVENTS = ["ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2", "lfps_rx_polling", "lf
 U3 = 30 # Fake LTSSM U3 state encoding.
 
 def fake_phy():
-    phy = SimpleNamespace(
+    pipe = SimpleNamespace(**{name: Signal(name=name) for name in PIPE_EVENTS})
+    phy  = SimpleNamespace(
         reset           = Signal(),
         serdes_rx_reset = Signal(),
         ltssm_state     = Signal(5),
         ltssm_states    = {"U3": U3},
         ltssm           = SimpleNamespace(u0=Signal(), recovery=Signal(), u1=Signal(), u2=Signal(),
             u3=Signal()),
-        pipe            = SimpleNamespace(**{name: Signal(name=name) for name in PIPE_EVENTS}),
+        pipe            = pipe,
+        pipes           = [pipe],
     )
     serdes = SimpleNamespace(
         ready       = Signal(),
@@ -137,6 +139,75 @@ class TestUSB3PHYDebug(unittest.TestCase):
                 yield
             yield
             self.assertEqual((yield from read_history()), [7, 8, 9, 8, U3, 5])
+
+        run_simulation(dut, generator())
+
+# Lanes Debug --------------------------------------------------------------------------------------
+
+def fake_lanes_phy():
+    pipes = [SimpleNamespace(**{name: Signal(name=f"lane{lane}_{name}") for name in PIPE_EVENTS})
+        for lane in range(2)]
+    phy = SimpleNamespace(x2=Signal(), gen2=Signal(), deskew_aligned=Signal(), pipes=pipes)
+    serdes = [SimpleNamespace(ready=Signal(), rx_idle=Signal(), rx_polarity=Signal(),
+        rx_errors=Signal()) for _ in range(2)]
+    return phy, serdes
+
+class LanesDUT(Module):
+    def __init__(self):
+        self.phy, self.serdes = fake_lanes_phy()
+        self.submodules.debug = USB3LanesDebug(self.phy, self.serdes)
+
+class TestUSB3LanesDebug(unittest.TestCase):
+    def test_status_counters(self):
+        dut = LanesDUT()
+        dbg = dut.debug
+        def generator():
+            # Status.
+            yield dut.phy.x2.eq(1)
+            yield dut.serdes[0].ready.eq(1)
+            yield dut.serdes[1].ready.eq(1)
+            yield dut.serdes[1].rx_idle.eq(1)
+            yield dut.serdes[1].rx_polarity.eq(1)
+            yield
+            fields = dbg._status.fields # (CSRs are not simulated: their fields are checked.)
+            self.assertEqual((yield fields.x2),             1)
+            self.assertEqual((yield fields.gen2),           0)
+            self.assertEqual((yield fields.deskew_aligned), 0)
+            self.assertEqual((yield fields.ready),          0b11)
+            self.assertEqual((yield fields.rx_idle),        0b10)
+            self.assertEqual((yield fields.rx_polarity),    0b10)
+
+            # Per lane events: edges counted once, levels counted per cycle.
+            yield dut.phy.pipes[1].ts_rx_ts1_inv.eq(1)
+            yield dut.phy.pipes[0].ts_rx_ts2.eq(1)
+            yield dut.phy.deskew_aligned.eq(1)
+            for _ in range(3):
+                yield
+            yield dut.phy.pipes[1].ts_rx_ts1_inv.eq(0)
+            yield dut.phy.pipes[0].ts_rx_ts2.eq(0)
+            yield dut.phy.deskew_aligned.eq(0)
+            yield
+            yield dut.phy.deskew_aligned.eq(1)
+            yield dut.serdes[1].rx_errors.eq(1)
+            for _ in range(4):
+                yield
+            yield dut.serdes[1].rx_errors.eq(0)
+            yield
+            yield
+            self.assertEqual((yield dbg._lane1_ts1_inv_count.status), 1)
+            self.assertEqual((yield dbg._lane0_ts1_inv_count.status), 0)
+            self.assertEqual((yield dbg._lane0_ts2_count.status), 1)
+            self.assertEqual((yield dbg._deskew_count.status), 2)
+            self.assertEqual((yield dbg._lane1_rx_errors_cycles_count.status), 4)
+            self.assertEqual((yield dbg._lane0_rx_errors_cycles_count.status), 0)
+
+            # Clear.
+            yield dbg._clear.re.eq(1)
+            yield
+            yield dbg._clear.re.eq(0)
+            yield
+            self.assertEqual((yield dbg._deskew_count.status), 0)
+            self.assertEqual((yield dbg._lane1_rx_errors_cycles_count.status), 0)
 
         run_simulation(dut, generator())
 

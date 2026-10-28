@@ -133,8 +133,11 @@ class USB3SerDes(LiteXModule):
         self.comb += self.rx_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
             self.rx_error_monitor.errors))
 
-    def add_timing_constraints(self, platform, sys_clk, xcvr):
-        platform.add_period_constraint(xcvr.cd_tx.clk, 1e9/xcvr.tx_clk_freq)
+    def add_timing_constraints(self, platform, sys_clk, xcvr, with_tx=True):
+        """Transceiver TX/RX clocks constraints (with_tx: False when the TX clock is shared with
+        another transceiver, already constrained)."""
+        if with_tx:
+            platform.add_period_constraint(xcvr.cd_tx.clk, 1e9/xcvr.tx_clk_freq)
         platform.add_period_constraint(xcvr.cd_rx.clk, 1e9/xcvr.rx_clk_freq)
         platform.add_false_path_constraints(sys_clk, xcvr.cd_tx.clk, xcvr.cd_rx.clk)
 
@@ -205,9 +208,13 @@ class A7USB3SerDes(USB3SerDes):
     with the GTPQuadPLL interface (channel, clk, refclk, lock, reset, config) and configured for
     5Gbps (2.5GHz VCO, D=1). The PLL is then not reset by the transceiver (owned by the user) and
     refclk_pads/refclk_freq are unused.
+
+    tx_clk: optional TX clock shared with another transceiver of the quad on the same PLL (ex: the
+    TX clock of Lane 0 for Lane 1 in Gen 1x2: the lanes TX run in lockstep), else the TX clock is
+    generated from the transceiver TXOUTCLK.
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
-        rxcdr_cfg=None, pll=None):
+        rxcdr_cfg=None, pll=None, tx_clk=None):
         USB3SerDes.__init__(self)
 
         # # #
@@ -224,7 +231,8 @@ class A7USB3SerDes(USB3SerDes):
                 refclk_from_fabric = refclk_from_fabric)
         self.pll = pll
         gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq,
-            qpll_reset = not external_pll)
+            qpll_reset = not external_pll,
+            tx_clk     = tx_clk)
 
         # Override GTP RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):
@@ -283,7 +291,7 @@ class A7USB3SerDes(USB3SerDes):
         ]
 
         # Timing constraints -----------------------------------------------------------------------
-        self.add_timing_constraints(platform, sys_clk, gtp)
+        self.add_timing_constraints(platform, sys_clk, gtp, with_tx=tx_clk is None)
 
 # Xilinx Ultrascale+ USB3 Serializer/Deserializer --------------------------------------------------
 

@@ -4,9 +4,9 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 PHY debug (doc/debugging-guide.md): LTSSM state history and counters (USB3PHYDebug), RX
-errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug), LiteScope probes
-groups (usb3_analyzer_groups).
+"""USB3 PHY debug (doc/debugging-guide.md): LTSSM state history and counters (USB3PHYDebug), Gen 1x2
+lanes status/counters (USB3LanesDebug), RX errors (USB3RXErrorsDebug), SerDes controls and
+measurements (USB3SerDesDebug), LiteScope probes groups (usb3_analyzer_groups).
 """
 
 from functools import reduce
@@ -50,7 +50,7 @@ class USB3PHYDebug(LiteXModule):
     """
     def __init__(self, phy, serdes, sys_clk_freq):
         ltssm = phy.ltssm
-        pipe  = phy.pipe
+        pipe  = phy.pipes[0] # Configuration Lane (Lane 0) with 2 lanes.
 
         self._phy_reset       = CSRStorage(description="PHY (PIPE + LTSSM) reset (level).")
         self._serdes_rx_reset = CSRStorage(description="SerDes RX re-initialization (level).")
@@ -170,6 +170,61 @@ class USB3PHYDebug(LiteXModule):
             self.sync += signal_d.eq(signal)
             event = (signal & ~signal_d) if edge else signal
             self.sync += If(clear,
+                csr.status.eq(0)
+            ).Elif(event & (csr.status != (2**32 - 1)),
+                csr.status.eq(csr.status + 1)
+            )
+
+# USB3 Lanes Debug ---------------------------------------------------------------------------------
+
+class USB3LanesDebug(LiteXModule):
+    """USB3 Gen 1x2 Lanes Debug (CSRs, hardware bring-up of USB3PHY(lanes=2)), with USB3PHYDebug on
+    the Configuration Lane (Lane 0):
+    - Status: negotiated x2/gen2, lanes deskewed, per lane SerDes ready/RX idle/RX polarity.
+    - Per lane event counters (TS1/TS1 inverted/TS2 detections, RX errors cycles) and deskew
+      acquisitions.
+    """
+    def __init__(self, phy, serdes):
+        assert len(serdes) == 2
+        self._clear  = CSR() # Clear counters (write).
+        self._status = CSRStatus(fields=[
+            CSRField("x2",             size=1, offset=0, description="Gen 1x2 negotiated (SuperSpeedPlus Polling)."),
+            CSRField("gen2",           size=1, offset=1, description="Gen 2 negotiated."),
+            CSRField("deskew_aligned", size=1, offset=2, description="Lanes deskewed."),
+            CSRField("ready",          size=2, offset=4, description="SerDes ready (per lane)."),
+            CSRField("rx_idle",        size=2, offset=6, description="SerDes RX idle (per lane)."),
+            CSRField("rx_polarity",    size=2, offset=8, description="SerDes RX polarity (per lane)."),
+        ])
+
+        # # #
+
+        self.comb += [
+            self._status.fields.x2.eq(phy.x2),
+            self._status.fields.gen2.eq(phy.gen2),
+            self._status.fields.deskew_aligned.eq(phy.deskew_aligned),
+            self._status.fields.ready.eq(Cat(*[s.ready for s in serdes])),
+            self._status.fields.rx_idle.eq(Cat(*[s.rx_idle for s in serdes])),
+            self._status.fields.rx_polarity.eq(Cat(*[s.rx_polarity for s in serdes])),
+        ]
+
+        # Event Counters.
+        events = [("deskew", phy.deskew_aligned, 1)]
+        for lane, (pipe, s) in enumerate(zip(phy.pipes, serdes)):
+            events += [
+                # Name,                          Signal,             Edge (1) or Level (0).
+                (f"lane{lane}_ts1",              pipe.ts_rx_ts1,     1),
+                (f"lane{lane}_ts1_inv",          pipe.ts_rx_ts1_inv, 1),
+                (f"lane{lane}_ts2",              pipe.ts_rx_ts2,     1),
+                (f"lane{lane}_rx_errors_cycles", s.rx_errors,        0),
+            ]
+        for name, signal, edge in events:
+            csr = CSRStatus(32, name=f"{name}_count",
+                description=f"{name} {'events' if edge else 'cycles'} count (saturating).")
+            setattr(self, f"_{name}_count", csr)
+            signal_d = Signal()
+            self.sync += signal_d.eq(signal)
+            event = (signal & ~signal_d) if edge else signal
+            self.sync += If(self._clear.re,
                 csr.status.eq(0)
             ).Elif(event & (csr.status != (2**32 - 1)),
                 csr.status.eq(csr.status + 1)
@@ -398,7 +453,7 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
     - u3       : LTSSM + U3 exit: LFPS TX/RX, TS1 detection, SerDes RX stream, RX vs TX clocks phase
                  (requires serdes_debug).
     """
-    pipe  = phy.pipe
+    pipe  = phy.pipes[0] # Configuration Lane (Lane 0) with 2 lanes.
     ltssm = phy.ltssm
     link_signals = [
         phy.ltssm_state,
