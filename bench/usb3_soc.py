@@ -70,7 +70,7 @@ class RXRawSnapshot(LiteXModule):
     across RX re-initializations) with their flags, stopped `depth//2` words after a trigger
     (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs (oldest word
     at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
-    def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr"):
+    def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr", write_enable=1):
         from migen.genlib.cdc import MultiReg, PulseSynchronizer
         from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
         self._arm     = CSR()
@@ -108,7 +108,7 @@ class RXRawSnapshot(LiteXModule):
         sync += [
             If(arm_ps.o,
                 armed.eq(1), done.eq(0), post.eq(0)
-            ).Elif(~done,
+            ).Elif(~done & write_enable,
                 adr.eq(adr + 1),
                 If(armed & (flags >> sel)[0],
                     armed.eq(0), post.eq(depth//2)
@@ -121,7 +121,7 @@ class RXRawSnapshot(LiteXModule):
         self.comb += [
             wr.adr.eq(adr),
             wr.dat_w.eq(Cat(rx_raw, flags)),
-            wr.we.eq(~done),
+            wr.we.eq(~done & write_enable),
             rd.adr.eq(start + self._index.storage),
             self._data0.status.eq(rd.dat_r[:32]),
             self._data1.status.eq(rd.dat_r[32:64]),
@@ -200,11 +200,19 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     # RX Data Blocks snapshot (monitor, descrambled, rx_nr): trigger 0: Link Layer Recovery request.
     link = getattr(getattr(soc, "usb3_core", None), "link", None)
     if link is not None:
-        recovery_rx = Signal()
-        soc.specials += MultiReg(link.dbg_recovery, recovery_rx, "rx_nr")
+        # Trigger: LCRD_x received out of order (sys pulse stretched for the rx_nr domain).
+        lcrd_err    = Signal()
+        lcrd_err_rx = Signal()
+        lcrd_count  = Signal(3)
+        soc.sync += If(link.dbg_recovery_cause[2], lcrd_count.eq(7)).Elif(lcrd_count != 0,
+            lcrd_count.eq(lcrd_count - 1))
+        soc.comb += lcrd_err.eq(lcrd_count != 0)
+        soc.specials += MultiReg(lcrd_err, lcrd_err_rx, "rx_nr")
         mon = gen2_rx.rx.source
+        # Valid Data Blocks only (~6.8us of Data Blocks).
         soc.usb3_gen2_blocks_snapshot = RXRawSnapshot(Cat(mon.data, mon.valid),
-            flags=Cat(recovery_rx), depth=512, clock_domain="rx_nr")
+            flags=Cat(lcrd_err_rx), depth=512, clock_domain="rx_nr",
+            write_enable=mon.valid | lcrd_err_rx)
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
