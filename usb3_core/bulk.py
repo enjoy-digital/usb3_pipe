@@ -214,12 +214,18 @@ class USB3BulkIN(USB3Endpoint):
                     fc_data.eq(0),
                     fc_req.eq(0),
                     fc_short.eq(0),
+                    erdy_pending.eq(0),
                 ).Elif(~fc_eob & ~ack_stale,
                     fc_short.eq(0),
                     win_seq.eq(h.tp_seq),
                     win_nump.eq(h.nump),
                     fc_data.eq(0),
                     fc_req.eq(0),
+                    # A pending ERDY (window closed, data available) is cancelled by a host request
+                    # received before it is sent (seen at Gen 2 in full duplex: NumP=0 then a new
+                    # request right after), else the ERDY was sent and the request (already received)
+                    # waited for (transfers stalled until the host retry).
+                    erdy_pending.eq(0),
                     If(h.nump == 0,
                         # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when
                         # data is available (the host may also request again on its own).
