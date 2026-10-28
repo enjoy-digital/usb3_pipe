@@ -242,8 +242,21 @@ XCKU3P, 64KB transfers: Bulk IN 426MB/s, Bulk OUT 466MB/s, full duplex 325MB/s I
 (~330MB/s, host side). Bulk IN bursts are limited by the 32-bit Link Layer TX (one 1024-byte DP every
 ~2.2us, ~470MB/s).
 
-Next: Link Layer datapath bandwidth (32-bit at 125MHz: ~500MB/s per direction): 64-bit Link Layer
-words at Gen 2 (DPPs 8 bytes per cycle).
+**M4b: 64-bit Link Layer words at Gen 2** (done): `USB3PHY(link_words=2)` Link Layer interface in
+words pairs (Gen 2 framing 8 bytes per cycle in the DPPs, adapters to the Gen 1 PIPE words), Link Layer
+DPP words of 64-bit (RX words window, TX DPPSplitter, CRC-32 on 8 bytes), 64-bit Bulk endpoints/packet
+slots (`data_width=64`), 32-bit endpoints (Control Endpoint) through Protocol Layer adapters. Bench:
+`--link-words 2`. XCKU3P, 64KB transfers, 0 errors:
+
+| Link Layer        | Bulk IN  | Bulk OUT | Full duplex (IN + OUT)     |
+|-------------------|----------|----------|----------------------------|
+| 32-bit            | 426MB/s  | 466MB/s  | 325 + 430MB/s              |
+| 64-bit            | 744MB/s  | 881MB/s  | 619 + 736MB/s (120s soak)  |
+| 64-bit, MaxBurst 16 | 785MB/s | 873MB/s | 644 + 757MB/s             |
+
+Gen 1 operation of the same design (Gen 2 capability cleared, `usb3_gen2_capable` bench CSR): 441MB/s
+IN/OUT. Limits: Bulk OUT ~87% of the 64-bit words at 125MHz (1GB/s), Bulk IN waiting for the host
+requests (ACK TPs behind the RX DPPs), the host Bulk IN rate with large transfers (~330MB/s at 1MB).
 
 ## Suggested order
 

@@ -147,18 +147,26 @@ class Gen2FramingLoopback(Module):
         self.sync += If(rx_fifo.sink.valid & ~rx_fifo.sink.ready, self.rx_overflow.eq(1))
 
 class TestGen2Framing(unittest.TestCase):
-    def loopback_test(self, seed, n_units=24, slots=False, short=False):
+    def loopback_test(self, seed, n_units=24, slots=False, short=False, pairs=False):
         rng   = random.Random(seed)
         units = random_units(rng, n_units, short=short)
         words = [w for u in units for w in u]
         out   = []
         lcs   = []
         dut   = Gen2FramingLoopback(slots=slots)
+        # Words pairs: 1 or 2 words per entry (pairs=True), else 1.
+        entries = []
+        i = 0
+        while i < len(words):
+            n = 2 if (pairs and (i + 1) < len(words) and rng.random() < 0.7) else 1
+            entries.append(words[i:i+n])
+            i += n
         def generator(dut):
-            for data, ctrl in words:
+            for entry in entries:
                 yield dut.framer.sink.valid.eq(1)
-                yield dut.framer.sink.data.eq(data)
-                yield dut.framer.sink.ctrl.eq(ctrl)
+                yield dut.framer.sink.data.eq(sum(d << (32*j) for j, (d, c) in enumerate(entry)))
+                yield dut.framer.sink.ctrl.eq(sum(c << (4*j) for j, (d, c) in enumerate(entry)))
+                yield dut.framer.sink.words.eq(len(entry))
                 yield
                 while not (yield dut.framer.sink.ready):
                     yield
@@ -202,6 +210,11 @@ class TestGen2Framing(unittest.TestCase):
         # Short units: many unit boundaries.
         for seed in range(2):
             self.loopback_test(seed, n_units=200, slots=True, short=True)
+
+    def test_loopback_pairs(self):
+        # Words pairs input (64-bit Link Layer words): DPP data 8 bytes per cycle.
+        for seed in range(3):
+            self.loopback_test(seed, pairs=True)
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,7 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common import *
 from usb3_core.crc    import CRC5, CRC16, CRC16Words, CRC32
+from usb3_core.dpp    import DPPSplitter
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -56,13 +57,19 @@ PORT_CFG_RESP_DW0 = TYPE_LMP | (LMP_SUB_PORT_CFG_RESP << 5) | (1 << 9)
 
 class USB3LinkLayer(LiteXModule):
     def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}):
+        # PHY Link Layer words (32-bit) or words pairs (64-bit, USB3PHY link_words=2): DPP words of
+        # 32 or 64 bits (8 bytes per cycle in the DPPs).
+        lw = 2 if len(phy.sink.data) == 64 else 1
+        dw = 32*lw
+        self.data_width = dw
+
         # Protocol Layer interface.
         self.rx_hp       = stream.Endpoint(header_layout())                                # o
-        self.rx_dpp      = stream.Endpoint(dpp_layout() + [("ept", 4), ("setup", 1)])      # o
+        self.rx_dpp      = stream.Endpoint(dpp_layout(dw) + [("ept", 4), ("setup", 1)])    # o
         self.rx_dpp_done = Signal() # o: DPP received (pulse), one per accepted DPH, in order.
         self.rx_dpp_ok   = Signal() # o: DPP received without error (with rx_dpp_done).
         self.tx_hp       = stream.Endpoint(tx_header_layout())                             # i
-        self.tx_dpp      = stream.Endpoint(dpp_layout())                                   # i
+        self.tx_dpp      = stream.Endpoint(dpp_layout(dw))                                 # i
 
         # Control/Status.
         self.lpm_enable   = Signal() # i: Accept the partner's LGO_U1/LGO_U2 when idle (else LXU).
@@ -117,12 +124,26 @@ class USB3LinkLayer(LiteXModule):
         rx_valid = Signal()
         rx_data  = Signal(32, reset_less=True)
         rx_ctrl  = Signal(4, reset_less=True)
-        self.comb += phy.source.ready.eq(1)
-        self.sync += [
-            rx_valid.eq(phy.source.valid & u0),
-            rx_data.eq(swap_data(phy.source.data)),
-            rx_ctrl.eq(swap_ctrl(phy.source.ctrl)),
-        ]
+        rx_data1 = Signal(32) # Next word (words pairs: DPP data 8 bytes per cycle).
+        rx_two   = Signal()   # Words pairs: current and next words consumed (DPP data).
+        if lw == 1:
+            self.comb += phy.source.ready.eq(1)
+            self.sync += [
+                rx_valid.eq(phy.source.valid & u0),
+                rx_data.eq(swap_data(phy.source.data)),
+                rx_ctrl.eq(swap_ctrl(phy.source.ctrl)),
+            ]
+        else:
+            # Words window (registered): one word per cycle, two in the DPPs, words dropped out of U0.
+            self.rx_window = rx_window = WordsWindow()
+            self.comb += [
+                phy.source.connect(rx_window.sink),
+                rx_valid.eq((rx_window.n != 0) & u0),
+                rx_data.eq(swap_data(rx_window.w0)),
+                rx_ctrl.eq(swap_ctrl(rx_window.c0)),
+                rx_data1.eq(swap_data(rx_window.w1)),
+                rx_window.consume.eq(Mux(u0, Mux(rx_two, 2, rx_valid), rx_window.n)),
+            ]
         rx_shp = Signal()
         rx_slc = Signal()
         rx_sdp = Signal()
@@ -227,7 +248,19 @@ class USB3LinkLayer(LiteXModule):
         dpp_pb    = Signal(3)
         dpp_crc   = Signal(32)
         dpp_end   = Signal() # DPP CRC word received (pulse).
-        self.crc32_rx = crc32_rx = CRC32()
+        self.crc32_rx = crc32_rx = CRC32(data_width=dw)
+        # Words pairs: DPP words of 8 bytes (two words: dpp_two, or a held word and the next one),
+        # the last one 1-8 bytes; CRC-32 on the words as consumed.
+        dpp_two    = Signal() # Two DPP data words consumed (8 bytes, not the last ones).
+        dpp_hold   = Signal() # DPP data word held (no DPP word output).
+        dpp_held   = Signal(32, reset_less=True)
+        dpp_held_v = Signal()
+        rx_fsm_dpp_data = Signal()
+        if lw == 2:
+            self.comb += [
+                dpp_two.eq(rx_fsm_dpp_data & ~dpp_held_v & (rx_window.n == 2) & (dpp_rem >= 8)),
+                dpp_hold.eq(~dpp_two & ~dpp_held_v & (dpp_rem > 4)),
+            ]
         self.comb += [
             dpp_pb.eq(Mux(dpp_rem >= 4, 4, dpp_rem)),
             Case(dpp_off, {
@@ -236,10 +269,11 @@ class USB3LinkLayer(LiteXModule):
                 2: dpp_crc.eq(Cat(dpp_prev[16:32], rx_data[0:16])),
                 3: dpp_crc.eq(Cat(dpp_prev[24:32], rx_data[0:24])),
             }),
-            crc32_rx.data.eq(rx_data),
-            crc32_rx.bytes.eq(dpp_pb),
-            self.rx_dpp.data.eq(rx_data),
-            self.rx_dpp.bytes.eq(dpp_pb),
+            crc32_rx.data.eq(Cat(rx_data, Mux(dpp_two, rx_data1, 0))[:dw]),
+            crc32_rx.bytes.eq(Mux(dpp_two, 8, dpp_pb)),
+            self.rx_dpp.data.eq(Mux(dpp_held_v,
+                Cat(dpp_held, rx_data), Cat(rx_data, Mux(dpp_two, rx_data1, 0)))[:dw]),
+            self.rx_dpp.bytes.eq(Mux(dpp_two, 8, Mux(dpp_held_v, 4 + dpp_pb, dpp_pb))),
             # DPH with DL bit (no DPP): routed with the DPH fields (rx_dpp_done on hp_check).
             If(hp_check,
                 self.rx_dpp.ept.eq(hp_w[1][8:12]),
@@ -251,6 +285,7 @@ class USB3LinkLayer(LiteXModule):
         ]
 
         self.rx_fsm = rx_fsm = FSM(reset_state="IDLE")
+        self.comb += rx_fsm_dpp_data.eq(rx_fsm.ongoing("DPP") & u0)
         rx_fsm.act("IDLE",
             If(rx_valid,
                 If(rx_shp,
@@ -266,6 +301,7 @@ class USB3LinkLayer(LiteXModule):
                     NextValue(dpp_rem,   length_now),
                     NextValue(dpp_off,   length_now[0:2]),
                     NextValue(dpp_first, 1),
+                    NextValue(dpp_held_v, 0),
                     NextState("DPP")
                 )
             )
@@ -292,13 +328,16 @@ class USB3LinkLayer(LiteXModule):
                 NextState("IDLE")
             ).Elif(rx_valid,
                 If(dpp_rem != 0,
-                    self.rx_dpp.valid.eq(1),
+                    self.rx_dpp.valid.eq(~dpp_hold),
                     self.rx_dpp.first.eq(dpp_first),
-                    self.rx_dpp.last.eq(dpp_rem <= 4),
+                    self.rx_dpp.last.eq(Mux(dpp_two, dpp_rem == 8, dpp_rem <= 4)),
                     crc32_rx.ce.eq(1),
-                    NextValue(dpp_first, 0),
-                    NextValue(dpp_rem,  dpp_rem - dpp_pb),
-                    NextValue(dpp_prev, rx_data),
+                    rx_two.eq(dpp_two),
+                    If(~dpp_hold, NextValue(dpp_first, 0)),
+                    NextValue(dpp_held,   rx_data),
+                    NextValue(dpp_held_v, dpp_hold),
+                    NextValue(dpp_rem,  dpp_rem - Mux(dpp_two, 8, dpp_pb)),
+                    NextValue(dpp_prev, Mux(dpp_two, rx_data1, rx_data)),
                 ).Else(
                     dpp_end.eq(1),
                     NextState("IDLE")
@@ -519,13 +558,16 @@ class USB3LinkLayer(LiteXModule):
 
         # TX Framer --------------------------------------------------------------------------------
         tx_word  = Signal(32)
+        tx_word2 = Signal(32) # Words pairs: second word (DPP data, tx_two).
+        tx_two   = Signal()
         tx_ctrl  = Signal(4)
         tx_valid = Signal()
-        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout()) # Registered (timings).
+        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout() if lw == 1 else link_pairs_layout()) # Registered (timings).
         self.comb += [
             tx_pipe.sink.valid.eq(tx_valid),
-            tx_pipe.sink.data.eq(swap_data(tx_word)),
+            tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2))),
             tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
+            tx_pipe.sink.words.eq(Mux(tx_two, 2, 1)) if lw == 2 else [],
             tx_pipe.source.connect(phy.sink),
         ]
         tx_ready = tx_pipe.sink.ready
@@ -594,10 +636,18 @@ class USB3LinkLayer(LiteXModule):
         dpp_tail2 = Signal(32, reset_less=True)
         dpp_ctrl1 = Signal(4, reset_less=True)
         dpp_ctrl2 = Signal(4, reset_less=True)
-        self.crc32_tx = crc32_tx = CRC32()
+        # DPP words: 32-bit, or 64-bit split in 8-byte words and 32-bit words for the last bytes.
+        if lw == 1:
+            tx_dpp = self.tx_dpp
+        else:
+            self.tx_dpp_splitter = tx_dpp_splitter = DPPSplitter()
+            self.comb += self.tx_dpp.connect(tx_dpp_splitter.sink)
+            tx_dpp = tx_dpp_splitter.source
+            self.comb += tx_word2.eq(tx_dpp.data[32:64])
+        self.crc32_tx = crc32_tx = CRC32(data_width=dw)
         self.comb += [
-            crc32_tx.data.eq(self.tx_dpp.data),
-            crc32_tx.bytes.eq(self.tx_dpp.bytes),
+            crc32_tx.data.eq(tx_dpp.data),
+            crc32_tx.bytes.eq(tx_dpp.bytes),
         ]
         crc_next = crc32_tx.next_value
         end_bytes = [(FRAMING_END >> 8*i) & 0xff for i in range(4)]
@@ -620,12 +670,12 @@ class USB3LinkLayer(LiteXModule):
                 NextValue(dpp_ctrl2, (1 << b) - 1),
             ]
         dpp_word = Signal(32)
-        self.comb += If(self.tx_dpp.last,
-            Case(self.tx_dpp.bytes, {b: dpp_word.eq(
-                Cat(self.tx_dpp.data[0:8*b], crc_next[0:32-8*b]) if b not in [0, 4] else
-                (crc_next if b == 0 else self.tx_dpp.data)) for b in range(5)})
+        self.comb += If(tx_dpp.last,
+            Case(tx_dpp.bytes, {b: dpp_word.eq(
+                Cat(tx_dpp.data[0:8*b], crc_next[0:32-8*b]) if b not in [0, 4] else
+                (crc_next if b == 0 else tx_dpp.data)) for b in range(5)})
         ).Else(
-            dpp_word.eq(self.tx_dpp.data)
+            dpp_word.eq(tx_dpp.data)
         )
 
         tx_sent_lc  = Signal() # Link Command/Header Packet transmission started (pulse).
@@ -691,14 +741,15 @@ class USB3LinkLayer(LiteXModule):
             If(tx_ready, NextState("DPP-DATA"))
         )
         tx_fsm.act("DPP-DATA",
-            tx_valid.eq(self.tx_dpp.valid),
+            tx_valid.eq(tx_dpp.valid),
             tx_word.eq(dpp_word),
-            self.tx_dpp.ready.eq(tx_ready),
-            If(self.tx_dpp.valid & tx_ready,
+            tx_two.eq(tx_dpp.two) if lw == 2 else [],
+            tx_dpp.ready.eq(tx_ready),
+            If(tx_dpp.valid & tx_ready,
                 crc32_tx.ce.eq(1),
-                If(self.tx_dpp.last,
-                    NextValue(dpp_b, self.tx_dpp.bytes),
-                    Case(self.tx_dpp.bytes, tail_cases),
+                If(tx_dpp.last,
+                    NextValue(dpp_b, tx_dpp.bytes),
+                    Case(tx_dpp.bytes, tail_cases),
                     NextState("DPP-TAIL1")
                 )
             )
@@ -781,7 +832,7 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_u0        = u0
         self.dbg_lgood_pending = u0 & (lgood_seq != rx_seq)
         self.dbg_lcrd_pending  = u0 & ((lcrd_pending != 0) | (lcrd2_pending != 0))
-        self.dbg_dpp_stall     = tx_fsm.ongoing("DPP-DATA") & ~self.tx_dpp.valid
+        self.dbg_dpp_stall     = tx_fsm.ongoing("DPP-DATA") & ~tx_dpp.valid
         self.dbg_tx_full       = u0 & self.tx_hp.valid & tx_hp_full           # Tx Header Buffers full (LGOOD_n wait).
         self.dbg_tx_credit     = u0 & (send_seq != tx_seq) & ~can_send_hp     # Header Packet waiting for a credit.
         self.dbg_tx_idle       = u0 & tx_fsm.ongoing("IDLE")

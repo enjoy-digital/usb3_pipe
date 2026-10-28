@@ -29,6 +29,11 @@ def payload(i, n=1024):
 # Tests --------------------------------------------------------------------------------------------
 
 class TestCoreBulk(unittest.TestCase):
+    link_words = 1 # PHY words (1) or words pairs (2: 64-bit Link Layer/endpoints).
+
+    def dut(self, **kwargs):
+        return DUT(link_words=self.link_words, **kwargs)
+
     def out_burst(self, host, start, n, seq0=0, corrupt=None):
         for i in range(n):
             data = data_packet_payload(payload(start + i))
@@ -44,7 +49,7 @@ class TestCoreBulk(unittest.TestCase):
     @pytest.mark.slow
     def test_bulk_out_burst_in_burst(self):
         # 4 OUT packets back-to-back (burst), then 4 IN packets requested with a single ACK TP.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -75,7 +80,7 @@ class TestCoreBulk(unittest.TestCase):
     @pytest.mark.slow
     def test_bulk_out_crc_error_retry(self):
         # DPP with a CRC-32 error: ACK TP with retry for this packet, then accepted when resent.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -97,7 +102,7 @@ class TestCoreBulk(unittest.TestCase):
     def test_header_crc_error_lbad_lrty(self):
         # Header Packet with a CRC-16 error: LBAD, ignored until LRTY + resent Header Packet (same
         # Header Sequence Number).
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -119,7 +124,7 @@ class TestCoreBulk(unittest.TestCase):
     @pytest.mark.slow
     def test_bulk_in_nrdy_erdy(self):
         # IN request without data: NRDY, then ERDY when data is available.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -139,7 +144,7 @@ class TestCoreBulk(unittest.TestCase):
     def test_bulk_in_eob(self):
         # Fewer packets available than requested: EOB on the last one, flow control (the ACK TPs of
         # the packets sent before the EOB do not reopen the window), ERDY and new request.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -169,7 +174,7 @@ class TestCoreBulk(unittest.TestCase):
     @pytest.mark.slow
     def test_bulk_pointers_wrap(self):
         # max_burst=2 (pointers modulo 4): 10 packets looped back, bursts of 2, pointers wrapping.
-        dut  = DUT(max_burst=2)
+        dut  = self.dut(max_burst=2)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -191,7 +196,7 @@ class TestCoreBulk(unittest.TestCase):
 
     def test_set_address(self):
         # SET_ADDRESS: Status stage ACK TP from the default address (0), then from the new address.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -211,7 +216,7 @@ class TestCoreBulk(unittest.TestCase):
     def test_bulk_in_short_packet_nump0(self):
         # Short packet acknowledged with NumP=0 (host closing the window, as xHCI after a short
         # packet), then new data: ERDY, new host request, data sent.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -236,7 +241,7 @@ class TestCoreBulk(unittest.TestCase):
         # Two short packets available: only the first one is sent (a short packet ends the transfer),
         # the second one after the host ACK TP (NumP=0, ERDY, new request), with the next Sequence
         # Number (found on hardware with a CDC-ACM console: the host dropped the second packet).
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
@@ -265,7 +270,7 @@ class TestCoreBulk(unittest.TestCase):
     @pytest.mark.slow
     def test_tx_backpressure(self):
         # PHY TX ready deasserted randomly (SKP insertion): packets integrity.
-        dut  = DUT(max_burst=8)
+        dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)

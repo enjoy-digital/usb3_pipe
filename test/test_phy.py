@@ -102,6 +102,30 @@ class TestPHY(unittest.TestCase):
                 self.assertRegex(out, side + r"\s*entering " + state.replace(".", r"\.") + " state", tail)
         self.assertIn("HOST script done", out, tail)
 
+    def run_link_words2(self, args):
+        # Device core on PHY words pairs (64-bit Link Layer/Bulk endpoints, sim.py --link-words 2):
+        # enumeration and Bulk loopback with the host script, no Recovery.
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--link-words", "2", *args,
+            "--output-dir", str(get_output_dir(self))]
+        try:
+            p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            self.fail("Simulation timeout.")
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        self.assertIn("HOST script done", out, tail)
+        self.assertNotRegex(out, r"entering Recovery\.Active state", tail)
+
+    def test_phy_link_words2(self):
+        # Gen 1: words pairs <-> Gen 1 PIPE words adapters.
+        self.run_link_words2([])
+
+    def test_phy_gen2_link_words2(self):
+        # Gen 2: words pairs to/from the Gen 2 framing (DPP data 8 bytes per cycle).
+        self.run_link_words2(["--gen2"])
+
 # Gen 1x2 (sim.py --lanes 2) -----------------------------------------------------------------------
 
 CONFIGS_SLOW = {

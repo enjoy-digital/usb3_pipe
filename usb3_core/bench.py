@@ -8,7 +8,13 @@
 
 - Source (Bulk IN) : 32-bit incrementing counter words at full rate (max size packets).
 - Sink   (Bulk OUT): checks the 32-bit incrementing counter words (resynchronized on errors).
+
+data_width=64: two counter words per 64-bit word (same byte stream), words counters in 32-bit
+words.
 """
+
+from functools import reduce
+from operator import or_
 
 from migen import *
 
@@ -22,9 +28,11 @@ from usb3_core.common import endpoint_layout
 # USB3 Bench ---------------------------------------------------------------------------------------
 
 class USB3Bench(LiteXModule):
-    def __init__(self, with_csr=True):
-        self.source = source = stream.Endpoint(endpoint_layout()) # To Bulk IN.
-        self.sink   = sink   = stream.Endpoint(endpoint_layout()) # From Bulk OUT.
+    def __init__(self, with_csr=True, data_width=32):
+        assert data_width in [32, 64]
+        n = data_width//32 # Counter words per word.
+        self.source = source = stream.Endpoint(endpoint_layout(data_width)) # To Bulk IN.
+        self.sink   = sink   = stream.Endpoint(endpoint_layout(data_width)) # From Bulk OUT.
 
         self.source_enable = Signal(reset=1) # i
         self.clear         = Signal()        # i: Counters clear (next received word not checked).
@@ -38,12 +46,12 @@ class USB3Bench(LiteXModule):
         count = Signal(32)
         self.comb += [
             source.valid.eq(self.source_enable),
-            source.data.eq(count),
-            source.be.eq(0b1111),
+            source.data.eq(Cat(*[count + i for i in range(n)])),
+            source.be.eq(2**(4*n) - 1),
         ]
         self.sync += If(source.valid & source.ready,
-            count.eq(count + 1),
-            self.source_words.eq(self.source_words + 1),
+            count.eq(count + n),
+            self.source_words.eq(self.source_words + n),
         )
 
         # Sink.
@@ -51,9 +59,10 @@ class USB3Bench(LiteXModule):
         self.comb += sink.ready.eq(1)
         self.sync += [
             If(sink.valid,
-                expected.eq(sink.data + 1),
-                self.sink_words.eq(self.sink_words + 1),
-                If((sink.data != expected) & (self.sink_words != 0),
+                expected.eq(sink.data[32*(n-1):32*n] + 1),
+                self.sink_words.eq(self.sink_words + n),
+                If((self.sink_words != 0) & reduce(or_, [sink.data[32*i:32*(i+1)] != (expected + i)
+                    for i in range(n)]),
                     self.sink_errors.eq(self.sink_errors + 1)
                 )
             ),

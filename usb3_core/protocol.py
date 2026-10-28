@@ -20,6 +20,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common import *
+from usb3_core.dpp    import DPPPacker, DPPRXAdapter
 
 # Layouts ------------------------------------------------------------------------------------------
 
@@ -43,6 +44,13 @@ class USB3ProtocolLayer(LiteXModule):
 
         # # #
 
+        # DPP words width: Link Layer data_width (32/64-bit), 32-bit endpoints on a 64-bit Link
+        # Layer through DPPPacker/DPPRXAdapter (Control Endpoint, ...: always landed DPPs).
+        dw = getattr(link, "data_width", 32)
+        adapted = {ep: ep.data_width != dw for ep in endpoints}
+        for ep in endpoints:
+            assert (ep.data_width == dw) or (ep.data_width == 32 and dw == 64)
+
         # Received Header Packets (registered: timings).
         self.rx_hp = rx_hp = stream.PipeValid(header_layout())
         self.comb += link.rx_hp.connect(rx_hp.sink)
@@ -51,7 +59,8 @@ class USB3ProtocolLayer(LiteXModule):
 
         # DPP status (one per accepted DPH, in order) ----------------------------------------------
         landed = Signal()
-        self.comb += landed.eq(Reduce("OR", [ep.landed for ep in endpoints]))
+        self.comb += landed.eq(Reduce("OR", [
+            (link.rx_dpp.ept == ep.ept) if adapted[ep] else ep.landed for ep in endpoints]))
         self.status = status = stream.SyncFIFO(dpp_status_layout(), 8)
         self.comb += [
             status.sink.valid.eq(link.rx_dpp_done),
@@ -64,8 +73,27 @@ class USB3ProtocolLayer(LiteXModule):
             if ep.direction == 1 and ep.ept != 0:
                 continue
             sel = Signal()
+            self.comb += sel.eq(link.rx_dpp.ept == ep.ept)
+            if adapted[ep]:
+                rx_adapter = DPPRXAdapter()
+                self.submodules += rx_adapter
+                self.comb += [
+                    rx_adapter.sink.valid.eq(link.rx_dpp.valid & sel),
+                    rx_adapter.sink.first.eq(link.rx_dpp.first),
+                    rx_adapter.sink.last.eq(link.rx_dpp.last),
+                    rx_adapter.sink.data.eq(link.rx_dpp.data),
+                    rx_adapter.sink.bytes.eq(link.rx_dpp.bytes),
+                    rx_adapter.setup.eq(link.rx_dpp.setup),
+                    rx_adapter.done.eq(link.rx_dpp_done & sel),
+                    rx_adapter.ok.eq(link.rx_dpp_ok),
+                    rx_adapter.source.connect(ep.rx_dpp),
+                    ep.rx_dpp_done.eq(rx_adapter.source_done),
+                    ep.rx_dpp_ok.eq(rx_adapter.source_ok),
+                ]
+                if ep.ept == 0:
+                    self.comb += ep.rx_dpp_setup.eq(rx_adapter.source_setup)
+                continue
             self.comb += [
-                sel.eq(link.rx_dpp.ept == ep.ept),
                 ep.rx_dpp.valid.eq(link.rx_dpp.valid & sel),
                 ep.rx_dpp.first.eq(link.rx_dpp.first),
                 ep.rx_dpp.last.eq(link.rx_dpp.last),
@@ -116,7 +144,7 @@ class USB3ProtocolLayer(LiteXModule):
 
         # TX Header Packets/DPPs to the Link Layer (registered: timings).
         self.tx_hp  = tx_hp  = stream.Buffer(tx_header_layout(), pipe_valid=True, pipe_ready=True)
-        self.tx_dpp = tx_dpp = stream.PipeValid(dpp_layout())
+        self.tx_dpp = tx_dpp = stream.PipeValid(dpp_layout(dw))
         self.comb += [
             tx_hp.source.connect(link.tx_hp),
             tx_dpp.source.connect(link.tx_dpp),
@@ -151,8 +179,14 @@ class USB3ProtocolLayer(LiteXModule):
         # TX DPP (in the DPHs order).
         dpp_cases = {}
         for i, ep in enumerate(endpoints):
+            ep_tx_dpp = ep.tx_dpp
+            if adapted[ep]:
+                packer = DPPPacker()
+                self.submodules += packer
+                self.comb += ep.tx_dpp.connect(packer.sink)
+                ep_tx_dpp = packer.source
             dpp_cases[i] = [
-                ep.tx_dpp.connect(tx_dpp.sink),
+                ep_tx_dpp.connect(tx_dpp.sink),
             ]
         self.comb += [
             If(jobs.source.valid,

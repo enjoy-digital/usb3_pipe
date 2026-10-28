@@ -126,15 +126,17 @@ TS2 = OrderedSet("TS2",
 # Endianness Swap ----------------------------------------------------------------------------------
 
 class EndiannessSwap(LiteXModule):
-    """Swap the data bytes/ctrl bits of stream"""
-    def __init__(self, sink, source):
+    """Swap the data bytes/ctrl bits of stream (per word of word_bytes bytes, whole data when None)."""
+    def __init__(self, sink, source, word_bytes=None):
         assert len(sink.data) == len(source.data)
         assert len(sink.ctrl) == len(source.ctrl)
         self.comb += sink.connect(source, omit={"data", "ctrl"})
-        n = len(sink.ctrl)
-        for i in range(n):
-            self.comb += source.data[8*i:8*(i+1)].eq(sink.data[8*(n-1-i):8*(n-1-i+1)])
-            self.comb += source.ctrl[i].eq(sink.ctrl[n-1-i])
+        n = len(sink.ctrl) if word_bytes is None else word_bytes
+        for w in range(len(sink.ctrl)//n):
+            for i in range(n):
+                o, j = w*n + i, w*n + n - 1 - i
+                self.comb += source.data[8*o:8*(o+1)].eq(sink.data[8*j:8*(j+1)])
+                self.comb += source.ctrl[o].eq(sink.ctrl[j])
 
 # LTSSM <-> PIPE Interface -------------------------------------------------------------------------
 

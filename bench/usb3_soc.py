@@ -301,6 +301,10 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             ]
             maxes.append(mx)
         soc.comb += soc.usb3_gen2_link_max.status.eq(Cat(*maxes))
+    # Gen 2 capability advertised in SuperSpeedPlus Polling (0: Gen 1 operation, test of the Gen 1
+    # datapath/fallback; applied at the next link training, ex: usb3_debug phy_reset).
+    soc.usb3_gen2_capable = CSRStorage(1, reset=1, description="Gen 2 capability advertised.")
+    soc.comb += phy.ssp.gen2_capable.eq(soc.usb3_gen2_capable.storage)
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
@@ -379,7 +383,8 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     with_core         = True,
     example           = "loopback",
     with_lpm          = False,
-    max_burst         = 8):
+    max_burst         = 8,
+    link_words        = 1):
     """Add a USB3 device on serdes to soc: USB3PHY + debug, USB3 Device Core example design (with_core)
     and LEDs (SerDes ready, U0, Recovery).
 
@@ -397,7 +402,8 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         serdes       = serdes,
         sys_clk_freq = sys_clk_freq,
         role         = "device",
-        gen2_capable = gen2_capable)
+        gen2_capable = gen2_capable,
+        link_words   = link_words)
 
     # USB3 PHY/SerDes Debug ------------------------------------------------------------------------
     soc.usb3_debug = USB3PHYDebug(usb3_phy, serdes, sys_clk_freq)
@@ -455,6 +461,7 @@ def usb3_soc_args(parser, output_dir, with_uartbone=True):
     parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=USB3_EXAMPLES)
     parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
     parser.add_argument("--max-burst",         default=8, type=int, help="Bulk endpoints Max Burst (loopback/bench examples).", choices=[2, 4, 8, 16])
+    parser.add_argument("--link-words",        default=1, type=int, help="Link Layer words: 1 (32-bit) or 2 (64-bit, loopback/bench examples: Gen 2 bandwidth).", choices=[1, 2])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group (phase: requires --with-serdes-debug).", choices=USB3_ANALYZER_GROUPS)
@@ -475,6 +482,7 @@ def usb3_soc_argdict(args):
             "example"           : args.example,
             "with_lpm"          : args.with_lpm,
             "max_burst"         : args.max_burst,
+            "link_words"        : args.link_words,
         },
     }
 

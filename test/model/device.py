@@ -14,6 +14,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.host_model  import *
+from usb3_core.common      import endpoint_layout
 from usb3_core.descriptors import bulk_descriptors
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
@@ -22,16 +23,37 @@ from test.model.host import tps, lmps, dpps
 
 # Bulk Loopback Device -----------------------------------------------------------------------------
 
+class PairsPHY:
+    """PHY stand-in in words pairs (USB3PHY link_words=2) for the core, words on the host side
+    (phy.source/phy.sink driven/monitored by the host models)."""
+    def __init__(self, phy, module):
+        from usb3_pipe.framing import WordsToPairs, PairsToWords
+        for k, v in vars(phy).items():
+            setattr(self, k, v)
+        to_pairs = WordsToPairs()
+        to_words = PairsToWords()
+        module.submodules += to_pairs, to_words
+        module.comb += [
+            phy.source.connect(to_pairs.sink),
+            to_words.source.connect(phy.sink),
+        ]
+        self.source = to_pairs.source
+        self.sink   = to_words.sink
+
 class BulkLoopbackDUT(LiteXModule):
     """USB3 Device Core (PHY stand-in) with Bulk IN/OUT endpoints (bulk_descriptors), EP2 OUT looped
-    to EP1 IN."""
-    def __init__(self, max_burst=8):
+    to EP1 IN. link_words=2: core on PHY words pairs, 64-bit Bulk endpoints."""
+    def __init__(self, max_burst=8, link_words=1):
         self.phy = phy = PHYStandIn()
-        self.core = core = USB3DeviceCore(phy, sys_clk_freq=125e6,
-            descriptors = bulk_descriptors(max_burst=max_burst),
-            endpoints   = [USB3BulkIN(ept=1, max_burst=max_burst), USB3BulkOUT(ept=2, max_burst=max_burst)])
+        dw = 32*link_words
+        self.core = core = USB3DeviceCore(phy if link_words == 1 else PairsPHY(phy, self),
+            sys_clk_freq = 125e6,
+            descriptors  = bulk_descriptors(max_burst=max_burst),
+            endpoints    = [
+                USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw),
+                USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw)])
         # Bulk loopback: EP2 OUT -> EP1 IN.
-        self.loopback = loopback = stream.SyncFIFO([("data", 32), ("be", 4)], 2*256, buffered=True)
+        self.loopback = loopback = stream.SyncFIFO(endpoint_layout(dw), 2*256, buffered=True)
         self.comb += [
             core.endpoints[1].source.connect(loopback.sink),
             loopback.source.connect(core.endpoints[0].sink),
