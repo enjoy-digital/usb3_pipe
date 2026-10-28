@@ -8,6 +8,8 @@
 bench/alibaba_xcku3p.py).
 
 - loopback     : Vendor Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1) (bench/usb3_bulk.py).
+- wishbone     : loopback + EP0 Wishbone bridge (litex_server --usb --usb-vid 0x1d50
+                 --usb-pid 0x605a).
 - bench        : Vendor Bulk IN counter source, Bulk OUT counter checker (bench/usb3_bench.py).
 - cdc_uartbone : CDC-ACM serial port carrying UARTBone (litex_server --uart --uart-port
                  /dev/ttyACMx).
@@ -35,9 +37,11 @@ from usb3_core.cdc_acm     import cdc_acm_interfaces, add_cdc_acm_requests
 from usb3_core.bench       import USB3Bench
 from usb3_core.uvc         import USB3UVC, USB3UVCFunction, uvc_interfaces, UVC_MODES
 from usb3_core.msc         import USB3MSC, USB3MSCDRAM, msc_fat_image
+from usb3_core.wishbone    import USB3EP0Wishbone
 
 USB3_EXAMPLES = [
     "loopback",
+    "wishbone",
     "bench",
     "cdc_uartbone",
     "console",
@@ -66,7 +70,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
     assert example in USB3_EXAMPLES
     # Link Layer words (USB3PHY link_words): 64-bit Bulk endpoints in the vendor Bulk examples.
     dw = 32*getattr(usb3_phy, "link_words", 1)
-    assert (dw == 32) or (example in ["loopback", "bench"])
+    assert (dw == 32) or (example in ["loopback", "wishbone", "bench"])
     if example in ["console", "composite"]:
         assert soc.cpu_type is not None, f"{example} example requires a CPU (--cpu-type)."
     if example in ["msc_dram"]:
@@ -163,11 +167,17 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
             USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw),
         ]
         soc.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints,
-            with_lpm = with_lpm)
+            with_lpm         = with_lpm,
+            with_ep0_handler = example == "wishbone")
         usb3_core.add_csr(with_trace=True)
 
+        # Wishbone bridge over EP0 vendor requests: litex_server --usb.
+        if example == "wishbone":
+            soc.usb3_wishbone = usb3_wishbone = USB3EP0Wishbone(usb3_core.ep0)
+            soc.bus.add_master(name="usb3_wishbone", master=usb3_wishbone.bus)
+
         # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (bench/usb3_bulk.py).
-        if example == "loopback":
+        if example in ["loopback", "wishbone"]:
             usb3_loopback = stream.SyncFIFO(endpoint_layout(dw), 2*256, buffered=True)
             soc.usb3_loopback = usb3_loopback
             soc.comb += [
