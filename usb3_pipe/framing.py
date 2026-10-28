@@ -41,6 +41,11 @@ KIND_LC   = 2 # Link Command (LCSTART).
 KIND_DPP  = 3 # Data Packet Payload (DPPSTART).
 KIND_EDB  = 4 # Nullified DPP (DPPABORT).
 
+def byte_offset(n):
+    """n bytes in bits (n*8) as a sized expression: in Verilog, a shift amount is self-determined and
+    8*n would be evaluated on max(width(8), width(n)) bits (truncated)."""
+    return Cat(C(0, 3), n)
+
 def gen2_link_layout():
     """Link words pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words."""
     return [("data", 64), ("ctrl", 8), ("words", 2)]
@@ -94,7 +99,7 @@ class Gen2RXFraming(LiteXModule):
         ]
         for i in reversed(range(8)):
             self.comb += If(nonidle[i], q.eq(i))
-        self.comb += first.eq((win >> (8*q))[0:8])
+        self.comb += first.eq((win >> byte_offset(q))[0:8])
 
         # Packet -----------------------------------------------------------------------------------
         kind    = Signal(3)
@@ -105,7 +110,7 @@ class Gen2RXFraming(LiteXModule):
         dpp_len = Signal(16) # Last DPH Length Field Replica.
         out     = Signal(64)
         self.comb += [
-            out.eq((win >> (8*p))[0:64]),
+            out.eq((win >> byte_offset(p))[0:64]),
             rem.eq(length - count),
             last.eq(rem <= 8),
         ]
@@ -540,6 +545,7 @@ class Gen2LinkRX(LiteXModule):
             stream.AsyncFIFO(gen2_link_layout(), buffer_depth, buffered=True))
         self.submodules += fifo, converter, framing, buffer
         self.framing = framing
+        self.buffer  = buffer
         self.comb += [
             fifo.sink.valid.eq(sink.valid),
             fifo.sink.data.eq(sink.data),

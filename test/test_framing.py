@@ -303,3 +303,28 @@ class TestGen2RXFraming(unittest.TestCase):
                 yield
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(out, expected)
+
+# Generated Verilog --------------------------------------------------------------------------------
+
+class TestGen2FramingVerilog(unittest.TestCase):
+    @unittest.skipIf(__import__("shutil").which("yosys") is None, "yosys not found")
+    def test_byte_offset_verilog(self):
+        # Byte shifts by a variable amount in the generated Verilog (a shift amount is self-determined
+        # in Verilog: 8*n was truncated, not reproduced by the Migen simulator), with yosys.
+        import os, re, subprocess, tempfile
+        from migen.fhdl import verilog
+        from usb3_pipe.framing import byte_offset
+        w = Signal(128)
+        n = Signal(3)
+        o = Signal(8)
+        m = Module()
+        m.comb += o.eq((w >> byte_offset(n))[0:8])
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "shift.v")
+            verilog.convert(m, ios={w, n, o}, name="shift").write(f)
+            script = f"read_verilog {f}; prep -top shift; " + "; ".join(
+                f"eval -set {w.backtrace[-1][0]} 128'h0f0e0d0c0b0a09080706050403020100 -set {n.backtrace[-1][0]} {v} "
+                f"-show {o.backtrace[-1][0]}" for v in range(8))
+            log = subprocess.run(["yosys", "-p", script], capture_output=True, text=True, check=True).stdout
+        self.assertEqual([int(x, 2) for x in re.findall(r"Eval result: .* = 8'([01]+)", log)], list(range(8)))
+
