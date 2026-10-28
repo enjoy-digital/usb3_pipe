@@ -21,7 +21,7 @@ from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
 from usb3_pipe.datapath import RXWordAligner, Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH
 from usb3_pipe.datapath import GEN2_IDLE_BLOCK
-from usb3_pipe.framing  import Gen2RXFraming, Gen2LinkTX, gen2_link_layout
+from usb3_pipe.framing  import Gen2LinkTX, Gen2LinkRX
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -418,39 +418,17 @@ class Gen2PIPE(LiteXModule):
         self.tx_packer = link_tx.packer
 
         # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
-        # Blocks buffered (one block every 3.3 cycles, not held by the Gen 2 RX datapath), 8 bytes
-        # per cycle to the framing (stalls 1 cycle on each packet start).
-        rx_fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8))
-        rx_converter = ClockDomainsRenamer("rx")(stream.Converter(128, 64))
-        rx_framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming()))
-        rx_buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
-            stream.AsyncFIFO(gen2_link_layout(), rx_buffer_depth, buffered=True))
-        self.submodules += rx_fifo, rx_converter, rx_framing, rx_buffer
-        self.rx_framing = rx_framing
+        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth)
         self.comb += [
             # Data Blocks (after SDS), framing reset out of the Data Stream.
-            rx_fifo.sink.valid.eq(rx.source.valid),
-            rx_fifo.sink.data.eq(rx.source.data),
-            rx_fifo.source.connect(rx_converter.sink),
-            rx_converter.source.connect(rx_framing.sink),
-            rx_framing.reset.eq(~rx.data_stream),
-            rx_framing.source.connect(rx_buffer.sink),
+            link_rx.sink.valid.eq(rx.source.valid),
+            link_rx.sink.data.eq(rx.source.data),
+            link_rx.data_stream.eq(rx.data_stream),
+            link_rx.rx_ready.eq(self.rx_ready),
+            link_rx.source.connect(self.source),
+            self.rx_overflow.eq(link_rx.overflow),
         ]
-        self.sync.rx += If(rx_fifo.sink.valid & ~rx_fifo.sink.ready, self.rx_overflow.eq(1))
-        # Words pairs -> words, gated by rx_ready (U0).
-        second = Signal()
-        self.comb += [
-            self.source.valid.eq(rx_buffer.source.valid & self.rx_ready),
-            self.source.data.eq(Mux(second, rx_buffer.source.data[32:64], rx_buffer.source.data[0:32])),
-            self.source.ctrl.eq(Mux(second, rx_buffer.source.ctrl[4:8],   rx_buffer.source.ctrl[0:4])),
-            rx_buffer.source.ready.eq(~self.rx_ready |
-                (self.source.ready & (second | (rx_buffer.source.words == 1)))),
-        ]
-        self.sync += If(~self.rx_ready,
-            second.eq(0)
-        ).Elif(self.source.valid & self.source.ready,
-            second.eq(~second & (rx_buffer.source.words == 2))
-        )
+        self.rx_framing = link_rx.framing
 
         # Idle Symbol handshake (7.5.4.10.2) -------------------------------------------------------
         # RX: a Logical Idle Data Block (16 Idle Symbols) received while enabled. TX: a Logical Idle

@@ -518,3 +518,51 @@ class Gen2LinkTX(LiteXModule):
             packer.flush.eq(flush_tx),
         ]
 
+# Gen 2 Link RX ------------------------------------------------------------------------------------
+
+class Gen2LinkRX(LiteXModule):
+    """Data Blocks (rx clock domain, one every 3.3 cycles at 40-bit, not held) -> blocks buffer ->
+    8 bytes per cycle -> Gen2RXFraming (reset out of the Data Stream) -> words pairs buffer (rx ->
+    sys) -> Link Layer words (sys clock domain, gated by rx_ready: U0)."""
+    def __init__(self, buffer_depth=1024):
+        self.sink        = sink   = stream.Endpoint([("data", 128)])         # rx clock domain.
+        self.source      = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.data_stream = Signal() # i: Receiving the Data Stream (rx clock domain).
+        self.rx_ready    = Signal() # i: U0 (sys clock domain).
+        self.overflow    = Signal() # o: Blocks buffer overflow (sticky, rx clock domain).
+
+        # # #
+
+        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8))
+        converter = ClockDomainsRenamer("rx")(stream.Converter(128, 64))
+        framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming()))
+        buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
+            stream.AsyncFIFO(gen2_link_layout(), buffer_depth, buffered=True))
+        self.submodules += fifo, converter, framing, buffer
+        self.framing = framing
+        self.comb += [
+            fifo.sink.valid.eq(sink.valid),
+            fifo.sink.data.eq(sink.data),
+            sink.ready.eq(1),
+            fifo.source.connect(converter.sink),
+            converter.source.connect(framing.sink),
+            framing.reset.eq(~self.data_stream),
+            framing.source.connect(buffer.sink),
+        ]
+        self.sync.rx += If(fifo.sink.valid & ~fifo.sink.ready, self.overflow.eq(1))
+
+        # Words pairs -> words, gated by rx_ready.
+        second = Signal()
+        self.comb += [
+            source.valid.eq(buffer.source.valid & self.rx_ready),
+            source.data.eq(Mux(second, buffer.source.data[32:64], buffer.source.data[0:32])),
+            source.ctrl.eq(Mux(second, buffer.source.ctrl[4:8],   buffer.source.ctrl[0:4])),
+            buffer.source.ready.eq(~self.rx_ready |
+                (source.ready & (second | (buffer.source.words == 1)))),
+        ]
+        self.sync += If(~self.rx_ready,
+            second.eq(0)
+        ).Elif(source.valid & source.ready,
+            second.eq(~second & (buffer.source.words == 2))
+        )
+
