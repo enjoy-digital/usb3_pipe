@@ -9,7 +9,7 @@ handshake, framing alignment, on top of a USB3 SerDes.
 """
 
 from migen import *
-from migen.genlib.cdc import MultiReg, PulseSynchronizer
+from migen.genlib.cdc import MultiReg, PulseSynchronizer, GrayCounter
 
 from litex.gen import *
 
@@ -21,6 +21,7 @@ from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
 from usb3_pipe.datapath import RXWordAligner, Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH
 from usb3_pipe.datapath import GEN2_IDLE_BLOCK
+from usb3_pipe.framing  import Gen2LinkTX, Gen2LinkRX
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -299,14 +300,24 @@ class Gen2PIPE(LiteXModule):
     transferred to the tx clock domain on a stable command (no transient Ordered Set selection), the
     pulses/levels back to sys with PulseSynchronizers/MultiRegs.
 
-    Not implemented yet: Link Layer data (TX: Logical Idle only, RX Data Blocks dropped), Disable
-    Scrambling, Gen 2 elastic buffer.
+    Link Layer side (sys clock domain, U0): sink/source 32-bit words with K Symbols (Symbol 0 on
+    data[0:8], framing Ordered Sets at word boundaries, as in Gen 1 operation), Gen 2 packet framing
+    in the Data Blocks (Gen2TXFramer/Gen2TXPacker, Gen2RXFraming): TX units (Header Packet, Link
+    Command, DPH with its DPP) stored and forwarded (tx_buffer_depth 8-byte entries), RX packets
+    buffered (rx_buffer_depth words pairs, ~1.2GB/s peak on the line vs 500MB/s on the Link Layer
+    words at 125MHz).
+
+    Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
     """
-    def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16):
+    def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
+        tx_buffer_depth=512, rx_buffer_depth=1024):
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
         self.tx_data = Signal(data_width) # o: TX words (tx clock domain).
         self.rx_data = Signal(data_width) # i: RX words (rx clock domain).
+        self.sink    = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer TX words (sys).
+        self.source  = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer RX words (sys).
+        self.rx_overflow = Signal() # o: RX buffer overflow (sticky, rx clock domain).
 
         # # #
 
@@ -394,6 +405,31 @@ class Gen2PIPE(LiteXModule):
             self.ts_rx_ts2_reset.eq(link_config[0]),
             self.ts_rx_ts2_loopback.eq(link_config[2]),
         ]
+
+        # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
+        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth)
+        self.comb += [
+            self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
+            link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
+            self.sink.ready.eq(link_tx.sink.ready & self.tx_ready),
+            link_tx.source.connect(tx.sink),
+            link_tx.flush.eq(~self.tx_ready),
+            link_tx.packer.skp_pending.eq(tx.tx.skp_pending),
+        ]
+        self.tx_packer = link_tx.packer
+
+        # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
+        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth)
+        self.comb += [
+            # Data Blocks (after SDS), framing reset out of the Data Stream.
+            link_rx.sink.valid.eq(rx.source.valid),
+            link_rx.sink.data.eq(rx.source.data),
+            link_rx.data_stream.eq(rx.data_stream),
+            link_rx.rx_ready.eq(self.rx_ready),
+            link_rx.source.connect(self.source),
+            self.rx_overflow.eq(link_rx.overflow),
+        ]
+        self.rx_framing = link_rx.framing
 
         # Idle Symbol handshake (7.5.4.10.2) -------------------------------------------------------
         # RX: a Logical Idle Data Block (16 Idle Symbols) received while enabled. TX: a Logical Idle

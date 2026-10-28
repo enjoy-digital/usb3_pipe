@@ -212,7 +212,9 @@ class USB3SerDesModel(LiteXModule):
 
         # RX decode errors.
         self.rx_error_monitor = RXErrorMonitor(decoders, clock_domain=rx_clock_domain)
-        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
+        self.gen2_rx_errors = Signal() # i
+        self.comb += self.rx_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
+            self.rx_error_monitor.errors))
 
     def connect(self, serdes):
         self.comb += [
@@ -418,8 +420,9 @@ class USB3PIPESim(SoCMini):
     (SCD1/SCD2, LBPM), Gen 2 negotiated (training continues at Gen 1 speed).
 
     gen2 (lanes=1, gen2_capable): SerDes models with Gen 2 raw words, the training continues at Gen 2
-    (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0. The SuperSpeedPlus Link Layer
-    is not implemented yet: the simulation ends once both PHYs are in U0 at Gen 2.
+    (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0, Link Layer packets with the
+    Gen 2 framing in the Data Blocks, SuperSpeedPlus Link Layer (Host script and Device Core: 4-bit
+    Header Sequence Numbers, Type 1/Type 2 credits, Transfer Types).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
@@ -487,8 +490,10 @@ class USB3PIPESim(SoCMini):
 
             if with_core and (name == "host"):
                 # Scripted host Link/Protocol Layer (link initialization, enumeration).
-                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency,
-                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm).steps))
+                # Gen 2: no Gen 1 SKP Ordered Sets/packets offsets in the script (Gen 2 SKP Ordered
+                # Sets by the Gen2TX, packets re-aligned by the Gen 2 framing).
+                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp and not gen2, latency=host_latency,
+                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
@@ -575,19 +580,7 @@ class USB3PIPESim(SoCMini):
         # Simulation End.
         done   = Signal()
         report = Signal()
-        if gen2:
-            # Both PHYs in U0 at Gen 2 for 2^6 cycles (the Gen 1 Link Layers then direct Recovery:
-            # no SuperSpeedPlus Link Layer yet).
-            u0_timer = WaitTimer(2**6)
-            self.submodules += u0_timer
-            self.comb += [
-                u0_timer.wait.eq(
-                    ltssms["host"].u0 & phys["host"].gen2_active &
-                    ltssms["dev"].u0  & phys["dev"].gen2_active),
-                done.eq(u0_timer.done),
-            ]
-            self.sync += If(done & ~report, Display("GEN2 U0 reached"))
-        elif with_core:
+        if with_core:
             # Host script done (or error), then 2^10 cycles.
             end_timer = WaitTimer(2**10)
             self.submodules += end_timer

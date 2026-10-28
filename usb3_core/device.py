@@ -31,10 +31,12 @@ from litex.gen import *
 
 from litex.soc.interconnect.csr import *
 
+from usb3_core.common    import TT_CONTROL, TT_ISOCHRONOUS, TT_BULK
 from usb3_core.link      import USB3LinkLayer
+from usb3_core.iso       import USB3IsoIN
 from usb3_core.protocol  import USB3ProtocolLayer
 from usb3_core.control   import USB3EndpointControl
-from usb3_core.trace     import USB3CoreTrace
+from usb3_core.trace     import USB3CoreTrace, USB3LinkTrace
 
 # USB3 Device Core ---------------------------------------------------------------------------------
 
@@ -49,9 +51,16 @@ class USB3DeviceCore(LiteXModule):
         # Link Power Management: U1/U2 exit latencies in the BOS.
         if with_lpm:
             descriptors.enable_lpm()
+        # SuperSpeedPlus (Gen 2 capable PHY): SuperSpeedPlus USB Device Capability in the BOS.
+        if hasattr(phy, "gen2_active"):
+            descriptors.enable_ssp()
 
-        # Link Layer.
-        self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale)
+        # Link Layer (Transfer Types of the endpoints for SuperSpeedPlus operation).
+        ssp_tt = {0: TT_CONTROL}
+        for ep in endpoints:
+            ssp_tt[ep.ept] = TT_ISOCHRONOUS if isinstance(ep, USB3IsoIN) else TT_BULK
+        self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale,
+            ssp_tt=ssp_tt)
         self.comb += link.lpm_enable.eq(with_lpm)
 
         # Control Endpoint.
@@ -82,7 +91,8 @@ class USB3DeviceCore(LiteXModule):
         """Status/statistics CSRs (bench/usb3_debug.py), optional Header Packets trace
         (bench/usb3_trace.py)."""
         if with_trace:
-            self.trace = USB3CoreTrace(self.link, depth=trace_depth)
+            self.trace      = USB3CoreTrace(self.link, depth=trace_depth)
+            self.link_trace = USB3LinkTrace(self.link)
         self._status = CSRStatus(fields=[
             CSRField("ready",      size=1, description="U0, link initialized."),
             CSRField("configured", size=1, description="Configured (SET_CONFIGURATION)."),
@@ -91,6 +101,9 @@ class USB3DeviceCore(LiteXModule):
         self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets RX errors).")
         self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets resent).")
         self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, errors).")
+        self._link_state   = CSRStatus(32, description="Link Layer state (debug): tx_seq, ack_seq, "
+            "send_seq, remote credits (Type 1/2), adv_received, pm_block, pm_accepted, tx_hp valid/ready, "
+            "lrty_pending, lbad_wait, ssp, tx_full, rx_seq.")
         self.comb += [
             self._status.fields.ready.eq(self.link.ready),
             self._status.fields.configured.eq(self.ep0.configured),
@@ -98,4 +111,5 @@ class USB3DeviceCore(LiteXModule):
             self._rx_lbad.status.eq(self.link.rx_lbad),
             self._tx_retry.status.eq(self.link.tx_retry),
             self._recovery_req.status.eq(self.link.recovery_req),
+            self._link_state.status.eq(self.link.dbg_state),
         ]

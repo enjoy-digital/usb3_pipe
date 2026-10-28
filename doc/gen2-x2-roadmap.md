@@ -214,15 +214,21 @@ Polling.Idle -> **U0 at 10Gbps**, Recovery at Gen 2 to U0. Found on hardware: th
 Device to U0 at Gen 2). The Gen 1 Link Layer receives nothing in U0 at Gen 2: the link goes to
 Recovery a few us after U0 (no Header Sequence Number Advertisement exchange).
 
-**M3: SuperSpeedPlus Link Layer, enumeration at Gen 2** (next):
-- Gen 2 framing (7.2.1.1, 7.2.1.3, Table 6-2): packets and Link Commands in Data Blocks with the
-  framing symbols as scrambled bytes (SHP 9Ah, SDP 96h, END 65h, EDB 69h, SLC 4Bh, EPF 36h, DPHP 95h
-  for the non-deferred DPH with its length field replica), Logical Idle 5Ah: Data Blocks <-> link
-  words for the Link Layer (framing parser/generator).
-- SuperSpeedPlus Link Layer: 4-bit Header Sequence Numbers, Type 1/Type 2 Rx Header Buffer credits
-  (LCRD1_x/LCRD2_x), DPHSTART, Gen 2 timers.
-- Datapath bandwidth (1.2GB/s after 128b/132b): 128-bit Data Blocks to the Link Layer words (32-bit at
-  125MHz first: enumeration, then wider).
+**M3: SuperSpeedPlus Link Layer, enumeration and Bulk transfers at Gen 2** (done): Gen 2 packet
+framing (`usb3_pipe/framing.py`: Link Layer words <-> Data Blocks, framing Symbols as scrambled bytes,
+DPHSTART/Length Field Replicas, store and forward of the TX units) and SuperSpeedPlus Link Layer
+(`usb3_core/link.py` at Gen 2: 4-bit Header Sequence Numbers, Type 1/Type 2 credits, Transfer Types),
+SuperSpeedPlus USB Device Capability in the BOS. On hardware (`lsusb`: 10000M, SuperSpeedPlus):
+Bulk IN ~320MB/s, Bulk OUT ~466MB/s, full duplex 98MB/s IN + 457MB/s OUT (60s), no errors, no
+Recovery. Found on hardware:
+- Warm Reset LFPS detected from the 8b/10b decode errors at 10Gbps (always set on raw words): Gen 2
+  block alignment lost instead.
+- Verilog expression width of the RX framing byte shifts (`8*p` truncated, as `popcount` in M1).
+- PENDING_HP_TIMER is 10us (Table 7-7), Bulk IN stale ERDY race, SKP Ordered Sets starvation with
+  units packed back to back (host Recovery every few ms in full duplex).
+
+Next: Link Layer datapath bandwidth (32-bit at 125MHz: ~500MB/s per direction, store and forward of
+the DPPs on the TX side, IN limited to ~320MB/s): 64/128-bit Link Layer words at Gen 2.
 
 ## Suggested order
 
