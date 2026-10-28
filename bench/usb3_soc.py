@@ -139,7 +139,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     """Gen 2 bring-up: Gen 2 RX monitor on the raw transceiver symbols (the PHY switches to 10Gbps
     once Gen 2 is negotiated in SuperSpeedPlus Polling, USB3PHY.add_gen2) with its debug CSRs
     (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters) and a raw RX snapshot."""
-    from litex.soc.interconnect.csr import CSRStatus
+    from litex.soc.interconnect.csr import CSR, CSRStatus, CSRStorage
     from usb3_pipe.datapath import Gen2RXDatapath
     from usb3_pipe.debug import Gen2RXDebug
     # Gen 2 RX datapath/counters in a reset-less RX clock domain: kept across the RX
@@ -266,10 +266,35 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         ]
         soc.comb += u0_exit.eq(u0_count != 0)
         soc.specials += MultiReg(u0_exit, u0_exit_tx, "tx_nr")
-        pk = phy.gen2_pipe.tx_packer.source
-        soc.usb3_gen2_txblocks_snapshot = RXRawSnapshot(Cat(pk.data, pk.last),
+        # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets, with
+        # the unscrambled sink data.
+        g2tx = phy.gen2_pipe.tx.tx
+        pk   = phy.gen2_pipe.tx_packer.source
+        soc.usb3_gen2_txblocks_snapshot = RXRawSnapshot(
+            Cat(pk.data, pk.last, g2tx.tx_data_blk, g2tx.tx_idle, g2tx.tx_skp),
             flags=Cat(u0_exit_tx), depth=1024, clock_domain="tx_nr",
-            write_enable=(pk.valid & pk.ready) | u0_exit_tx, post=8)
+            write_enable=g2tx.tx_data_blk | g2tx.tx_idle | g2tx.tx_skp | u0_exit_tx, post=8)
+    # Transceiver electrical controls (Gen 2 signal integrity bring-up): TX swing/pre/post cursors,
+    # RX equalizer (RXLPMEN: 1 LPM, 0 DFE).
+    xcvr = getattr(serdes, serdes.xcvr_name)
+    if hasattr(xcvr, "add_electrical_control"):
+        xcvr.add_electrical_control()
+        soc.usb3_gen2_rx_lpmen = CSRStorage(1, reset=1, description="RX equalizer: 1 LPM, 0 DFE.")
+        xcvr.gty_params.update(i_RXLPMEN=soc.usb3_gen2_rx_lpmen.storage)
+    # Link Layer max durations (sys cycles): LGOOD_n pending, LCRD_x pending, TX DPP data stall.
+    if link is not None:
+        soc.usb3_gen2_link_max = CSRStatus(32*3, description="Max cycles: LGOOD pending, LCRD pending, DPP stall.")
+        soc.usb3_gen2_link_max_clear = CSR()
+        maxes = []
+        for e in [link.dbg_lgood_pending, link.dbg_lcrd_pending, link.dbg_dpp_stall]:
+            cnt = Signal(32)
+            mx  = Signal(32)
+            soc.sync += [
+                If(e, cnt.eq(cnt + 1)).Else(cnt.eq(0)),
+                If(soc.usb3_gen2_link_max_clear.re, mx.eq(0)).Elif(cnt > mx, mx.eq(cnt)),
+            ]
+            maxes.append(mx)
+        soc.comb += soc.usb3_gen2_link_max.status.eq(Cat(*maxes))
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 

@@ -730,6 +730,9 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_tx_hp_info = Cat(send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
             tx_dws[send_seq[0:2]][0:5], tx_sent[send_seq[0:2]])
         self.dbg_u0        = u0
+        self.dbg_lgood_pending = u0 & (lgood_seq != rx_seq)
+        self.dbg_lcrd_pending  = u0 & ((lcrd_pending != 0) | (lcrd2_pending != 0))
+        self.dbg_dpp_stall     = tx_fsm.ongoing("DPP-DATA") & ~self.tx_dpp.valid
         self.dbg_state     = Cat(tx_seq[0:4] if sw == 4 else Cat(tx_seq, C(0, 1)),
             ack_seq[0:4] if sw == 4 else Cat(ack_seq, C(0, 1)),
             send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
