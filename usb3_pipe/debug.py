@@ -302,10 +302,11 @@ class USB3SerDesDebug(LiteXModule):
         ]
 
         # DRP access (selected on the transceiver DRP mux during the accesses, the mux default is
-        # the transceiver RX initialization).
+        # the transceiver RX initialization on GTP, gt.drp is the only interface on GTY).
         self._drp_sel = CSRStorage(description="Select DRP access on the transceiver DRP mux.")
         self.drp      = DRPControl(gt.drp)
-        self.comb += gt.drp_mux.sel.eq(self._drp_sel.storage)
+        drp_index     = gt.drp_mux.interfaces.index(gt.drp)
+        self.comb += gt.drp_mux.sel.eq(Mux(self._drp_sel.storage, drp_index, 0))
 
         # RX vs TX clocks phase (gray counters).
         rx_count = ClockDomainsRenamer("rx")(GrayCounter(16))
