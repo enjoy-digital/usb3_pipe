@@ -166,6 +166,60 @@ class TestCoreLinkSSP(unittest.TestCase):
         self.assertEqual((lcw >> 9) & 1, 1) # DL bit set.
         self.assertEqual(sent[retry + 5], (swap(FRAMING_EDB), 0b1111))
 
+    def test_advertisement_after_link_reset(self):
+        # U0 period with Header Packets received (rx_seq advanced, an LGOOD_n not sent yet when U0
+        # is exited), then a link reset (Polling.Idle) and a new U0 entry: the first Link Command
+        # sent is the Header Sequence Number Advertisement LGOOD_15 (no stale LGOOD_n).
+        dut  = LinkDUT()
+        link = dut.link
+        phy  = dut.phy
+        sent = []
+
+        def send(words):
+            for data, ctrl in words:
+                yield phy.source.valid.eq(1)
+                yield phy.source.data.eq(data)
+                yield phy.source.ctrl.eq(ctrl)
+                yield
+            yield phy.source.valid.eq(0)
+
+        def host():
+            yield link.rx_hp.ready.eq(1)
+            yield phy.sink.ready.eq(1)
+            for period in range(2):
+                yield phy.polling_idle.eq(1)
+                yield
+                yield phy.polling_idle.eq(0)
+                yield phy.u0.eq(1)
+                if period == 1:
+                    sent.clear()
+                words = link_command(LGOOD(15))
+                for x in range(4):
+                    words += link_command(LCRD(x)) + link_command(LCRD2(x))
+                yield from send(words)
+                if period == 0:
+                    # Header Packets received, U0 exited right after (LGOOD_n pending).
+                    for seq in range(3):
+                        yield from send(tp(TP_SUB_ACK, seq, ept=2))
+                    yield phy.sink.ready.eq(0)
+                    for _ in range(8):
+                        yield
+                    yield phy.u0.eq(0)
+                    yield phy.sink.ready.eq(1)
+                for _ in range(64):
+                    yield
+
+        @passive
+        def monitor():
+            while True:
+                if (yield phy.sink.valid) & (yield phy.sink.ready):
+                    sent.append(((yield phy.sink.data), (yield phy.sink.ctrl)))
+                yield
+
+        run_simulation(dut, [host(), monitor()])
+        lcs = [p[1] for p in decode_packets(sent) if p[0] == "LC"]
+        self.assertEqual(lcs[0], LGOOD(15))
+
 def swap(w):
     return int.from_bytes(w.to_bytes(4, "little"), "big")
 

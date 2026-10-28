@@ -258,6 +258,13 @@ Gen 1 operation of the same design (Gen 2 capability cleared, `usb3_gen2_capable
 IN/OUT. Limits: Bulk OUT ~87% of the 64-bit words at 125MHz (1GB/s), Bulk IN waiting for the host
 requests (ACK TPs behind the RX DPPs), the host Bulk IN rate with large transfers (~330MB/s at 1MB).
 
+**M4c: Gen 2 robustness** (done): link retraining at Gen 2 after a PHY reset (Gen2PIPE tx/rx clock
+domains reset with the PHY reset; no stale LGOOD_n before the Advertisement at the U0 entry), Gen 1
+operation of a Gen 2 capable design, U1/U2 entries/exits with Recovery at Gen 2 (simulation: the bench
+host, an xHCI without hardware LPM support in Linux, never enables U1/U2). On hardware: 10 PHY resets
+alternating Gen 2/Gen 1 trainings, traffic checked after each (one Gen 2 -> Gen 1 capability change
+needed a host port power cycle: capability changes between trainings are a test-only case).
+
 ## Suggested order
 
 1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`); remaining:

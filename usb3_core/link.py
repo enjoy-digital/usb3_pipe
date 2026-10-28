@@ -682,7 +682,9 @@ class USB3LinkLayer(LiteXModule):
         tx_sent_hp  = Signal()
         self.tx_fsm = tx_fsm = FSM(reset_state="IDLE")
         tx_fsm.act("IDLE",
-            If(u0,
+            # Not on the U0 entry cycle: Advertisement values (lgood_seq/credits) updated with it (a
+            # stale LGOOD_n of a previous U0 period would be sent before the Advertisement).
+            If(u0 & ~u0_rise,
                 If(start_hp,
                     tx_sent_hp.eq(1),
                     NextValue(hp_dws,  tx_dws[send_seq[0:ib]]),
