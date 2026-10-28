@@ -1,10 +1,14 @@
 # Gen 2x1 (10Gbps) / Gen 1x2 (2x5Gbps) Roadmap
 
-USB3PIPE implements USB 3.2 **Gen 1x1** (SuperSpeed, 5Gbps, 8b/10b, one lane). This document lists what
-**Gen 2x1** (SuperSpeedPlus 10Gbps, 128b/132b, one lane) and **Gen 1x2** (SuperSpeedPlus 2x5Gbps,
-8b/10b, two lanes) require, layer by layer, and what is already prepared. References are to the
-USB 3.2 specification (Rev 1.1). Current Gen 1x1 PHY and Device Core: [usb3-pipe.md](usb3-pipe.md),
-[usb3-core.md](usb3-core.md).
+**Status**: **Gen 1x1** (SuperSpeed, 5Gbps) and **Gen 2x1** (SuperSpeedPlus, 10Gbps) work on hardware
+(Gen 2x1 on UltraScale+ GTY: enumeration, Bulk transfers up to ~880MB/s, full duplex, see the
+[hardware milestones](#gen-2x1-hardware-milestones)). **Gen 1x2** (2x5Gbps): PHY in simulation only
+(no SuperSpeedPlus Link Layer on two lanes, no hardware). **Gen 2x2** (2x10Gbps): not started.
+
+This document lists what Gen 2x1 (SuperSpeedPlus 10Gbps, 128b/132b, one lane) and Gen 1x2
+(SuperSpeedPlus 2x5Gbps, 8b/10b, two lanes) require, layer by layer, what was done and found during
+the Gen 2x1 bring-up and what remains. References are to the USB 3.2 specification (Rev 1.1). PHY and
+Device Core: [usb3-pipe.md](usb3-pipe.md), [usb3-core.md](usb3-core.md).
 
 Both are **SuperSpeedPlus** operation: they change the PHY *and* the Link Layer (Type 1/Type 2 traffic
 classes, 4-bit Header Sequence Numbers, Rx Buffer credits), the Protocol Layer is mostly unchanged.
@@ -68,10 +72,11 @@ parameters of the flow control state, the framer/parser are word based (data_wid
 - Bandwidth: Gen 2x1 needs 64-bit endpoints datapaths (or two 32-bit at 2x the clock).
 - Descriptors: bcdUSB 0x0320, SuperSpeedPlus USB Device Capability (sublink speed attributes) in BOS.
 
-## Done (simulation only)
+## Done in simulation (before the hardware bring-up)
 
-There is no Gen 2 (10Gbps) or dual-lane hardware on the current benches (Acorn GTP: 6.6Gbps max, single
-lane): everything below is verified in simulation only.
+The building blocks below were first developed and verified in simulation (Acorn GTP: 6.6Gbps max,
+single lane), the Gen 2x1 ones were then validated on the XCKU3P ([hardware
+milestones](#gen-2x1-hardware-milestones)); the Gen 1x2 ones are still simulation only.
 
 ### Gen 2x1 PHY building blocks (`usb3_pipe/common.py`/`coding.py`/`scrambling.py`/`datapath.py`)
 
@@ -151,23 +156,18 @@ lane): everything below is verified in simulation only.
 
 ### Approximated / not verified
 
-- Gen 2 Block Header bit order: "0011b" read with bit 0 as LSB, bit 0 transmitted first (Figure 6-11);
-  SKP LFSR Symbol 4N+1 bit 7 = ~LFSR[22] as Table 6-13 (6.4.3.3 rule 6 mentions an even parity
-  instead). To check against a Gen 2 capture.
+Confirmed on hardware since (Gen 2 host, [M1/M2](#gen-2x1-hardware-milestones)): the Gen 2 Block
+Header bit order and SKP LFSR Symbols, the LBPM PHY Capability Gen 2 bit, the speed switch to Gen 2
+after Polling.PortConfig, timing at 250MHz (`Gen2TX` DC Balance pipelined). Remaining:
+
 - `Gen2BlockAligner`: a SYNC with a different alignment received while a SKP Ordered Set is consumed
   does not realign (the next SYNC does), polarity only toggled in Unaligned, SKP/SKPEND Symbols are
   matched exactly (no multi-bit error tolerance). DC Balance includes the Block Header bits.
-- Timing at 250MHz estimated only (Yosys LUT6 mapping, no Vivado run): aligner <= 9 LUT levels
-  (SYNC/pointer paths, adders mapped as LUTs: carry chains in Vivado), `Gen2RX` 4; the `Gen2TX` DC
-  Balance (popcounts -> running balance -> Symbols 14/15) is the deepest path (to check, can be
-  pipelined: a block is accepted every 3.3 cycles at 40-bit).
 - No Gen 2 elastic buffer (SKP add/remove at the receiver, the Gen 2 RX path runs in the recovered
   clock domain), no Disable Scrambling in Gen 2 operation.
-- LBPM PHY Capability Gen 2 bit (bit 2) and the Table 7-14 common capability as the AND of both
-  capabilities: from the spec reading, to confirm with a Gen 2 host.
-- SSP Polling: no tPollingSCDLFPSTimeout, no speed switch to Gen 2 after Polling.PortConfig, no
-  re-timer presence announcement/RT Config (bit 7 always de-asserted), no Polling.PortMatch
-  re-entry/fallback after a training failure (Table 7-15), no cPollingTimeout/eSS.Disabled handling.
+- SSP Polling: no tPollingSCDLFPSTimeout, no re-timer presence announcement/RT Config (bit 7 always
+  de-asserted), no Polling.PortMatch re-entry/fallback after a training failure (Table 7-15), no
+  cPollingTimeout/eSS.Disabled handling.
 - `USB3PHY(lanes=2)`: Gen 1x1 negotiated (x2 = 0) is reported but the datapath stays x2 (no fallback
   to a single lane datapath), the two lanes TX must run in lockstep (same clock, same SKP schedule),
   the Recovery/U1/U2/U3 flows use the Gen 1x1 LTSSM on the Configuration Lane (Ux exit, Ping.LFPS on
@@ -175,18 +175,18 @@ lane): everything below is verified in simulation only.
   lane not handled. The x2 simulation PRBS packets are separated by 0-3 cycles of Logical Idle:
   Logical Idle gaps of 4+ cycles with the extra SKP Ordered Sets on a single lane give Device PRBS
   errors (also seen with the former sim_x2.py, to investigate).
-- SuperSpeedPlus Link Layer (Type 1/Type 2 traffic, 4-bit HSEQ, Rx Buffer credits, DPHP, framing
-  alignment of the 64-bit link words): not started, the x2 simulation uses PRBS Link-Layer stand-ins.
+- Gen 1x2 Link Layer: the SuperSpeedPlus Link Layer (done for Gen 2x1, M3) and the 64-bit link
+  words (done for Gen 2x1, M4b) are not connected to the x2 datapath yet (framing alignment of the
+  striped 64-bit link words), the x2 simulation uses PRBS Link-Layer stand-ins.
 
 ### Hardware needed
 
-- Gen 2x1: 10Gbps transceivers (Kintex7 GTX -2/-3, UltraScale GTH (ex: KCU105), UltraScale+ GTY (the
-  alibaba_xcku3p target)) with a 10Gbps capable Type-A/B or Type-C connection and a USB 3.2 Gen 2 host.
+- Gen 2x1: done on UltraScale+ GTY (alibaba_xcku3p target, SFP2USB adapter, USB 3.2 Gen 2 host);
+  other 10Gbps transceivers (Kintex7 GTX -2/-3, UltraScale GTH) would need their Gen 2 SerDes
+  clocking (`gen2_capable`, only on `USPUSB3SerDes` today).
 - Gen 1x2/Gen 2x2: two transceivers per port with a **dual-lane USB Type-C** breakout (both SuperSpeed
   pairs routed, CC handling for the Configuration Lane) and a **USB 3.2 Gen 1x2/Gen 2x2 capable host**
   (Gen 2x2 hosts are rare: ASMedia ASM3242 based cards).
-- A protocol analyzer/capture (or a Gen 2 PHY with PIPE access) to validate the Gen 2 bit order/LFSR
-  against real traffic.
 
 ## Gen 2x1 hardware milestones
 
@@ -265,11 +265,13 @@ host, an xHCI without hardware LPM support in Linux, never enables U1/U2). On ha
 alternating Gen 2/Gen 1 trainings, traffic checked after each (one Gen 2 -> Gen 1 capability change
 needed a host port power cycle: capability changes between trainings are a test-only case).
 
-## Suggested order
+## Next steps
 
-1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`); remaining:
-   single lane fallback, SSP Link Layer, Type-C CC/Configuration Lane, hardware validation.
-2. Gen 2x1 on UltraScale+ GTY (or Kintex7 GTX/UltraScale GTH): 128b/132b blocks, 40-bit TX/RX
-   datapaths and Gen 2 capability in the SSP Polling done in simulation; next: the hardware
-   milestones above.
+1. Gen 2x1: Bulk OUT at ~87% of the 64-bit Link Layer words (8 bytes per cycle at 125MHz, ~1GB/s vs
+   ~1.18GB/s on the line): wider/faster Link Layer words for the last ~25%; 64-bit words for the other
+   endpoints/device classes (UVC, MSC); U1/U2 on hardware (not enabled by the bench host); Gen 2
+   SerDes clocking on Kintex7 GTX/UltraScale GTH.
+2. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`);
+   remaining: single lane fallback, SSP Link Layer on the x2 datapath, Type-C CC/Configuration Lane,
+   hardware validation.
 3. Gen 2x2 (20Gbps) on UltraScale+ GTY: combination of both, 7 buffers.

@@ -163,8 +163,7 @@ Full duplex bandwidth/soak with data checked on both sides (`--example bench`):
 
 ## USB3 Device Core: Header Packets trace
 
-`USB3DeviceCore.add_csr(with_trace=True)` (enabled in the device class examples: `cdc_uartbone`,
-`console`, `uvc`, `uvc_iso`, `msc`, `msc_dram`, `composite`) records the received and
+`USB3DeviceCore.add_csr(with_trace=True)` (enabled in all the examples) records the received and
 transmitted Header Packets (TPs/DPHs/LMPs, ITPs skipped) with timestamps: the Protocol Layer exchanges
 with the host (control transfers, bursts, NRDY/ERDY flow control, retries) are visible without USB
 analyzer.
@@ -183,6 +182,37 @@ The core status CSRs (`usb3_core_status`: ready/configured/address, `rx_lbad`, `
 `recovery_req`) count the Link Layer errors/Recovery requests (`usb3_soak.py` logs them). The prefix
 is `usb3_core` in the vendor Bulk/`composite` examples, `usb3_<class>_core` in the single class
 examples (ex: `usb3_uvc_core_status`); `usb3_trace.py` autodetects it (`--prefix`).
+
+`clear-ept --ept N` records only the Header Packets of endpoint N in a circular buffer, `stop --ept N`
+freezes it (ex: around a stalled transfer). The Link Layer events trace (`USB3LinkTrace`: Link
+Commands, Header Packets, U0 entry/exit, Recovery requests with their causes) and the Link Layer
+state CSR (`usb3_core_link_state`: sequence numbers, credits, Tx Header Buffers) show the flow
+control below the Protocol Layer:
+
+```sh
+# Circular (stops on a U0 exit or a Recovery request: the last events before it), keep-alives filtered.
+./bench/usb3_trace.py --port 1240 --csr-csv build/alibaba_xcku3p/csr.csv link-clear --circular --filter
+# ... traffic until the issue ...
+./bench/usb3_trace.py --port 1240 --csr-csv build/alibaba_xcku3p/csr.csv link
+```
+
+## Gen 2 (10Gbps)
+
+With `--gen2-capable` (`bench/alibaba_xcku3p.py`), `bench/usb3_soc.py` adds the Gen 2 bring-up CSRs
+(`add_usb3_gen2_rx`):
+
+| CSRs | Content |
+|---|---|
+| `usb3_gen2_status`, `usb3_gen2_capable` | Gen 2 negotiated/10Gbps rate; Gen 2 capability advertised (0: Gen 1 operation at the next link training, ex: after a `usb3_debug` PHY reset). |
+| `usb3_gen2_rx_*` (`Gen2RXDebug`), `usb3_gen2_phy_rx_status`, `usb3_gen2_rx_link`, `usb3_gen2_events` | Gen 2 RX monitor status/counters (blocks, corrected headers, alignment losses, Ordered Sets), PHY RX aligner status, RX overflow/framing errors, TS1/TS2 seen in U0. |
+| `usb3_gen2_lc_counts`, `usb3_gen2_lc_rearm`, `usb3_gen2_link_max` | Link Commands counts along the RX path (frozen on a LCRD_x out of order), Link Layer max durations (LGOOD_n/LCRD_x pending, DPP stall). |
+| `usb3_gen2_snapshot`, `usb3_gen2_tx_snapshot`, `usb3_gen2_blocks_snapshot`, `usb3_gen2_txblocks_snapshot` | Snapshots (`arm`/`trigger`/`done`/`index`/`data*`): raw RX/TX transceiver words, RX Data Blocks (descrambled), TX Data Blocks (unscrambled, Gen2TX blocks with their kind: data/Logical Idle/SKP), stopped after a U0 exit, or a LBAD received with `usb3_gen2_txblocks_lbad` (the units sent before it, to check the Header Packets CRCs/framing). |
+| `usb3_gen2_rx_lpmen` | GTY RX equalizer (1: LPM, 0: DFE), with the transceiver electrical controls. |
+
+The bench example also has a throughput profile (`usb3_profile_control`/`usb3_profile`, see
+[examples.md](examples.md)): where the Link Layer TX and the Bulk IN endpoint spend their cycles
+(Tx Header Buffers full, credits, host window, flow control) and the Little's law averages of the
+Header Packets round trip.
 
 ## Suspend/Resume (U3)
 
