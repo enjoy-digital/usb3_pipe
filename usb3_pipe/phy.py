@@ -10,6 +10,7 @@ doc/gen2-x2-roadmap.md).
 """
 
 from migen import *
+from migen.genlib.cdc import MultiReg
 
 from litex.gen import *
 
@@ -315,6 +316,11 @@ class USB3PHY(LiteXModule):
             serdes.gen2_tx_data.eq(gen2_pipe.tx_data),
             gen2_pipe.rx_data.eq(serdes.gen2_rx_data),
         ]
+        # Gen 2 RX errors (Warm Reset LFPS detection at 10Gbps, see USB3SerDes.add_lfps): block
+        # alignment lost.
+        gen2_aligned = Signal()
+        self.specials += MultiReg(gen2_pipe.rx.aligner.aligned, gen2_aligned)
+        self.comb += serdes.gen2_rx_errors.eq(~gen2_aligned)
         # LTSSM <-> Gen 1 PIPE / Gen2PIPE. No comma alignment at Gen 2: the transceiver comma aligner
         # would slip bits on comma-like patterns of the raw 128b/132b words (block alignment by the
         # Gen 2 RX datapath).

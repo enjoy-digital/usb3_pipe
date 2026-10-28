@@ -310,7 +310,7 @@ class Gen2PIPE(LiteXModule):
     Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
     """
     def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
-        tx_buffer_depth=512, rx_buffer_depth=512):
+        tx_buffer_depth=512, rx_buffer_depth=1024):
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
         self.tx_data = Signal(data_width) # o: TX words (tx clock domain).

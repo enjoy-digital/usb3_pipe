@@ -212,7 +212,9 @@ class USB3SerDesModel(LiteXModule):
 
         # RX decode errors.
         self.rx_error_monitor = RXErrorMonitor(decoders, clock_domain=rx_clock_domain)
-        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
+        self.gen2_rx_errors = Signal() # i
+        self.comb += self.rx_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
+            self.rx_error_monitor.errors))
 
     def connect(self, serdes):
         self.comb += [
