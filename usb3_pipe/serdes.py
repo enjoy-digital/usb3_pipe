@@ -78,10 +78,11 @@ class USB3SerDes(LiteXModule):
         )
         return refclk
 
-    def add_transceiver(self, name, xcvr_cls, pll, tx_pads, rx_pads, sys_clk_freq, data_width=20):
+    def add_transceiver(self, name, xcvr_cls, pll, tx_pads, rx_pads, sys_clk_freq, data_width=20,
+        **kwargs):
         """Transceiver channel (added as name) with the TX/RX datapaths (data_width: 20 or 40 bits,
-        2 or 4 symbols per transceiver clock cycle)."""
-        xcvr = xcvr_cls(pll, tx_pads, rx_pads, sys_clk_freq,
+        2 or 4 symbols per transceiver clock cycle, kwargs: extra transceiver parameters)."""
+        xcvr = xcvr_cls(pll, tx_pads, rx_pads, sys_clk_freq, **kwargs,
             data_width       = data_width,
             clock_aligner    = False,
             tx_buffer_enable = True,
@@ -198,9 +199,15 @@ class K7USB3SerDes(USB3SerDes):
 # Xilinx Artix7 USB3 Serializer/Deserializer -------------------------------------------------------
 
 class A7USB3SerDes(USB3SerDes):
-    """Artix7 GTP USB3 SerDes (Quad PLL, optional RXCDR_CFG override)."""
+    """Artix7 GTP USB3 SerDes (Quad PLL, optional RXCDR_CFG override).
+
+    pll: optional external Quad PLL (shared with other protocols in the quad: PCIe, Ethernet, ...),
+    with the GTPQuadPLL interface (channel, clk, refclk, lock, reset, config) and configured for
+    5Gbps (2.5GHz VCO, D=1). The PLL is then not reset by the transceiver (owned by the user) and
+    refclk_pads/refclk_freq are unused.
+    """
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
-        rxcdr_cfg=None):
+        rxcdr_cfg=None, pll=None):
         USB3SerDes.__init__(self)
 
         # # #
@@ -210,10 +217,14 @@ class A7USB3SerDes(USB3SerDes):
         # PLL / Transceiver ------------------------------------------------------------------------
         # Fabric reference clock: PLL from GTGREFCLK (dedicated clock network input). Routing it to
         # GTREFCLK0 goes through general interconnect and the RX quality then depends on the build.
-        refclk_from_fabric = isinstance(refclk_pads, (Signal, ClockSignal))
-        self.pll = pll = GTPQuadPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9,
-            refclk_from_fabric = refclk_from_fabric)
-        gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq)
+        external_pll = pll is not None
+        if not external_pll:
+            refclk_from_fabric = isinstance(refclk_pads, (Signal, ClockSignal))
+            pll = GTPQuadPLL(self.get_refclk(refclk_pads), refclk_freq, 5e9,
+                refclk_from_fabric = refclk_from_fabric)
+        self.pll = pll
+        gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq,
+            qpll_reset = not external_pll)
 
         # Override GTP RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):

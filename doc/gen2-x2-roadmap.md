@@ -227,8 +227,43 @@ Recovery. Found on hardware:
 - PENDING_HP_TIMER is 10us (Table 7-7), Bulk IN stale ERDY race, SKP Ordered Sets starvation with
   units packed back to back (host Recovery every few ms in full duplex).
 
-Next: Link Layer datapath bandwidth (32-bit at 125MHz: ~500MB/s per direction, store and forward of
-the DPPs on the TX side, IN limited to ~320MB/s): 64/128-bit Link Layer words at Gen 2.
+**M4a: Gen 2 full duplex throughput and robustness** (done): measured with a throughput profile
+(`bench/usb3_soc.py` `add_usb3_profile`: Link Layer TX/Bulk IN cycles, Tx Header Buffers hold, LGOOD_n
+round trip, Bulk IN ACK TP latency) and the Link Layer/core traces:
+- Type 1/Type 2 Tx Header Buffers (4 + 4, 7.2.4.1): the Bulk OUT ACK TPs no longer block the Bulk IN DPHs.
+- LGOOD_n/LCRD_x received from the Gen 2 RX framing without waiting behind the RX words (~7us with
+  Bulk OUT DPs queued: Tx Header Buffers full, credits missing).
+- Nullified DPP after a retransmitted DPH (Gen 2 framing: a DPP after each DPH).
+- Gen2TXPacker: Logical Idle Data Block inside a unit when a block was requested while the next unit
+  was started in a partially filled block (rare LBADs, Recovery/transfer errors in full duplex).
+
+XCKU3P, 64KB transfers: Bulk IN 426MB/s, Bulk OUT 466MB/s, full duplex 325MB/s IN + 430MB/s OUT (120s,
+0 errors, 0 LBAD, 0 Recovery; was 100 + 457MB/s). With 1MB transfers the host is slower on Bulk IN
+(~330MB/s, host side). Bulk IN bursts are limited by the 32-bit Link Layer TX (one 1024-byte DP every
+~2.2us, ~470MB/s).
+
+**M4b: 64-bit Link Layer words at Gen 2** (done): `USB3PHY(link_words=2)` Link Layer interface in
+words pairs (Gen 2 framing 8 bytes per cycle in the DPPs, adapters to the Gen 1 PIPE words), Link Layer
+DPP words of 64-bit (RX words window, TX DPPSplitter, CRC-32 on 8 bytes), 64-bit Bulk endpoints/packet
+slots (`data_width=64`), 32-bit endpoints (Control Endpoint) through Protocol Layer adapters. Bench:
+`--link-words 2`. XCKU3P, 64KB transfers, 0 errors:
+
+| Link Layer        | Bulk IN  | Bulk OUT | Full duplex (IN + OUT)     |
+|-------------------|----------|----------|----------------------------|
+| 32-bit            | 426MB/s  | 466MB/s  | 325 + 430MB/s              |
+| 64-bit            | 744MB/s  | 881MB/s  | 619 + 736MB/s (120s soak)  |
+| 64-bit, MaxBurst 16 | 785MB/s | 873MB/s | 644 + 757MB/s             |
+
+Gen 1 operation of the same design (Gen 2 capability cleared, `usb3_gen2_capable` bench CSR): 441MB/s
+IN/OUT. Limits: Bulk OUT ~87% of the 64-bit words at 125MHz (1GB/s), Bulk IN waiting for the host
+requests (ACK TPs behind the RX DPPs), the host Bulk IN rate with large transfers (~330MB/s at 1MB).
+
+**M4c: Gen 2 robustness** (done): link retraining at Gen 2 after a PHY reset (Gen2PIPE tx/rx clock
+domains reset with the PHY reset; no stale LGOOD_n before the Advertisement at the U0 entry), Gen 1
+operation of a Gen 2 capable design, U1/U2 entries/exits with Recovery at Gen 2 (simulation: the bench
+host, an xHCI without hardware LPM support in Linux, never enables U1/U2). On hardware: 10 PHY resets
+alternating Gen 2/Gen 1 trainings, traffic checked after each (one Gen 2 -> Gen 1 capability change
+needed a host port power cycle: capability changes between trainings are a test-only case).
 
 ## Suggested order
 

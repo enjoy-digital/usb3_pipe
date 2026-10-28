@@ -64,10 +64,13 @@ def add_usb3_console(soc, usb3_acm):
 
 # USB3 Example -------------------------------------------------------------------------------------
 
-def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False):
+def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False, max_burst=8):
     """Add a USB3 Device Core example design to soc (on usb3_phy), with_lpm: U1/U2 Link Power
-    Management (vendor Bulk examples)."""
+    Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples)."""
     assert example in USB3_EXAMPLES
+    # Link Layer words (USB3PHY link_words): 64-bit Bulk endpoints in the vendor Bulk examples.
+    dw = 32*getattr(usb3_phy, "link_words", 1)
+    assert (dw == 32) or (example in ["loopback", "wishbone", "bench"])
     if example in ["console", "composite"]:
         assert soc.cpu_type is not None, f"{example} example requires a CPU (--cpu-type)."
     if example in ["msc_dram"]:
@@ -158,8 +161,11 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
 
     # Vendor Bulk examples.
     else:
-        descriptors = bulk_descriptors(max_burst=8)
-        endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]
+        descriptors = bulk_descriptors(max_burst=max_burst)
+        endpoints   = [
+            USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw),
+            USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw),
+        ]
         soc.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints,
             with_lpm         = with_lpm,
             with_ep0_handler = example == "wishbone")
@@ -172,7 +178,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
 
         # Bulk loopback: EP2 OUT -> FIFO -> EP1 IN (bench/usb3_bulk.py).
         if example in ["loopback", "wishbone"]:
-            usb3_loopback = stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True)
+            usb3_loopback = stream.SyncFIFO(endpoint_layout(dw), 2*256, buffered=True)
             soc.usb3_loopback = usb3_loopback
             soc.comb += [
                 usb3_core.endpoints[1].source.connect(usb3_loopback.sink),
@@ -182,7 +188,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
         # Bandwidth benchmark: EP1 IN counter source, EP2 OUT counter checker
         # (bench/usb3_bench.py).
         if example == "bench":
-            soc.usb3_bench = usb3_bench = USB3Bench()
+            soc.usb3_bench = usb3_bench = USB3Bench(data_width=dw)
             soc.comb += [
                 usb3_bench.source.connect(usb3_core.endpoints[0].sink),
                 usb3_core.endpoints[1].source.connect(usb3_bench.sink),

@@ -82,7 +82,7 @@ USB3PHY_LINK_CTRL = [
     ("exit_u1_req",       "i"), ("exit_u2_req",    "i"), ("wakeup_u3_req",  "i"),
 ]
 
-@ResetInserter(["sys"]) # sys only (the Gen2PIPE also has logic in the tx/rx clock domains).
+@ResetInserter(["sys"]) # sys only (the Gen2PIPE tx/rx clock domains: synchronized reset, see do_finalize).
 class USB3PHY(LiteXModule):
     """USB3 PHY: USB3PIPE(s) + USB3LTSSM.
 
@@ -109,12 +109,15 @@ class USB3PHY(LiteXModule):
       signals are the LTSSM ones (same Signal objects); undriven inputs keep their reset values.
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
-        timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8):
+        timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8, link_words=1):
         assert role in ["device", "host"]
         assert lanes in [1, 2]
         serdes = [serdes] if lanes == 1 else serdes
         assert len(serdes) == lanes
         assert (lanes == 1) or (not with_endianness_swap)
+        assert link_words in [1, 2]
+        assert (lanes == 1) or (link_words == 1)
+        self.link_words = link_words # Link Layer words (1: 32-bit) or words pairs (2: 64-bit).
 
         # PIPE(s) / LTSSM --------------------------------------------------------------------------
         if lanes == 1:
@@ -153,6 +156,8 @@ class USB3PHY(LiteXModule):
         if lanes == 1:
             if hasattr(self, "gen2_pipe"):
                 self.add_gen2_datapath(pipe)
+            elif link_words == 2:
+                self.sink, self.source = self.add_pairs_adapters(pipe)
             else:
                 self.sink   = pipe.sink
                 self.source = pipe.source
@@ -274,28 +279,70 @@ class USB3PHY(LiteXModule):
         """PHY reset (sys clock domain)."""
         return self.reset_sys
 
+    def do_finalize(self):
+        # Gen2PIPE tx/rx clock domains reset with the PHY reset (else, after a PHY reset, the sys sides
+        # of the Gen 2 TX units/RX words buffers restart while their tx/rx sides keep their state:
+        # units started before being written, Logical Idle Data Blocks inside the units).
+        if hasattr(self, "gen2_pipe"):
+            self.specials += [
+                MultiReg(self.reset_sys, self.gen2_pipe.reset_tx, "tx"),
+                MultiReg(self.reset_sys, self.gen2_pipe.reset_rx, "rx"),
+            ]
+
+    def add_pairs_adapters(self, pipe):
+        """Words pairs (link_words=2) <-> Gen 1 PIPE words: returns the (sink, source) pairs streams."""
+        from usb3_pipe.framing import WordsToPairs, PairsToWords
+        to_words = PairsToWords()
+        to_pairs = WordsToPairs()
+        self.submodules += to_words, to_pairs
+        self.comb += [
+            to_words.source.connect(pipe.sink),
+            pipe.source.connect(to_pairs.sink),
+        ]
+        return to_words.sink, to_pairs.source
+
     def add_gen2_datapath(self, pipe):
-        """Link Layer words: Gen2PIPE (Gen 2 packet framing) while gen2_active, else Gen 1 PIPE."""
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        gen2_sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        gen2_source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        """Link Layer words: Gen2PIPE (Gen 2 packet framing) while gen2_active, else Gen 1 PIPE
+        (words or words pairs: link_words)."""
+        from usb3_pipe.framing import gen2_link_layout
+        layout = [("data", 32), ("ctrl", 4)] if self.link_words == 1 else gen2_link_layout()
+        self.sink   = sink   = stream.Endpoint(layout)
+        self.source = source = stream.Endpoint(layout)
+        gen2_sink   = stream.Endpoint(layout)
+        gen2_source = stream.Endpoint(layout)
+        if self.link_words == 1:
+            pipe_sink, pipe_source = pipe.sink, pipe.source
+        else:
+            pipe_sink, pipe_source = self.add_pairs_adapters(pipe)
+        # LGOOD_n/LCRD_x Link Commands words (Gen 2, PHY words order), not behind the RX words, when
+        # enabled by the Link Layer (source_lc_enable, else in source).
+        self.source_lc        = source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source_lc_enable = Signal()
+        self.comb += self.gen2_pipe.source_lc_enable.eq(self.source_lc_enable)
+        gen2_source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
         if self.gen2_endianness_swap:
             # Gen2PIPE words: Symbol 0 on data[0:8], PHY words: Symbol 0 on data[24:32].
-            self.submodules += EndiannessSwap(gen2_sink, self.gen2_pipe.sink)
-            self.submodules += EndiannessSwap(self.gen2_pipe.source, gen2_source)
+            self.submodules += EndiannessSwap(gen2_sink, self.gen2_pipe.sink, word_bytes=4)
+            self.submodules += EndiannessSwap(self.gen2_pipe.source, gen2_source, word_bytes=4)
+            self.submodules += EndiannessSwap(self.gen2_pipe.source_lc, gen2_source_lc)
         else:
             self.comb += [
                 gen2_sink.connect(self.gen2_pipe.sink),
                 self.gen2_pipe.source.connect(gen2_source),
+                self.gen2_pipe.source_lc.connect(gen2_source_lc),
             ]
+        self.comb += [
+            gen2_source_lc.connect(source_lc, omit={"valid", "ready"}),
+            source_lc.valid.eq(gen2_source_lc.valid & self.gen2_active),
+            gen2_source_lc.ready.eq(source_lc.ready | ~self.gen2_active),
+        ]
         self.comb += [
             If(self.gen2_active,
                 sink.connect(gen2_sink),
                 gen2_source.connect(source),
             ).Else(
-                sink.connect(pipe.sink),
-                pipe.source.connect(source),
+                sink.connect(pipe_sink),
+                pipe_source.connect(source),
             )
         ]
 
@@ -307,7 +354,9 @@ class USB3PHY(LiteXModule):
         5Gbps for the next SuperSpeedPlus Polling."""
         ltssm = self.ltssm
         self.gen2_endianness_swap = with_endianness_swap
-        self.gen2_pipe = gen2_pipe = Gen2PIPE()
+        # tx/rx clock domains reset with the PHY (sys) reset, synchronized (do_finalize): the TX units
+        # and RX words buffers have their write/read sides in different clock domains.
+        self.gen2_pipe = gen2_pipe = ResetInserter(["tx", "rx"])(Gen2PIPE(link_words=self.link_words))
         self.gen2_active = gen2_active = Signal() # o: Gen 2 operation (10Gbps).
         self.sync += gen2_active.eq(self.gen2 & ~ltssm.ssp_polling)
         self.comb += [

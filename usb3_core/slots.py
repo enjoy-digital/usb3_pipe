@@ -22,22 +22,25 @@ from usb3_core.endpoints import MAX_PACKET_SIZE, MAX_PACKET_WORDS
 # USB3 Packet Slots --------------------------------------------------------------------------------
 
 class USB3PacketSlots(LiteXModule):
-    """Packet Slots: n slots x MAX_PACKET_WORDS 32-bit words.
+    """Packet Slots: n slots x Max Packet Size (1024 bytes) in data_width words (32/64-bit).
 
     wr_port: write port (adr/dat_w/we), rd_port: read port (adr/re/dat_r, 1 cycle latency).
     lengths: per-slot packet length in bytes (Array, indexed by slot).
     adr(slot, count): memory word address of word count of slot (word 0 when count is None).
     """
-    def __init__(self, n):
+    def __init__(self, n, data_width=32):
         assert n >= 2
-        self.n     = n
-        self.sbits = log2_int(n)                # Slot index bits.
-        self.wbits = log2_int(MAX_PACKET_WORDS) # Word in slot bits.
+        assert data_width in [32, 64]
+        self.n          = n
+        self.data_width = data_width
+        self.words      = MAX_PACKET_SIZE//(data_width//8) # Words per slot.
+        self.sbits      = log2_int(n)                     # Slot index bits.
+        self.wbits      = log2_int(self.words)            # Word in slot bits.
 
         # # #
 
         # Memory (not an attribute: not collected as a CSR memory).
-        mem = Memory(32, n*MAX_PACKET_WORDS)
+        mem = Memory(data_width, n*self.words)
         self.wr_port = mem.get_port(write_capable=True)
         self.rd_port = mem.get_port(has_re=True)
         self.specials += mem
@@ -54,8 +57,8 @@ class USB3PacketSlots(LiteXModule):
 class USB3PacketWriter(LiteXModule):
     """Packet Writer (user side of the IN Endpoints).
 
-    sink: packets (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end of
-    packet) written to the slot of ptr, packets longer than MAX_PACKET_WORDS split. The slot is
+    sink: packets (data: slots words, first byte on data[0:8], be: valid bytes, last: end of
+    packet) written to the slot of ptr, packets longer than Max Packet Size split. The slot is
     committed (commit: length from be, ptr incremented) on last or when full.
     rd_ptr: oldest slot in use (endpoint side), sink not ready when the n slots are used.
     flush: write restarted (packet being written dropped).
@@ -75,7 +78,9 @@ class USB3PacketWriter(LiteXModule):
         # # #
 
         slot  = ptr[0:sbits]
-        count = Signal(bits_for(MAX_PACKET_WORDS)) # Words of the packet written.
+        words = slots.words
+        wb    = slots.data_width//8                # Bytes per word.
+        count = Signal(bits_for(words))            # Words of the packet written.
         used  = Signal(sbits + 1)                  # Written slots not freed (modulo 2*n).
         full  = Signal()
         self.comb += [
@@ -89,14 +94,14 @@ class USB3PacketWriter(LiteXModule):
             slots.wr_port.adr.eq(slots.adr(slot, count)),
             slots.wr_port.dat_w.eq(sink.data),
             slots.wr_port.we.eq(sink.valid & sink.ready),
-            commit.eq(sink.valid & sink.ready & (sink.last | (count == MAX_PACKET_WORDS - 1))),
+            commit.eq(sink.valid & sink.ready & (sink.last | (count == words - 1))),
         ]
 
         # Count/Commit.
         on_flush  = [count.eq(0)]
         on_commit = [
             count.eq(0),
-            slots.lengths[slot].eq(4*count + Mux(sink.last, be_to_bytes(sink.be), 4)),
+            slots.lengths[slot].eq(wb*count + Mux(sink.last, be_to_bytes(sink.be), wb)),
             ptr.eq(ptr + 1),
         ]
         if max_packets is not None:

@@ -36,17 +36,17 @@ WR_IDLE_CYCLES = 64 # Bulk IN: writer idle cycles before a last max size packet 
 class USB3BulkIN(USB3Endpoint):
     """Bulk IN Endpoint (Device -> Host).
 
-    sink: packets to send (data: 32-bit words, first byte on data[0:8], be: valid bytes, last: end
-    of packet), packets longer than 1024 bytes are split.
+    sink: packets to send (data: data_width words, first byte on data[0:8], be: valid bytes, last:
+    end of packet), packets longer than 1024 bytes are split.
     flush: drop the buffered packets (and the packet being written), ex: stream restarted. The
     packets already sent (DPHs out) are kept until acknowledged (or retried/reset): the Sequence
     Numbers stay in sync with the host.
     """
-    def __init__(self, ept, max_burst=8):
+    def __init__(self, ept, max_burst=8, data_width=32):
         assert max_burst in [2, 4, 8, 16]
-        USB3Endpoint.__init__(self, ept, direction=1)
+        USB3Endpoint.__init__(self, ept, direction=1, data_width=data_width)
         self.max_burst = max_burst
-        self.sink  = sink = stream.Endpoint(endpoint_layout())
+        self.sink  = sink = stream.Endpoint(endpoint_layout(data_width))
         self.flush = Signal() # i
 
         # # #
@@ -55,7 +55,7 @@ class USB3BulkIN(USB3Endpoint):
         pbits = log2_int(n) + 1 # Pointers: one more bit than the slot index (full/empty).
 
         # Packet Slots -----------------------------------------------------------------------------
-        self.slots = slots = USB3PacketSlots(n)
+        self.slots = slots = USB3PacketSlots(n, data_width)
         lengths = slots.lengths
 
         ack_ptr = Signal(pbits) # Oldest slot not acknowledged by the host.
@@ -270,19 +270,26 @@ class USB3BulkIN(USB3Endpoint):
             reader.source.connect(self.tx_dpp),
         ]
 
+        # Debug (sending state).
+        self.dbg_no_data  = ~avail & ~fc                            # No packet written to send.
+        self.dbg_no_win   = avail & ~fc & ~in_win                   # Waiting for a host request.
+        self.dbg_fc       = fc                                      # Flow control (EOB/NRDY/ERDY).
+        self.dbg_hp_wait  = avail & ~fc & in_win & ~self.tx_hp.ready # Link Layer not ready.
+        self.dbg_inflight = inflight
+
 # USB3 Bulk OUT Endpoint ---------------------------------------------------------------------------
 
 class USB3BulkOUT(USB3Endpoint):
     """Bulk OUT Endpoint (Host -> Device).
 
-    source: received packets (data: 32-bit words, first byte on data[0:8], be: valid bytes, last:
-    end of packet). Zero-length packets are dropped.
+    source: received packets (data: data_width words, first byte on data[0:8], be: valid bytes,
+    last: end of packet). Zero-length packets are dropped.
     """
-    def __init__(self, ept, max_burst=8):
+    def __init__(self, ept, max_burst=8, data_width=32):
         assert max_burst in [2, 4, 8, 16]
-        USB3Endpoint.__init__(self, ept, direction=0)
+        USB3Endpoint.__init__(self, ept, direction=0, data_width=data_width)
         self.max_burst = max_burst
-        self.source = source = stream.Endpoint(endpoint_layout())
+        self.source = source = stream.Endpoint(endpoint_layout(data_width))
 
         # # #
 
@@ -290,7 +297,9 @@ class USB3BulkOUT(USB3Endpoint):
         pbits = log2_int(n) + 1
 
         # Packet Slots -----------------------------------------------------------------------------
-        self.slots = slots = USB3PacketSlots(n)
+        self.slots = slots = USB3PacketSlots(n, data_width)
+        words   = slots.words
+        wb      = data_width//8 # Bytes per word.
         wr_port = slots.wr_port
         rd_port = slots.rd_port
         lengths = slots.lengths
@@ -310,7 +319,7 @@ class USB3BulkOUT(USB3Endpoint):
         ]
 
         # Landing (DPPs written as received) -------------------------------------------------------
-        land_count = Signal(bits_for(MAX_PACKET_WORDS))
+        land_count = Signal(bits_for(words))
         land_bytes = Signal(bits_for(MAX_PACKET_SIZE))
         land_en    = Signal(reset_less=True) # Slot available at the DPP start (latched).
         land_data  = Signal()                # DPP data received.
@@ -323,7 +332,7 @@ class USB3BulkOUT(USB3Endpoint):
             ),
             wr_port.adr.eq(slots.adr(land_ptr[0:pbits-1], land_count)),
             wr_port.dat_w.eq(self.rx_dpp.data),
-            wr_port.we.eq(self.rx_dpp.valid & landing & (land_count < MAX_PACKET_WORDS)),
+            wr_port.we.eq(self.rx_dpp.valid & landing & (land_count < words)),
             self.rx_dpp.ready.eq(1),
             self.landed.eq(self.rx_dpp_done & landing),
         ]
@@ -394,20 +403,20 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += If(self.tx_hp.valid & self.tx_hp.ready, need_erdy.eq(0))
 
         # Reader (user) ----------------------------------------------------------------------------
-        self.fifo = fifo = stream.SyncFIFO(endpoint_layout(), 16)
-        rd_count  = Signal(bits_for(MAX_PACKET_WORDS), reset_less=True)
+        self.fifo = fifo = stream.SyncFIFO(endpoint_layout(data_width), 16)
+        rd_count  = Signal(bits_for(words), reset_less=True)
         rd_len    = Signal(bits_for(MAX_PACKET_SIZE))
-        rd_words  = Signal(bits_for(MAX_PACKET_WORDS))
+        rd_words  = Signal(bits_for(words))
         rd_active = Signal()
         rd_valid  = Signal()
         rd_last   = Signal(reset_less=True)
-        rd_be     = Signal(4, reset_less=True)
+        rd_be     = Signal(wb, reset_less=True)
         rd_issue  = Signal()
         rd_slot   = Signal(pbits - 1)
         self.comb += [
             rd_slot.eq(rd_ptr[0:pbits-1]),
             rd_len.eq(lengths[rd_slot]),
-            rd_words.eq((rd_len + 3)[2:]),
+            rd_words.eq((rd_len + wb - 1)[log2_int(wb):]),
             rd_port.adr.eq(slots.adr(rd_slot, rd_count)),
             rd_issue.eq(rd_active & (fifo.level < 12)),
             rd_port.re.eq(rd_issue),
@@ -415,7 +424,7 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += [
             rd_valid.eq(rd_issue),
             rd_last.eq(rd_issue & (rd_count + 1 >= rd_words)),
-            rd_be.eq(Mux(rd_count + 1 >= rd_words, bytes_to_be(rd_len), 0b1111)),
+            rd_be.eq(Mux(rd_count + 1 >= rd_words, bytes_to_be_n(rd_len[:log2_int(wb)], wb), 2**wb - 1)),
             If(~rd_active,
                 # Next decided slot: read it (valid, not empty) or skip it.
                 If(rd_ptr != decide_ptr,

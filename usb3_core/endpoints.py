@@ -30,9 +30,10 @@ MAX_PACKET_WORDS = MAX_PACKET_SIZE//4
 # USB3 Endpoint Base -------------------------------------------------------------------------------
 
 class USB3Endpoint(LiteXModule):
-    def __init__(self, ept, direction):
-        self.ept       = ept
-        self.direction = direction # 0: OUT, 1: IN.
+    def __init__(self, ept, direction, data_width=32):
+        self.ept        = ept
+        self.direction  = direction  # 0: OUT, 1: IN.
+        self.data_width = data_width # DPP words (32/64-bit, see USB3LinkLayer data_width).
 
         # Protocol Layer interface.
         self.hdr_dw0      = Signal(32) # i
@@ -44,8 +45,8 @@ class USB3Endpoint(LiteXModule):
         self.resp_valid   = Signal()   # o
         self.resp_dw1     = Signal(32) # o
         self.tx_hp        = stream.Endpoint(tx_header_layout()) # o
-        self.tx_dpp       = stream.Endpoint(dpp_layout())       # o
-        self.rx_dpp       = stream.Endpoint(dpp_layout())       # i
+        self.tx_dpp       = stream.Endpoint(dpp_layout(data_width)) # o
+        self.rx_dpp       = stream.Endpoint(dpp_layout(data_width)) # i
         self.rx_dpp_done  = Signal() # i
         self.rx_dpp_ok    = Signal() # i
         self.rx_dpp_setup = Signal() # i: Received DPP is a SETUP DP (Control Endpoint).
