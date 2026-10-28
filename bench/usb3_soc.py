@@ -70,7 +70,7 @@ class RXRawSnapshot(LiteXModule):
     across RX re-initializations) with their flags, stopped `depth//2` words after a trigger
     (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs (oldest word
     at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
-    def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr", write_enable=1):
+    def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr", write_enable=1, post=None):
         from migen.genlib.cdc import MultiReg, PulseSynchronizer
         from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
         self._arm     = CSR()
@@ -86,6 +86,8 @@ class RXRawSnapshot(LiteXModule):
             self._data4 = CSRStatus(32)
 
         # # #
+
+        post_count = post
 
         mem = Memory(len(rx_raw) + len(flags), depth)
         wr  = mem.get_port(write_capable=True, clock_domain=clock_domain)
@@ -111,7 +113,7 @@ class RXRawSnapshot(LiteXModule):
             ).Elif(~done & write_enable,
                 adr.eq(adr + 1),
                 If(armed & (flags >> sel)[0],
-                    armed.eq(0), post.eq(depth//2)
+                    armed.eq(0), post.eq(depth//2 if post_count is None else post_count)
                 ).Elif(post != 0,
                     post.eq(post - 1),
                     If(post == 1, done.eq(1), start.eq(adr + 1))
@@ -251,6 +253,23 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             flags=Cat(lcrd_err_rx, phy.gen2_pipe.rx.rx.data_stream, lrx.framing.source.valid),
             depth=512, clock_domain="rx_nr",
             write_enable=mon.valid | lcrd_err_rx | ~phy.gen2_pipe.rx.rx.data_stream)
+    # TX Data Blocks snapshot (unscrambled, Gen2LinkTX packer -> Gen2TX, blocks sent), stopped right
+    # after a U0 exit (the last ~1000 blocks before it).
+    if hasattr(phy, "gen2_pipe"):
+        u0_exit    = Signal()
+        u0_d       = Signal()
+        u0_exit_tx = Signal()
+        u0_count   = Signal(3)
+        soc.sync += [
+            u0_d.eq(phy.u0),
+            If(u0_d & ~phy.u0, u0_count.eq(7)).Elif(u0_count != 0, u0_count.eq(u0_count - 1)),
+        ]
+        soc.comb += u0_exit.eq(u0_count != 0)
+        soc.specials += MultiReg(u0_exit, u0_exit_tx, "tx_nr")
+        pk = phy.gen2_pipe.tx_packer.source
+        soc.usb3_gen2_txblocks_snapshot = RXRawSnapshot(Cat(pk.data, pk.last),
+            flags=Cat(u0_exit_tx), depth=1024, clock_domain="tx_nr",
+            write_enable=(pk.valid & pk.ready) | u0_exit_tx, post=8)
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
