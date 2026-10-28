@@ -249,10 +249,18 @@ class USB3LinkLayer(LiteXModule):
         dpp_crc   = Signal(32)
         dpp_end   = Signal() # DPP CRC word received (pulse).
         self.crc32_rx = crc32_rx = CRC32(data_width=dw)
-        dpp_two = Signal() # Words pairs: two DPP data words (8 bytes, not the last ones).
+        # Words pairs: DPP words of 8 bytes (two words: dpp_two, or a held word and the next one),
+        # the last one 1-8 bytes; CRC-32 on the words as consumed.
+        dpp_two    = Signal() # Two DPP data words consumed (8 bytes, not the last ones).
+        dpp_hold   = Signal() # DPP data word held (no DPP word output).
+        dpp_held   = Signal(32, reset_less=True)
+        dpp_held_v = Signal()
         rx_fsm_dpp_data = Signal()
         if lw == 2:
-            self.comb += dpp_two.eq(rx_fsm_dpp_data & (rx_window.n == 2) & (dpp_rem >= 8))
+            self.comb += [
+                dpp_two.eq(rx_fsm_dpp_data & ~dpp_held_v & (rx_window.n == 2) & (dpp_rem >= 8)),
+                dpp_hold.eq(~dpp_two & ~dpp_held_v & (dpp_rem > 4)),
+            ]
         self.comb += [
             dpp_pb.eq(Mux(dpp_rem >= 4, 4, dpp_rem)),
             Case(dpp_off, {
@@ -263,8 +271,9 @@ class USB3LinkLayer(LiteXModule):
             }),
             crc32_rx.data.eq(Cat(rx_data, Mux(dpp_two, rx_data1, 0))[:dw]),
             crc32_rx.bytes.eq(Mux(dpp_two, 8, dpp_pb)),
-            self.rx_dpp.data.eq(Cat(rx_data, Mux(dpp_two, rx_data1, 0))[:dw]),
-            self.rx_dpp.bytes.eq(Mux(dpp_two, 8, dpp_pb)),
+            self.rx_dpp.data.eq(Mux(dpp_held_v,
+                Cat(dpp_held, rx_data), Cat(rx_data, Mux(dpp_two, rx_data1, 0)))[:dw]),
+            self.rx_dpp.bytes.eq(Mux(dpp_two, 8, Mux(dpp_held_v, 4 + dpp_pb, dpp_pb))),
             # DPH with DL bit (no DPP): routed with the DPH fields (rx_dpp_done on hp_check).
             If(hp_check,
                 self.rx_dpp.ept.eq(hp_w[1][8:12]),
@@ -292,6 +301,7 @@ class USB3LinkLayer(LiteXModule):
                     NextValue(dpp_rem,   length_now),
                     NextValue(dpp_off,   length_now[0:2]),
                     NextValue(dpp_first, 1),
+                    NextValue(dpp_held_v, 0),
                     NextState("DPP")
                 )
             )
@@ -318,12 +328,14 @@ class USB3LinkLayer(LiteXModule):
                 NextState("IDLE")
             ).Elif(rx_valid,
                 If(dpp_rem != 0,
-                    self.rx_dpp.valid.eq(1),
+                    self.rx_dpp.valid.eq(~dpp_hold),
                     self.rx_dpp.first.eq(dpp_first),
                     self.rx_dpp.last.eq(Mux(dpp_two, dpp_rem == 8, dpp_rem <= 4)),
                     crc32_rx.ce.eq(1),
                     rx_two.eq(dpp_two),
-                    NextValue(dpp_first, 0),
+                    If(~dpp_hold, NextValue(dpp_first, 0)),
+                    NextValue(dpp_held,   rx_data),
+                    NextValue(dpp_held_v, dpp_hold),
                     NextValue(dpp_rem,  dpp_rem - Mux(dpp_two, 8, dpp_pb)),
                     NextValue(dpp_prev, Mux(dpp_two, rx_data1, rx_data)),
                 ).Else(

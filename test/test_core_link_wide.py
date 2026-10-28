@@ -74,6 +74,7 @@ class TestCoreLinkWide(unittest.TestCase):
         payloads = [[rng.randrange(256) for _ in range(n)] for n in LENGTHS]
         received = []
         status   = []
+        partial  = []
         words    = advertisement()
         for seq, payload in enumerate(payloads):
             words += dph(seq % 16, len(payload), ept=2, tt=TT_BULK)
@@ -91,8 +92,12 @@ class TestCoreLinkWide(unittest.TestCase):
             current = []
             while True:
                 if (yield link.rx_dpp.valid):
-                    data = (yield link.rx_dpp.data)
-                    current += list(data.to_bytes(link_words*4, "little"))[:(yield link.rx_dpp.bytes)]
+                    data   = (yield link.rx_dpp.data)
+                    nbytes = (yield link.rx_dpp.bytes)
+                    current += list(data.to_bytes(link_words*4, "little"))[:nbytes]
+                    # Full words except the last one (endpoints memories written per word).
+                    if not (yield link.rx_dpp.last):
+                        partial.append(nbytes != 4*link_words)
                 if (yield link.rx_dpp_done):
                     received.append(current)
                     status.append((yield link.rx_dpp_ok))
@@ -102,6 +107,7 @@ class TestCoreLinkWide(unittest.TestCase):
         run_simulation(dut, [host(), monitor()])
         self.assertEqual(received, payloads)
         self.assertEqual(status, [1]*len(payloads))
+        self.assertFalse(any(partial))
 
     def tx_test(self, link_words):
         # DPHs + DPPs (tx_hp/tx_dpp, 64-bit DPP words with link_words=2) -> PHY words: DPPs decoded,

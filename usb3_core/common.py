@@ -37,8 +37,11 @@ def seq_add(seq, n, width=3):
 # except on the last word of a packet.
 
 def be_to_bytes(be):
-    """be to valid bytes of the word (1-4)."""
-    return Mux(be[3], 4, Mux(be[2], 3, Mux(be[1], 2, 1)))
+    """be to valid bytes of the word (1-4, 1-8 with an 8-bit be)."""
+    r = 1
+    for i in range(1, len(be)):
+        r = Mux(be[i], i + 1, r)
+    return r
 
 def bytes_to_be(nbytes):
     """Valid bytes of the word (1-4, 2 LSBs used: 0 = 4) to be."""
@@ -177,9 +180,15 @@ class WordsWindow(LiteXModule):
             )
         self.sync += level.eq(rem + Mux(accept, sink.words, 0))
 
-def endpoint_layout():
-    """Endpoints user streams: 32-bit words (first byte on data[0:8]), be: valid bytes."""
-    return [("data", 32), ("be", 4)]
+def bytes_to_be_n(nbytes, n):
+    """Valid bytes of the word (1-n, 0 = n) to be (n bits)."""
+    cases = {b: C((1 << b) - 1, n) for b in range(1, n)}
+    return Array([C((1 << n) - 1, n)] + [cases[b] for b in range(1, n)] +
+        [C((1 << n) - 1, n)]*(2**len(nbytes) - n))[nbytes]
+
+def endpoint_layout(data_width=32):
+    """Endpoints user streams: 32/64-bit words (first byte on data[0:8]), be: valid bytes."""
+    return [("data", data_width), ("be", data_width//8)]
 
 # Header Fields (8.3/8.5/8.6) ----------------------------------------------------------------------
 
