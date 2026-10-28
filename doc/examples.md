@@ -42,6 +42,41 @@ $ ./bench/usb3_bench.py both --csr-csv build/sqrl_acorn/csr.csv # IN 376 + OUT 4
 $ ./bench/usb3_soak.py --bench 20 --duration 300 --csr-csv build/sqrl_acorn/csr.csv
 ```
 
+`usb3_bench.py` options: `--duration`, `--transfer-size` (bytes, default 1MB), `--queue` (queued
+transfers per direction), `--no-check`. With 1MB transfers the host itself limits the Bulk IN rate at
+Gen 2 (~330MB/s): use `--transfer-size 65536` to measure the device.
+
+Build options of the vendor Bulk examples (`loopback`, `bench`):
+- `--max-burst 2|4|8|16`: Bulk endpoints Max Burst (default 8).
+- `--link-words 1|2`: Link Layer words, 2: 64-bit Link Layer and Bulk endpoints/`USB3Bench`
+  (`USB3PHY(link_words=2)`, Gen 2 bandwidth).
+
+With the `bench` example, the SoC also has a throughput profile (`usb3_profile_control`: clear/run,
+`usb3_profile`: cycles counters of `USB3_PROFILE_EVENTS` in `bench/usb3_soc.py`: Link Layer TX
+words/back-pressure/idle, Tx Header Buffers full, credit waits, Bulk IN states (no data, no host
+window, flow control), Tx Header Buffers hold, Header Packet -> LGOOD_n round trip, Bulk IN DPH ->
+ACK TP latency).
+
+## Gen 2 (10Gbps): `bench` on the XCKU3P
+
+`bench/alibaba_xcku3p.py --gen2-capable` (Gen 2 capable GTY clocking: QPLL at 10Gbps) advertises Gen
+2x1 in the SuperSpeedPlus Polling: on a USB 3.2 Gen 2 host port the link trains at 10Gbps
+(SuperSpeedPlus, `lsusb -t`: 10000M), on a Gen 1 port at 5Gbps.
+
+```sh
+$ ./bench/alibaba_xcku3p.py --build --load --example bench --gen2-capable --link-words 2
+$ lsusb -t
+$ ./bench/usb3_bench.py in   --transfer-size 65536                                         # IN  744 MB/s
+$ ./bench/usb3_bench.py out  --transfer-size 65536 --csr-csv build/alibaba_xcku3p/csr.csv  # OUT 881 MB/s
+$ ./bench/usb3_bench.py both --transfer-size 65536 --csr-csv build/alibaba_xcku3p/csr.csv  # IN 619 + OUT 736 MB/s
+```
+
+32-bit Link Layer (default `--link-words 1`): IN 426 MB/s, OUT 466 MB/s, full duplex 325 + 430 MB/s.
+`--max-burst 16` with `--link-words 2`: IN 785 MB/s, full duplex 644 + 757 MB/s. The Gen 2 debug CSRs
+(`usb3_gen2_*`) are added with `--gen2-capable`: Gen 2 status (`usb3_gen2_status`: negotiated, 10Gbps
+rate), capability advertised (`usb3_gen2_capable`, 0: Gen 1 operation at the next link training, ex:
+after a `usb3_debug` PHY reset), RX/TX snapshots and counters ([debugging-guide.md](debugging-guide.md)).
+
 ## `--with-lpm`: U1/U2 Link Power Management
 
 With `--with-lpm`, the vendor Bulk examples (`loopback`, `bench`) are built with
@@ -163,12 +198,14 @@ ffplay/VLC while using `litex_term /dev/ttyACM0`.
 `bench/kc705.py` (KC705, Kintex7 GTX, `--connector sfp|sma`) and `bench/alibaba_xcku3p.py` (Alibaba
 Cloud XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`, `--refclk sfp|clk100`) share the SoC
 (`bench/usb3_soc.py`: example designs and common options `--example`, `--cpu-type`, `--with-lpm`,
-`--with-serdes-debug`, `--with-analyzer`). Results above are from the Acorn.
+`--max-burst`, `--link-words`, `--with-serdes-debug`, `--with-analyzer`). Results above are from the
+Acorn, except the Gen 2 section (XCKU3P).
 
 - XCKU3P: validated on hardware with the SFP2USB adapter in the NIC1 SFP cage (`--sfp 0`, default),
   GTY reference clock from the SFP MGT clock (156.25MHz, `--refclk sfp`, default): bench example IN
   446MB/s, OUT 450MB/s, full duplex, 0 errors, retrains/soak without Recovery (RX polarity inverted
-  on this board, detected by the LTSSM). JTAG: Digilent JTAG-HS2 (`openFPGALoader -c digilent_hs2`,
+  on this board, detected by the LTSSM). Gen 2 (10Gbps) with `--gen2-capable`, see above. JTAG:
+  Digilent JTAG-HS2 (`openFPGALoader -c digilent_hs2`,
   OpenOCD `cpld/xilinx-xcu.cfg` with `CHIP XCKU3P` for JTAGBone).
 - KC705: build-tested, hardware validation in progress.
 
