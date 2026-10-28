@@ -93,5 +93,81 @@ class TestCoreLinkSSP(unittest.TestCase):
         run_simulation(dut, [host(), dpps(), scenario()])
         self.assertEqual(accepted, [("ack", True)]*3 + [("dph", True)]*4 + [("ack", False), ("dph", False)])
 
+    def test_dph_retransmission_nullified_dpp(self):
+        # LBAD received after a DPH: LRTY, then the DPH retransmitted (DL bit set) followed by a
+        # nullified DPP (DPPABORT), the Gen 2 framing has a DPP after each DPH (7.2.4.1.13).
+        dut  = LinkDUT()
+        link = dut.link
+        phy  = dut.phy
+        sent = []
+
+        def host():
+            words = link_command(LGOOD(15))
+            for x in range(4):
+                words += link_command(LCRD(x)) + link_command(LCRD2(x))
+            yield phy.polling_idle.eq(1)
+            yield
+            yield phy.polling_idle.eq(0)
+            yield phy.u0.eq(1)
+            yield phy.sink.ready.eq(1)
+            for data, ctrl in words:
+                yield phy.source.valid.eq(1)
+                yield phy.source.data.eq(data)
+                yield phy.source.ctrl.eq(ctrl)
+                yield
+            yield phy.source.valid.eq(0)
+            # LBAD once the DPH and its DPP are sent.
+            while not any(w == (swap(FRAMING_END), 0b1111) for w in sent):
+                yield
+            for data, ctrl in link_command(0x180): # LBAD.
+                yield phy.source.valid.eq(1)
+                yield phy.source.data.eq(data)
+                yield phy.source.ctrl.eq(ctrl)
+                yield
+            yield phy.source.valid.eq(0)
+            for _ in range(256):
+                yield
+
+        @passive
+        def monitor():
+            while True:
+                if (yield phy.sink.valid) & (yield phy.sink.ready):
+                    sent.append(((yield phy.sink.data), (yield phy.sink.ctrl)))
+                yield
+
+        def push():
+            for _ in range(128):
+                yield
+            yield link.tx_hp.valid.eq(1)
+            yield link.tx_hp.dw0.eq(TYPE_DP)
+            yield link.tx_hp.dw1.eq(dph_dw1(seq=0, ept=1, direction=1, length=4))
+            yield link.tx_hp.dpp.eq(1)
+            yield
+            while not (yield link.tx_hp.ready):
+                yield
+            yield link.tx_hp.valid.eq(0)
+
+        @passive
+        def dpp():
+            yield link.tx_dpp.valid.eq(1)
+            yield link.tx_dpp.data.eq(0x12345678)
+            yield link.tx_dpp.bytes.eq(4)
+            yield link.tx_dpp.last.eq(1)
+            while True:
+                yield
+
+        run_simulation(dut, [host(), monitor(), push(), dpp()])
+        # Framing words sent (K Symbols, PHY order): SHP for the Header Packets.
+        shp = [i for i, w in enumerate(sent) if w == (swap(FRAMING_SHP), 0b1111)]
+        dphs = [i for i in shp if (swap(sent[i + 1][0]) & 0x1f) == TYPE_DP]
+        self.assertEqual(len(dphs), 2)
+        retry = dphs[1]
+        lcw   = swap(sent[retry + 4][0]) >> 16
+        self.assertEqual((lcw >> 9) & 1, 1) # DL bit set.
+        self.assertEqual(sent[retry + 5], (swap(FRAMING_EDB), 0b1111))
+
+def swap(w):
+    return int.from_bytes(w.to_bytes(4, "little"), "big")
+
 if __name__ == "__main__":
     unittest.main()

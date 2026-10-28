@@ -534,6 +534,7 @@ class USB3LinkLayer(LiteXModule):
         lc_word   = Signal(32, reset_less=True)
         hp_dws    = Signal(96, reset_less=True)
         hp_dpp    = Signal(reset_less=True)
+        hp_null   = Signal(reset_less=True) # Retransmitted DPH: nullified DPP (SuperSpeedPlus).
         hp_lcw    = Signal(16)
         hp_info   = Signal(11, reset_less=True)
         self.crc16_tx  = crc16_tx  = CRC16()
@@ -636,6 +637,7 @@ class USB3LinkLayer(LiteXModule):
                     tx_sent_hp.eq(1),
                     NextValue(hp_dws,  tx_dws[send_seq[0:ib]]),
                     NextValue(hp_dpp,  tx_dpps[send_seq[0:ib]] & ~tx_sent[send_seq[0:ib]]),
+                    NextValue(hp_null, tx_dpps[send_seq[0:ib]] &  tx_sent[send_seq[0:ib]] & ssp),
                     NextValue(hp_info, Cat(send_seq, C(0, 9 - sw), tx_sent[send_seq[0:ib]], C(0, 1))),
                     NextState("HP0")
                 ).Elif(sel_lrty | sel_lbad | sel_lgood | sel_lcrd | sel_lcrd2 | sel_lau | sel_lxu | sel_lup,
@@ -664,9 +666,23 @@ class USB3LinkLayer(LiteXModule):
                 tx_ctrl.eq(0b1111 if i == 0 else 0b0000),
                 If(tx_ready,
                     NextState(f"HP{i+1}") if i < 4 else
-                    If(hp_dpp, NextState("DPP-SOF")).Else(NextState("IDLE"))
+                    If(hp_dpp,
+                        NextState("DPP-SOF")
+                    ).Elif(hp_null,
+                        NextState("DPP-ABORT")
+                    ).Else(
+                        NextState("IDLE")
+                    )
                 )
             )
+        # Retransmitted DPH (DL bit set) in SuperSpeedPlus operation: DPP replaced by a nullified DPP
+        # (DPPABORT, 7.2.4.1.13/7.2.1.2.2), the Gen 2 framing has a DPP after each DPH.
+        tx_fsm.act("DPP-ABORT",
+            tx_valid.eq(1),
+            tx_word.eq(FRAMING_EDB),
+            tx_ctrl.eq(0b1111),
+            If(tx_ready, NextState("IDLE"))
+        )
         tx_fsm.act("DPP-SOF",
             tx_valid.eq(1),
             tx_word.eq(FRAMING_SDP),

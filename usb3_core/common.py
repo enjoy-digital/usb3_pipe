@@ -58,6 +58,7 @@ FRAMING_SHP = framing_word(SHP)
 FRAMING_SDP = framing_word(SDP)
 FRAMING_SLC = framing_word(SLC)
 FRAMING_END = framing_word(END)
+FRAMING_EDB = framing_word(EDB) # DPPABORT (nullified DPP).
 
 # Link Commands (7.2.2.1) --------------------------------------------------------------------------
 
