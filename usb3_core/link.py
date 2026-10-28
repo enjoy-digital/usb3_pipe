@@ -789,6 +789,7 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_tx_push       = tx_push
         self.dbg_lgood_rx      = lc_lgood & adv_received & lgood_ok           # Expected LGOOD_n received...
         self.dbg_lgood_seq     = lc_info[0:4]                                 # ...for this Header Sequence Number.
+        self.dbg_lbad_rx       = lc_lbad                                      # LBAD received.
         self.dbg_state     = Cat(tx_seq[0:4] if sw == 4 else Cat(tx_seq, C(0, 1)),
             ack_seq[0:4] if sw == 4 else Cat(ack_seq, C(0, 1)),
             send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),

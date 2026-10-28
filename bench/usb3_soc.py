@@ -264,6 +264,12 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             u0_d.eq(phy.u0),
             If(u0_d & ~phy.u0, u0_count.eq(7)).Elif(u0_count != 0, u0_count.eq(u0_count - 1)),
         ]
+        # Optional trigger: LBAD received (Header Packet received with errors by the partner).
+        if link is not None:
+            from litex.soc.interconnect.csr import CSRStorage
+            soc.usb3_gen2_txblocks_lbad = CSRStorage(1, description="TX Data Blocks snapshot also "
+                "stopped on a LBAD received.")
+            soc.sync += If(soc.usb3_gen2_txblocks_lbad.storage & link.dbg_lbad_rx, u0_count.eq(7))
         soc.comb += u0_exit.eq(u0_count != 0)
         soc.specials += MultiReg(u0_exit, u0_exit_tx, "tx_nr")
         # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets, with
