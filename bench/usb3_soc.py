@@ -79,6 +79,11 @@ class RXRawSnapshot(LiteXModule):
         self._index   = CSRStorage(bits_for(depth - 1))
         self._data0   = CSRStatus(32)
         self._data1   = CSRStatus(32)
+        wide = (len(rx_raw) + len(flags)) > 64
+        if wide:
+            self._data2 = CSRStatus(32)
+            self._data3 = CSRStatus(32)
+            self._data4 = CSRStatus(32)
 
         # # #
 
@@ -119,8 +124,14 @@ class RXRawSnapshot(LiteXModule):
             wr.we.eq(~done),
             rd.adr.eq(start + self._index.storage),
             self._data0.status.eq(rd.dat_r[:32]),
-            self._data1.status.eq(rd.dat_r[32:]),
+            self._data1.status.eq(rd.dat_r[32:64]),
         ]
+        if wide:
+            self.comb += [
+                self._data2.status.eq(rd.dat_r[64:96]),
+                self._data3.status.eq(rd.dat_r[96:128]),
+                self._data4.status.eq(rd.dat_r[128:]),
+            ]
 
 def add_usb3_gen2_rx(soc, serdes, phy):
     """Gen 2 bring-up: Gen 2 RX monitor on the raw transceiver symbols (the PHY switches to 10Gbps
@@ -177,10 +188,23 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             soc.sync.rx_nr += If(u0_rx & e, c_rx.eq(c_rx + 1))
             soc.specials += MultiReg(c_rx, c) # Quasi-static reads only.
         soc.comb += soc.usb3_gen2_events.status.eq(Cat(*counts))
+        # PHY Gen 2 RX Link Layer path: RX blocks buffer overflow (sticky), framing errors (unknown
+        # packet starts).
+        soc.usb3_gen2_rx_link = CSRStatus(32, description="RX overflow [0], framing errors [31:16].")
+        soc.specials += MultiReg(Cat(gp.rx_overflow, C(0, 15), gp.rx_framing.errors),
+            soc.usb3_gen2_rx_link.status)
         aligner = gp.rx.aligner
         soc.usb3_gen2_phy_rx_status = CSRStatus(8, description="PHY Gen 2 RX: aligned, locked, polarity, data_stream.")
         soc.specials += MultiReg(Cat(aligner.aligned, aligner.locked, aligner.polarity, gp.rx.data_stream),
             soc.usb3_gen2_phy_rx_status.status[0:4])
+    # RX Data Blocks snapshot (monitor, descrambled, rx_nr): trigger 0: Link Layer Recovery request.
+    link = getattr(getattr(soc, "usb3_core", None), "link", None)
+    if link is not None:
+        recovery_rx = Signal()
+        soc.specials += MultiReg(link.dbg_recovery, recovery_rx, "rx_nr")
+        mon = gen2_rx.rx.source
+        soc.usb3_gen2_blocks_snapshot = RXRawSnapshot(Cat(mon.data, mon.valid),
+            flags=Cat(recovery_rx), depth=512, clock_domain="rx_nr")
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
@@ -207,8 +231,6 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         sys_clk_freq = sys_clk_freq,
         role         = "device",
         gen2_capable = gen2_capable)
-    if gen2_capable:
-        add_usb3_gen2_rx(soc, serdes, usb3_phy)
 
     # USB3 PHY/SerDes Debug ------------------------------------------------------------------------
     soc.usb3_debug = USB3PHYDebug(usb3_phy, serdes, sys_clk_freq)
@@ -221,6 +243,10 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         add_usb3_example(soc, usb3_phy, sys_clk_freq, example=example, with_lpm=with_lpm)
     else:
         soc.comb += usb3_phy.source.ready.eq(1)
+
+    # Gen 2 bring-up debug (after the core: Link Layer probes).
+    if gen2_capable:
+        add_usb3_gen2_rx(soc, serdes, usb3_phy)
 
     # Leds -----------------------------------------------------------------------------------------
     for led, signal in zip(leds, [serdes.ready, usb3_phy.u0, usb3_phy.recovery]):
