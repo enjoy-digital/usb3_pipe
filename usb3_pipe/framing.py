@@ -463,11 +463,18 @@ class Gen2TXPacker(LiteXModule):
         ]
 
         # Input: entries placed at the fill level (after the output shift).
+        # A unit is started in a partially filled block only when its first entry completes the
+        # block: else, a block requested before its next entry (Gen2TX, a block every 3 cycles or
+        # more) would find no block and send a Logical Idle Data Block inside the unit. The padded
+        # block (Idle Symbols) is sent first.
         fill_eff = Signal(5)
+        start_ok = Signal()
         rd       = Signal()
         self.comb += [
             fill_eff.eq(Mux(out_fire, Mux(fill >= 16, fill - 16, 0), fill)),
-            rd.eq(sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold)) &
+            start_ok.eq((fill_eff == 0) | ((fill_eff + sink.bytes) >= 16)),
+            rd.eq(sink.valid & ~self.flush &
+                (in_unit | (self.units_available & ~hold & start_ok)) &
                 (fill_eff <= 16)),
             sink.ready.eq(rd | self.flush),
             self.unit_end.eq(sink.valid & sink.ready & sink.last),
