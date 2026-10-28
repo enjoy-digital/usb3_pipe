@@ -30,7 +30,8 @@ parameters: each file has its Gen 1 part first, then its Gen 2/SuperSpeedPlus pa
 | `USB3LTSSM`, `SSPPolling` | `ltssm.py` | LTSSM (7.5): Polling, U0, Recovery, U1/U2/U3, Hot/Warm Reset, Compliance, Loopback, eSS.Inactive, PM handshake, timers. SuperSpeedPlus Polling substates (SCD/LBPM, PortMatch/PortConfig, 7.5.4.3-7.5.4.6) used with `USB3LTSSM(ssp=True)`. |
 | `USB3PHY` | `phy.py` | PIPE + LTSSM with the Link interface (below). `lanes=2`: Gen 1x2 (one PIPE per lane, SuperSpeedPlus Polling, lanes deskew/striping, 64-bit link words, [gen2-x2-roadmap.md](gen2-x2-roadmap.md)). |
 | `LaneStriper`/`LaneDestriper`/`LaneDeskew` | `lanes.py` | Gen 1x2 lanes striping/deskew (6.13). |
-| `USB3PHYDebug`/`USB3SerDesDebug`, `Gen2RXDebug` | `debug.py` | State history, counters, measurements CSRs ([debugging-guide.md](debugging-guide.md)), Gen 2 RX status/counters. |
+| `USB3PHYDebug`/`USB3SerDesDebug`, `USB3LanesDebug`, `Gen2RXDebug` | `debug.py` | State history, counters, measurements CSRs ([debugging-guide.md](debugging-guide.md)), Gen 1x2 lanes status/counters, Gen 2 RX status/counters. |
+| `PRBSPacketGenerator`/`PRBSPacketChecker`, `PRBSLinkTester` | `prbs.py` | PRBS Link-Layer stand-ins (`sim.py --no-core`/`--lanes 2`), with CSRs for hardware link tests (`bench/acorn.py --lanes 2`). |
 | `usb3_pipe_gen` | `gen.py` | Standalone Verilog core generator. |
 
 ## Link interface (`USB3PHY`)
@@ -86,8 +87,8 @@ $ pytest test -m slow            # Long simulations (Verilator), not run by defa
 
 ## Limitations
 
-- Gen 1x1 only on hardware (Gen 1x2: simulation only, Gen 2: building blocks,
-  [gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
+- Gen 1x1 only on hardware (Gen 1x2: simulation only, two boards link test ready for hardware
+  validation, Gen 2: building blocks, [gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
 - U1/U2 are rejected by the USB3 Device Core by default (LXU), accepted with `with_lpm` (simulation
   validated only).
 - The Acorn has no transceiver reference clock without a PCIe host: the 200MHz oscillator is routed

@@ -27,7 +27,7 @@ from litedram.gen     import LiteDRAMCoreControl
 
 from usb3_pipe import A7USB3SerDes
 
-from usb3_soc import USB3BaseSoC, add_usb3_device, usb3_analyzer
+from usb3_soc import USB3BaseSoC, add_usb3_device, add_usb3_lanes_link, usb3_analyzer
 from usb3_soc import usb3_soc_args, usb3_soc_argdict, usb3_soc_build
 
 # USB3 IOs -----------------------------------------------------------------------------------------
@@ -55,6 +55,17 @@ _usb3_io_mini = [
     ("sfp_rx", 0,
         Subsignal("p", Pins("D11")),
         Subsignal("n", Pins("C11")),
+    ),
+
+    # SFP-1 (Gen 1x2: Lane 1).
+    ("sfp_tx", 1,
+        Subsignal("p", Pins("B4")),
+        Subsignal("n", Pins("A4")),
+    ),
+
+    ("sfp_rx", 1,
+        Subsignal("p", Pins("B8")),
+        Subsignal("n", Pins("A8")),
     ),
 ]
 
@@ -97,7 +108,7 @@ class _CRG(LiteXModule):
 
 class USB3SoC(USB3BaseSoC):
     def __init__(self, platform, cpu_type=None, with_dram=False,
-        gtp_params={}, rxcdr_cfg=None, lpm_hold="none",
+        gtp_params={}, rxcdr_cfg=None, lpm_hold="none", lanes=1, role="device",
         with_analyzer=False, analyzer_group="link", analyzer_csv="analyzer.csv",
         usb3_kwargs={}, **kwargs):
         sys_clk_freq = int(125e6)
@@ -131,23 +142,37 @@ class USB3SoC(USB3BaseSoC):
             self.ddrctrl = LiteDRAMCoreControl()
 
         # USB3 SerDes ------------------------------------------------------------------------------
-        usb3_serdes = A7USB3SerDes(platform,
-            sys_clk      = self.crg.cd_sys.clk,
-            sys_clk_freq = sys_clk_freq,
-            refclk_pads  = ClockSignal("clk200"), # Directly from the oscillator (no PLL jitter).
-            refclk_freq  = 200e6,
-            tx_pads      = platform.request("sfp_tx"),
-            rx_pads      = platform.request("sfp_rx"),
-            rxcdr_cfg    = rxcdr_cfg)
+        # Gen 1x2 (lanes=2): Lane 0 on SFP-0, Lane 1 on SFP-1 (same GTP quad), Lane 1 on the Lane 0
+        # Quad PLL and TX clock (lanes TX in lockstep).
+        usb3_serdes = []
+        for lane in range(lanes):
+            serdes = A7USB3SerDes(platform,
+                sys_clk      = self.crg.cd_sys.clk,
+                sys_clk_freq = sys_clk_freq,
+                refclk_pads  = ClockSignal("clk200"), # Directly from the oscillator (no PLL jitter).
+                refclk_freq  = 200e6,
+                tx_pads      = platform.request("sfp_tx", lane),
+                rx_pads      = platform.request("sfp_rx", lane),
+                rxcdr_cfg    = rxcdr_cfg,
+                pll          = None if lane == 0 else usb3_serdes[0].pll,
+                tx_clk       = None if lane == 0 else usb3_serdes[0].gtp.cd_tx.clk)
+            serdes.gtp.gtp_params.update(gtp_params) # Debug overrides (--gtp-param).
+            usb3_serdes.append(serdes)
         # Fabric reference clock on GTGREFCLK0 (see doc/debugging-guide.md): allowed as a warning.
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
-        usb3_serdes.gtp.gtp_params.update(gtp_params) # Debug overrides (--gtp-param).
 
         # USB3 (PHY, Debug, Core, Leds) ------------------------------------------------------------
-        add_usb3_device(self, usb3_serdes,
-            leds          = [platform.request("user_led", i) for i in range(3)],
-            leds_inverted = True,
-            **usb3_kwargs)
+        leds = [platform.request("user_led", i) for i in range(3)]
+        if lanes == 1:
+            add_usb3_device(self, usb3_serdes[0],
+                leds          = leds,
+                leds_inverted = True,
+                **usb3_kwargs)
+        else:
+            add_usb3_lanes_link(self, usb3_serdes,
+                role          = role,
+                leds          = leds,
+                leds_inverted = True)
         self.comb += platform.request("user_led", 3).eq(1) # Not Used.
 
         # FPGA temperature/voltages (RX quality vs temperature, bench/usb3_soak.py) ----------------
@@ -163,11 +188,12 @@ class USB3SoC(USB3BaseSoC):
                 self.comb += lpm_hold_signal.eq(ltssm_state != ltssm_states["Polling.RxEQ"])
             else:
                 self.comb += lpm_hold_signal.eq(1)
-            usb3_serdes.gtp.gtp_params.update(
-                i_RXLPMHFHOLD = lpm_hold_signal,
-                i_RXLPMLFHOLD = lpm_hold_signal,
-                i_RXOSHOLD    = lpm_hold_signal,
-            )
+            for serdes in usb3_serdes:
+                serdes.gtp.gtp_params.update(
+                    i_RXLPMHFHOLD = lpm_hold_signal,
+                    i_RXLPMLFHOLD = lpm_hold_signal,
+                    i_RXOSHOLD    = lpm_hold_signal,
+                )
 
         # Analyzer ---------------------------------------------------------------------------------
         if with_analyzer:
@@ -184,7 +210,18 @@ def main():
     gtp_group.add_argument("--rxcdr-cfg", default=None,   help="GTP RXCDR_CFG override (hex).")
     gtp_group.add_argument("--gtp-param", default=[],     help="GTP parameter override NAME=VALUE (ex: p_RXCDR_HOLD_DURING_EIDLE=1).", action="append")
     gtp_group.add_argument("--lpm-hold",  default="none", help="GTP LPM adaptation hold (rxeq: adapt only in Polling.RxEQ).", choices=["none", "rxeq", "always"])
+    x2_group = parser.add_argument_group(title="Gen 1x2 link tests (two boards, SFP-0/SFP-1, PRBS Link-Layer stand-ins)")
+    x2_group.add_argument("--lanes",      default=1, type=int, help="Lanes: 1 (Gen 1x1, SFP-0) or 2 (Gen 1x2, SFP-0/SFP-1, Mini only, no USB3 Device Core).", choices=[1, 2])
+    x2_group.add_argument("--role",       default="device",    help="USB3PHY role with --lanes 2 (one board in each role).", choices=["device", "host"])
     args = parser.parse_args()
+
+    # Gen 1x2: two SFPs (Mini), PHY + PRBS Link-Layer stand-ins only (no SuperSpeedPlus Link Layer).
+    if args.lanes == 2:
+        assert args.variant == "mini", "--lanes 2 requires the Mini (SFP-0/SFP-1)."
+        assert not args.with_serdes_debug, "--lanes 2: --with-serdes-debug not supported."
+        assert args.cpu_type is None and not args.with_dram, "--lanes 2: no CPU/DRAM."
+    else:
+        assert args.role == "device", "--role host requires --lanes 2."
 
     # DRAM disk: DDR3 SDRAM, initialized by the BIOS (VexRiscv CPU by default, console on a stub UART).
     with_dram = args.with_dram or (args.example == "msc_dram")
@@ -202,6 +239,8 @@ def main():
         rxcdr_cfg   = None if args.rxcdr_cfg is None else int(args.rxcdr_cfg, 0),
         gtp_params  = {k: int(v, 0) for k, v in (p.split("=") for p in args.gtp_param)},
         lpm_hold    = args.lpm_hold,
+        lanes       = args.lanes,
+        role        = args.role,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)
 

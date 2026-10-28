@@ -115,7 +115,8 @@ shared host helpers: `bench/common.py`).
 - [doc/examples.md](doc/examples.md): example designs and host tools.
 - [doc/standalone-core.md](doc/standalone-core.md): standalone Verilog core generator (`usb3_pipe_gen`).
 - [doc/debugging-guide.md](doc/debugging-guide.md): hardware debugging (CSRs, trace, LiteScope, soak).
-- [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md): Gen 2x1 (10Gbps)/Gen 1x2 (2x5Gbps) roadmap.
+- [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md): Gen 2x1 (10Gbps)/Gen 1x2 (2x5Gbps) roadmap (Gen 1x2
+  two boards link test: `bench/acorn.py --lanes 2`).
 
 [> Credits
 ----------

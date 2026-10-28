@@ -11,6 +11,7 @@ The software (BIOS) is not compiled (CPU examples: no RISC-V toolchain needed): 
 with LiteX's Builder compile_software defaulting to False.
 """
 
+import re
 import sys
 import subprocess
 
@@ -94,3 +95,34 @@ def test_target_debug(name, tmp_path):
     if "--with-analyzer" in args:
         assert "analyzer_trigger_enable" in csr
         assert (tmp_path / "analyzer.csv").exists()
+
+# Gen 1x2 Link Tests (two boards) ------------------------------------------------------------------
+
+LANES_ARGS = {
+    "acorn_x2_device"          : ["--lanes", "2", "--role", "device"],
+    "acorn_x2_host"            : ["--lanes", "2", "--role", "host", "--with-jtagbone"],
+    "acorn_x2_analyzer_link"   : ["--lanes", "2", "--with-analyzer", "--analyzer-group", "link",
+        "--lpm-hold", "rxeq"],
+}
+
+@pytest.mark.parametrize("name", list(LANES_ARGS))
+def test_target_lanes(name, tmp_path):
+    # Acorn Mini Gen 1x2 (SFP-0/SFP-1): USB3PHY(lanes=2) + debug + PRBS Link-Layer stand-ins, one
+    # Quad PLL and the Lane 0 TX clock shared by both lanes.
+    csr = elaborate("acorn", tmp_path, LANES_ARGS[name])
+    for csr_name in ["usb3_debug_history_count", "usb3_lanes_debug_status",
+        "usb3_lanes_debug_deskew_count", "usb3_lanes_debug_lane1_ts1_count", "usb3_prbs_control",
+        "usb3_prbs_rx_errors"]:
+        assert csr_name in csr
+    verilog = next((tmp_path / "gateware").glob("*.v")).read_text()
+    assert verilog.count("\nGTPE2_COMMON ") == 1
+    assert verilog.count("\nGTPE2_CHANNEL ") == 2
+    tx_clks = set(re.findall(r"\.TXUSRCLK\s*\((\w+)\)", verilog))
+    assert len(tx_clks) == 1
+
+def test_target_lanes_args(tmp_path):
+    # --role host requires --lanes 2, --lanes 2 requires the Mini.
+    for args in [["--role", "host"], ["--lanes", "2", "--variant", "standard"]]:
+        cmd = [sys.executable, "-c", RUN_TARGET, "bench/acorn.py", "--output-dir", str(tmp_path)] + args
+        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        assert p.returncode != 0

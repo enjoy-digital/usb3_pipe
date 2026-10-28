@@ -172,6 +172,10 @@ Cloud XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`, `--refclk sfp|clk100`) share 
   OpenOCD `cpld/xilinx-xcu.cfg` with `CHIP XCKU3P` for JTAGBone).
 - KC705: build-tested, hardware validation in progress.
 
+`bench/acorn.py --lanes 2 --role host|device` (Acorn Baseboard Mini, SFP-0/SFP-1) is not a USB3
+Device Core example: Gen 1x2 PHY link test between two boards with PRBS Link-Layer stand-ins
+(`bench/usb3_lanes.py`), see [gen2-x2-roadmap.md](gen2-x2-roadmap.md#gen-1x2-hardware-milestones).
+
 | Target | Build directory | Not available |
 |---|---|---|
 | `bench/acorn.py` | `build/sqrl_acorn` | |

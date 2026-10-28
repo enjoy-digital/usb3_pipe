@@ -18,7 +18,9 @@ classes, 4-bit Header Sequence Numbers, Rx Buffer credits), the Protocol Layer i
 | Gen 1x2  | 2x5Gbps       | 2 GTP/GTX (Artix7 possible)          | **Type-C only** (two lanes, Configuration Lane from CC) |
 
 The SFP2USB adapter carries a single lane: Gen 1x2 needs a Type-C breakout with both SuperSpeed lane
-pairs routed to transceivers (and CC handling for the Configuration Lane/orientation).
+pairs routed to transceivers (and CC handling for the Configuration Lane/orientation). Before such a
+breakout and a Gen 1x2 host, the two-lane PHY is tested between two boards (one in each role) on two
+SFP links: [Gen 1x2 hardware milestones](#gen-1x2-hardware-milestones).
 
 ## PHY (usb3_pipe)
 
@@ -265,10 +267,51 @@ host, an xHCI without hardware LPM support in Linux, never enables U1/U2). On ha
 alternating Gen 2/Gen 1 trainings, traffic checked after each (one Gen 2 -> Gen 1 capability change
 needed a host port power cycle: capability changes between trainings are a test-only case).
 
+## Gen 1x2 hardware milestones
+
+Hardware: two LiteX Acorn Baseboard Minis (Acorn CLE-215+, Artix7 GTP), SFP-0 <-> SFP-0 and SFP-1 <->
+SFP-1 with two SFP DAC cables (both SFP cages are in the same GTP quad), then a dual SFP to USB-C
+breakout (two SFP cages, both SuperSpeed lane pairs routed to the USB-C connector) and a Gen 1x2
+capable host ([issue #140](https://github.com/enjoy-digital/usb3_pipe/issues/140)).
+
+**M0: two-lane link between two boards** (gateware ready, hardware validation to do): the same test
+as `sim.py --lanes 2`, on hardware, without the SuperSpeedPlus Link Layer or a USB host.
+`bench/acorn.py --lanes 2 --role host|device` builds `USB3PHY(lanes=2)` (Host or Device role) on
+SFP-0 (Lane 0, Configuration Lane) and SFP-1 (Lane 1), Lane 1 on the Lane 0 Quad PLL and TX clock
+(`A7USB3SerDes(pll=, tx_clk=)`: the lanes TX run in lockstep, as required by `USB3PHY(lanes=2)`), with
+`USB3PHYDebug` (Lane 0), `USB3LanesDebug` (x2/deskew status, per lane TS/RX errors counters) and
+the 64-bit PRBS Link-Layer stand-ins of the simulation (`PRBSLinkTester`, `usb3_pipe/prbs.py`, sent
+and checked in U0). LEDs: SerDes ready, U0, x2 negotiated.
+
+```sh
+# Board 1 (Host role) / Board 2 (Device role), JTAGBone (litex_server --jtag, one port per board).
+$ ./bench/acorn.py --lanes 2 --role host   --with-jtagbone --output-dir build/acorn_x2_host   --build --load
+$ ./bench/acorn.py --lanes 2 --role device --with-jtagbone --output-dir build/acorn_x2_device --build --load
+$ ./bench/usb3_lanes.py --port 1234 --csr-csv build/acorn_x2_host/csr.csv status   # x2, deskew, U0.
+$ ./bench/usb3_lanes.py --port 1235 --csr-csv build/acorn_x2_device/csr.csv prbs --duration 60
+$ ./bench/usb3_lanes.py --port 1235 --csr-csv build/acorn_x2_device/csr.csv retrain --wait 2
+```
+
+To check on hardware: SuperSpeedPlus Polling (SCD1/SCD2, LBPM) with Gen 1x2 negotiated (`x2`), link
+training to U0 on both lanes, lanes deskewed, PRBS packets without errors in both directions (64-bit
+link words at 125MHz: up to 1GB/s, less the packets markers/gaps), retrains, the LFPS/electrical
+idle through the SFP DAC cables, and the AC coupling of the lanes on the baseboards (required by
+USB3). The Host role is exercised on hardware for the first time (Rx.Detect is not modelled by the
+LTSSM: both boards start in Polling).
+
+**M1: Type-C breakout and a Gen 1x2 host** (to do): the Configuration Lane follows the USB-C plug
+orientation (a flipped plug swaps the lanes). Options: detect it in gateware (the host sends the
+Polling LFPS on its Configuration Lane only: swap the lanes on the SFP that receives them before the
+SuperSpeedPlus Polling), or read a CC controller on the breakout through the SFP I2C (`sfp_i2c` on
+the Mini). Rd pull-downs on CC1/CC2 (UFP). Needs the single lane fallback (Gen 1x1 negotiated by
+most hosts) and the SuperSpeedPlus Link Layer at Gen 1x2 for the enumeration and transfers; Linux
+reports the negotiated lanes in `/sys/bus/usb/devices/*/rx_lanes` and `tx_lanes`.
+
 ## Suggested order
 
-1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`); remaining:
-   single lane fallback, SSP Link Layer, Type-C CC/Configuration Lane, hardware validation.
+1. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`), two
+   boards link test ready (M0 above); remaining: hardware validation, single lane fallback, SSP Link
+   Layer, Type-C CC/Configuration Lane.
 2. Gen 2x1 on UltraScale+ GTY (or Kintex7 GTX/UltraScale GTH): 128b/132b blocks, 40-bit TX/RX
    datapaths and Gen 2 capability in the SSP Polling done in simulation; next: the hardware
    milestones above.
