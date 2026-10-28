@@ -86,7 +86,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_remote_args(parser)
     parser.add_argument("--prefix",  default=None,                       help="Trace CSRs prefix (default: autodetect).")
-    parser.add_argument("command",   choices=["clear", "dump", "link", "link-clear"])
+    parser.add_argument("command",   choices=["clear", "dump", "link", "link-clear", "clear-ept", "stop"])
+    parser.add_argument("--ept",      default=1, type=int, help="Core trace: endpoint (clear-ept/stop).")
     parser.add_argument("--circular", action="store_true", help="Link trace: circular, stops on a U0 exit.")
     parser.add_argument("--filter",   action="store_true", help="Link trace: drop keep-alives (LUP/LDN/ITPs).")
     args = parser.parse_args()
@@ -108,13 +109,21 @@ def main():
         for i in range(count):
             reg("index").write((start + i) % depth)
             print(decode_link(reg("data").read()))
+    elif args.command == "clear-ept":
+        # enable, clear, circular, ept filter.
+        reg("control").write(0b1 | 0b10 | 0b100 | 0b1000 | (args.ept << 4))
+    elif args.command == "stop":
+        reg("control").write(0b100 | 0b1000 | (args.ept << 4))
     elif args.command == "clear":
         reg("control").write(0b11)
     else:
-        count = reg("count").read()
+        count   = reg("count").read()
+        pointer = reg("pointer").read() if hasattr(bus.regs, f"{prefix}_pointer") else 0
+        depth   = 512
         print(f"{count} entries")
+        start = pointer if count == depth else 0
         for i in range(count):
-            reg("index").write(i)
+            reg("index").write((start + i) % depth)
             print(decode(reg("data").read()))
     bus.close()
 

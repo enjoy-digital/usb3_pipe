@@ -30,8 +30,12 @@ class USB3CoreTrace(LiteXModule):
         self._control = CSRStorage(fields=[
             CSRField("enable", size=1, reset=1, description="Trace enable (stops when full)."),
             CSRField("clear",  size=1, pulse=True, description="Trace clear (timestamp reset)."),
+            CSRField("circular",   size=1, description="Circular (stopped with enable=0)."),
+            CSRField("ept_filter", size=1, description="Record only the ept endpoint packets."),
+            CSRField("ept",        size=4, description="Endpoint number (ept_filter)."),
         ])
-        self._count = CSRStatus(16,  description="Recorded entries.")
+        self._count   = CSRStatus(16, description="Recorded entries.")
+        self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
         self._index = CSRStorage(16, description="Entry to read.")
         self._data  = CSRStatus(64,  description="Entry (dw1, type, direction, timestamp).")
 
@@ -44,6 +48,7 @@ class USB3CoreTrace(LiteXModule):
 
         timestamp = Signal(30)
         count     = Signal(16)
+        pointer   = Signal(max=depth)
         self.sync += timestamp.eq(timestamp + 1)
 
         rx = Signal()
@@ -70,9 +75,11 @@ class USB3CoreTrace(LiteXModule):
                 record.eq(1),
                 entry.eq(Cat(link.tx_hp.dw1, link.tx_hp.dw0[0:5], C(1, 1), timestamp[4:30])),
             ),
-            wr_port.adr.eq(count),
+            wr_port.adr.eq(pointer),
             wr_port.dat_w.eq(entry),
-            wr_port.we.eq(record & self._control.fields.enable & (count < depth)),
+            wr_port.we.eq(record & self._control.fields.enable &
+                (self._control.fields.circular | (count < depth)) &
+                (~self._control.fields.ept_filter | (entry[8:12] == self._control.fields.ept))),
         ]
         self.sync += [
             If(tx_pending & ~rx, tx_pending.eq(0)),
@@ -81,14 +88,19 @@ class USB3CoreTrace(LiteXModule):
                 tx_dw0.eq(link.tx_hp.dw0),
                 tx_dw1.eq(link.tx_hp.dw1),
             ),
-            If(wr_port.we, count.eq(count + 1)),
+            If(wr_port.we,
+                pointer.eq(Mux(pointer == (depth - 1), 0, pointer + 1)),
+                If(count != depth, count.eq(count + 1)),
+            ),
             If(self._control.fields.clear,
                 count.eq(0),
+                pointer.eq(0),
                 timestamp.eq(0),
             ),
         ]
         self.comb += [
             self._count.status.eq(count),
+            self._pointer.status.eq(pointer),
             rd_port.adr.eq(self._index.storage),
             self._data.status.eq(rd_port.dat_r),
         ]
