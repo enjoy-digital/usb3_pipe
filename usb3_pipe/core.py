@@ -317,6 +317,8 @@ class Gen2PIPE(LiteXModule):
         self.rx_data = Signal(data_width) # i: RX words (rx clock domain).
         self.sink    = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer TX words (sys).
         self.source  = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer RX words (sys).
+        self.source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer RX LGOOD_n/LCRD_x (sys).
+        self.source_lc_enable = Signal() # LGOOD_n/LCRD_x on source_lc (else in source).
         self.rx_overflow = Signal() # o: RX buffer overflow (sticky, rx clock domain).
 
         # # #
@@ -427,6 +429,8 @@ class Gen2PIPE(LiteXModule):
             link_rx.data_stream.eq(rx.data_stream),
             link_rx.rx_ready.eq(self.rx_ready),
             link_rx.source.connect(self.source),
+            link_rx.source_lc.connect(self.source_lc),
+            link_rx.lc_enable.eq(self.source_lc_enable),
             self.rx_overflow.eq(link_rx.overflow),
         ]
         self.rx_framing = link_rx.framing

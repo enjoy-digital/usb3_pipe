@@ -159,6 +159,12 @@ class USB3LinkLayer(LiteXModule):
         self.sync += hp_check.eq(hp_last)
 
         # RX Link Commands checks ------------------------------------------------------------------
+        # From the RX words or, when the PHY provides it (Gen 2), from the PHY LGOOD_n/LCRD_x Link
+        # Commands words (source_lc, received without waiting behind the RX words), when no Link
+        # Command is received from the RX words.
+        lc_main  = Signal()   # Link Command word in the RX words.
+        lc_fast  = Signal()   # Link Command word from the PHY source_lc.
+        lc_data  = Signal(32)
         lc_valid = Signal()   # Link Command received (pulse, before registration).
         lc_check = Signal()   # Link Command received (pulse, registered: timings).
         lc_info  = Signal(11, reset_less=True)
@@ -166,15 +172,25 @@ class USB3LinkLayer(LiteXModule):
         self.crc5_lc1 = crc5_lc1 = CRC5()
         lc_ok0 = Signal()
         lc_ok1 = Signal()
+        if hasattr(phy, "source_lc"):
+            self.comb += [
+                lc_fast.eq(phy.source_lc.valid & ~lc_main),
+                phy.source_lc.ready.eq(lc_fast | ~u0),
+                phy.source_lc_enable.eq(1),
+                lc_data.eq(Mux(lc_fast, swap_data(phy.source_lc.data), rx_data)),
+            ]
+        else:
+            self.comb += lc_data.eq(rx_data)
         self.comb += [
-            crc5_lc0.data.eq(rx_data[0:11]),
-            crc5_lc1.data.eq(rx_data[16:27]),
-            lc_ok0.eq(crc5_lc0.value == rx_data[11:16]),
-            lc_ok1.eq(crc5_lc1.value == rx_data[27:32]),
+            crc5_lc0.data.eq(lc_data[0:11]),
+            crc5_lc1.data.eq(lc_data[16:27]),
+            lc_ok0.eq(crc5_lc0.value == lc_data[11:16]),
+            lc_ok1.eq(crc5_lc1.value == lc_data[27:32]),
+            lc_valid.eq((lc_main | (lc_fast & u0)) & (lc_ok0 | lc_ok1)),
         ]
         self.sync += [
             lc_check.eq(lc_valid),
-            lc_info.eq(Mux(lc_ok0, rx_data[0:11], rx_data[16:27])),
+            lc_info.eq(Mux(lc_ok0, lc_data[0:11], lc_data[16:27])),
         ]
 
         # RX DPP expectation (from the last accepted DPH) ------------------------------------------
@@ -267,7 +283,7 @@ class USB3LinkLayer(LiteXModule):
         )
         rx_fsm.act("LC",
             If(rx_valid,
-                lc_valid.eq(lc_ok0 | lc_ok1),
+                lc_main.eq(1),
                 NextState("IDLE")
             )
         )
