@@ -8,6 +8,7 @@ import unittest
 
 from migen import *
 from migen.fhdl.specials import Instance
+from migen.fhdl.tools import list_targets
 
 from litex.build.xilinx import XilinxPlatform
 
@@ -71,6 +72,33 @@ class TestSerDes(unittest.TestCase):
         word = [item.value for item in channel.items
             if isinstance(item, Instance.Parameter) and item.name == "ALIGN_COMMA_WORD"]
         self.assertEqual([w.value if hasattr(w, "value") else w for w in word], [1])
+
+    def test_a7_external_pll(self):
+        # External (shared) Quad PLL on PLL1: no GTPE2_COMMON, PLL not reset by the transceiver.
+        class ExternalPLL:
+            channel = 1
+            clk     = Signal()
+            refclk  = Signal()
+            lock    = Signal()
+            reset   = Signal()
+            config  = {"linerate": 5e9, "d": 1, "clkin": 100e6}
+        pll      = ExternalPLL()
+        platform = XilinxPlatform("xc7a200t-fbg484-3", io=[])
+        serdes   = A7USB3SerDes(platform,
+            sys_clk      = Signal(),
+            sys_clk_freq = 125e6,
+            refclk_pads  = None,
+            refclk_freq  = None,
+            tx_pads      = _pads("p", "n"),
+            rx_pads      = _pads("p", "n"),
+            pll          = pll)
+        fragment = serdes.get_fragment()
+        self.assertEqual([s for s in fragment.specials
+            if isinstance(s, Instance) and s.of == "GTPE2_COMMON"], [])
+        channel = _instance(fragment, "GTPE2_CHANNEL")
+        self.assertIs(_input(channel, "PLL1CLK"), pll.clk)
+        self.assertEqual(_input(channel, "TXSYSCLKSEL").value, 0b11)
+        self.assertNotIn(pll.reset, list_targets(fragment.comb))
 
 if __name__ == "__main__":
     unittest.main()
