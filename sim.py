@@ -427,8 +427,9 @@ class USB3PIPESim(SoCMini):
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
         host_lpm=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
-        gen2_capable=False, gen2=False):
+        gen2_capable=False, gen2=False, link_words=1):
         assert lanes in [1, 2]
+        assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
         assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
         sys_clk_freq = int(133e6)
@@ -474,7 +475,8 @@ class USB3PIPESim(SoCMini):
                 timer_scale          = timer_scale,
                 with_endianness_swap = (lanes == 1),
                 lanes                = lanes,
-                gen2_capable         = gen2_capable))
+                gen2_capable         = gen2_capable,
+                link_words           = link_words if name == "dev" else 1))
             if lanes == 1:
                 self.add_module(name=f"{name}_usb3_serdes", module=serdes[0])
             else:
@@ -513,12 +515,15 @@ class USB3PIPESim(SoCMini):
                 ]
             elif with_core:
                 # USB3 Device Core, Bulk loopback: EP2 OUT -> EP1 IN.
+                dw   = 32*link_words
                 core = renamer(USB3DeviceCore(phy, sys_clk_freq,
                     descriptors = bulk_descriptors(max_burst=8),
-                    endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)],
+                    endpoints   = [
+                        USB3BulkIN(ept=1,  max_burst=8, data_width=dw),
+                        USB3BulkOUT(ept=2, max_burst=8, data_width=dw)],
                     with_lpm    = host_lpm))
                 self.add_module(name=f"{name}_usb3_core", module=core)
-                loopback = renamer(stream.SyncFIFO(endpoint_layout(), 2*256, buffered=True))
+                loopback = renamer(stream.SyncFIFO(endpoint_layout(dw), 2*256, buffered=True))
                 self.add_module(name=f"{name}_loopback", module=loopback)
                 self.comb += [
                     core.endpoints[1].source.connect(loopback.sink),
@@ -706,6 +711,7 @@ def main():
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
+    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs).", choices=["1", "2"])
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -733,7 +739,8 @@ def main():
         lane1_word_shift = int(args.lane1_word_shift),
         lane_skp         = int(args.lane_skp),
         gen2_capable     = args.gen2_capable or args.gen2,
-        gen2             = args.gen2)
+        gen2             = args.gen2,
+        link_words       = int(args.link_words))
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",
