@@ -63,3 +63,45 @@ class DPPReader(LiteXModule):
             prefetch.sink.last.eq(last | zlp),
             prefetch.source.connect(source),
         ]
+
+
+class DPPSplitter(LiteXModule):
+    """64-bit Data Packet Payload words -> full 8-byte words (two: not last) or 32-bit words (data[0:32],
+    1-4 bytes) for the last bytes: the Link Layer appends the CRC-32/END on 32-bit words."""
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint(dpp_layout(64))
+        self.source = source = stream.Endpoint(dpp_layout(64) + [("two", 1)])
+
+        # # #
+
+        half  = Signal() # Upper half of a split word.
+        full  = Signal()
+        split = Signal()
+        self.comb += [
+            full.eq((sink.bytes == 8) & ~sink.last),
+            split.eq(~full & (sink.bytes > 4)),
+            source.valid.eq(sink.valid),
+            source.first.eq(sink.first & ~half),
+            If(half,
+                source.data.eq(sink.data[32:64]),
+                source.bytes.eq(sink.bytes - 4),
+                source.last.eq(sink.last),
+                sink.ready.eq(source.ready),
+            ).Elif(full,
+                source.data.eq(sink.data),
+                source.bytes.eq(8),
+                source.two.eq(1),
+                sink.ready.eq(source.ready),
+            ).Elif(split,
+                source.data.eq(sink.data[0:32]),
+                source.bytes.eq(4),
+            ).Else(
+                source.data.eq(sink.data[0:32]),
+                source.bytes.eq(sink.bytes),
+                source.last.eq(sink.last),
+                sink.ready.eq(source.ready),
+            ),
+        ]
+        self.sync += If(source.valid & source.ready,
+            half.eq(~half & split)
+        )
