@@ -674,9 +674,19 @@ class USB3LinkLayer(LiteXModule):
         self.t_lup = t_lup = WaitTimer(scaled(10e-6))
         self.comb += t_lup.wait.eq(u0 & ~pm_block & ~tx_sent_lc & ~tx_sent_hp & ~lup_pending)
         # PENDING_HP_TIMER (3us): Header Packets sent and not acknowledged, Advertisement expected.
-        self.t_pending_hp = t_pending_hp = WaitTimer(scaled(3e-6))
-        self.comb += t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood &
-            (~adv_received | (ack_seq != send_seq)))
+        # SuperSpeedPlus at Gen 2: the Header Packets are transmitted on the line after their DPP is
+        # stored (Gen 2 TX framing, DPH and DPP without spacing): the timer is extended by the
+        # maximum DPP buffering time (1024 bytes on the 32-bit Link Layer words).
+        pending_hp_ssp = 3e-6 + (1024 + 64)/4/sys_clk_freq
+        self.t_pending_hp = t_pending_hp = WaitTimer(scaled(pending_hp_ssp if ssp_capable else 3e-6))
+        t_pending_hp_ss = WaitTimer(scaled(3e-6))
+        self.submodules += t_pending_hp_ss
+        pending_hp_done = Signal()
+        self.comb += [
+            t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood & (~adv_received | (ack_seq != send_seq))),
+            t_pending_hp_ss.wait.eq(t_pending_hp.wait),
+            pending_hp_done.eq(Mux(ssp, t_pending_hp.done, t_pending_hp_ss.done)),
+        ]
         # CREDIT_HP_TIMER (5ms): Remote Rx Header Buffer Credits missing.
         self.t_credit_hp = t_credit_hp = WaitTimer(scaled(5e-3))
         self.comb += t_credit_hp.wait.eq(u0 & ~pm_block & ~lc_lcrd &
@@ -704,7 +714,7 @@ class USB3LinkLayer(LiteXModule):
                 rx_hp_seqer |
                 (lc_lgood & adv_received & ~lgood_ok) |
                 (lc_lcrd & ~lcrd_ok) |
-                t_pending_hp.done |
+                pending_hp_done |
                 t_credit_hp.done)),
         ]
         # Debug (USB3LinkTrace): Link Commands/Header Packets events, Recovery causes.
@@ -719,9 +729,15 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_tx_hp_info = Cat(send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
             tx_dws[send_seq[0:2]][0:5], tx_sent[send_seq[0:2]])
         self.dbg_u0        = u0
+        self.dbg_state     = Cat(tx_seq[0:4] if sw == 4 else Cat(tx_seq, C(0, 1)),
+            ack_seq[0:4] if sw == 4 else Cat(ack_seq, C(0, 1)),
+            send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
+            remote_credits, remote_credits2, adv_received, pm_block, pm_accepted,
+            self.tx_hp.valid, self.tx_hp.ready, lrty_pending, lbad_wait, ssp, tx_full,
+            rx_seq[0:4] if sw == 4 else Cat(rx_seq, C(0, 1)))
         self.dbg_recovery  = recovery
         self.dbg_recovery_cause = Cat(rx_hp_seqer, lc_lgood & adv_received & ~lgood_ok,
-            lc_lcrd & ~lcrd_ok, t_pending_hp.done, t_credit_hp.done)
+            lc_lcrd & ~lcrd_ok, pending_hp_done, t_credit_hp.done)
 
         self.sync += [
             # Header Packets received.

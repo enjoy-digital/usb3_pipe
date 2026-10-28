@@ -232,3 +232,74 @@ class TestGen2LinkTX(unittest.TestCase):
         run_simulation(dut, {"sys": [generator(dut), timeout(dut)], "tx": [checker(dut)]},
             clocks={"sys": 8, "tx": 4})
         self.assertEqual(out, words)
+
+# Gen2RXFraming: packets at any byte position, random Idle Symbols between them ----------------------
+
+def gen2_unit_bytes(unit):
+    """Gen 2 bytes of a unit of Link Layer words (as transmitted by a host: framing bytes, DPHSTART +
+    Length Field Replicas for the DPHs, bytes after DPPEND/DPPABORT removed)."""
+    from usb3_pipe.framing import GEN2_FRAMING_BYTES, GEN2_DPHP
+    symbols = []
+    for data, ctrl in unit:
+        for j in range(4):
+            symbols.append(((data >> (8*j)) & 0xff, (ctrl >> j) & 1))
+    out    = []
+    is_dph = (symbols[0] == (SHP, 1)) and ((symbols[4][0] & 0x1f) == 0x08)
+    i      = 0
+    while i < len(symbols):
+        b, k = symbols[i]
+        if k:
+            b = GEN2_FRAMING_BYTES[b]
+            if is_dph and i < 3:
+                b = GEN2_DPHP
+        out.append(b)
+        if is_dph and i == 19:
+            length = symbols[10][0] | (symbols[11][0] << 8)
+            out += [length & 0xff, length >> 8]*2
+        # DPP end: EPF after END/EDB.
+        if k and symbols[i][0] == EPF and i > 3 and (i >= 24 or not is_dph):
+            if i > 23 or not is_dph:
+                break
+        i += 1
+    return out
+
+class TestGen2RXFraming(unittest.TestCase):
+    def test_rx_framing_idle_gaps(self):
+        rng   = random.Random(3)
+        units = random_units(rng, 40)
+        stream_bytes = []
+        expected     = []
+        for u in units:
+            stream_bytes += [GEN2_IDLE]*rng.choice([0, 0, 1, 2, 3, 5, 7, 8, 13, 16, 17])
+            stream_bytes += gen2_unit_bytes(u)
+            # Expected words: unit words with the bytes after the DPP end zeroed (DPHs: 20 bytes).
+            expected += u
+        stream_bytes += [GEN2_IDLE]*64
+        stream_bytes += [GEN2_IDLE]*((-len(stream_bytes)) % 8)
+        words8 = [int.from_bytes(bytes(stream_bytes[i:i+8]), "little") for i in range(0, len(stream_bytes), 8)]
+        dut = Gen2RXFraming()
+        out = []
+        def generator(dut):
+            for w in words8:
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(w)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+                if rng.random() < 0.3:
+                    yield dut.sink.valid.eq(0)
+                    yield
+            yield dut.sink.valid.eq(0)
+            for _ in range(32):
+                yield
+        @passive
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            while True:
+                if (yield dut.source.valid):
+                    data, ctrl, n = (yield dut.source.data), (yield dut.source.ctrl), (yield dut.source.words)
+                    for w in range(n):
+                        out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                yield
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(out, expected)

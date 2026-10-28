@@ -98,6 +98,9 @@ class USB3DeviceCore(LiteXModule):
         self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets RX errors).")
         self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets resent).")
         self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, errors).")
+        self._link_state   = CSRStatus(32, description="Link Layer state (debug): tx_seq, ack_seq, "
+            "send_seq, remote credits (Type 1/2), adv_received, pm_block, pm_accepted, tx_hp valid/ready, "
+            "lrty_pending, lbad_wait, ssp, tx_full, rx_seq.")
         self.comb += [
             self._status.fields.ready.eq(self.link.ready),
             self._status.fields.configured.eq(self.ep0.configured),
@@ -105,4 +108,5 @@ class USB3DeviceCore(LiteXModule):
             self._rx_lbad.status.eq(self.link.rx_lbad),
             self._tx_retry.status.eq(self.link.tx_retry),
             self._recovery_req.status.eq(self.link.recovery_req),
+            self._link_state.status.eq(self.link.dbg_state),
         ]

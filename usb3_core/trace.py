@@ -106,7 +106,7 @@ class USB3LinkTrace(LiteXModule):
     tx_lc_sel[50:61], rx_hp[61:77] (type, LMP subtype, seq, ok, accept, seq error), tx_hp[77:87]
     (seq, type, retry), recovery causes[87:92] (seq error, LGOOD, LCRD, PENDING_HP, CREDIT_HP).
 
-    Modes: linear (stops when full) or circular (stops on a U0 exit: the last entries before it are
+    Modes: linear (stops when full) or circular (stops on a U0 exit or a Recovery request: the last entries before it are
     kept, oldest at the write pointer), keep-alive filter (LUP/LDN only entries and ITPs dropped).
     """
     def __init__(self, link, depth=1024):
@@ -166,7 +166,7 @@ class USB3LinkTrace(LiteXModule):
             If(wr_port.we,
                 pointer.eq(Mux(pointer == (depth - 1), 0, pointer + 1)),
                 If(count != depth, count.eq(count + 1)),
-                If(self._control.fields.circular & events[5], stopped.eq(1)),
+                If(self._control.fields.circular & (events[5] | events[6]), stopped.eq(1)),
             ),
             If(self._control.fields.clear,
                 count.eq(0),
