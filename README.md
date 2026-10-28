@@ -40,7 +40,7 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
   (Polling/U0/Recovery/U1-U3/Hot/Warm Reset/Compliance/Loopback), debug counters. Also generated as a
   standalone Verilog core (`usb3_pipe_gen`, Artix7/Kintex7/Ultrascale+).
 - **USB3 Device Core** (`usb3_core/`): Link Layer (header flow control, retries, LMPs, timers), Protocol
-  Layer, Control Endpoint (standard requests, alternate settings, class/vendor request handler), Bulk
+  Layer, Control Endpoint (standard requests, alternate settings, class/vendor request handler, Wishbone bridge), Bulk
   IN/OUT endpoints with bursts, Isochronous IN endpoints, U1/U2 Link Power Management (`with_lpm`, off
   by default), descriptors builder, Header Packets trace (debug).
 - **Device classes**: vendor Bulk, CDC-ACM (serial port/LiteX console), UVC (video camera, Bulk or
@@ -92,6 +92,7 @@ examples), see [doc/examples.md](doc/examples.md):
 | Example | Device | Host side |
 |---|---|---|
 | `loopback` | Vendor Bulk OUT -> Bulk IN | `bench/usb3_bulk.py loopback` |
+| `wishbone` | `loopback` + EP0 Wishbone bridge (vendor requests) | `litex_server --usb --usb-vid 0x1d50 --usb-pid 0x605a` |
 | `bench` | Vendor Bulk counters source/checker | `bench/usb3_bench.py in\|out\|both` |
 | `cdc_uartbone` | CDC-ACM serial port (UARTBone) | `litex_server --uart --uart-port /dev/ttyACM0` |
 | `console` (`--cpu-type vexriscv`) | CDC-ACM LiteX BIOS console | `litex_term /dev/ttyACM0` |

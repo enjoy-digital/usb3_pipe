@@ -1,6 +1,6 @@
 # Examples
 
-Example designs (`usb3_core/examples.py`: `loopback`, `bench`, `cdc_uartbone`, `console`, `uvc`,
+Example designs (`usb3_core/examples.py`: `loopback`, `wishbone`, `bench`, `cdc_uartbone`, `console`, `uvc`,
 `uvc_iso`, `msc`, `msc_dram`, `composite`) and their host tools, on `bench/acorn.py` (LiteX Acorn
 Baseboard, Acorn CLE-215+, SFP2USB). Build and load (JTAG, SRAM) with:
 
@@ -19,6 +19,16 @@ Vendor class interface, Bulk OUT (EP2) data looped back to Bulk IN (EP1) through
 $ ./bench/usb3_bulk.py loopback --size 1024 --count 1000
 1000 packets, 1024000 bytes, 0 errors
 $ ./bench/usb3_bulk.py loopback --size 1024 --count 2000 --random-sizes
+```
+
+## `wishbone`: Bulk loopback + EP0 Wishbone bridge
+
+`loopback` with a Wishbone bridge on the Control Endpoint (`USB3EP0Wishbone`, vendor requests): SoC
+bus/CSRs access over USB with LiteX CommUSB (pyusb), alongside the Bulk endpoints.
+
+```sh
+$ litex_server --usb --usb-vid 0x1d50 --usb-pid 0x605a
+$ litex_cli --regs
 ```
 
 ## `bench`: bandwidth

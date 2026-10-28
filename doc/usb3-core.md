@@ -87,6 +87,13 @@ SET_INTERFACE is also decoded by EP0 for all devices: `set_interface` (pulse, St
 `interface`, `alt_setting`. GET_INTERFACE returns the current alternate setting of the interface
 (reset on SET_CONFIGURATION).
 
+`USB3EP0Wishbone(ep0)` (`usb3_core/wishbone.py`) is a request handler giving a Wishbone master
+(`bus`, add it with `soc.bus.add_master`) wire-compatible with LiteX CommUSB (`litex_server --usb`):
+vendor requests `bmRequestType` 0xC3 (read)/0x43 (write), `bRequest` 0, `wValue`/`wIndex` = 32-bit
+byte address, `wLength` = 4*N bytes for incrementing bursts of N words (N <= 128, CommUSB uses N=1).
+Writes are buffered (2 full-size requests) and executed before the following reads, other requests
+are stalled.
+
 ## Isochronous IN endpoints
 
 `USB3IsoIN(ept, max_burst)` (USB 3.2 8.12.6, Mult of 0): `sink` takes service interval transfers
