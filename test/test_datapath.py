@@ -22,6 +22,7 @@ from litex.gen import *
 from usb3_pipe.common   import *
 from usb3_pipe.datapath import RXWordAligner, RXSKPRemover, TXSKPInserter, RXDatapath, TXDatapath
 from usb3_pipe.datapath import Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH, GEN2_RX_COUNTERS
+from usb3_pipe.datapath import GEN2_IDLE_BLOCK
 
 from test.common import ordered_set_words, words_to_symbols, symbols_to_words, stream_monitor
 from test.model.gen2 import Gen2ReferenceDecoder, int_to_bits, bits_from_words, words_from_bits
@@ -589,10 +590,11 @@ class TestGen2Datapath(unittest.TestCase):
         self.assertAlmostEqual(n_skp, n_blk/40, delta=2)
         # Link Functionality.
         self.assertTrue(all(b[3] == 0x08 for b in blocks if b[0] in ["TS1", "TS2"]))
-        # Data: SDS then the packets data blocks with Logical Idle (00h) blocks between packets.
+        # Data: SDS then the packets data blocks with Logical Idle (5Ah) blocks between packets.
         self.assertEqual(kinds.count("SDS"), 1)
         data = [b[3] for b in blocks[kinds.index("SDS"):] if b[0] == "DATA"]
-        self.assertEqual([d for d in data if d != 0], [d for p in packets for d in p if d != 0])
+        self.assertEqual([d for d in data if d != GEN2_IDLE_BLOCK],
+            [d for p in packets for d in p if d != GEN2_IDLE_BLOCK])
         # No SKP inside a packet (after a Logical Idle block or the last block of a packet only).
         lasts = set()
         n = 0
@@ -603,7 +605,7 @@ class TestGen2Datapath(unittest.TestCase):
         allowed   = True
         for kind, pos, length, info in blocks[kinds.index("SDS") + 1:]:
             if kind == "DATA":
-                if info == 0:
+                if info == GEN2_IDLE_BLOCK:
                     allowed = True
                 else:
                     allowed = idx in lasts
@@ -722,7 +724,7 @@ class TestGen2Datapath(unittest.TestCase):
             self.assertEqual(skp_lfsr, rx_lfsr)
         self.assertEqual(events["data"], sent_data[:len(events["data"])])
         self.assertGreaterEqual(len(events["data"]), len(sent_data) - 2)
-        self.assertEqual([d for d in events["data"] if d != 0][:10], [d for p in packets for d in p][:10])
+        self.assertEqual([d for d in events["data"] if d != GEN2_IDLE_BLOCK][:10], [d for p in packets for d in p][:10])
 
     def test_loopback(self):
         # Short: less TS1/TS2/packets, one SKP Ordered Set edit.

@@ -82,6 +82,26 @@ class TestPHY(unittest.TestCase):
             self.assertRegex(out, side + r"\s*entering U0 state", tail)
         self.assertIn("HOST script done", out, tail)
 
+    def test_phy_gen2(self):
+        # Gen 2x1 Host/Device (sim.py --gen2): Gen 2 negotiated in the SuperSpeedPlus Polling, then
+        # Gen 2 training (TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0 on raw words, then
+        # the enumeration with the Gen 2 packet framing in the Data Blocks.
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--gen2",
+            "--output-dir", str(get_output_dir(self))]
+        try:
+            p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            self.fail("Simulation timeout.")
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        for side in ["HOST", r"DEV\s"]:
+            self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: 0, gen2: 1\)", tail)
+            for state in ["Polling.RxEQ", "Polling.Active", "Polling.Configuration", "Polling.Idle", "U0"]:
+                self.assertRegex(out, side + r"\s*entering " + state.replace(".", r"\.") + " state", tail)
+        self.assertIn("HOST script done", out, tail)
+
 # Gen 1x2 (sim.py --lanes 2) -----------------------------------------------------------------------
 
 CONFIGS_SLOW = {

@@ -9,6 +9,7 @@ handshake, framing alignment, on top of a USB3 SerDes.
 """
 
 from migen import *
+from migen.genlib.cdc import MultiReg, PulseSynchronizer, GrayCounter
 
 from litex.gen import *
 
@@ -18,7 +19,9 @@ from usb3_pipe.common import *
 from usb3_pipe.lfps import LFPSUnit
 from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
-from usb3_pipe.datapath import RXWordAligner
+from usb3_pipe.datapath import RXWordAligner, Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH
+from usb3_pipe.datapath import GEN2_IDLE_BLOCK
+from usb3_pipe.framing  import Gen2LinkTX, Gen2LinkRX
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -262,3 +265,202 @@ class USB3PIPE(LiteXModule):
             idle_handshake.tx_idle.eq(tx_enable & tx_idle & scrambler.sink.ready),
             self.idle_handshake_done.eq(idle_handshake.done),
         ]
+
+# Gen 2 PIPE ---------------------------------------------------------------------------------------
+
+# TSEQ Ordered Sets transmitted in Polling.RxEQ in Gen 2 operation (7.5.4.7.2).
+GEN2_TSEQ_COUNT = 524288
+
+# LTSSM <-> PIPE signals handled by the Gen2PIPE (Training Sequences, Idle Symbol handshake): the
+# LFPS signals stay on the Gen 1 PIPE (LFPSUnit, electrical idle/patterns at both rates).
+GEN2_PIPE_INTERFACE = [
+    "ts_tx_enable", "ts_tx_tseq", "ts_tx_ts1", "ts_tx_ts2", "ts_tx_ts2_reset", "ts_tx_ts2_loopback",
+    "ts_tx_done", "ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2", "ts_rx_ts2_reset", "ts_rx_ts2_loopback",
+    "idle_handshake", "idle_handshake_done", "rx_ready", "tx_ready",
+]
+
+class Gen2PIPE(LiteXModule):
+    """Gen 2 PIPE (Gen 2x1, 10Gbps): Training Sequences and Idle Symbol handshake for the LTSSM on
+    the Gen 2 TX/RX datapaths (128b/132b blocks, raw transceiver words).
+
+    LTSSM side (sys clock domain, GEN2_PIPE_INTERFACE signals with the LTSSM_PIPE_INTERFACE
+    semantics):
+    - ts_tx_tseq/ts_tx_ts1/ts_tx_ts2 (with ts_tx_enable): Gen 2 TSEQ/TS1/TS2 Ordered Sets with the
+      SYNC Ordered Sets (6.4.1.2.1), ts_tx_done pulses every tseq_count TSEQ (Polling.RxEQ,
+      7.5.4.7.2) or 16 TS1/TS2 transmitted.
+    - ts_rx_ts1/ts_rx_ts2: 8 consecutive and identical TS1/TS2 received (Symbols 14/15 excluded,
+      SYNC/SKP Ordered Sets are not interruptions, 7.5.4.8.2), Link Functionality of the last TS2.
+      Polarity is detected/corrected by the block aligner (ts_rx_ts1_inv not used).
+    - idle_handshake/tx_ready: SDS Ordered Set then Data Blocks (Logical Idle: 5Ah Idle Symbols in
+      Gen 2 operation, 7.2.3, 7.5.4.10.1), idle_handshake_done once a Logical Idle Data Block (16
+      Idle Symbols) is received and one is transmitted after it (7.5.4.10.2).
+
+    Transceiver side: Gen2TXDatapath (words on tx_data, tx clock domain) and Gen2RXDatapath (words
+    from rx_data, rx clock domain), data_width-bit raw words, bit 0 first. The control levels are
+    transferred to the tx clock domain on a stable command (no transient Ordered Set selection), the
+    pulses/levels back to sys with PulseSynchronizers/MultiRegs.
+
+    Link Layer side (sys clock domain, U0): sink/source 32-bit words with K Symbols (Symbol 0 on
+    data[0:8], framing Ordered Sets at word boundaries, as in Gen 1 operation), Gen 2 packet framing
+    in the Data Blocks (Gen2TXFramer/Gen2TXPacker, Gen2RXFraming): TX units (Header Packet, Link
+    Command, DPH with its DPP) stored and forwarded (tx_buffer_depth 8-byte entries), RX packets
+    buffered (rx_buffer_depth words pairs, ~1.2GB/s peak on the line vs 500MB/s on the Link Layer
+    words at 125MHz).
+
+    Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
+    """
+    def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
+        tx_buffer_depth=512, rx_buffer_depth=1024):
+        for name in GEN2_PIPE_INTERFACE:
+            setattr(self, name, Signal(name=name))
+        self.tx_data = Signal(data_width) # o: TX words (tx clock domain).
+        self.rx_data = Signal(data_width) # i: RX words (rx clock domain).
+        self.sink    = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer TX words (sys).
+        self.source  = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer RX words (sys).
+        self.rx_overflow = Signal() # o: RX buffer overflow (sticky, rx clock domain).
+
+        # # #
+
+        # TX (tx clock domain) ---------------------------------------------------------------------
+        self.tx = tx = ClockDomainsRenamer("tx")(Gen2TXDatapath(data_width=data_width))
+        self.comb += [
+            tx.source.ready.eq(1),
+            self.tx_data.eq(tx.source.data),
+        ]
+
+        # Command: enable, tseq, ts1, ts2, data, ts2 reset/loopback (sys, registered).
+        cmd = Signal(7)
+        self.sync += cmd.eq(Cat(
+            self.ts_tx_enable | self.idle_handshake | self.tx_ready,
+            self.ts_tx_enable & self.ts_tx_tseq,
+            self.ts_tx_enable & self.ts_tx_ts1,
+            self.ts_tx_enable & self.ts_tx_ts2,
+            self.idle_handshake | self.tx_ready,
+            self.ts_tx_ts2_reset,
+            self.ts_tx_ts2_loopback,
+        ))
+        # Applied in the tx clock domain once stable (2 consecutive identical samples).
+        cmd_tx   = Signal(7)
+        cmd_tx_d = Signal(7)
+        cmd_cur  = Signal(7)
+        self.specials += MultiReg(cmd, cmd_tx, "tx")
+        self.sync.tx += [
+            cmd_tx_d.eq(cmd_tx),
+            If(cmd_tx == cmd_tx_d, cmd_cur.eq(cmd_tx)),
+        ]
+        self.comb += [
+            tx.tx.enable.eq(cmd_cur[0]),
+            tx.tx.tx_tseq.eq(cmd_cur[1]),
+            tx.tx.tx_ts1.eq(cmd_cur[2]),
+            tx.tx.tx_ts2.eq(cmd_cur[3]),
+            tx.tx.tx_data.eq(cmd_cur[4]),
+            # Link Functionality (Table 6-6): Reset (bit 0), Loopback (bit 2).
+            tx.tx.link_config.eq(Cat(cmd_cur[5], 0, cmd_cur[6])),
+        ]
+
+        # TSEQ/TS1/TS2 bursts (tx_done every tseq_count TSEQ/ts_count TS1/TS2 transmitted, the count
+        # restarts when the command changes).
+        tx_count = Signal(max=max(tseq_count, ts_count))
+        tx_done  = Signal()
+        cmd_cur_d = Signal(7)
+        self.sync.tx += [
+            cmd_cur_d.eq(cmd_cur),
+            tx_done.eq(0),
+            If(cmd_cur != cmd_cur_d,
+                tx_count.eq(0)
+            ).Elif(tx.tx.tx_os,
+                If(tx_count == Mux(cmd_cur[1], tseq_count - 1, ts_count - 1),
+                    tx_count.eq(0),
+                    tx_done.eq(1)
+                ).Else(
+                    tx_count.eq(tx_count + 1)
+                )
+            )
+        ]
+        tx_done_ps = PulseSynchronizer("tx", "sys")
+        self.submodules += tx_done_ps
+        self.comb += [
+            tx_done_ps.i.eq(tx_done),
+            self.ts_tx_done.eq(tx_done_ps.o),
+        ]
+
+        # RX (rx clock domain) ---------------------------------------------------------------------
+        self.rx = rx = ClockDomainsRenamer("rx")(Gen2RXDatapath(data_width=data_width))
+        self.comb += [
+            rx.sink.valid.eq(1),
+            rx.sink.data.eq(self.rx_data),
+            rx.source.ready.eq(1),
+        ]
+        rx_ts1_ps = PulseSynchronizer("rx", "sys")
+        rx_ts2_ps = PulseSynchronizer("rx", "sys")
+        self.submodules += rx_ts1_ps, rx_ts2_ps
+        link_config = Signal(8)
+        self.specials += MultiReg(rx.link_config, link_config)
+        self.comb += [
+            rx_ts1_ps.i.eq(rx.rx.rx_ts1),
+            rx_ts2_ps.i.eq(rx.rx.rx_ts2),
+            self.ts_rx_ts1.eq(rx_ts1_ps.o),
+            self.ts_rx_ts2.eq(rx_ts2_ps.o),
+            self.ts_rx_ts1_inv.eq(0),
+            self.ts_rx_ts2_reset.eq(link_config[0]),
+            self.ts_rx_ts2_loopback.eq(link_config[2]),
+        ]
+
+        # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
+        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth)
+        self.comb += [
+            self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
+            link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
+            self.sink.ready.eq(link_tx.sink.ready & self.tx_ready),
+            link_tx.source.connect(tx.sink),
+            link_tx.flush.eq(~self.tx_ready),
+            link_tx.packer.skp_pending.eq(tx.tx.skp_pending),
+        ]
+        self.tx_packer = link_tx.packer
+
+        # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
+        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth)
+        self.comb += [
+            # Data Blocks (after SDS), framing reset out of the Data Stream.
+            link_rx.sink.valid.eq(rx.source.valid),
+            link_rx.sink.data.eq(rx.source.data),
+            link_rx.data_stream.eq(rx.data_stream),
+            link_rx.rx_ready.eq(self.rx_ready),
+            link_rx.source.connect(self.source),
+            self.rx_overflow.eq(link_rx.overflow),
+        ]
+        self.rx_framing = link_rx.framing
+
+        # Idle Symbol handshake (7.5.4.10.2) -------------------------------------------------------
+        # RX: a Logical Idle Data Block (16 Idle Symbols) received while enabled. TX: a Logical Idle
+        # Data Block (16 Idle Symbols) transmitted after the first one received.
+        enable_rx = Signal()
+        enable_tx = Signal()
+        rx_idle   = Signal()
+        rx_idle_tx = Signal()
+        tx_idle    = Signal()
+        rx_idle_sys = Signal()
+        tx_idle_sys = Signal()
+        self.specials += [
+            MultiReg(self.idle_handshake, enable_rx, "rx"),
+            MultiReg(self.idle_handshake, enable_tx, "tx"),
+            MultiReg(rx_idle, rx_idle_tx, "tx"),
+            MultiReg(rx_idle, rx_idle_sys),
+            MultiReg(tx_idle, tx_idle_sys),
+        ]
+        self.sync.rx += [
+            If(~enable_rx,
+                rx_idle.eq(0)
+            ).Elif(rx.source.valid & (rx.source.data == GEN2_IDLE_BLOCK),
+                rx_idle.eq(1)
+            )
+        ]
+        self.sync.tx += [
+            If(~enable_tx,
+                tx_idle.eq(0)
+            ).Elif(rx_idle_tx & tx.tx.tx_idle,
+                tx_idle.eq(1)
+            )
+        ]
+        self.comb += self.idle_handshake_done.eq(self.idle_handshake & rx_idle_sys & tx_idle_sys)
+

@@ -26,7 +26,7 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common     import K, COM, SKP
 from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
-from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ
+from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ, GEN2_IDLE
 from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
 from usb3_pipe.coding     import RX8b10bChecker
 from usb3_pipe.coding     import GEN2_DC_REDUCE_ONES, GEN2_DC_REDUCE_ZEROS, popcount
@@ -471,7 +471,11 @@ class Gen2TX(LiteXModule):
 
     Controls (levels, one at a time): tx_tseq/tx_ts1/tx_ts2 (Ordered Sets, a SYNC Ordered Set first
     and then every sync_interval_ts TS1/TS2 or sync_interval_tseq TSEQ, 6.4.1.2.1) or tx_data (SDS
-    Ordered Set then Data Blocks from sink, Logical Idle Data Blocks when sink has no data).
+    Ordered Set then Data Blocks from sink, Logical Idle Data Blocks (5Ah Idle Symbols, 7.2.3) when
+    sink has no data).
+
+    The TSEQ/TS1/TS2 blocks are output with their scrambled Symbols 14/15 (ts flag): the DC Balance
+    Symbols are applied by Gen2TXDCBalance (dc_reset: SDS/Data Blocks reset the running balance).
 
     SKP Ordered Sets (6.4.3.3): Y counts the non SKP blocks (reset while sending TSEQ: Y restarts on
     Polling.Active entry), Z = Y/skp_interval accumulated (2 max) and inserted after SYNC, TS1, TS2,
@@ -487,9 +491,14 @@ class Gen2TX(LiteXModule):
         self.tx_data     = Signal()  # i
         self.link_config = Signal(8) # i: TS1/TS2 Link Functionality (Table 6-6).
         self.tx_os       = Signal()  # o: TSEQ/TS1/TS2 Ordered Set sent (pulse).
+        self.tx_idle     = Signal()  # o: Logical Idle Data Block sent (pulse).
+        self.tx_skp      = Signal()  # o: SKP Ordered Set sent (pulse, debug).
+        self.skp_pending = Signal()  # o: SKP Ordered Set(s) scheduled (inserted after a sink.last
+                                     #    Data Block or a Logical Idle block).
+        self.tx_data_blk = Signal()  # o: Data Block with sink data sent (pulse, debug).
 
         self.sink   = sink   = stream.Endpoint([("data", 128)])
-        self.source = source = stream.Endpoint(gen2_block_layout())
+        self.source = source = stream.Endpoint(gen2_tx_block_layout())
 
         # # #
 
@@ -569,9 +578,9 @@ class Gen2TX(LiteXModule):
                 scrambler.i.eq(_symbols(gen2_sds_payload())),
                 scrambler.advance.eq(1),
             ).Elif(sel_data,
-                # Scrambled, advance (Logical Idle: 00h Symbols).
+                # Scrambled, advance (Logical Idle: 5Ah Idle Symbols in Gen 2 operation, 7.2.3).
                 source.header.eq(BLOCK_HEADER_DATA),
-                scrambler.i.eq(Mux(idle, 0, sink.data)),
+                scrambler.i.eq(Mux(idle, GEN2_IDLE_BLOCK, sink.data)),
                 scrambler.advance.eq(1),
                 scrambler.scramble.eq(0xffff),
                 sink.ready.eq(source.ready),
@@ -584,49 +593,6 @@ class Gen2TX(LiteXModule):
             )
         ]
 
-        # DC Balance (6.4.1.2.2) -------------------------------------------------------------------
-        # Running DC Balance (1s - 0s) of the transmitted TSEQ/TS1/TS2 bits (Block Header included),
-        # saturated at +-511, reset at the start of the Data Blocks transmission. Evaluated at the end
-        # of Symbol 11: > 31: DC Balance Symbols 14 and 15, > 15: Symbol 15 only (unscrambled, the LFSR
-        # still advances).
-        self.dc_balance = dc_balance = Signal((11, True))
-        ones_11   = Signal((9, True))
-        ones_13   = Signal(5)
-        ones_14   = Signal(4)
-        ones_15   = Signal(4)
-        ones      = Signal((9, True))
-        balance   = Signal((12, True))
-        magnitude = Signal(11)
-        ts_out    = Signal(128)
-        sym14     = Signal(8)
-        sym15     = Signal(8)
-        def dc_ones(i):
-            return Mux(balance > 0, bin(GEN2_DC_REDUCE_ONES[i]).count("1"),
-                                    bin(GEN2_DC_REDUCE_ZEROS[i]).count("1"))
-        self.comb += [
-            # Popcounts computed in parallel (logic depth): Symbols 0-11, 12-13, 14, 15.
-            ones_11.eq(popcount(Cat(source.header, scrambler.o[0:96]))),
-            ones_13.eq(popcount(scrambler.o[96:112])),
-            ones_14.eq(popcount(scrambler.o[112:120])),
-            ones_15.eq(popcount(scrambler.o[120:128])),
-            balance.eq(dc_balance + 2*ones_11 - 100),
-            magnitude.eq(Mux(balance < 0, -balance, balance)),
-            sym14.eq(scrambler.o[112:120]),
-            sym15.eq(scrambler.o[120:128]),
-            If(magnitude > 31,
-                sym14.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0])),
-                sym15.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1])),
-            ).Elif(magnitude > 15,
-                sym15.eq(Mux(balance > 0, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1])),
-            ),
-            ts_out.eq(Cat(scrambler.o[0:112], sym14, sym15)),
-            ones.eq(ones_11 + ones_13 +
-                Mux(magnitude > 31, dc_ones(0), ones_14) +
-                Mux(magnitude > 15, dc_ones(1), ones_15)),
-        ]
-        new_balance = Signal((12, True))
-        self.comb += new_balance.eq(dc_balance + 2*ones - 132)
-
         # Output -----------------------------------------------------------------------------------
         lfsr = scrambler.state
         self.comb += [
@@ -634,12 +600,16 @@ class Gen2TX(LiteXModule):
                 source.data.eq(Cat(
                     _symbols([GEN2_SKP]*GEN2_SKP_TX_SYMBOLS + [GEN2_SKPEND]),
                     lfsr[16:23], ~lfsr[22], lfsr[8:16], lfsr[0:8]))
-            ).Elif(sel_ts,
-                source.data.eq(ts_out)
             ).Else(
                 source.data.eq(scrambler.o)
             ),
+            source.ts.eq(sel_ts),
+            source.dc_reset.eq(sel_sds | sel_data),
             self.tx_os.eq(sel_ts & source.ready),
+            self.tx_idle.eq(idle & source.ready),
+            self.skp_pending.eq(skp_pending != 0),
+            self.tx_skp.eq(sel_skp & source.ready),
+            self.tx_data_blk.eq(sel_data & ~idle & source.ready),
         ]
 
         # State ------------------------------------------------------------------------------------
@@ -650,7 +620,6 @@ class Gen2TX(LiteXModule):
                 skp_pending.eq(0),
                 skp_allowed.eq(0),
                 sds_sent.eq(0),
-                dc_balance.eq(0),
             ).Elif(source.valid & source.ready,
                 # SYNC scheduling (TS Ordered Sets count).
                 If(sel_ts,
@@ -685,21 +654,125 @@ class Gen2TX(LiteXModule):
                 ).Elif(sel_sync | sel_ts,
                     sds_sent.eq(0)
                 ),
-                # DC Balance.
-                If(sel_ts,
-                    If(new_balance > 511,
-                        dc_balance.eq(511)
-                    ).Elif(new_balance < -511,
-                        dc_balance.eq(-511)
-                    ).Else(
-                        dc_balance.eq(new_balance)
-                    )
-                ).Elif(sel_sds | sel_data,
-                    dc_balance.eq(0)
-                )
             ),
             If(~self.tx_data & ~tx_os, sds_sent.eq(0)),
         ]
+
+# Logical Idle Data Block payload (16 Idle Symbols).
+GEN2_IDLE_BLOCK = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
+
+def gen2_tx_block_layout():
+    """Gen2TX blocks: gen2_block_layout + TSEQ/TS1/TS2 (ts, DC Balance Symbols to apply) and running
+    DC Balance reset (dc_reset: SDS/Data Blocks)."""
+    return gen2_block_layout() + [("ts", 1), ("dc_reset", 1)]
+
+# Gen 2 TX DC Balance ------------------------------------------------------------------------------
+
+class Gen2TXDCBalance(LiteXModule):
+    """DC Balance Symbols of the transmitted TSEQ/TS1/TS2 (6.4.1.2.2), on the Gen2TX blocks.
+
+    Running DC Balance (1s - 0s) of the transmitted TSEQ/TS1/TS2 bits (Block Header included),
+    saturated at +-511, reset at the start of the Data Blocks transmission (dc_reset). Evaluated at
+    the end of Symbol 11: > 31: DC Balance Symbols 14 and 15, > 15: Symbol 15 only (the Gen2TX LFSR
+    still advances on them).
+
+    Pipelined over 3 cycles per block (popcounts, balance, output/update): the gearbox accepts a block
+    every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
+    and saturation.
+    """
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
+        self.source = source = stream.Endpoint(gen2_block_layout())
+
+        # # #
+
+        self.dc_balance = dc_balance = Signal((11, True))
+
+        # Stage 1: block and popcounts (Symbols 0-11 with the Block Header, 12-13, 14, 15).
+        header   = Signal(4)
+        data     = Signal(192)
+        skp      = Signal()
+        ts       = Signal()
+        dc_reset = Signal()
+        ones_11  = Signal((8, True)) # Signed: balance arithmetic.
+        ones_13  = Signal((6, True))
+        ones_14  = Signal((5, True))
+        ones_15  = Signal((5, True))
+        # Stage 2: balance at the end of Symbol 11, DC Balance Symbols selection.
+        balance  = Signal((12, True))
+        fix_14   = Signal()
+        fix_15   = Signal()
+        positive = Signal()
+
+        self.fsm = fsm = FSM(reset_state="CAPTURE")
+        fsm.act("CAPTURE",
+            sink.ready.eq(1),
+            If(sink.valid,
+                NextValue(header,   sink.header),
+                NextValue(data,     sink.data),
+                NextValue(skp,      sink.skp),
+                NextValue(ts,       sink.ts),
+                NextValue(dc_reset, sink.dc_reset),
+                NextValue(ones_11, popcount(Cat(sink.header, sink.data[0:96]))),
+                NextValue(ones_13, popcount(sink.data[96:112])),
+                NextValue(ones_14, popcount(sink.data[112:120])),
+                NextValue(ones_15, popcount(sink.data[120:128])),
+                NextState("BALANCE")
+            )
+        )
+        new_balance = Signal((12, True))
+        fsm.act("BALANCE",
+            NextValue(balance, dc_balance + 2*ones_11 - 100),
+            NextState("OUTPUT")
+        )
+        magnitude = Signal(11)
+        self.comb += [
+            magnitude.eq(Mux(balance < 0, -balance, balance)),
+            positive.eq(balance > 0),
+            fix_14.eq(magnitude > 31),
+            fix_15.eq(magnitude > 15),
+        ]
+        sym14 = Signal(8)
+        sym15 = Signal(8)
+        o14   = Signal((5, True))
+        o15   = Signal((5, True))
+        def dc_ones(i):
+            return Mux(positive, bin(GEN2_DC_REDUCE_ONES[i]).count("1"),
+                                 bin(GEN2_DC_REDUCE_ZEROS[i]).count("1"))
+        self.comb += [
+            sym14.eq(Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]),
+                data[112:120])),
+            sym15.eq(Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]),
+                data[120:128])),
+            o14.eq(Mux(fix_14, dc_ones(0), ones_14)),
+            o15.eq(Mux(fix_15, dc_ones(1), ones_15)),
+            # dc_balance + 2*ones(block) - 132.
+            new_balance.eq(balance + 2*(ones_13 + o14 + o15) - 32),
+        ]
+        fsm.act("OUTPUT",
+            source.valid.eq(1),
+            source.header.eq(header),
+            source.skp.eq(skp),
+            If(ts,
+                source.data.eq(Cat(data[0:112], sym14, sym15, data[128:]))
+            ).Else(
+                source.data.eq(data)
+            ),
+            If(source.ready,
+                If(ts,
+                    If(new_balance > 511,
+                        NextValue(dc_balance, 511)
+                    ).Elif(new_balance < -511,
+                        NextValue(dc_balance, -511)
+                    ).Else(
+                        NextValue(dc_balance, new_balance)
+                    )
+                ).Elif(dc_reset,
+                    NextValue(dc_balance, 0)
+                ),
+                NextState("CAPTURE")
+            )
+        )
 
 # Gen 2 RX -----------------------------------------------------------------------------------------
 
@@ -839,21 +912,21 @@ class Gen2RX(LiteXModule):
 GEN2_DATA_WIDTH = 40
 
 class Gen2TXDatapath(LiteXModule):
-    """Gen 2 TX datapath: Gen2TX -> register stage -> Gen2BlockGearbox: continuous data_width-bit
+    """Gen 2 TX datapath: Gen2TX -> Gen2TXDCBalance -> Gen2BlockGearbox: continuous data_width-bit
     transceiver words (bit 0 transmitted first), in the transceiver TX clock domain. Controls/sink
     on tx (Gen2TX)."""
     def __init__(self, data_width=GEN2_DATA_WIDTH, **kwargs):
-        self.tx      = tx      = Gen2TX(**kwargs)
-        self.buffer  = buffer  = stream.Buffer(gen2_block_layout())
-        self.gearbox = gearbox = Gen2BlockGearbox(data_width)
+        self.tx         = tx         = Gen2TX(**kwargs)
+        self.dc_balance = dc_balance = Gen2TXDCBalance()
+        self.gearbox    = gearbox    = Gen2BlockGearbox(data_width)
         self.sink    = tx.sink
         self.source  = gearbox.source
 
         # # #
 
         self.comb += [
-            tx.source.connect(buffer.sink),
-            buffer.source.connect(gearbox.sink),
+            tx.source.connect(dc_balance.sink),
+            dc_balance.source.connect(gearbox.sink),
         ]
 
 GEN2_RX_COUNTERS = [

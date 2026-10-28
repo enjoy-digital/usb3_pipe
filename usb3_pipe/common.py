@@ -198,6 +198,16 @@ GEN2_SDS    = 0xe1
 GEN2_TS1    = 0x1e
 GEN2_TS2    = 0x2d
 GEN2_TSEQ   = 0x87
+GEN2_IDLE   = 0x5a # Idle Symbol in Gen 2 operation (Logical Idle, 7.2.3, Table 7-6).
+
+# Gen 2 framing Symbols (Table 6-2: scrambled, in Data Blocks only).
+GEN2_SHP  = 0x9a # Start Header Packet.
+GEN2_DPHP = 0x95 # Start Data Packet Header (non-deferred DPH, Gen 2 only).
+GEN2_SDP  = 0x96 # Start Data Packet Payload.
+GEN2_EDB  = 0x69 # End Bad.
+GEN2_END  = 0x65 # End.
+GEN2_SLC  = 0x4b # Start Link Command.
+GEN2_EPF  = 0x36 # End Packet Framing.
 
 GEN2_SKP_TX_SYMBOLS = 20 # SKP Symbols in a transmitted SKP Ordered Set (24 Symbols, 6.4.3.3).
 

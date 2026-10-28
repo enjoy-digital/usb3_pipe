@@ -97,8 +97,9 @@ def le_bytes(value, n):
 
 # Link Commands (USB 3.2 7.2.2) --------------------------------------------------------------------
 
-def LGOOD(n): return 0x000 | (n & 0x7)
-def LCRD(x):  return 0x080 | (x & 0x3)
+def LGOOD(n): return 0x000 | (n & 0xf) # n: 0-7 (SuperSpeed), 0-15 (SuperSpeedPlus).
+def LCRD(x):  return 0x080 | (x & 0x3) # LCRD_x (SuperSpeed), LCRD1_x (SuperSpeedPlus).
+def LCRD2(x): return 0x084 | (x & 0x3) # LCRD2_x (SuperSpeedPlus).
 def LRTY():   return 0x100
 def LUP():    return 0x400
 def LDN():    return 0x580
@@ -116,7 +117,7 @@ def link_command(info):
 def header_packet(dw0, dw1, dw2, seq):
     """Header Packet: SHP framing, 3 DWords, CRC-16 and Link Control Word (Header Sequence Number)."""
     header = le_bytes(dw0, 4) + le_bytes(dw1, 4) + le_bytes(dw2, 4)
-    lcw    = (seq & 0x7) | (crc5(seq & 0x7) << 11)
+    lcw    = (seq & 0xf) | (crc5(seq & 0xf) << 11)
     return words_from_symbols(framing(SHP) + [(b, 0) for b in header + le_bytes(crc16(header), 2) + le_bytes(lcw, 2)])
 
 def data_packet_payload(payload):
@@ -145,15 +146,19 @@ TP_SUB_STALL     = 5
 TP_SUB_PING      = 7
 TP_SUB_PING_RESP = 8
 
-def tp(subtype, seq, addr=0, ept=0, direction=0, nump=0, tp_seq=0, pp=0):
+# Transfer Types (SuperSpeedPlus ACK TPs/DPHs, DW1[14:12]).
+TT_CONTROL = 0b100
+TT_BULK    = 0b110
+
+def tp(subtype, seq, addr=0, ept=0, direction=0, nump=0, tp_seq=0, pp=0, tt=0):
     dw0 = 0x04 | (addr << 25)
-    dw1 = subtype | (direction << 7) | (ept << 8) | (nump << 16) | (tp_seq << 21)
+    dw1 = subtype | (direction << 7) | (ept << 8) | (tt << 12) | (nump << 16) | (tp_seq << 21)
     dw2 = pp << 27
     return header_packet(dw0, dw1, dw2, seq)
 
-def dph(seq, length, addr=0, ept=0, dp_seq=0, setup=0):
+def dph(seq, length, addr=0, ept=0, dp_seq=0, setup=0, tt=0):
     dw0 = 0x08 | (addr << 25)
-    dw1 = dp_seq | (ept << 8) | (setup << 15) | (length << 16)
+    dw1 = dp_seq | (ept << 8) | (tt << 12) | (setup << 15) | (length << 16)
     return header_packet(dw0, dw1, 0, seq)
 
 # Received Packets Decoding ------------------------------------------------------------------------
@@ -340,14 +345,24 @@ class USB3HostModel(LiteXModule):
 
 class HostScript:
     """Host script builder (USB3HostModel steps), tracking the Header Sequence Numbers and the Rx
-    Header Buffer Credits returned to the device."""
-    def __init__(self):
+    Header Buffer Credits returned to the device.
+
+    ssp: SuperSpeedPlus operation (Gen 2x1): 4-bit Header Sequence Numbers, Type 1/Type 2 credits
+    (LCRD1_x/LCRD2_x, Type 2: asynchronous DPs), Transfer Type in the ACK TPs/DPHs."""
+    def __init__(self, ssp=False):
+        self.ssp       = ssp
+        self.seq_mod   = 16 if ssp else 8
         self.steps     = []
         self.offset    = 0 # Packets offset in the words (symbols, SKP Ordered Sets accounting).
         self.tx_seq    = 0 # Host Header Sequence Number.
         self.rx_seq    = 0 # Device Header Sequence Number (expected).
-        self.lcrd      = 0 # Rx Header Buffer Credit index (LCRD_x returned to the device).
+        self.lcrd      = 0 # Rx Header Buffer Credit index (LCRD_x/LCRD1_x returned to the device).
+        self.lcrd2     = 0 # Type 2 Rx Buffer Credit index (LCRD2_x, SuperSpeedPlus).
         self.marks     = []
+
+    def tt(self, tt):
+        """Transfer Type field (SuperSpeedPlus only)."""
+        return tt if self.ssp else 0
 
     def send(self, words):
         # Packets offset by the SKP Ordered Sets accounting (Logical Idle symbols before the packet).
@@ -358,18 +373,33 @@ class HostScript:
 
     def send_hp(self, builder, *args, **kwargs):
         self.send(builder(*args, seq=self.tx_seq, **kwargs))
-        self.tx_seq = (self.tx_seq + 1) % 8
+        self.tx_seq = (self.tx_seq + 1) % self.seq_mod
 
     def wait(self, data, ctrl=0, mask=0xffffffff):
         self.steps.append((OP_WAIT, data, ctrl, mask, 0, 0))
 
-    def wait_hp(self):
-        # Wait a device Header Packet and acknowledge it (LGOOD_n + LCRD_x, 7.2.4).
+    def wait_hp(self, type2=False):
+        # Wait a device Header Packet and acknowledge it (LGOOD_n + LCRD_x/LCRD1_x/LCRD2_x, 7.2.4,
+        # type2: asynchronous DP in SuperSpeedPlus operation).
         self.wait(0xfbfbfbf7, ctrl=0b1111)
         self.send(link_command(LGOOD(self.rx_seq)))
-        self.send(link_command(LCRD(self.lcrd)))
-        self.rx_seq = (self.rx_seq + 1) % 8
-        self.lcrd   = (self.lcrd + 1) % 4
+        if self.ssp and type2:
+            self.send(link_command(LCRD2(self.lcrd2)))
+            self.lcrd2 = (self.lcrd2 + 1) % 4
+        else:
+            self.send(link_command(LCRD(self.lcrd)))
+            self.lcrd = (self.lcrd + 1) % 4
+        self.rx_seq = (self.rx_seq + 1) % self.seq_mod
+
+    def advertise(self):
+        # Header Sequence Number and Rx Header Buffer Credit Advertisements (7.2.4.1.1).
+        self.send(link_command(LGOOD((self.rx_seq - 1) % self.seq_mod)))
+        for x in range(4):
+            self.send(link_command(LCRD(x)))
+            if self.ssp:
+                self.send(link_command(LCRD2(x)))
+        self.lcrd  = 0
+        self.lcrd2 = 0
 
     def idle(self, cycles):
         self.steps.append((OP_IDLE, cycles, 0, 0, 0, 0))
@@ -392,9 +422,7 @@ class HostScript:
     # Port Configuration LMPs.
     def link_init(self):
         self.mark("link_init")
-        self.send(link_command(LGOOD(7)))
-        for x in range(4):
-            self.send(link_command(LCRD(x)))
+        self.advertise()
         self.send_hp(lmp_port_capability)
         self.wait_hp() # Device Port Capability LMP.
         self.send_hp(lmp_port_configuration)
@@ -403,21 +431,22 @@ class HostScript:
     # Control transfers (8.12.2).
     def control_read(self, setup, name, latency=256, status_gap=64):
         self.mark(name)
-        self.send_hp(dph, length=8, setup=1)
+        ctl = self.tt(TT_CONTROL)
+        self.send_hp(dph, length=8, setup=1, tt=ctl)
         self.send(data_packet_payload(setup))
         self.wait_hp()                                                # ACK TP (SETUP).
         self.idle(latency)                                            # Host latency (xHCI: ~1.5us).
-        self.send_hp(tp, TP_SUB_ACK, nump=1, tp_seq=0, pp=1)          # Data stage request.
-        self.wait_hp()                                                # DPH (+DPP).
+        self.send_hp(tp, TP_SUB_ACK, nump=1, tp_seq=0, pp=1, tt=ctl)  # Data stage request.
+        self.wait_hp(type2=True)                                      # DPH (+DPP).
         self.idle(128)                                                # DPP (END framing not aligned).
-        self.send_hp(tp, TP_SUB_ACK, nump=0, tp_seq=1)                # Data acknowledgement.
+        self.send_hp(tp, TP_SUB_ACK, nump=0, tp_seq=1, tt=ctl)        # Data acknowledgement.
         self.idle(status_gap)
         self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
         self.wait_hp()                                                # ACK TP (Status).
 
     def control_write(self, setup, name):
         self.mark(name)
-        self.send_hp(dph, length=8, setup=1)
+        self.send_hp(dph, length=8, setup=1, tt=self.tt(TT_CONTROL))
         self.send(data_packet_payload(setup))
         self.wait_hp()                                                # ACK TP (SETUP).
         self.send_hp(tp, TP_SUB_STATUS)                               # Status stage.
@@ -427,7 +456,7 @@ class HostScript:
     def bulk_out(self, payload, ept, dp_seq, name):
         # DPH + DPP, the device acknowledges with an ACK TP (next sequence number).
         self.mark(name)
-        self.send_hp(dph, length=len(payload), ept=ept, dp_seq=dp_seq)
+        self.send_hp(dph, length=len(payload), ept=ept, dp_seq=dp_seq, tt=self.tt(TT_BULK))
         self.send(data_packet_payload(payload))
         self.wait_hp()                                                # ACK TP.
 
@@ -436,10 +465,11 @@ class HostScript:
         # With erdy: the window closed by the host (NumP=0) with more data available, the device sends
         # an ERDY (as Linux xHCI hosts, the next request waits for it).
         self.mark(name)
-        self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=1, tp_seq=dp_seq, pp=1)
-        self.wait_hp()                                                # DPH (+DPP).
+        blk = self.tt(TT_BULK)
+        self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=1, tp_seq=dp_seq, pp=1, tt=blk)
+        self.wait_hp(type2=True)                                      # DPH (+DPP).
         self.idle(latency)                                            # DPP (END framing not aligned).
-        self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=0, tp_seq=(dp_seq + 1) % 32)
+        self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=0, tp_seq=(dp_seq + 1) % 32, tt=blk)
         if erdy:
             self.wait_hp()                                            # ERDY TP.
 
@@ -468,10 +498,7 @@ class HostScript:
         self.idle(16)
         self.steps.append((OP_U0, 0, 0, 0, 0, 0))
         self.mark(name + "_u0")
-        self.send(link_command(LGOOD((self.rx_seq - 1) % 8)))
-        for x in range(4):
-            self.send(link_command(LCRD(x)))
-        self.lcrd = 0
+        self.advertise()
         self.idle(64)
 
     def end(self):
@@ -481,9 +508,10 @@ class HostScript:
 def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
-def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False):
+def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
+    ssp=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
-    s = HostScript()
+    s = HostScript(ssp=ssp)
     s.link_init()
     if skp:
         # SKP Ordered Set (2 symbols) between packets: the framing is then shifted by 2 symbols in

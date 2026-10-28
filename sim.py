@@ -58,8 +58,9 @@ class USB3SerDesModel(LiteXModule):
     clock, as recovered by the CDR of a real transceiver. The RX datapath's CDC then moves the data
     to the local sys clock domain.
     """
-    def __init__(self, phy_dw=20, rx_word_shift=0, rx_clock_domain="sys"):
+    def __init__(self, phy_dw=20, rx_word_shift=0, rx_clock_domain="sys", gen2_capable=False):
         assert phy_dw in [20, 40]
+        assert (not gen2_capable) or (phy_dw == 40)
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.tx     = stream.Endpoint([("data", phy_dw)])
@@ -84,6 +85,14 @@ class USB3SerDesModel(LiteXModule):
 
         self.rx_idle_stretch = 0
         self.xcvr_name       = None
+
+        # Gen 2 (raw words, same word rate as Gen 1 in the model: the 10Gbps line rate is not
+        # modelled, the words carry 128b/132b blocks instead of 8b/10b symbols).
+        self.gen2_capable   = gen2_capable
+        self.rate_10g       = Signal()       # i
+        self.gen2_tx_enable = Signal()       # i
+        self.gen2_tx_data   = Signal(phy_dw) # i
+        self.gen2_rx_data   = Signal(phy_dw) # o (rx clock domain).
 
         # # #
 
@@ -177,6 +186,8 @@ class USB3SerDesModel(LiteXModule):
         self.comb += [
             If(self.tx_lfps | (self.tx_pattern != 0),
                 tx_data.eq(self.tx_pattern)
+            ).Elif(self.gen2_tx_enable,
+                tx_data.eq(self.gen2_tx_data)
             ).Else(
                 tx_data.eq(Cat(*[encoder.output[i] for i in range(nwords)])),
             ),
@@ -193,6 +204,7 @@ class USB3SerDesModel(LiteXModule):
                 rx_data.eq(self.rx.data)
             )
         ]
+        self.comb += self.gen2_rx_data.eq(rx_data)
         sync_rx = getattr(self.sync, rx_clock_domain)
         sync_rx += rx_data_sr.eq(Cat(rx_data_sr[phy_dw:], rx_data)) # Previous word in LSBs.
         for i in range(nwords):
@@ -200,7 +212,9 @@ class USB3SerDesModel(LiteXModule):
 
         # RX decode errors.
         self.rx_error_monitor = RXErrorMonitor(decoders, clock_domain=rx_clock_domain)
-        self.comb += self.rx_errors.eq(self.rx_error_monitor.errors)
+        self.gen2_rx_errors = Signal() # i
+        self.comb += self.rx_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
+            self.rx_error_monitor.errors))
 
     def connect(self, serdes):
         self.comb += [
@@ -403,14 +417,19 @@ class USB3PIPESim(SoCMini):
                         the model).
 
     gen2_capable (lanes=1): Host and Device advertise Gen 2x1 in the SuperSpeedPlus Polling
-    (SCD1/SCD2, LBPM), Gen 2 negotiated (no Gen 2 speed switch yet: training continues at Gen 1
-    speed).
+    (SCD1/SCD2, LBPM), Gen 2 negotiated (training continues at Gen 1 speed).
+
+    gen2 (lanes=1, gen2_capable): SerDes models with Gen 2 raw words, the training continues at Gen 2
+    (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0, Link Layer packets with the
+    Gen 2 framing in the Data Blocks, SuperSpeedPlus Link Layer (Host script and Device Core: 4-bit
+    Header Sequence Numbers, Type 1/Type 2 credits, Transfer Types).
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
         host_lpm=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
-        gen2_capable=False):
+        gen2_capable=False, gen2=False):
         assert lanes in [1, 2]
+        assert (not gen2) or ((lanes == 1) and gen2_capable)
         assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on
@@ -442,11 +461,12 @@ class USB3PIPESim(SoCMini):
         serdeses = {}
         checkers = {}
         for name, role, partner in [("host", "host", "dev"), ("dev", "device", "host")]:
-            renamer = ClockDomainsRenamer({"sys": cds[name], "rx": cds[partner]})
+            renamer = ClockDomainsRenamer({"sys": cds[name], "tx": cds[name], "rx": cds[partner]})
             serdes  = [renamer(USB3SerDesModel(
                 phy_dw          = phy_dw,
                 rx_word_shift   = lane1_word_shift if (name, lane) == ("dev", 1) else rx_word_shift,
-                rx_clock_domain = "rx")) for lane in range(lanes)]
+                rx_clock_domain = "rx",
+                gen2_capable    = gen2)) for lane in range(lanes)]
             phy     = renamer(USB3PHY(
                 serdes               = serdes[0] if lanes == 1 else serdes,
                 sys_clk_freq         = sys_clk_freq,
@@ -470,8 +490,10 @@ class USB3PIPESim(SoCMini):
 
             if with_core and (name == "host"):
                 # Scripted host Link/Protocol Layer (link initialization, enumeration).
-                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp, latency=host_latency,
-                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm).steps))
+                # Gen 2: no Gen 1 SKP Ordered Sets/packets offsets in the script (Gen 2 SKP Ordered
+                # Sets by the Gen2TX, packets re-aligned by the Gen 2 framing).
+                host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp and not gen2, latency=host_latency,
+                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
@@ -683,6 +705,7 @@ def main():
     parser.add_argument("--lane1-word-shift", default=2,        help="Device Lane 1 RX word shift (symbols, --lanes 2).")
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
+    parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -709,7 +732,8 @@ def main():
         lane_delays      = (int(args.lane0_delay), int(args.lane1_delay)),
         lane1_word_shift = int(args.lane1_word_shift),
         lane_skp         = int(args.lane_skp),
-        gen2_capable     = args.gen2_capable)
+        gen2_capable     = args.gen2_capable or args.gen2,
+        gen2             = args.gen2)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

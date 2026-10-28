@@ -161,8 +161,8 @@ lane): everything below is verified in simulation only.
   (SYNC/pointer paths, adders mapped as LUTs: carry chains in Vivado), `Gen2RX` 4; the `Gen2TX` DC
   Balance (popcounts -> running balance -> Symbols 14/15) is the deepest path (to check, can be
   pipelined: a block is accepted every 3.3 cycles at 40-bit).
-- No Gen 2 elastic buffer (SKP add/remove at the receiver), no Gen 2 LTSSM integration (TSEQ/TS
-  count, SYNC in Polling/Recovery, Disable Scrambling from the first Data Block).
+- No Gen 2 elastic buffer (SKP add/remove at the receiver, the Gen 2 RX path runs in the recovered
+  clock domain), no Disable Scrambling in Gen 2 operation.
 - LBPM PHY Capability Gen 2 bit (bit 2) and the Table 7-14 common capability as the AND of both
   capabilities: from the spec reading, to confirm with a Gen 2 host.
 - SSP Polling: no tPollingSCDLFPSTimeout, no speed switch to Gen 2 after Polling.PortConfig, no
@@ -190,26 +190,45 @@ lane): everything below is verified in simulation only.
 
 ## Gen 2x1 hardware milestones
 
-**M1: Gen 2 capability exchange and Gen 2 RX** (UltraScale+ GTY, Gen 2 host): the device advertises
-Gen 2x1 in Polling (`USB3PHY(gen2_capable=True)`), the host switches to 10Gbps and sends Gen 2
-TSEQ/TS1, `Gen2RXDatapath` block-aligns, descrambles and counts them (`Gen2RXDebug` CSRs, LiteScope).
-Remaining for M1:
-- Gen 2 transceiver configuration: QPLL0 at 10Gbps (Gen 1: RXOUT_DIV/TXOUT_DIV 2), raw 40-bit words
-  (`data_width=40`, fabric 8b/10b bypassed, comma alignment off), TX/RX clocks unchanged at 250MHz;
-  rate switch on `phy.gen2` after Polling.PortConfig (DRP: OUT_DIV, RX/TX_DATA_WIDTH 20 <-> 40, or
-  40-bit at both speeds with Gen 1 at 125MHz), Gen 2 CDR/equalizer settings, RX electrical idle/LFPS
-  detection at Gen 2.
-- Gen 2 path wiring in the SerDes (`USPUSB3SerDes`): raw RX words to `Gen2RXDatapath`, TX words from
-  `Gen2TXDatapath` (TSEQ/TS1 for the host to progress, or electrical idle for a first test), bench
-  target with the CSRs/LiteScope probes.
-- To check on hardware: bit order (RX word bit 0 = first received bit, Block Header bit 0 first), SKP
-  LFSR Symbol bit 7, LBPM Gen 2 bit, host behavior when the device does not answer the Gen 2
-  training.
+Hardware: Alibaba Cloud XCKU3P (UltraScale+ GTY, `bench/alibaba_xcku3p.py --gen2-capable`), SFP2USB
+adapter, USB 3.2 Gen 2 xHCI root hub (a Gen 1 only root hub negotiates Gen 1, as expected).
 
-**M2: Gen 2 link training to U0**: Gen 2 LTSSM (Polling.RxEQ/Active/Configuration/Idle with TSEQ
-counts, SYNC, TS1/TS2 counts, SDS and Logical Idle Data Blocks, Recovery with SYNC/TS1/TS2), Gen 2
-elastic buffer (SKP Ordered Sets add/remove), Gen 2 timers (Table 7-7), Disable Scrambling, then the
-Link Layer datapath at 1.25GB/s and the SuperSpeedPlus Link Layer (above).
+**M1: Gen 2 capability exchange and Gen 2 RX** (done): the device advertises Gen 2x1 in the
+SuperSpeedPlus Polling, the host selects Gen 2 and the training continues at 10Gbps
+(`USPUSB3SerDes(gen2_capable=True)`: QPLL at 10Gbps, 40-bit raw words, Gen 1 at the /2 rate, RX
+re-initialization on rate changes). The host Gen 2 SYNC/TSEQ/TS1/SKP Ordered Sets are block-aligned,
+descrambled and decoded (Gen 2 bit order, polarity inversion, SKP LFSR Symbols confirmed): 31.6M
+blocks, 146 corrected Block Headers over 4 host Gen 2 attempts. Found on hardware:
+- `popcount` compared to constants was evaluated on 1-bit operands in the generated Verilog (all
+  Block Headers seen as corrected Control headers, no alignment loss on undefined headers), not
+  visible in the Migen simulation: fixed, tested with yosys on the generated Verilog.
+- GTY CDR: the `USPUSB3SerDes` RXCDR_CFG2/3 overrides (0x263/0x1a) also track the host SSC at 10Gbps
+  (as the PCIe Gen3 0x164/0x12), the Transceivers Wizard 10Gbps default (0x269) does not.
+
+**M2: Gen 2 link training to U0** (done): `Gen2PIPE` (Gen 2 TSEQ/TS1/TS2 bursts, 8 consecutive
+TS1/TS2 detection, SDS then Logical Idle, Idle Symbol handshake) under the LTSSM when Gen 2 is
+negotiated (`USB3PHY.add_gen2`: 10Gbps once Gen 2 is negotiated, LFPS stay on the Gen 1 PIPE). On
+hardware: Polling.RxEQ (524288 TSEQ, 6.9ms) -> Polling.Active -> Polling.Configuration ->
+Polling.Idle -> **U0 at 10Gbps**, Recovery at Gen 2 to U0. Found on hardware: the Gen 2 Idle Symbol is
+5Ah (7.2.3, the host Data Blocks after SDS descramble to 5Ah). Simulation: `sim.py --gen2` (Host and
+Device to U0 at Gen 2). The Gen 1 Link Layer receives nothing in U0 at Gen 2: the link goes to
+Recovery a few us after U0 (no Header Sequence Number Advertisement exchange).
+
+**M3: SuperSpeedPlus Link Layer, enumeration and Bulk transfers at Gen 2** (done): Gen 2 packet
+framing (`usb3_pipe/framing.py`: Link Layer words <-> Data Blocks, framing Symbols as scrambled bytes,
+DPHSTART/Length Field Replicas, store and forward of the TX units) and SuperSpeedPlus Link Layer
+(`usb3_core/link.py` at Gen 2: 4-bit Header Sequence Numbers, Type 1/Type 2 credits, Transfer Types),
+SuperSpeedPlus USB Device Capability in the BOS. On hardware (`lsusb`: 10000M, SuperSpeedPlus):
+Bulk IN ~320MB/s, Bulk OUT ~466MB/s, full duplex 98MB/s IN + 457MB/s OUT (60s), no errors, no
+Recovery. Found on hardware:
+- Warm Reset LFPS detected from the 8b/10b decode errors at 10Gbps (always set on raw words): Gen 2
+  block alignment lost instead.
+- Verilog expression width of the RX framing byte shifts (`8*p` truncated, as `popcount` in M1).
+- PENDING_HP_TIMER is 10us (Table 7-7), Bulk IN stale ERDY race, SKP Ordered Sets starvation with
+  units packed back to back (host Recovery every few ms in full duplex).
+
+Next: Link Layer datapath bandwidth (32-bit at 125MHz: ~500MB/s per direction, store and forward of
+the DPPs on the TX side, IN limited to ~320MB/s): 64/128-bit Link Layer words at Gen 2.
 
 ## Suggested order
 
