@@ -270,6 +270,13 @@ class USB3BulkIN(USB3Endpoint):
             reader.source.connect(self.tx_dpp),
         ]
 
+        # Debug (sending state).
+        self.dbg_no_data  = ~avail & ~fc                            # No packet written to send.
+        self.dbg_no_win   = avail & ~fc & ~in_win                   # Waiting for a host request.
+        self.dbg_fc       = fc                                      # Flow control (EOB/NRDY/ERDY).
+        self.dbg_hp_wait  = avail & ~fc & in_win & ~self.tx_hp.ready # Link Layer not ready.
+        self.dbg_inflight = inflight
+
 # USB3 Bulk OUT Endpoint ---------------------------------------------------------------------------
 
 class USB3BulkOUT(USB3Endpoint):

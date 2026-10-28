@@ -60,9 +60,9 @@ def add_usb3_console(soc, usb3_acm):
 
 # USB3 Example -------------------------------------------------------------------------------------
 
-def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False):
+def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False, max_burst=8):
     """Add a USB3 Device Core example design to soc (on usb3_phy), with_lpm: U1/U2 Link Power
-    Management (vendor Bulk examples)."""
+    Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples)."""
     assert example in USB3_EXAMPLES
     if example in ["console", "composite"]:
         assert soc.cpu_type is not None, f"{example} example requires a CPU (--cpu-type)."
@@ -154,8 +154,8 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
 
     # Vendor Bulk examples.
     else:
-        descriptors = bulk_descriptors(max_burst=8)
-        endpoints   = [USB3BulkIN(ept=1, max_burst=8), USB3BulkOUT(ept=2, max_burst=8)]
+        descriptors = bulk_descriptors(max_burst=max_burst)
+        endpoints   = [USB3BulkIN(ept=1, max_burst=max_burst), USB3BulkOUT(ept=2, max_burst=max_burst)]
         soc.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints,
             with_lpm = with_lpm)
         usb3_core.add_csr(with_trace=True)

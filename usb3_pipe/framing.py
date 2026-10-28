@@ -61,11 +61,19 @@ class Gen2RXFraming(LiteXModule):
     A packet is identified by its first framing Symbol (in Idle) and its length (DPP: Length Field
     Replica of the preceding DPH), a byte pointer re-aligns it in a 16-byte window: 8 bytes per
     cycle in a packet, 1 cycle per packet start. Unknown packet starts are skipped (errors).
+
+    With lc_enable, LGOOD_n/LCRD_x Link Commands (both copies identical) are output on source_lc
+    (Link Command word, Symbol 0 on data[0:8]) instead of source: they only concern the transmitter
+    (Header Packets acknowledgements and credits), the Link Layer gets them without waiting behind
+    the received packets (RX buffering, 7.2.4.1: Header Packets held in the Tx Header Buffers until
+    LGOOD_n).
     """
     def __init__(self):
-        self.sink   = sink   = stream.Endpoint([("data", 64)])
-        self.source = source = stream.Endpoint(gen2_link_layout())
-        self.errors = Signal(16) # o: Unknown packet starts (skipped bytes).
+        self.sink      = sink      = stream.Endpoint([("data", 64)])
+        self.source    = source    = stream.Endpoint(gen2_link_layout())
+        self.source_lc = source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.errors    = Signal(16) # o: Unknown packet starts (skipped bytes).
+        self.lc_enable = Signal()   # i: LGOOD_n/LCRD_x on source_lc.
 
         # # #
 
@@ -145,6 +153,18 @@ class Gen2RXFraming(LiteXModule):
                 data.eq(byte),
             )
 
+        # LGOOD_n/LCRD_x Link Commands (Link Command Word copies identical, 7.2.2): source_lc.
+        lc_word = out[32:64]
+        lc_fast = Signal()
+        self.comb += [
+            lc_fast.eq(self.lc_enable & (kind == KIND_LC) & (lc_word[0:16] == lc_word[16:32]) & (
+                ((lc_word[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
+                ((lc_word[0:11] & 0x7f8) == 0x080))), # LCRD_x/LCRD1_x/LCRD2_x.
+            source_lc.data.eq(lc_word),
+        ]
+        out_ready = Signal()
+        self.comb += out_ready.eq(Mux(lc_fast, source_lc.ready, source.ready))
+
         # FSM --------------------------------------------------------------------------------------
         p_next = Signal(4)
         self.fsm = fsm = FSM(reset_state="IDLE")
@@ -187,12 +207,13 @@ class Gen2RXFraming(LiteXModule):
         self.comb += p_next.eq(p + rem[0:4])
         fsm.act("PACKET",
             If(avail,
-                source.valid.eq(1),
+                source.valid.eq(~lc_fast),
+                source_lc.valid.eq(lc_fast),
                 source.words.eq(Mux(rem > 4, 2, 1)),
                 If((kind == KIND_DPH) & last,
                     source.words.eq(1), # Length Field Replicas removed.
                 ),
-                If(source.ready,
+                If(out_ready,
                     If((kind == KIND_DPH) & last,
                         NextValue(dpp_len, out[32:48]),
                     ),
@@ -442,11 +463,18 @@ class Gen2TXPacker(LiteXModule):
         ]
 
         # Input: entries placed at the fill level (after the output shift).
+        # A unit is started in a partially filled block only when its first entry completes the
+        # block: else, a block requested before its next entry (Gen2TX, a block every 3 cycles or
+        # more) would find no block and send a Logical Idle Data Block inside the unit. The padded
+        # block (Idle Symbols) is sent first.
         fill_eff = Signal(5)
+        start_ok = Signal()
         rd       = Signal()
         self.comb += [
             fill_eff.eq(Mux(out_fire, Mux(fill >= 16, fill - 16, 0), fill)),
-            rd.eq(sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold)) &
+            start_ok.eq((fill_eff == 0) | ((fill_eff + sink.bytes) >= 16)),
+            rd.eq(sink.valid & ~self.flush &
+                (in_unit | (self.units_available & ~hold & start_ok)) &
                 (fill_eff <= 16)),
             sink.ready.eq(rd | self.flush),
             self.unit_end.eq(sink.valid & sink.ready & sink.last),
@@ -540,10 +568,13 @@ class Gen2LinkTX(LiteXModule):
 class Gen2LinkRX(LiteXModule):
     """Data Blocks (rx clock domain, one every 3.3 cycles at 40-bit, not held) -> blocks buffer ->
     8 bytes per cycle -> Gen2RXFraming (reset out of the Data Stream) -> words pairs buffer (rx ->
-    sys) -> Link Layer words (sys clock domain, gated by rx_ready: U0)."""
+    sys) -> Link Layer words (sys clock domain, gated by rx_ready: U0). LGOOD_n/LCRD_x Link Commands
+    on source_lc (Link Command words buffer, rx -> sys) with lc_enable."""
     def __init__(self, buffer_depth=1024):
         self.sink        = sink   = stream.Endpoint([("data", 128)])         # rx clock domain.
         self.source      = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source_lc   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.lc_enable   = Signal() # i: LGOOD_n/LCRD_x on source_lc (sys clock domain, static).
         self.data_stream = Signal() # i: Receiving the Data Stream (rx clock domain).
         self.rx_ready    = Signal() # i: U0 (sys clock domain).
         self.overflow    = Signal() # o: Blocks buffer overflow (sticky, rx clock domain).
@@ -568,6 +599,17 @@ class Gen2LinkRX(LiteXModule):
             framing.source.connect(buffer.sink),
         ]
         self.sync.rx += If(fifo.sink.valid & ~fifo.sink.ready, self.overflow.eq(1))
+
+        # Link Commands words (rx -> sys), gated by rx_ready.
+        self.specials += MultiReg(self.lc_enable, framing.lc_enable, "rx")
+        self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
+            stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
+        self.comb += [
+            framing.source_lc.connect(lc_buffer.sink),
+            self.source_lc.valid.eq(lc_buffer.source.valid & self.rx_ready),
+            self.source_lc.data.eq(lc_buffer.source.data),
+            lc_buffer.source.ready.eq(~self.rx_ready | self.source_lc.ready),
+        ]
 
         # Words pairs -> words, gated by rx_ready.
         second = Signal()

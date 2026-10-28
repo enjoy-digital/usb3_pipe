@@ -40,7 +40,23 @@ def header_packet(rng, dw0_type=0x00, length=None):
 
 def link_command(rng):
     lcw = rng.getrandbits(16)
+    # LGOOD_n/LCRD_x (Gen2RXFraming source_lc) 1/3 of the time.
+    lcw = rng.choice([lcw, lcw, (lcw & ~0x7f0), (lcw & ~0x7f8) | 0x080])
     return [k_word(SLC), (lcw | (lcw << 16), 0)]
+
+def is_fast_lc(unit):
+    """LGOOD_n/LCRD_x Link Command (Gen2RXFraming source_lc)."""
+    if unit[0] != k_word(SLC):
+        return False
+    lcw = unit[1][0] & 0xffff
+    return ((lcw & 0x7f0) == 0x000) or ((lcw & 0x7f8) == 0x080)
+
+def split_units(units, lc_enable=True):
+    """Expected Gen2RXFraming outputs: words (source), Link Command words (source_lc)."""
+    fast  = lambda u: lc_enable and is_fast_lc(u)
+    words = [w for u in units if not fast(u) for w in u]
+    lcs   = [u[1][0] for u in units if fast(u)]
+    return words, lcs
 
 def dpp(rng, length, nullified=False):
     if nullified:
@@ -49,7 +65,7 @@ def dpp(rng, length, nullified=False):
     end  = [(END, 1)]*3 + [(EPF, 1)]
     return [k_word(SDP)] + words_from_bytes(data + end)
 
-def random_units(rng, n):
+def random_units(rng, n, short=False):
     units = []
     for _ in range(n):
         kind = rng.choice(["hp", "lc", "dp", "dp", "nullified"])
@@ -58,7 +74,7 @@ def random_units(rng, n):
         elif kind == "lc":
             units.append(link_command(rng))
         else:
-            length = rng.choice([0, 1, 2, 3, 4, 5, 13, 64, 255, 1024])
+            length = rng.choice([0, 1, 2, 3, 4, 5, 13] + ([] if short else [64, 255, 1024]))
             units.append(header_packet(rng, dw0_type=0x08, length=length) +
                 dpp(rng, length, nullified=(kind == "nullified")))
     return units
@@ -67,8 +83,10 @@ def random_units(rng, n):
 
 class Gen2FramingLoopback(Module):
     """Gen2TXFramer -> units FIFO (store and forward) -> Gen2TXPacker -> Data Blocks (Gen2TX model:
-    a block every 3 cycles at most, Idle Data Blocks when no block) -> Gen2RXFraming."""
-    def __init__(self):
+    a block every 3 cycles at most, Idle Data Blocks when no block) -> Gen2RXFraming.
+
+    slots: block requests from the slot Signal (driven by the test) instead of every 3 cycles."""
+    def __init__(self, slots=False):
         self.framer  = framer  = Gen2TXFramer()
         self.fifo    = fifo    = stream.SyncFIFO(gen2_tx_unit_layout(), 512, buffered=True)
         self.packer  = packer  = Gen2TXPacker()
@@ -94,14 +112,17 @@ class Gen2FramingLoopback(Module):
         self.block       = block = Signal(128)
         self.block_valid = block_valid = Signal()
         timer = Signal(2)
+        self.slot = slot = Signal()
         self.sync += If(timer == 2, timer.eq(0)).Else(timer.eq(timer + 1))
+        if not slots:
+            self.comb += slot.eq(timer == 2)
         idle = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
         self.comb += [
-            packer.source.ready.eq(timer == 2),
+            packer.source.ready.eq(slot),
         ]
         self.sync += [
-            block_valid.eq(timer == 2),
-            If(timer == 2,
+            block_valid.eq(slot),
+            If(slot,
                 block.eq(Mux(packer.source.valid, packer.source.data, idle))
             )
         ]
@@ -119,17 +140,20 @@ class Gen2FramingLoopback(Module):
             rx_fifo.sink.data.eq(Mux(block_valid, block[0:64], hold[64:128])),
             rx_fifo.source.connect(rx.sink),
             rx.source.ready.eq(1),
+            rx.source_lc.ready.eq(1),
+            rx.lc_enable.eq(1),
         ]
         self.rx_overflow = Signal()
         self.sync += If(rx_fifo.sink.valid & ~rx_fifo.sink.ready, self.rx_overflow.eq(1))
 
 class TestGen2Framing(unittest.TestCase):
-    def loopback_test(self, seed, n_units=24):
+    def loopback_test(self, seed, n_units=24, slots=False, short=False):
         rng   = random.Random(seed)
-        units = random_units(rng, n_units)
+        units = random_units(rng, n_units, short=short)
         words = [w for u in units for w in u]
         out   = []
-        dut   = Gen2FramingLoopback()
+        lcs   = []
+        dut   = Gen2FramingLoopback(slots=slots)
         def generator(dut):
             for data, ctrl in words:
                 yield dut.framer.sink.valid.eq(1)
@@ -151,14 +175,33 @@ class TestGen2Framing(unittest.TestCase):
                     nwords = (yield dut.rx.source.words)
                     for w in range(nwords):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                if (yield dut.rx.source_lc.valid):
+                    lcs.append((yield dut.rx.source_lc.data))
                 yield
-        run_simulation(dut, [generator(dut), checker(dut)])
-        self.assertEqual(out, words)
+        @passive
+        def slots_generator(dut):
+            # Block requests every 3 to 5 cycles (random phase relative to the units).
+            while True:
+                yield dut.slot.eq(1)
+                yield
+                yield dut.slot.eq(0)
+                for _ in range(rng.choice([2, 2, 3, 4])):
+                    yield
+        generators = [generator(dut), checker(dut)] + ([slots_generator(dut)] if slots else [])
+        run_simulation(dut, generators)
+        self.assertEqual((out, lcs), split_units(units))
 
 
     def test_loopback(self):
         for seed in range(3):
             self.loopback_test(seed)
+
+    def test_loopback_block_slots(self):
+        # Data Blocks requested at random intervals: a unit must never be split by a Logical Idle
+        # Data Block (block requested while the packer is starting the next unit).
+        # Short units: many unit boundaries.
+        for seed in range(2):
+            self.loopback_test(seed, n_units=200, slots=True, short=True)
 
 if __name__ == "__main__":
     unittest.main()
@@ -198,6 +241,8 @@ class Gen2LinkTXLoopback(Module):
             rx_fifo.sink.data.eq(Mux(block_valid, block[0:64], hold[64:128])),
             rx_fifo.source.connect(rx.sink),
             rx.source.ready.eq(1),
+            rx.source_lc.ready.eq(1),
+            rx.lc_enable.eq(1),
         ]
 
 class TestGen2LinkTX(unittest.TestCase):
@@ -206,6 +251,7 @@ class TestGen2LinkTX(unittest.TestCase):
         units = random_units(rng, 24)
         words = [w for u in units for w in u]
         out   = []
+        lcs   = []
         dut   = Gen2LinkTXLoopback()
         def generator(dut):
             for data, ctrl in words:
@@ -229,13 +275,15 @@ class TestGen2LinkTX(unittest.TestCase):
                     nwords = (yield dut.rx.source.words)
                     for w in range(nwords):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                if (yield dut.rx.source_lc.valid):
+                    lcs.append((yield dut.rx.source_lc.data))
                 yield
         def timeout(dut):
             for _ in range(len(words)*4 + 2000):
                 yield
         run_simulation(dut, {"sys": [generator(dut), timeout(dut)], "tx": [checker(dut)]},
             clocks={"sys": 8, "tx": 4})
-        self.assertEqual(out, words)
+        self.assertEqual((out, lcs), split_units(units))
 
 # Gen2RXFraming: packets at any byte position, random Idle Symbols between them ----------------------
 
@@ -269,6 +317,10 @@ def gen2_unit_bytes(unit):
 
 class TestGen2RXFraming(unittest.TestCase):
     def test_rx_framing_idle_gaps(self):
+        for lc_enable in [0, 1]:
+            self.rx_framing_idle_gaps(lc_enable)
+
+    def rx_framing_idle_gaps(self, lc_enable):
         rng   = random.Random(3)
         units = random_units(rng, 40)
         stream_bytes = []
@@ -283,6 +335,7 @@ class TestGen2RXFraming(unittest.TestCase):
         words8 = [int.from_bytes(bytes(stream_bytes[i:i+8]), "little") for i in range(0, len(stream_bytes), 8)]
         dut = Gen2RXFraming()
         out = []
+        lcs = []
         def generator(dut):
             for w in words8:
                 yield dut.sink.valid.eq(1)
@@ -299,14 +352,18 @@ class TestGen2RXFraming(unittest.TestCase):
         @passive
         def checker(dut):
             yield dut.source.ready.eq(1)
+            yield dut.source_lc.ready.eq(1)
+            yield dut.lc_enable.eq(lc_enable)
             while True:
                 if (yield dut.source.valid):
                     data, ctrl, n = (yield dut.source.data), (yield dut.source.ctrl), (yield dut.source.words)
                     for w in range(n):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                if (yield dut.source_lc.valid):
+                    lcs.append((yield dut.source_lc.data))
                 yield
         run_simulation(dut, [generator(dut), checker(dut)])
-        self.assertEqual(out, expected)
+        self.assertEqual((out, lcs), split_units(units, lc_enable))
 
 # Generated Verilog --------------------------------------------------------------------------------
 

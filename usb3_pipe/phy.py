@@ -280,15 +280,28 @@ class USB3PHY(LiteXModule):
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         gen2_sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         gen2_source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        # LGOOD_n/LCRD_x Link Commands words (Gen 2, PHY words order), not behind the RX words, when
+        # enabled by the Link Layer (source_lc_enable, else in source).
+        self.source_lc        = source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source_lc_enable = Signal()
+        self.comb += self.gen2_pipe.source_lc_enable.eq(self.source_lc_enable)
+        gen2_source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
         if self.gen2_endianness_swap:
             # Gen2PIPE words: Symbol 0 on data[0:8], PHY words: Symbol 0 on data[24:32].
             self.submodules += EndiannessSwap(gen2_sink, self.gen2_pipe.sink)
             self.submodules += EndiannessSwap(self.gen2_pipe.source, gen2_source)
+            self.submodules += EndiannessSwap(self.gen2_pipe.source_lc, gen2_source_lc)
         else:
             self.comb += [
                 gen2_sink.connect(self.gen2_pipe.sink),
                 self.gen2_pipe.source.connect(gen2_source),
+                self.gen2_pipe.source_lc.connect(gen2_source_lc),
             ]
+        self.comb += [
+            gen2_source_lc.connect(source_lc, omit={"valid", "ready"}),
+            source_lc.valid.eq(gen2_source_lc.valid & self.gen2_active),
+            gen2_source_lc.ready.eq(source_lc.ready | ~self.gen2_active),
+        ]
         self.comb += [
             If(self.gen2_active,
                 sink.connect(gen2_sink),

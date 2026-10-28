@@ -264,6 +264,12 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             u0_d.eq(phy.u0),
             If(u0_d & ~phy.u0, u0_count.eq(7)).Elif(u0_count != 0, u0_count.eq(u0_count - 1)),
         ]
+        # Optional trigger: LBAD received (Header Packet received with errors by the partner).
+        if link is not None:
+            from litex.soc.interconnect.csr import CSRStorage
+            soc.usb3_gen2_txblocks_lbad = CSRStorage(1, description="TX Data Blocks snapshot also "
+                "stopped on a LBAD received.")
+            soc.sync += If(soc.usb3_gen2_txblocks_lbad.storage & link.dbg_lbad_rx, u0_count.eq(7))
         soc.comb += u0_exit.eq(u0_count != 0)
         soc.specials += MultiReg(u0_exit, u0_exit_tx, "tx_nr")
         # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets, with
@@ -298,11 +304,82 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
+USB3_PROFILE_EVENTS = [
+    "cycles", "u0",
+    "link_tx_words", "link_tx_stall",                             # PHY sink: words, back-pressure.
+    "link_tx_idle", "link_tx_full", "link_tx_credit", "link_dpp_stall",
+    "in_dps", "in_no_data", "in_no_win", "in_fc", "in_hp_wait", "in_slots_full",
+    "out_words",
+    "hp_push", "hp_occupancy",                                     # Tx Header Buffers: pushes, sum of the count.
+    "lgood_count", "lgood_rtt_sum", "lgood_rtt_max",               # Header Packet sent -> LGOOD_n received.
+    "in_inflight_sum",                                             # Bulk IN: sum of the sent not acknowledged DPs.
+]
+
+def add_usb3_profile(soc, phy):
+    """Throughput profile: cycles counters (sys) of the Link Layer TX and of the bench Bulk IN
+    endpoint states (USB3_PROFILE_EVENTS), cleared/frozen by usb3_profile_control (clear, run)."""
+    from litex.soc.interconnect.csr import CSRStorage, CSRStatus, CSRField
+    link = soc.usb3_core.link
+    ep_in, ep_out = soc.usb3_core.endpoints[0:2]
+    events = {
+        "cycles"         : 1,
+        "u0"             : phy.u0,
+        "link_tx_words"  : phy.sink.valid & phy.sink.ready,
+        "link_tx_stall"  : phy.sink.valid & ~phy.sink.ready,
+        "link_tx_idle"   : link.dbg_tx_idle,
+        "link_tx_full"   : link.dbg_tx_full,
+        "link_tx_credit" : link.dbg_tx_credit,
+        "link_dpp_stall" : link.dbg_dpp_stall,
+        "in_dps"         : ep_in.jobs.sink.valid & ep_in.jobs.sink.ready,
+        "in_no_data"     : ep_in.dbg_no_data,
+        "in_no_win"      : ep_in.dbg_no_win,
+        "in_fc"          : ep_in.dbg_fc,
+        "in_hp_wait"     : ep_in.dbg_hp_wait,
+        "in_slots_full"  : ep_in.dbg_inflight == ep_in.max_burst,
+        "out_words"      : ep_out.slots.wr_port.we,
+        "hp_push"        : link.dbg_tx_push,
+        "hp_occupancy"   : link.dbg_tx_count,
+        "in_inflight_sum": ep_in.dbg_inflight,
+    }
+    # Header Packet round trip: transmission start (send_seq) -> LGOOD_n received (per sequence number
+    # timestamps, retransmissions overwrite them).
+    time  = Signal(32)
+    stamps = Array(Signal(32) for _ in range(16))
+    rtt   = Signal(32)
+    soc.sync += [
+        time.eq(time + 1),
+        If(link.dbg_tx_hp, stamps[link.dbg_tx_hp_info[0:4]].eq(time)),
+    ]
+    soc.comb += rtt.eq(time - stamps[link.dbg_lgood_seq])
+    events["lgood_count"]   = link.dbg_lgood_rx
+    events["lgood_rtt_sum"] = Mux(link.dbg_lgood_rx, rtt, 0)
+    soc.usb3_profile_control = CSRStorage(fields=[
+        CSRField("clear", size=1, offset=0, pulse=True, description="Clear the counters."),
+        CSRField("run",   size=1, offset=1, reset=1,    description="Counting."),
+    ])
+    soc.usb3_profile = CSRStatus(32*len(USB3_PROFILE_EVENTS), description="Profile counters: " +
+        ", ".join(USB3_PROFILE_EVENTS) + ".")
+    ctrl   = soc.usb3_profile_control.fields
+    counts = []
+    for name in USB3_PROFILE_EVENTS:
+        c = Signal(32, name=f"usb3_profile_{name}")
+        if name == "lgood_rtt_max":
+            soc.sync += If(ctrl.clear, c.eq(0)).Elif(ctrl.run & link.dbg_lgood_rx & (rtt > c), c.eq(rtt))
+        else:
+            # Counts (1-bit events) or sums (values), sized first (Verilog: operands extended to the
+            # sum width before the event logic).
+            e = Signal(max(len(Cat(events[name])), 1), name=f"usb3_profile_{name}_event")
+            soc.comb += e.eq(events[name])
+            soc.sync += If(ctrl.clear, c.eq(0)).Elif(ctrl.run, c.eq(c + e))
+        counts.append(c)
+    soc.comb += soc.usb3_profile.status.eq(Cat(*counts))
+
 def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     with_serdes_debug = False,
     with_core         = True,
     example           = "loopback",
-    with_lpm          = False):
+    with_lpm          = False,
+    max_burst         = 8):
     """Add a USB3 device on serdes to soc: USB3PHY + debug, USB3 Device Core example design (with_core)
     and LEDs (SerDes ready, U0, Recovery).
 
@@ -330,13 +407,18 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
 
     # USB3 Core (Example design) -------------------------------------------------------------------
     if with_core:
-        add_usb3_example(soc, usb3_phy, sys_clk_freq, example=example, with_lpm=with_lpm)
+        add_usb3_example(soc, usb3_phy, sys_clk_freq, example=example, with_lpm=with_lpm,
+            max_burst=max_burst)
     else:
         soc.comb += usb3_phy.source.ready.eq(1)
 
     # Gen 2 bring-up debug (after the core: Link Layer probes).
     if gen2_capable:
         add_usb3_gen2_rx(soc, serdes, usb3_phy)
+
+    # Throughput profile (Bulk IN/Link Layer TX cycles).
+    if with_core and hasattr(soc, "usb3_bench"):
+        add_usb3_profile(soc, usb3_phy)
 
     # Leds -----------------------------------------------------------------------------------------
     for led, signal in zip(leds, [serdes.ready, usb3_phy.u0, usb3_phy.recovery]):
@@ -372,6 +454,7 @@ def usb3_soc_args(parser, output_dir, with_uartbone=True):
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
     parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=USB3_EXAMPLES)
     parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
+    parser.add_argument("--max-burst",         default=8, type=int, help="Bulk endpoints Max Burst (loopback/bench examples).", choices=[2, 4, 8, 16])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group (phase: requires --with-serdes-debug).", choices=USB3_ANALYZER_GROUPS)
@@ -391,6 +474,7 @@ def usb3_soc_argdict(args):
             "with_core"         : not args.no_core,
             "example"           : args.example,
             "with_lpm"          : args.with_lpm,
+            "max_burst"         : args.max_burst,
         },
     }
 

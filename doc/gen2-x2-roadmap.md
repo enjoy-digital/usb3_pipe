@@ -227,8 +227,23 @@ Recovery. Found on hardware:
 - PENDING_HP_TIMER is 10us (Table 7-7), Bulk IN stale ERDY race, SKP Ordered Sets starvation with
   units packed back to back (host Recovery every few ms in full duplex).
 
-Next: Link Layer datapath bandwidth (32-bit at 125MHz: ~500MB/s per direction, store and forward of
-the DPPs on the TX side, IN limited to ~320MB/s): 64/128-bit Link Layer words at Gen 2.
+**M4a: Gen 2 full duplex throughput and robustness** (done): measured with a throughput profile
+(`bench/usb3_soc.py` `add_usb3_profile`: Link Layer TX/Bulk IN cycles, Tx Header Buffers hold, LGOOD_n
+round trip, Bulk IN ACK TP latency) and the Link Layer/core traces:
+- Type 1/Type 2 Tx Header Buffers (4 + 4, 7.2.4.1): the Bulk OUT ACK TPs no longer block the Bulk IN DPHs.
+- LGOOD_n/LCRD_x received from the Gen 2 RX framing without waiting behind the RX words (~7us with
+  Bulk OUT DPs queued: Tx Header Buffers full, credits missing).
+- Nullified DPP after a retransmitted DPH (Gen 2 framing: a DPP after each DPH).
+- Gen2TXPacker: Logical Idle Data Block inside a unit when a block was requested while the next unit
+  was started in a partially filled block (rare LBADs, Recovery/transfer errors in full duplex).
+
+XCKU3P, 64KB transfers: Bulk IN 426MB/s, Bulk OUT 466MB/s, full duplex 325MB/s IN + 430MB/s OUT (120s,
+0 errors, 0 LBAD, 0 Recovery; was 100 + 457MB/s). With 1MB transfers the host is slower on Bulk IN
+(~330MB/s, host side). Bulk IN bursts are limited by the 32-bit Link Layer TX (one 1024-byte DP every
+~2.2us, ~470MB/s).
+
+Next: Link Layer datapath bandwidth (32-bit at 125MHz: ~500MB/s per direction): 64-bit Link Layer
+words at Gen 2 (DPPs 8 bytes per cycle).
 
 ## Suggested order
 
