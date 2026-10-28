@@ -198,6 +198,7 @@ GEN2_SDS    = 0xe1
 GEN2_TS1    = 0x1e
 GEN2_TS2    = 0x2d
 GEN2_TSEQ   = 0x87
+GEN2_IDLE   = 0x5a # Idle Symbol in Gen 2 operation (Logical Idle, 7.2.3, Table 7-6).
 
 GEN2_SKP_TX_SYMBOLS = 20 # SKP Symbols in a transmitted SKP Ordered Set (24 Symbols, 6.4.3.3).
 

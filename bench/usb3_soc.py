@@ -122,17 +122,12 @@ class RXRawSnapshot(LiteXModule):
         ]
 
 def add_usb3_gen2_rx(soc, serdes, phy):
-    """Gen 2 bring-up (M1): 10Gbps line rate once Gen 2 is negotiated in SuperSpeedPlus Polling
-    (rate CSR: 0 auto, 1 force 5Gbps, 2 force 10Gbps) and Gen 2 RX datapath on the raw transceiver
-    symbols with its debug CSRs (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters)."""
-    from litex.soc.interconnect.csr import CSRStorage, CSRStatus
+    """Gen 2 bring-up: Gen 2 RX monitor on the raw transceiver symbols (the PHY switches to 10Gbps
+    once Gen 2 is negotiated in SuperSpeedPlus Polling, USB3PHY.add_gen2) with its debug CSRs
+    (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters) and a raw RX snapshot."""
+    from litex.soc.interconnect.csr import CSRStatus
     from usb3_pipe.datapath import Gen2RXDatapath
     from usb3_pipe.debug import Gen2RXDebug
-    xcvr = getattr(serdes, serdes.xcvr_name)
-    soc.usb3_gen2_rate = CSRStorage(2, description="Line rate: 0 auto (negotiated), 1 5Gbps, 2 10Gbps.")
-    rate = soc.usb3_gen2_rate.storage
-    soc.comb += serdes.rate_10g.eq(
-        (rate == 2) | ((rate == 0) & phy.gen2 & ~phy.ltssm.ssp_polling))
     # Gen 2 RX datapath/counters in a reset-less RX clock domain: kept across the RX
     # re-initializations (rate changes), counters accumulated over the 10Gbps periods.
     soc.cd_rx_nr = ClockDomain(reset_less=True)
@@ -141,12 +136,12 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     soc.usb3_gen2_rx_datapath = gen2_rx
     soc.comb += [
         gen2_rx.sink.valid.eq(1),
-        gen2_rx.sink.data.eq(xcvr.rx_raw),
+        gen2_rx.sink.data.eq(serdes.gen2_rx_data),
         gen2_rx.source.ready.eq(1),
     ]
     soc.usb3_gen2_rx = Gen2RXDebug(gen2_rx, clock_domain="rx_nr")
     aligner = gen2_rx.aligner
-    soc.usb3_gen2_snapshot = RXRawSnapshot(xcvr.rx_raw, flags=Cat(
+    soc.usb3_gen2_snapshot = RXRawSnapshot(serdes.gen2_rx_data, flags=Cat(
         aligner.source.valid & aligner.source.header_error,                 # 0: Header error.
         aligner.source.valid & aligner.source.header_error & aligner.locked, # 1: Header error (locked).
         aligner.error,                                                      # 2: Alignment error.
@@ -175,7 +170,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     soc.usb3_serdes = serdes
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
-    gen2_capable = hasattr(serdes, "rate_10g") and getattr(serdes, "gen2_capable", False)
+    gen2_capable = getattr(serdes, "gen2_capable", False)
     soc.usb3_phy = usb3_phy = USB3PHY(
         serdes       = serdes,
         sys_clk_freq = sys_clk_freq,

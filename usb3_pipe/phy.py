@@ -16,7 +16,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE
-from usb3_pipe.core       import USB3PIPE
+from usb3_pipe.core       import USB3PIPE, Gen2PIPE, GEN2_PIPE_INTERFACE
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, link_layout
@@ -34,11 +34,15 @@ def connect_ltssm_pipe(ltssm, pipe, with_rx_ts_status=True):
     for name, width, direction in LTSSM_PIPE_INTERFACE:
         if (name in rx_ts_status) and (not with_rx_ts_status):
             continue
-        if direction == "o":
-            statements.append(getattr(pipe, name).eq(getattr(ltssm, name)))
-        else:
-            statements.append(getattr(ltssm, name).eq(getattr(pipe, name)))
+        statements.append(connect_ltssm_pipe_signal(ltssm, pipe, name, direction))
     return statements
+
+def connect_ltssm_pipe_signal(ltssm, pipe, name, direction):
+    """LTSSM <-> PIPE wiring of a LTSSM_PIPE_INTERFACE signal."""
+    if direction == "o":
+        return getattr(pipe, name).eq(getattr(ltssm, name))
+    else:
+        return getattr(ltssm, name).eq(getattr(pipe, name))
 
 # Lanes Event --------------------------------------------------------------------------------------
 
@@ -77,7 +81,7 @@ USB3PHY_LINK_CTRL = [
     ("exit_u1_req",       "i"), ("exit_u2_req",    "i"), ("wakeup_u3_req",  "i"),
 ]
 
-@ResetInserter()
+@ResetInserter(["sys"]) # sys only (the Gen2PIPE also has logic in the tx/rx clock domains).
 class USB3PHY(LiteXModule):
     """USB3 PHY: USB3PIPE(s) + USB3LTSSM.
 
@@ -90,9 +94,10 @@ class USB3PHY(LiteXModule):
       data/8-bit ctrl link words (Symbol 0 on data[0:8], no endianness swap). x2 is the negotiated
       Gen 1x2 operation (PHY Capability LBPM, x2_capable: advertised capability).
     - gen2_capable: Gen 2 (10Gbps) capability advertised in SuperSpeedPlus Polling (SCD1/SCD2, PHY
-      Capability LBPM, also used with lanes=1), gen2 is the negotiated Gen 2 operation. The Gen 2
-      speed switch/datapath (Gen2TXDatapath/Gen2RXDatapath) and Gen 2 LTSSM are not integrated yet
-      (doc/gen2-x2-roadmap.md): training continues at Gen 1 speed after Polling.LFPS.
+      Capability LBPM, also used with lanes=1), gen2 is the negotiated Gen 2 operation. With a
+      gen2_capable SerDes (raw words, 10Gbps rate), the training continues at 10Gbps on the
+      Gen2PIPE (add_gen2: Gen 2 TSEQ/TS1/TS2, SDS/Logical Idle, gen2_active), else at Gen 1 speed.
+      The SuperSpeedPlus Link Layer datapath is not integrated yet (doc/gen2-x2-roadmap.md).
 
     Link interface (what a USB3 Link Layer needs from the PHY, the Link Layer does not have to know
     the PHY internals):
@@ -121,11 +126,14 @@ class USB3PHY(LiteXModule):
             self.pipes = [pipe]
             self.ltssm = ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale,
                 ssp=ssp)
-            self.comb += connect_ltssm_pipe(ltssm, pipe)
             self.comb += ltssm.ds_port.eq(role == "host")
             if ssp:
                 self.add_ssp_polling(pipe, serdes[0], sys_clk_freq, role, timer_scale,
                     x2_capable=False, gen2_capable=True)
+            if ssp and getattr(serdes[0], "gen2_capable", False):
+                self.add_gen2(pipe, serdes[0])
+            else:
+                self.comb += connect_ltssm_pipe(ltssm, pipe)
         else:
             self.add_lanes(serdes, sys_clk_freq, role, timer_scale, x2_capable, gen2_capable)
             ltssm = self.ltssm
@@ -256,6 +264,44 @@ class USB3PHY(LiteXModule):
             self.x2.eq(ssp.x2),
             self.gen2.eq(ssp.gen2),
         )
+
+    @property
+    def reset(self):
+        """PHY reset (sys clock domain)."""
+        return self.reset_sys
+
+    def add_gen2(self, pipe, serdes):
+        """Gen 2x1 operation (gen2_capable SerDes): once Gen 2 is negotiated in the SuperSpeedPlus
+        Polling, the line rate switches to 10Gbps (serdes.rate_10g) and the LTSSM Training Sequences
+        and Idle Symbol handshake (GEN2_PIPE_INTERFACE) are done by the Gen2PIPE on the raw
+        transceiver words (128b/132b blocks), the LFPS stay on the Gen 1 PIPE (LFPSUnit). Back to
+        5Gbps for the next SuperSpeedPlus Polling."""
+        ltssm = self.ltssm
+        self.gen2_pipe = gen2_pipe = Gen2PIPE()
+        self.gen2_active = gen2_active = Signal() # o: Gen 2 operation (10Gbps).
+        self.sync += gen2_active.eq(self.gen2 & ~ltssm.ssp_polling)
+        self.comb += [
+            serdes.rate_10g.eq(gen2_active),
+            serdes.gen2_tx_enable.eq(gen2_active),
+            serdes.gen2_tx_data.eq(gen2_pipe.tx_data),
+            gen2_pipe.rx_data.eq(serdes.gen2_rx_data),
+        ]
+        # LTSSM <-> Gen 1 PIPE / Gen2PIPE. No comma alignment at Gen 2: the transceiver comma aligner
+        # would slip bits on comma-like patterns of the raw 128b/132b words (block alignment by the
+        # Gen 2 RX datapath).
+        for name, width, direction in LTSSM_PIPE_INTERFACE:
+            if name == "serdes_rx_align":
+                self.comb += pipe.serdes_rx_align.eq(ltssm.serdes_rx_align & ~gen2_active)
+            elif name not in GEN2_PIPE_INTERFACE:
+                self.comb += connect_ltssm_pipe_signal(ltssm, pipe, name, direction)
+            elif direction == "o":
+                self.comb += [
+                    getattr(pipe,      name).eq(getattr(ltssm, name) & ~gen2_active),
+                    getattr(gen2_pipe, name).eq(getattr(ltssm, name) &  gen2_active),
+                ]
+            else:
+                self.comb += getattr(ltssm, name).eq(
+                    Mux(gen2_active, getattr(gen2_pipe, name), getattr(pipe, name)))
 
     def add_lanes_datapath(self, deskew_depth):
         """Gen 1x2 datapath: data striping (6.13.4): 64-bit/8-bit link words (Symbol 0 on
