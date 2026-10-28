@@ -13,7 +13,7 @@
 - SuperSpeedPlus operation (phy.gen2_active, Gen 2x1, 7.2.4.1): 4-bit Header Sequence Numbers,
   Type 1/Type 2 Rx Header Buffer Credits (LCRD1_x/LCRD2_x, 4 each), Type 2: asynchronous DPs (TT:
   Control/Bulk), Transfer Type (TT) set in the transmitted ACK TPs/DPHs (ssp_tt: {ept: TT}).
-- Timers: PENDING_HP_TIMER, CREDIT_HP_TIMER (Recovery on timeout), U0 LUP keep-alive.
+- Timers: PENDING_HP_TIMER (10us), CREDIT_HP_TIMER (Recovery on timeout), U0 LUP keep-alive.
 - LMPs (8.4): Port Capability/Configuration (Response), Set Link Function (Force_LinkPM_Accept),
   U2 Inactivity Timeout.
 - Link Power Management (7.2.4.2): partner LGO_Ux forwarded to the LTSSM (U3 always, U1/U2 when
@@ -673,13 +673,14 @@ class USB3LinkLayer(LiteXModule):
         # U0 keep-alive: LUP when nothing sent for 10us (7.5.6.1).
         self.t_lup = t_lup = WaitTimer(scaled(10e-6))
         self.comb += t_lup.wait.eq(u0 & ~pm_block & ~tx_sent_lc & ~tx_sent_hp & ~lup_pending)
-        # PENDING_HP_TIMER (3us): Header Packets sent and not acknowledged, Advertisement expected.
+        # PENDING_HP_TIMER (10us, Table 7-7): Header Packets sent and not acknowledged, Advertisement
+        # expected (the partner returns LGOOD_n within 3us/1.5us in SuperSpeed/SuperSpeedPlus operation).
         # SuperSpeedPlus at Gen 2: the Header Packets are transmitted on the line after their DPP is
         # stored (Gen 2 TX framing, DPH and DPP without spacing): the timer is extended by the
         # maximum DPP buffering time (1024 bytes on the 32-bit Link Layer words).
-        pending_hp_ssp = 3e-6 + (1024 + 64)/4/sys_clk_freq
-        self.t_pending_hp = t_pending_hp = WaitTimer(scaled(pending_hp_ssp if ssp_capable else 3e-6))
-        t_pending_hp_ss = WaitTimer(scaled(3e-6))
+        pending_hp_ssp = 10e-6 + (1024 + 64)/4/sys_clk_freq
+        self.t_pending_hp = t_pending_hp = WaitTimer(scaled(pending_hp_ssp if ssp_capable else 10e-6))
+        t_pending_hp_ss = WaitTimer(scaled(10e-6))
         self.submodules += t_pending_hp_ss
         pending_hp_done = Signal()
         self.comb += [

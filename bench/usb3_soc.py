@@ -208,11 +208,49 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             lcrd_count.eq(lcrd_count - 1))
         soc.comb += lcrd_err.eq(lcrd_count != 0)
         soc.specials += MultiReg(lcrd_err, lcrd_err_rx, "rx_nr")
-        mon = gen2_rx.rx.source
+        # Link Commands counts along the RX path (frozen on a LCRD_x out of order, rearm with the CSR):
+        # framing output / words buffer writes (rx), words buffer reads / Link Layer input / checked
+        # (sys).
+        lrx   = phy.gen2_pipe.link_rx
+        fr    = lrx.framing.source
+        bsink = lrx.buffer.sink
+        bsrc  = lrx.buffer.source
+        src   = phy.source # PHY order: Symbol 0 on data[24:32].
+        from litex.soc.interconnect.csr import CSR
+        soc.usb3_gen2_lc_rearm = CSR()
+        stop    = Signal()
+        stop_rx = Signal()
+        soc.sync += If(soc.usb3_gen2_lc_rearm.re, stop.eq(0)).Elif(link.dbg_recovery_cause[2], stop.eq(1))
+        soc.specials += MultiReg(stop, stop_rx, "rx_nr")
+        def is_lc(ep, swap=False):
+            return ep.valid & ep.ready & (ep.ctrl[0:4] == 0b1111) & (
+                (ep.data[24:32] if swap else ep.data[0:8]) == 0xfe)
+        rx_events  = [is_lc(fr), is_lc(bsink), bsink.valid & bsink.ready]
+        sys_events = [is_lc(bsrc), bsrc.valid & bsrc.ready, is_lc(src, swap=True) & phy.u0,
+            link.dbg_rx_lc]
+        counts = []
+        for e in rx_events:
+            c_rx = Signal(32)
+            soc.sync.rx_nr += If(~stop_rx & e, c_rx.eq(c_rx + 1))
+            c = Signal(32)
+            soc.specials += MultiReg(c_rx, c)
+            counts.append(c)
+        for e in sys_events:
+            c = Signal(32)
+            soc.sync += If(~stop & e, c.eq(c + 1))
+            counts.append(c)
+        soc.usb3_gen2_lc_counts = CSRStatus(32*7, description="rx: LC framing, LC buffer written, entries "
+            "written; sys: LC buffer read, entries read, LC Link Layer input, LC checked.")
+        soc.comb += soc.usb3_gen2_lc_counts.status.eq(Cat(*counts))
+
+        # PHY Gen 2 RX Data Blocks (Gen2PIPE), flags: trigger, PHY data_stream, framing output.
+        mon = phy.gen2_pipe.rx.rx.source
+        lrx = phy.gen2_pipe.link_rx
         # Valid Data Blocks only (~6.8us of Data Blocks).
         soc.usb3_gen2_blocks_snapshot = RXRawSnapshot(Cat(mon.data, mon.valid),
-            flags=Cat(lcrd_err_rx), depth=512, clock_domain="rx_nr",
-            write_enable=mon.valid | lcrd_err_rx)
+            flags=Cat(lcrd_err_rx, phy.gen2_pipe.rx.rx.data_stream, lrx.framing.source.valid),
+            depth=512, clock_domain="rx_nr",
+            write_enable=mon.valid | lcrd_err_rx | ~phy.gen2_pipe.rx.rx.data_stream)
     soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
     soc.comb += soc.usb3_gen2_status.status.eq(Cat(phy.gen2, serdes.rate_10g))
 
