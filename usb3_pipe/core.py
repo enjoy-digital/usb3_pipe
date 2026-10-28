@@ -21,7 +21,7 @@ from usb3_pipe.training import TSUnit
 from usb3_pipe.scrambling import Scrambler, Descrambler, lfsr_after_ts, LFSR_SEED_LANE0
 from usb3_pipe.datapath import RXWordAligner, Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH
 from usb3_pipe.datapath import GEN2_IDLE_BLOCK
-from usb3_pipe.framing  import Gen2LinkTX, Gen2LinkRX
+from usb3_pipe.framing  import Gen2LinkTX, Gen2LinkRX, gen2_link_layout
 
 # Idle Handshake -----------------------------------------------------------------------------------
 
@@ -310,13 +310,14 @@ class Gen2PIPE(LiteXModule):
     Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
     """
     def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
-        tx_buffer_depth=512, rx_buffer_depth=1024):
+        tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1):
+        link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout()
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
         self.tx_data = Signal(data_width) # o: TX words (tx clock domain).
         self.rx_data = Signal(data_width) # i: RX words (rx clock domain).
-        self.sink    = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer TX words (sys).
-        self.source  = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer RX words (sys).
+        self.sink    = stream.Endpoint(link_layout) # Link Layer TX words/words pairs (sys).
+        self.source  = stream.Endpoint(link_layout) # Link Layer RX words/words pairs (sys).
         self.source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)]) # Link Layer RX LGOOD_n/LCRD_x (sys).
         self.source_lc_enable = Signal() # LGOOD_n/LCRD_x on source_lc (else in source).
         self.rx_overflow = Signal() # o: RX buffer overflow (sticky, rx clock domain).
@@ -409,7 +410,7 @@ class Gen2PIPE(LiteXModule):
         ]
 
         # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
-        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth)
+        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words)
         self.comb += [
             self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
             link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
@@ -421,7 +422,7 @@ class Gen2PIPE(LiteXModule):
         self.tx_packer = link_tx.packer
 
         # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
-        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth)
+        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth, link_words=link_words)
         self.comb += [
             # Data Blocks (after SDS), framing reset out of the Data Stream.
             link_rx.sink.valid.eq(rx.source.valid),
