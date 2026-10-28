@@ -97,26 +97,29 @@ class CRC16Words(LiteXModule):
 # CRC-32 -------------------------------------------------------------------------------------------
 
 class CRC32(LiteXModule):
-    """CRC-32 of a Data Packet Payload, computed on 32-bit words (1 to 4 valid bytes per word).
+    """CRC-32 of a Data Packet Payload, computed on 32-bit words (1 to 4 valid bytes per word) or on
+    64-bit words (data_width=64: 1 to 4 valid bytes on data[0:32], or 8 valid bytes).
 
     clear: initialize the CRC (before the first word), ce: process data (bytes valid bytes:
     data[0:8] first, 0: no data). value: CRC of the processed data (registered state), next_value:
     CRC including the current data.
     """
-    def __init__(self):
-        self.clear      = Signal()   # i
-        self.ce         = Signal()   # i
-        self.data       = Signal(32) # i
-        self.bytes      = Signal(3)  # i: Valid bytes (0-4).
-        self.value      = Signal(32) # o
-        self.next_value = Signal(32) # o
+    def __init__(self, data_width=32):
+        assert data_width in [32, 64]
+        self.clear      = Signal()           # i
+        self.ce         = Signal()           # i
+        self.data       = Signal(data_width) # i
+        self.bytes      = Signal(4)          # i: Valid bytes (0-4, 8 with data_width=64).
+        self.value      = Signal(32)         # o
+        self.next_value = Signal(32)         # o
 
         # # #
 
         state = Signal(32, reset=0xffffffff)
         new   = Signal(32)
+        sizes = [1, 2, 3, 4] + ([8] if data_width == 64 else [])
         cases = {n: new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:8*n])))
-            for n in range(1, 5)}
+            for n in sizes}
         cases["default"] = new.eq(state)
         self.comb += Case(self.bytes, cases)
         self.sync += [

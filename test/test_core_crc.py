@@ -71,5 +71,29 @@ class TestCoreCRC(unittest.TestCase):
                 self.assertEqual((yield dut.value), crc32(data), f"length {length}")
         run_simulation(dut, generator(dut))
 
+    def test_crc32_64(self):
+        # 64-bit words: 8 bytes per word, the last 1-4 bytes in 32-bit words (data[0:32]).
+        rng = random.Random(64)
+        dut = CRC32(data_width=64)
+        def generator(dut):
+            for length in [1, 4, 5, 8, 9, 12, 13, 18, 64, 255, 1024]:
+                data = [rng.randrange(256) for _ in range(length)]
+                yield dut.clear.eq(1)
+                yield
+                yield dut.clear.eq(0)
+                i = 0
+                while i < length:
+                    n = 8 if (length - i) >= 8 else min(4, length - i)
+                    chunk = data[i:i+n]
+                    yield dut.ce.eq(1)
+                    yield dut.data.eq(int.from_bytes(bytes(chunk + [0]*(8 - len(chunk))), "little"))
+                    yield dut.bytes.eq(n)
+                    yield
+                    i += n
+                yield dut.ce.eq(0)
+                yield
+                self.assertEqual((yield dut.value), crc32(data), f"length {length}")
+        run_simulation(dut, generator(dut))
+
 if __name__ == "__main__":
     unittest.main()
