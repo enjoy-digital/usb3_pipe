@@ -408,6 +408,9 @@ class Gen2TXPacker(LiteXModule):
         self.units_available = Signal() # i: A complete unit is available on sink.
         self.unit_end        = Signal() # o: A unit is read (pulse, last entry).
         self.flush           = Signal() # i: Discard the sink entries (link not in U0).
+        self.skp_pending     = Signal() # i: SKP Ordered Set pending (Gen2TX): the Data Block ending
+                                        #    a unit ends there (Idle Symbols, last) instead of packing
+                                        #    the next unit (SKP Ordered Sets only between packets).
 
         # # #
 
@@ -415,6 +418,7 @@ class Gen2TXPacker(LiteXModule):
         fill    = Signal(5)    # Bytes in buf (0-24).
         in_unit = Signal()     # Reading a unit.
         ending  = Signal()     # Block with a unit end and Idle Symbols.
+        hold    = Signal()     # Unit ended with a SKP Ordered Set pending: next unit after the block.
 
         # Output: a block when 16 bytes are buffered, or a unit end padded with Idle Symbols.
         out_fire = Signal()
@@ -432,6 +436,8 @@ class Gen2TXPacker(LiteXModule):
                 source.data.eq((buf[0:128] & ~pad_mask) | (idle & pad_mask)),
                 source.last.eq(1),
             ),
+            # Block ending exactly at a unit end.
+            If(ending & (fill == 16), source.last.eq(1)),
             out_fire.eq(source.valid & source.ready),
         ]
 
@@ -440,7 +446,8 @@ class Gen2TXPacker(LiteXModule):
         rd       = Signal()
         self.comb += [
             fill_eff.eq(Mux(out_fire, Mux(fill >= 16, fill - 16, 0), fill)),
-            rd.eq(sink.valid & ~self.flush & (in_unit | self.units_available) & (fill_eff <= 16)),
+            rd.eq(sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold)) &
+                (fill_eff <= 16)),
             sink.ready.eq(rd | self.flush),
             self.unit_end.eq(sink.valid & sink.ready & sink.last),
         ]
@@ -462,6 +469,11 @@ class Gen2TXPacker(LiteXModule):
                 fill.eq(fill_eff),
             ),
             # A unit ended: its last block is padded with Idle Symbols unless the next unit follows.
+            If(self.flush | (out_fire & (fill <= 16)),
+                hold.eq(0)
+            ).Elif(rd & sink.last & self.skp_pending,
+                hold.eq(1)
+            ),
             If(self.flush,
                 ending.eq(0)
             ).Elif(rd & sink.last,

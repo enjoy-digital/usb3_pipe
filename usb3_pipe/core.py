@@ -414,6 +414,7 @@ class Gen2PIPE(LiteXModule):
             self.sink.ready.eq(link_tx.sink.ready & self.tx_ready),
             link_tx.source.connect(tx.sink),
             link_tx.flush.eq(~self.tx_ready),
+            link_tx.packer.skp_pending.eq(tx.tx.skp_pending),
         ]
         self.tx_packer = link_tx.packer
 

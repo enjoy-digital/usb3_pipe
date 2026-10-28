@@ -85,6 +85,10 @@ class Gen2FramingLoopback(Module):
             If(packer.unit_end, units_started.eq(units_started + 1)),
         ]
         self.comb += packer.units_available.eq(units_written != units_started)
+        # SKP Ordered Sets pending periodically (units ended in their block).
+        skp_timer = Signal(6)
+        self.sync += skp_timer.eq(skp_timer + 1)
+        self.comb += packer.skp_pending.eq(skp_timer[5])
 
         # Gen2TX model: block every 3 cycles, idle block when none.
         self.block       = block = Signal(128)

@@ -492,6 +492,10 @@ class Gen2TX(LiteXModule):
         self.link_config = Signal(8) # i: TS1/TS2 Link Functionality (Table 6-6).
         self.tx_os       = Signal()  # o: TSEQ/TS1/TS2 Ordered Set sent (pulse).
         self.tx_idle     = Signal()  # o: Logical Idle Data Block sent (pulse).
+        self.tx_skp      = Signal()  # o: SKP Ordered Set sent (pulse, debug).
+        self.skp_pending = Signal()  # o: SKP Ordered Set(s) scheduled (inserted after a sink.last
+                                     #    Data Block or a Logical Idle block).
+        self.tx_data_blk = Signal()  # o: Data Block with sink data sent (pulse, debug).
 
         self.sink   = sink   = stream.Endpoint([("data", 128)])
         self.source = source = stream.Endpoint(gen2_tx_block_layout())
@@ -603,6 +607,9 @@ class Gen2TX(LiteXModule):
             source.dc_reset.eq(sel_sds | sel_data),
             self.tx_os.eq(sel_ts & source.ready),
             self.tx_idle.eq(idle & source.ready),
+            self.skp_pending.eq(skp_pending != 0),
+            self.tx_skp.eq(sel_skp & source.ready),
+            self.tx_data_blk.eq(sel_data & ~idle & source.ready),
         ]
 
         # State ------------------------------------------------------------------------------------
