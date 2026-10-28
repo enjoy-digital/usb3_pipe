@@ -126,6 +126,23 @@ class TestPHY(unittest.TestCase):
         # Gen 2: words pairs to/from the Gen 2 framing (DPP data 8 bytes per cycle).
         self.run_link_words2(["--gen2"])
 
+    def test_phy_gen2_lpm(self):
+        # Gen 2 U1/U2 (sim.py --gen2 --host-lpm): Host model LGO_U1/LGO_U2 after the enumeration,
+        # U1/U2 exits (LFPS) and Recovery at Gen 2 back to U0, script done.
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--gen2", "--host-lpm", "--link-words", "2",
+            "--output-dir", str(get_output_dir(self))]
+        try:
+            p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=900)
+        except subprocess.TimeoutExpired:
+            self.fail("Simulation timeout.")
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        for state in ["U1", "U2", r"Recovery\.Active"]:
+            self.assertRegex(out, r"DEV\s*entering " + state + " state", tail)
+        self.assertIn("HOST script done", out, tail)
+
 # Gen 1x2 (sim.py --lanes 2) -----------------------------------------------------------------------
 
 CONFIGS_SLOW = {
