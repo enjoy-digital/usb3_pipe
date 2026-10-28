@@ -155,7 +155,12 @@ class USB3Descriptors:
         self.max_power_ma = max_power_ma
         self.device_class = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
         self.with_lpm     = with_lpm
+        self.with_ssp     = False
         self.class_requests = [] # (bmRequestType, bRequest, IN response bytes or None).
+
+    def enable_ssp(self):
+        """SuperSpeedPlus (Gen 2x1) capable: SuperSpeedPlus USB Device Capability in the BOS."""
+        self.with_ssp = True
 
     def enable_lpm(self):
         """U1/U2 supported (Link Layer accepting LGO_U1/LGO_U2): non-zero exit latencies."""
@@ -188,7 +193,21 @@ class USB3Descriptors:
         ss_cap   = [10, DESC_DEVICE_CAP, 0x03, 0x00] + le16(0x0008) + [3, u1_exit_lat] + \
             le16(u2_exit_lat)
         caps     = usb2_ext + ss_cap
-        return [5, DESC_BOS] + le16(5 + len(caps)) + [2] + caps
+        n_caps   = 2
+        if self.with_ssp:
+            # SuperSpeedPlus USB Device Capability (9.6.2.5): one Sublink Speed ID (0), symmetric RX/TX
+            # attributes, 10Gbps (LSE: Gb/s, LSM: 10), SuperSpeedPlus protocol, 1 RX/TX lane minimum.
+            attrs   = [
+                (0 << 0) | (3 << 4) | (0b00 << 6) | (1 << 14) | (10 << 16), # RX.
+                (0 << 0) | (3 << 4) | (0b10 << 6) | (1 << 14) | (10 << 16), # TX.
+            ]
+            ssp_cap = [12 + 4*len(attrs), DESC_DEVICE_CAP, 0x0a, 0x00] + \
+                le32((len(attrs) - 1) | (0 << 5)) + le16((0 << 0) | (1 << 8) | (1 << 12)) + le16(0)
+            for a in attrs:
+                ssp_cap += le32(a)
+            caps   += ssp_cap
+            n_caps += 1
+        return [5, DESC_BOS] + le16(5 + len(caps)) + [n_caps] + caps
 
     def string(self, index):
         if index == 0:
