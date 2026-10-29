@@ -453,12 +453,20 @@ class USB3PHY(LiteXModule):
                     tx_packets.source.connect(to_words.sink),
                 ]
 
-        # TX: sys -> pipe_cd (registered ready: the Link Layer TX path from a register).
+        # TX: sys -> pipe_cd (registered ready: the Link Layer TX path from a register). Gen 2:
+        # words to the Gen2PIPE framing (sys) while gen2_active.
         self.tx_cdc_buffer = tx_buffer = stream.Buffer(layout, pipe_ready=True)
         self.tx_cdc        = tx_cdc    = ClockDomainsRenamer({"write": "sys", "read": pipe_cd})(
             AsyncFIFO(layout, fifo_depth))
+        if hasattr(self, "gen2_tx_sink"):
+            self.comb += If(self.gen2_active,
+                sink.connect(self.gen2_tx_sink),
+            ).Else(
+                sink.connect(tx_buffer.sink),
+            )
+        else:
+            self.comb += sink.connect(tx_buffer.sink)
         self.comb += [
-            sink.connect(tx_buffer.sink),
             tx_buffer.source.connect(tx_cdc.sink),
             tx_cdc.source.connect(pipe_sink),
         ]
@@ -572,10 +580,12 @@ class USB3PHY(LiteXModule):
         pipe_cd = self.pipe_cd
         # Raw words width (transceiver words at 10Gbps): from the SerDes (ex: 80-bit at 125MHz).
         gen2_data_width = getattr(serdes, "gen2_data_width", GEN2_DATA_WIDTH)
+        # With pipe_cd: TX framing at the Link Layer frequency (sys, "gen2_link"), the rest of the
+        # Gen2PIPE in pipe_cd (renamed in this order).
         gen2_pipe = ResetInserter(["tx", "rx"])(Gen2PIPE(link_words=self.link_words,
-            data_width=gen2_data_width))
+            data_width=gen2_data_width, link_cd=None if pipe_cd is None else "gen2_link"))
         if pipe_cd is not None:
-            gen2_pipe = ClockDomainsRenamer({"sys": pipe_cd})(gen2_pipe)
+            gen2_pipe = ClockDomainsRenamer({"sys": pipe_cd, "gen2_link": "sys"})(gen2_pipe)
         self.gen2_pipe = gen2_pipe
         self.gen2_active = gen2_active = Signal() # o: Gen 2 operation (10Gbps).
         self.sync += gen2_active.eq(self.gen2 & ~ltssm.ssp_polling)
@@ -638,15 +648,13 @@ class USB3PHY(LiteXModule):
                 gen2_pipe.source_lc.connect(gen2_lc),
             ]
 
-        # TX.
+        # TX: Gen 1 words through the packets buffer, Gen 2 words to the Gen2PIPE framing (sys,
+        # gen2_tx_sink, see add_pipe_cdc).
         self.comb += [
-            tx_packets.drop.eq(~Mux(gen2, gen2_pipe.tx_ready, pipe.tx_ready)),
-            If(gen2,
-                tx_packets.source.connect(gen2_sink),
-            ).Else(
-                tx_packets.source.connect(to_words.sink),
-            )
+            tx_packets.drop.eq(~pipe.tx_ready),
+            tx_packets.source.connect(to_words.sink),
         ]
+        self.gen2_tx_sink = gen2_sink
 
         # RX (no back-pressure).
         rx_source = stream.Endpoint(layout)

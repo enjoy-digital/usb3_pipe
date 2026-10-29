@@ -336,7 +336,9 @@ class Gen2PIPE(LiteXModule):
     Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
     """
     def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
-        tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1):
+        tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1, link_cd=None):
+        # link_cd: clock domain of the TX framing and sink (default: sys), ex: the Link Layer clock
+        # domain when this module runs at a higher PIPE frequency.
         framing_bytes = 8 if data_width <= 40 else 16
         link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout()
         for name in GEN2_PIPE_INTERFACE:
@@ -437,14 +439,19 @@ class Gen2PIPE(LiteXModule):
         ]
 
         # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
-        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words,
-            nbytes=framing_bytes)
+        link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words, nbytes=framing_bytes)
+        tx_ready = self.tx_ready
+        if link_cd is not None:
+            link_tx  = ClockDomainsRenamer({"sys": link_cd})(link_tx)
+            tx_ready = Signal()
+            self.specials += MultiReg(self.tx_ready, tx_ready, link_cd)
+        self.link_tx = link_tx
         self.comb += [
             self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
-            link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
-            self.sink.ready.eq(link_tx.sink.ready & self.tx_ready),
+            link_tx.sink.valid.eq(self.sink.valid & tx_ready),
+            self.sink.ready.eq(link_tx.sink.ready & tx_ready),
             link_tx.source.connect(tx.sink),
-            link_tx.flush.eq(~self.tx_ready),
+            link_tx.flush.eq(~tx_ready),
             link_tx.packer.skp_pending.eq(tx.tx.skp_pending),
         ]
         self.tx_packer = link_tx.packer
