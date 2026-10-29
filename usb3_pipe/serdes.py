@@ -398,8 +398,9 @@ class USPUSB3SerDes(USB3SerDes):
 # Gowin GW5AST USB3 Serializer/Deserializer --------------------------------------------------------
 
 class GW5USB3SerDes(USB3SerDes):
-    """Gowin GW5AST-138B GTR12 USB3 SerDes (Q1 lane 0/1: SFP0/SFP1 of the Tang Mega 138K Pro dock,
-    100 MHz REFCLK1).
+    """Gowin GW5AST-138B/GW5AT-15 GTR12 USB3 SerDes (GW5AST-138B: Q1 lane 0/1, SFP0/SFP1 of the Tang
+    Mega 138K Pro dock, 100 MHz REFCLK1 or 125 MHz REFCLK0; GW5AT-15: Q0 lane 0, 125 MHz REFCLK0, ex:
+    Sipeed SLogic16U3).
 
     5Gbps, raw 20-bit PMA with 40-bit fabric words (125MHz, 4 symbols per cycle), 8b/10b and polarity
     in the fabric (LiteICLink GTR12), comma alignment by the PCS. The register configuration is
@@ -413,20 +414,28 @@ class GW5USB3SerDes(USB3SerDes):
     Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
-        with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True):
+        with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
+        position=None):
         USB3SerDes.__init__(self)
 
         # # #
 
-        from liteiclink.serdes.gtr12_gw5 import GTR12
+        from liteiclink.serdes.gtr12_gw5 import GTR12, gtr12_primitives
         from usb3_pipe.gw5 import gw5_usb3_csr_config
 
+        # Quad position: Q0 on single quad devices (GW5AT-15), Q1 on the GW5AST-138B.
+        if position is None:
+            quad, _  = gtr12_primitives(platform.devicename)
+            position = "Q0" if quad == "GTR12_QUADB" else "Q1"
+
         # Transceiver ------------------------------------------------------------------------------
+        if csr_config is None:
+            csr_config = gw5_usb3_csr_config(lane, "5G", refclk, position=position)
         gtr12 = GTR12(platform,
             line_rate   = 5e9,
-            csr_config  = gw5_usb3_csr_config(lane, "5G", refclk) if csr_config is None else csr_config,
+            csr_config  = csr_config,
             data_width  = 40,
-            position    = "Q1",
+            position    = position,
             lane        = lane,
             tx_polarity = self.tx_polarity,
             rx_polarity = self.rx_polarity,

@@ -107,7 +107,8 @@ class USB3PHY(LiteXModule):
     - with_u1u2=False (Gen 1x1): no U1/U2 Link Power Management (less logic, see USB3LTSSM).
     - pipe_cd (Gen 1x1): USB3PIPE (and SerDes, renamed by the caller) in the pipe_cd clock domain at
       pipe_clk_freq (>= 125MHz), LTSSM and Link interface in sys (add_pipe_cdc): ex. sys at 62.5MHz
-      with link_words=2 on FPGAs where the LTSSM/Link Layer can't reach 125MHz.
+      with link_words=2 on FPGAs where the LTSSM/Link Layer can't reach 125MHz. pipe_rx_depth: RX CDC
+      FIFO depth override (default: 256 words pairs with link_words=2, for Bulk OUT bursts).
 
     Link interface (what a USB3 Link Layer needs from the PHY, the Link Layer does not have to know
     the PHY internals):
@@ -119,7 +120,7 @@ class USB3PHY(LiteXModule):
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
         timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8, link_words=1,
-        pipe_cd=None, pipe_clk_freq=None, with_u1u2=True):
+        pipe_cd=None, pipe_clk_freq=None, pipe_rx_depth=None, with_u1u2=True):
         assert role in ["device", "host"]
         assert lanes in [1, 2]
         serdes = [serdes] if lanes == 1 else serdes
@@ -180,7 +181,7 @@ class USB3PHY(LiteXModule):
             if hasattr(self, "gen2_pipe"):
                 self.add_gen2_datapath(pipe)
             elif pipe_cd is not None:
-                self.sink, self.source = self.add_pipe_cdc(pipe, pipe_cd)
+                self.sink, self.source = self.add_pipe_cdc(pipe, pipe_cd, rx_depth=pipe_rx_depth)
             elif link_words == 2:
                 self.sink, self.source = self.add_pairs_adapters(pipe)
             else:
@@ -364,7 +365,7 @@ class USB3PHY(LiteXModule):
             else:
                 self.specials += MultiReg(pipe_s, ltssm_s)
 
-    def add_pipe_cdc(self, pipe, pipe_cd, fifo_depth=32):
+    def add_pipe_cdc(self, pipe, pipe_cd, fifo_depth=32, rx_depth=None):
         """Link words (link_words=1) or words pairs (link_words=2) sys <-> pipe_cd through AsyncFIFOs
         (registered FIFO writes: timings): returns the (sink, source) streams.
 
@@ -439,8 +440,10 @@ class USB3PHY(LiteXModule):
             pipe_ready=True))
         # Deep (block RAM, read side at the Link Layer frequency): with words pairs at half the PIPE
         # frequency, the Link Layer consumes the Header Packets/DPP tails one word per cycle and
-        # back-to-back DPH+DPPs (Bulk OUT bursts) accumulate words (~11 per 1024-byte DPP).
-        rx_depth = fifo_depth if self.link_words == 1 else 256
+        # back-to-back DPH+DPPs (Bulk OUT bursts) accumulate words (~11 per 1024-byte DPP). rx_depth:
+        # override (ex: devices without Bulk OUT endpoints, distributed RAM on small FPGAs).
+        if rx_depth is None:
+            rx_depth = fifo_depth if self.link_words == 1 else 256
         self.rx_cdc        = rx_cdc    = ClockDomainsRenamer({"write": pipe_cd, "read": "sys"})(
             stream.AsyncFIFO(layout, rx_depth, buffered=True))
         self.comb += [
