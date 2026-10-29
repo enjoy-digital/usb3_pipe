@@ -869,50 +869,85 @@ class Gen2TXDCBalance(LiteXModule):
             inc["14n"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ZEROS[0]) + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
         )
 
-        # Stage 2: balance, DC Balance Symbols, running balance update, output.
-        balance  = Signal((12, True))
+        # Stage 2: thresholds of the running balance (DC Balance Symbols choice, balance at the end of
+        # Symbol 11 = dc_balance + inc_11: > 0, > 15, < -15, > 31, < -31) and the update of each choice
+        # (inc_11 + inc[k]) with its saturation thresholds (+-511): the running balance loop is then
+        # comparisons/adders with registered values and a selection.
+        v2        = Signal()
+        header2   = Signal(4)
+        data2     = Signal(192)
+        skp2      = Signal()
+        ts2       = Signal()
+        dc_reset2 = Signal()
+        th        = {k: Signal((12, True)) for k in ["pos", "15p", "15n", "14p", "14n"]}
+        upd       = {k: Signal((12, True)) for k in inc}
+        sat_hi    = {k: Signal((12, True)) for k in inc}
+        sat_lo    = {k: Signal((12, True)) for k in inc}
+        ready2    = Signal()
+        self.comb += advance.eq(v1 & ready2)
+        self.sync += If(ready2,
+            v2.eq(v1),
+            header2.eq(header),
+            data2.eq(data),
+            skp2.eq(skp),
+            ts2.eq(ts),
+            dc_reset2.eq(dc_reset),
+            th["pos"].eq(  0 - inc_11),
+            th["15p"].eq( 15 - inc_11),
+            th["15n"].eq(-15 - inc_11),
+            th["14p"].eq( 31 - inc_11),
+            th["14n"].eq(-31 - inc_11),
+            [upd[k].eq(inc_11 + inc[k]) for k in inc],
+            [sat_hi[k].eq( 511 - (inc_11 + inc[k])) for k in inc],
+            [sat_lo[k].eq(-511 - (inc_11 + inc[k])) for k in inc],
+        )
+
+        # Stage 3: DC Balance Symbols, running balance update, output.
         positive = Signal()
         fix_14   = Signal()
         fix_15   = Signal()
-        update   = Signal((12, True))
+        value    = {k: Signal((12, True)) for k in inc} # Saturated running balance of each choice.
         updated  = Signal((12, True))
         self.comb += [
-            balance.eq(dc_balance + inc_11),
-            positive.eq(balance > 0),
-            fix_14.eq((balance > 31) | (balance < -31)),
-            fix_15.eq((balance > 15) | (balance < -15)),
-            If(fix_14,
-                update.eq(Mux(positive, inc["14p"], inc["14n"]))
-            ).Elif(fix_15,
-                update.eq(Mux(positive, inc["15p"], inc["15n"]))
+            positive.eq(dc_balance > th["pos"]),
+            fix_14.eq((dc_balance > th["14p"]) | (dc_balance < th["14n"])),
+            fix_15.eq((dc_balance > th["15p"]) | (dc_balance < th["15n"])),
+            [If(dc_balance > sat_hi[k],
+                value[k].eq(511)
+            ).Elif(dc_balance < sat_lo[k],
+                value[k].eq(-511)
             ).Else(
-                update.eq(inc["none"])
+                value[k].eq(dc_balance + upd[k])
+            ) for k in inc],
+            If(fix_14,
+                updated.eq(Mux(positive, value["14p"], value["14n"]))
+            ).Elif(fix_15,
+                updated.eq(Mux(positive, value["15p"], value["15n"]))
+            ).Else(
+                updated.eq(value["none"])
             ),
-            updated.eq(balance + update),
         ]
-        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data[112:120])
-        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data[120:128])
-        self.comb += advance.eq(v1 & (~source.valid | source.ready))
+        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
+        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
+        advance2 = Signal()
+        self.comb += [
+            ready2.eq(~v2 | advance2),
+            advance2.eq(v2 & (~source.valid | source.ready)),
+        ]
         self.sync += [
             If(source.ready, source.valid.eq(0)),
-            If(advance,
+            If(advance2,
                 source.valid.eq(1),
-                source.header.eq(header),
-                source.skp.eq(skp),
-                If(ts,
-                    source.data.eq(Cat(data[0:112], sym14, sym15, data[128:]))
+                source.header.eq(header2),
+                source.skp.eq(skp2),
+                If(ts2,
+                    source.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
                 ).Else(
-                    source.data.eq(data)
+                    source.data.eq(data2)
                 ),
-                If(ts,
-                    If(updated > 511,
-                        dc_balance.eq(511)
-                    ).Elif(updated < -511,
-                        dc_balance.eq(-511)
-                    ).Else(
-                        dc_balance.eq(updated)
-                    )
-                ).Elif(dc_reset,
+                If(ts2,
+                    dc_balance.eq(updated)
+                ).Elif(dc_reset2,
                     dc_balance.eq(0)
                 ),
             ),
