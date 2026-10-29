@@ -275,3 +275,25 @@ needed a host port power cycle: capability changes between trainings are a test-
    remaining: single lane fallback, SSP Link Layer on the x2 datapath, Type-C CC/Configuration Lane,
    hardware validation.
 3. Gen 2x2 (20Gbps) on UltraScale+ GTY: combination of both, 7 buffers.
+4. Gen 2x1 on Gowin GW5AST (Tang Mega 138K Pro, `bench/sipeed_tang_mega_138k_pro.py`): Gen 1 is
+   validated on hardware with the PIPE in its own clock domain (`pipe_cd`, GTR12 TX clock at 125MHz)
+   and the LTSSM/Link Layer/Core at 62.5MHz on 64-bit words. Remaining for 10Gbps:
+   - GTR12 rate switch: 5Gbps -> 10Gbps is 6 register writes (CDR divider, QPLL1 output divider, TX
+     lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) with the same 5GHz VCO and 125MHz fabric clock
+     (40-bit -> 80-bit raw words), back to 5Gbps for the next SuperSpeedPlus Polling. Needs the GTR12
+     runtime register access (UPAR), whose accesses do not complete yet, or another rate control
+     (fabric rate input, reconfiguration).
+   - 80-bit raw words in LiteICLink's GTR12 (8b/10b on 40 bits at 5Gbps, raw 80 bits at 10Gbps) and
+     `GW5USB3SerDes` as a Gen 2 capable SerDes (`gen2_data_width = 80`).
+   - Gen 2 with `pipe_cd` (follow-up branch `gw5/gen2`): done in simulation (`sim.py --gen2 --dev-pipe-cd`, Gen2PIPE in the PIPE
+     clock domain, RX credits throttling sized for Gen 2), including 80-bit raw words for the
+     gearbox/aligner and the TX DC balance (`Gen2TXDCBalance(one_per_cycle=True)`).
+   - Gen 2 framing at one Data Block per cycle: `Gen2LinkRX`/`Gen2RXFraming` and `Gen2TXPacker`
+     process 8 bytes per cycle (a Data Block every 2 cycles), enough with 40-bit words at 250MHz (a
+     block every 3.3 cycles) but not with 80-bit words at 125MHz (a block every 1.65 cycles): RX
+     blocks buffer overflow, Logical Idle Data Blocks inside the TX units (`sim.py --gen2
+     --dev-pipe-cd --gen2-data-width 80` reaches U0 then Recovery). Rework for 16 bytes per cycle.
+   - Throughput: the 64-bit Link Layer at 62.5MHz is ~500MB/s (credit throttled at Gen 2, about half
+     of the 10Gbps rate): 128-bit Link Layer words (or a faster Link Layer clock) for full rate.
+   - Timing: the 80-bit Gen 2 datapaths (aligner, gearbox, scrambler, framing) at 125MHz on the GW5A
+     fabric.

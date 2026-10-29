@@ -20,7 +20,7 @@ parameters: each file has its Gen 1 part first, then its Gen 2/SuperSpeedPlus pa
 
 | Module | File | Role |
 |---|---|---|
-| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/UltraScale+ GTY) at 5Gbps (and 10Gbps on the GTY with `gen2_capable`: QPLL at 10Gbps, 40-bit raw words) with their USB3 settings (SSC tolerant CDR, LFPS/OOB): 8b/10b, polarity, electrical idle/LFPS patterns and the TX/RX datapaths below. |
+| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes`/`GW5USB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST GTR12) at 5Gbps (and 10Gbps on the GTY with `gen2_capable`: QPLL at 10Gbps, 40-bit raw words) with their USB3 settings (SSC tolerant CDR, LFPS/OOB): 8b/10b, polarity, electrical idle/LFPS patterns and the TX/RX datapaths below. `GW5USB3SerDes`: GTR12 Q1 lane 0/1, 40-bit words at 125MHz, register configuration generated from `usb3_pipe/gw5` TOML files with Gowin's `serdes_toml_to_csr` (100MHz REFCLK1 or 125MHz REFCLK0). |
 | `TXDatapath`/`RXDatapath` (`TXSKPInserter`, `RXSKPRemover`, `RXWordAligner`, `RXErrorSubstitution`, `RXErrorMonitor`, `RXIdleFilter`), `Gen2TX`/`Gen2RX`, `Gen2TXDatapath`/`Gen2RXDatapath` | `datapath.py` | Gen 1: SKP insertion (TX, 6.4.3) and removal (RX), word alignment on COM, 8b/10b errors substitution (6.3.1.4)/monitoring, electrical idle filtering, CDC/data-width. Gen 2: block transmitter/receiver (TSEQ/TS1/TS2/SYNC/SDS/SKP Ordered Sets, Data Blocks, 6.3.2.3 scrambling rules), 40-bit transceiver words <-> blocks datapaths (250MHz) with RX counters. |
 | `RX8b10bChecker`, `Gen2BlockGearbox`/`Gen2BlockAligner` | `coding.py` | 8b/10b Python model/code tables and RX checker (6.3.1), 128b/132b blocks gearbox/aligner and DC balance helpers (6.3.2, 6.4.1.2). |
 | Symbols/Ordered Sets | `common.py` | Gen 1 Symbols and TS1/TS2/TSEQ, Link Configuration, Gen 2 Block Headers, Symbols/Ordered Sets identifiers and payloads. |
@@ -94,6 +94,32 @@ With `link_words=2`, `sink`/`source` carry words pairs (`data` 64, `ctrl` 8, `wo
 words, word 0 first), adapted to the Gen 1 PIPE words at Gen 1; the Gen 2 framing then moves the DPP
 data 8 bytes per cycle (~1GB/s at 125MHz vs ~500MB/s with 32-bit words).
 
+## Slower fabrics: PIPE clock domain (`pipe_cd`)
+
+On fabrics where the LTSSM/Link Layer/Core can't run at 125MHz (Gowin GW5A, ~2x slower per logic
+level than 7-Series), `USB3PHY(pipe_cd=..., pipe_clk_freq=...)` keeps the PIPE (and the SerDes,
+renamed by the caller) in its own clock domain at 125MHz and the LTSSM and the Link interface in
+`sys` (ex: 62.5MHz, with `link_words=2`):
+
+- LTSSM <-> PIPE: controls/status levels resynchronized, status pulses through PulseSynchronizers
+  (Training Sequences detections/bursts ends, LFPS detections). The TS1/TS2/TSEQ requests are taken
+  into account on the Ordered Sets boundaries (`TSUnit`): no truncated Ordered Set when a request
+  changes after a burst end seen with the CDC latency.
+- RX: Logical Idle words between the packets dropped (`LogicalIdleFilter`), words packed in pairs
+  (`WordsPacker`), no back-pressure (line rate), deep RX FIFO (block RAM). The Link Layer reads the
+  Header Packets/DPP tails one word per cycle (below the line rate): the PHY `rx_throttle` output
+  (RX FIFO half full) holds the Link Layer Rx Header Buffer credits (LCRD_x), the partner stops
+  after its outstanding Header Packets (Bulk OUT bursts at the line rate).
+- TX: packets stored and forwarded (`PacketsBuffer`, the Link Layer marks the packets ends): no
+  Logical Idle inside the packets, `first`/`last` propagated to the SKP inserter (SKP Ordered Sets
+  only between packets: inside packets, a host on the Gowin target rejected Header Packets).
+- `USB3PHY(with_u1u2=False)`: no U1/U2 in the LTSSM (LGO_U1/LGO_U2 rejected by the Link Layer), less
+  logic when power saving is not needed (U3 kept).
+
+On the Tang Mega 138K Pro target, the PIPE runs on the GTR12 TX fabric clock (frequency-locked to
+the transmitted words: no TX clock domain crossing, `TXDatapath(with_cdc=False)`) and the GTR12
+control logic stays on a free-running clock (`GW5USB3SerDes(xcvr_cd=...)`).
+
 ## Simulation
 
 `sim.py` connects two PHYs (Host/Device) through SerDes models (configurable word shift, ppm offset,
@@ -110,6 +136,8 @@ $ ./sim.py --gen2-capable        # SSP Polling with Gen 2x1 capability (Gen 2 ne
 $ ./sim.py --gen2                # Gen 2x1: training to U0 at 10Gbps, enumeration, Bulk transfers.
 $ ./sim.py --gen2 --link-words 2 # Same with the 64-bit Link interface on the Device.
 $ ./sim.py --gen2 --host-lpm     # Gen 2 U1/U2 entries/exits (Recovery at Gen 2).
+$ ./sim.py --dev-pipe-cd         # Device LTSSM/Link Layer/Core at half the PIPE frequency (pipe_cd).
+$ ./sim.py --dev-pipe-cd --dev-no-u1u2 --host-pm --host-itp  # + no U1/U2 (LXU), Host ITPs.
 $ ./sim.py --trace               # VCD (build/sim/gateware/sim.vcd).
 $ pytest test                    # Unit/system tests (-n auto: parallel with pytest-xdist).
 $ pytest test -m slow            # Long simulations (Verilator), not run by default.
@@ -117,8 +145,11 @@ $ pytest test -m slow            # Long simulations (Verilator), not run by defa
 
 ## Limitations
 
-- Gen 1x1 and Gen 2x1 on hardware (Gen 2x1 on UltraScale+ GTY only), Gen 1x2: simulation only,
-  Gen 2x2: not started ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
+- Gen 1x1 and Gen 2x1 on hardware (Gen 2x1 on UltraScale+ GTY only, Gen 1x1 on Gowin GW5AST), Gen
+  1x2: simulation only, Gen 2x2: not started ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
+- `pipe_cd` (Gowin GW5AST): Gen 1 only; 64-bit Link Layer at 62.5MHz (~430MB/s Bulk OUT, ~370MB/s
+  IN); the GTR12 runtime register access (UPAR) does not complete yet; Gowin: no `--load` in the
+  target (openFPGALoader).
 - Gen 2: no elastic buffer (the Gen 2 RX path runs in the recovered clock domain), no Disable
   Scrambling.
 - U1/U2 are rejected by the USB3 Device Core by default (LXU), accepted with `with_lpm` (simulation

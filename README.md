@@ -25,13 +25,13 @@ or an external USB controller/FIFO ([FTDI FT60X](https://ftdichip.com/products/f
 
 **Status** (USB device, SFP2USB adapter, Linux xHCI host):
 
-| | Gen 1x1 (5Gbps): Acorn CLE-215+ (Artix7 GTP) | Gen 2x1 (10Gbps): Alibaba XCKU3P (UltraScale+ GTY) |
-|---|---|---|
-| Enumeration | SuperSpeed (5000M) | SuperSpeedPlus (10000M), SuperSpeedPlus BOS capability |
-| Bulk IN/OUT | 446/449 MB/s (~90% of 5Gbps 8b/10b) | 426/466 MB/s (32-bit link), 744-785/~880 MB/s (64-bit link) |
-| Full duplex | 376 + 400 MB/s | 325 + 430 MB/s (32-bit link), 619 + 736 MB/s (64-bit link) |
-| Stability | 139 GB full duplex, data checked: 0 errors, no retry/Recovery | 156 GB full duplex (64-bit link), data checked: 0 errors, 0 LBAD, 0 Recovery |
-| Suspend/Resume | Linux autosuspend (U3) and resume: 72/72 clean resumes (~0.6s) | |
+| | Gen 1x1 (5Gbps): Acorn CLE-215+ (Artix7 GTP) | Gen 2x1 (10Gbps): Alibaba XCKU3P (UltraScale+ GTY) | Gen 1x1 (5Gbps): Tang Mega 138K Pro (Gowin GW5AST GTR12) |
+|---|---|---|---|
+| Enumeration | SuperSpeed (5000M) | SuperSpeedPlus (10000M), SuperSpeedPlus BOS capability | SuperSpeed (5000M) |
+| Bulk IN/OUT | 446/449 MB/s (~90% of 5Gbps 8b/10b) | 426/466 MB/s (32-bit link), 744-785/~880 MB/s (64-bit link) | 372/433 MB/s (64-bit link at 62.5MHz) |
+| Full duplex | 376 + 400 MB/s | 325 + 430 MB/s (32-bit link), 619 + 736 MB/s (64-bit link) | 262 + 383 MB/s |
+| Stability | 139 GB full duplex, data checked: 0 errors, no retry/Recovery | 156 GB full duplex (64-bit link), data checked: 0 errors, 0 LBAD, 0 Recovery | 20s runs, data checked: 0 errors, 0 LBAD, 0 Recovery |
+| Suspend/Resume | Linux autosuspend (U3) and resume: 72/72 clean resumes (~0.6s) | | |
 
 Standard Linux drivers (usbfs, cdc_acm, uvcvideo, usb-storage). Demos: Bulk loopback/benchmark, LiteX
 BIOS console (CDC-ACM), UVC camera up to 1080p60 (Bulk) or 1080p30 (Isochronous), Mass Storage RAM
@@ -39,12 +39,14 @@ disk (and DDR3 disk), composite camera + console.
 
 [> Features
 -----------
-- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/UltraScale+ GTY SerDes (LiteICLink), LFPS, Training
+- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST GTR12 SerDes (LiteICLink), LFPS, Training
   Sequences, 8b/10b, scrambling, SKP insertion/removal, word/framing alignment, polarity, LTSSM
   (Polling/U0/Recovery/U1-U3/Hot/Warm Reset/Compliance/Loopback), debug counters. **Gen 2x1** on
   UltraScale+ GTY: SuperSpeedPlus Polling (SCD/LBPM), 128b/132b blocks, Gen 2 scrambler/SKP/SYNC,
   Gen 2 packet framing, optional 64-bit Link Layer interface (`link_words=2`). Also generated as a
-  standalone Verilog core (`usb3_pipe_gen`, Artix7/Kintex7/UltraScale+).
+  standalone Verilog core (`usb3_pipe_gen`, Artix7/Kintex7/UltraScale+). For slower fabrics (Gowin
+  GW5A), the PIPE can run in its own clock domain (`pipe_cd`, on the transceiver TX clock) with the
+  LTSSM/Link Layer/Core at half the frequency on 64-bit words, Link Layer RX credits flow control.
 - **USB3 Device Core** (`usb3_core/`): Link Layer (header flow control, retries, LMPs, timers,
   SuperSpeedPlus operation: 4-bit sequence numbers, Type 1/Type 2 buffers and credits), Protocol
   Layer, Control Endpoint (standard requests, alternate settings, class/vendor request handler,
@@ -67,14 +69,20 @@ disk (and DDR3 disk), composite camera + console.
   (`--gen2-capable`, on a USB 3.2 Gen 2 host port), 0 errors. Main Gen 2 development target.
 - [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) (`bench/kc705.py`, Kintex7
   GTX): build-tested, hardware validation in progress.
+- [Sipeed Tang Mega 138K Pro](https://wiki.sipeed.com/hardware/en/tang/tang-mega-138k/mega-138k-pro.html)
+  (`bench/sipeed_tang_mega_138k_pro.py`, Gowin GW5AST-138B GTR12, SFP2USB adapter in SFP0, Gowin IDE):
+  validated at Gen 1 (5Gbps): IN 372MB/s, OUT 433MB/s, full duplex 262 + 383MB/s, 0 errors (PIPE at
+  125MHz on the GTR12 TX clock, Link Layer/Core at 62.5MHz on 64-bit words). Needs
+  [LiteICLink](https://github.com/enjoy-digital/liteiclink) GTR12 support.
 - [SFP2USB](http://xillybus.com/sfp2usb-module) adapter (from the [XillyUSB](http://xillybus.com/xillyusb)
   project) or the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board.
 
 ![LiteX Acorn Baseboard + SFP2USB](doc/acorn_baseboard_sfp2usb_2.jpg)
 
-Any 7-Series/UltraScale+ board with a transceiver routed to a SFP/PCIe connector can be used with a
-target file (the example designs are shared: `usb3_core/examples.py`). Gen 2 (10Gbps) needs 10Gbps
-capable transceivers (validated on UltraScale+ GTY).
+Any 7-Series/UltraScale+/Gowin GW5AST board with a transceiver routed to a SFP/PCIe connector can be
+used with a target file (the example designs are shared: `usb3_core/examples.py`). Gen 2 (10Gbps) needs
+10Gbps capable transceivers (validated on UltraScale+ GTY; GW5AST: see
+[doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md)).
 
 [> Getting started
 ------------------
@@ -97,6 +105,11 @@ $ ./bench/usb3_bulk.py loopback --size 1024 --count 1000
 $ ./bench/alibaba_xcku3p.py --build --load --example bench --gen2-capable --link-words 2
 $ lsusb -t                # 10000M on a USB 3.2 Gen 2 root hub.
 $ ./bench/usb3_bench.py both --transfer-size 65536 --csr-csv build/alibaba_xcku3p/csr.csv
+
+# Gen 1 (5Gbps) on the Tang Mega 138K Pro (Gowin IDE, LiteICLink with GTR12 support): bench example.
+$ ./bench/sipeed_tang_mega_138k_pro.py --build --example bench
+$ openFPGALoader -c ft2232 build/sipeed_tang_mega_138k_pro/gateware/impl/pnr/project.fs
+$ ./bench/usb3_bench.py both --transfer-size 65536 --csr-csv build/sipeed_tang_mega_138k_pro/csr.csv
 ```
 
 `usb3_bench.py` uses 1MB transfers by default: with them the host itself limits the Gen 2 Bulk IN rate
