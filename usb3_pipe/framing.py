@@ -403,7 +403,12 @@ class Gen2RXFraming(LiteXModule):
             last.eq(rem <= nbytes),
         ]
 
-        # Output words: framing Symbols as K Symbols, bytes after the packet end padded (00h).
+        # Output words (registered with 16 bytes per cycle, see the Link Commands): framing Symbols as
+        # K Symbols, bytes after the packet end padded (00h).
+        if nbytes == 16:
+            output = stream.Endpoint(gen2_link_layout(nbytes//4) + [("lc", 1)])
+        else:
+            output = source
         start_k = Signal(8)
         self.comb += Case(kind, {
             KIND_HP  : start_k.eq(SHP),
@@ -415,8 +420,8 @@ class Gen2RXFraming(LiteXModule):
         # Byte j of the chunk is packet byte i: i >= length <-> j >= rem (comparisons with constants).
         for j in range(nbytes):
             byte   = out[8*j:8*(j+1)]
-            data   = source.data[8*j:8*(j+1)]
-            ctrl   = source.ctrl[j]
+            data   = output.data[8*j:8*(j+1)]
+            ctrl   = output.ctrl[j]
             is_end = Signal(name=f"is_end{j}") # DPPEND/DPPABORT.
             self.comb += is_end.eq((kind == KIND_DPP) & ((j + 4) >= rem))
             self.comb += If(j >= rem,
@@ -433,18 +438,38 @@ class Gen2RXFraming(LiteXModule):
                 data.eq(byte),
             )
 
-        # LGOOD_n/LCRD_x Link Commands (Link Command Word copies identical, 7.2.2): source_lc.
-        lc_word = out[32:64]
-        lc_fast = Signal()
-        self.comb += [
-            lc_fast.eq(self.lc_enable & (kind == KIND_LC) & (lc_word[0:16] == lc_word[16:32]) & (
+        # LGOOD_n/LCRD_x Link Commands (Link Command Word copies identical, 7.2.2): source_lc. With
+        # 16 bytes per cycle, decoded on the registered output (timings).
+        def is_fast_lc(lc_word):
+            return (lc_word[0:16] == lc_word[16:32]) & (
                 ((lc_word[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
-                ((lc_word[0:11] & 0x7f8) == 0x080))), # LCRD_x/LCRD1_x/LCRD2_x.
-            source_lc.data.eq(lc_word),
-        ]
-        # Both outputs ready (not depending on the Link Command decode: timings).
+                ((lc_word[0:11] & 0x7f8) == 0x080))   # LCRD_x/LCRD1_x/LCRD2_x.
+        lc_fast   = Signal()
         out_ready = Signal()
-        self.comb += out_ready.eq(source_lc.ready & source.ready)
+        if nbytes == 16:
+            self.out_buffer = out_buffer = stream.Buffer(gen2_link_layout(nbytes//4) + [("lc", 1)],
+                pipe_valid=True, pipe_ready=True)
+            fast = Signal()
+            self.comb += [
+                output.lc.eq(kind == KIND_LC),
+                output.connect(out_buffer.sink),
+                out_ready.eq(output.ready),
+                fast.eq(self.lc_enable & out_buffer.source.lc &
+                    is_fast_lc(out_buffer.source.data[32:64])),
+                out_buffer.source.connect(source, omit={"valid", "ready", "lc"}),
+                source.valid.eq(out_buffer.source.valid & ~fast),
+                source_lc.valid.eq(out_buffer.source.valid & fast),
+                source_lc.data.eq(out_buffer.source.data[32:64]),
+                out_buffer.source.ready.eq(Mux(fast, source_lc.ready, source.ready)),
+            ]
+        else:
+            lc_word = out[32:64]
+            self.comb += [
+                lc_fast.eq(self.lc_enable & (kind == KIND_LC) & is_fast_lc(lc_word)),
+                source_lc.data.eq(lc_word),
+                # Both outputs ready (not depending on the Link Command decode: timings).
+                out_ready.eq(source_lc.ready & source.ready),
+            ]
 
         # FSM --------------------------------------------------------------------------------------
         p_next = Signal(pw + 1)
@@ -483,12 +508,12 @@ class Gen2RXFraming(LiteXModule):
         self.comb += p_next.eq(p + rem[0:pw + 1])
         fsm.act("PACKET",
             If(avail,
-                source.valid.eq(~lc_fast),
-                source_lc.valid.eq(lc_fast),
+                output.valid.eq(~lc_fast),
+                source_lc.valid.eq(lc_fast) if nbytes != 16 else [],
                 # Valid words: rem bytes (up to nbytes) rounded up to words.
-                source.words.eq(Mux(last, (rem[0:pw + 1] + 3) >> 2, nbytes//4)),
+                output.words.eq(Mux(last, (rem[0:pw + 1] + 3) >> 2, nbytes//4)),
                 If((kind == KIND_DPH) & last,
-                    source.words.eq(1), # Length Field Replicas removed.
+                    output.words.eq(1), # Length Field Replicas removed.
                 ),
                 If(out_ready,
                     If((kind == KIND_DPH) & last,
