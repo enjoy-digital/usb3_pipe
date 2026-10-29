@@ -313,7 +313,11 @@ class Gen2RXFraming(LiteXModule):
         # # #
 
         # Window: R (oldest nbytes) + incoming word ------------------------------------------------
+        # Bytes start codes (packet kind + 1, 0: Idle, CODE_UNKNOWN) decoded on the incoming word and
+        # registered with R: the packet start search is then a priority selection.
+        CODE_UNKNOWN = 7
         r       = Signal(8*nbytes)
+        r_codes = Signal(3*nbytes)
         r_valid = Signal()
         shift   = Signal() # Consume R (R <- incoming word).
         win     = Signal(16*nbytes)
@@ -323,8 +327,21 @@ class Gen2RXFraming(LiteXModule):
             avail.eq(r_valid & sink.valid),
             sink.ready.eq(~r_valid | shift),
         ]
+        codes = Signal(3*nbytes)
+        for i in range(nbytes):
+            b = sink.data[8*i:8*(i+1)]
+            self.comb += Case(b, {
+                GEN2_IDLE : codes[3*i:3*(i+1)].eq(0),
+                GEN2_SHP  : codes[3*i:3*(i+1)].eq(KIND_HP  + 1),
+                GEN2_DPHP : codes[3*i:3*(i+1)].eq(KIND_DPH + 1),
+                GEN2_SLC  : codes[3*i:3*(i+1)].eq(KIND_LC  + 1),
+                GEN2_SDP  : codes[3*i:3*(i+1)].eq(KIND_DPP + 1),
+                GEN2_EDB  : codes[3*i:3*(i+1)].eq(KIND_EDB + 1),
+                "default" : codes[3*i:3*(i+1)].eq(CODE_UNKNOWN),
+            })
         self.sync += If(sink.valid & sink.ready,
             r.eq(sink.data),
+            r_codes.eq(codes),
             r_valid.eq(1),
         )
 
@@ -332,29 +349,27 @@ class Gen2RXFraming(LiteXModule):
         p     = Signal(pw) # Byte pointer in R.
         q     = Signal(pw) # First non-Idle byte at/after p.
         found = Signal()
-        first = Signal(8)
+        first = Signal(3)  # Start code of the byte at q.
         nonidle = Signal(nbytes)
         for i in range(nbytes):
-            self.comb += nonidle[i].eq((win[8*i:8*(i+1)] != GEN2_IDLE) & (i >= p))
+            self.comb += nonidle[i].eq((r_codes[3*i:3*(i+1)] != 0) & (i >= p))
         self.comb += [
             found.eq(nonidle != 0),
             q.eq(nbytes - 1),
         ]
         for i in reversed(range(nbytes)):
             self.comb += If(nonidle[i], q.eq(i))
-        self.comb += first.eq((win >> byte_offset(q))[0:8])
+        self.comb += first.eq(Array([r_codes[3*i:3*(i+1)] for i in range(nbytes)])[q])
 
         # Packet -----------------------------------------------------------------------------------
-        kind    = Signal(3)
-        length  = Signal(11) # Packet length (bytes).
-        count   = Signal(11) # Packet bytes already output.
-        rem     = Signal(11)
-        last    = Signal()
-        dpp_len = Signal(16) # Last DPH Length Field Replica.
-        out     = Signal(8*nbytes)
+        kind      = Signal(3)
+        rem       = Signal(11) # Packet bytes remaining (from the current chunk).
+        start     = Signal()   # First chunk of the packet.
+        last      = Signal()
+        dpp_len12 = Signal(11, reset=12) # Last DPH Length Field Replica + 12 (DPP length).
+        out       = Signal(8*nbytes)
         self.comb += [
             out.eq((win >> byte_offset(p))[0:8*nbytes]),
-            rem.eq(length - count),
             last.eq(rem <= nbytes),
         ]
 
@@ -367,20 +382,20 @@ class Gen2RXFraming(LiteXModule):
             KIND_DPP : start_k.eq(SDP),
             KIND_EDB : start_k.eq(EDB),
         })
+        # Byte j of the chunk is packet byte i: i >= length <-> j >= rem (comparisons with constants).
         for j in range(nbytes):
-            i      = count + j
             byte   = out[8*j:8*(j+1)]
             data   = source.data[8*j:8*(j+1)]
             ctrl   = source.ctrl[j]
             is_end = Signal(name=f"is_end{j}") # DPPEND/DPPABORT.
-            self.comb += is_end.eq((kind == KIND_DPP) & (i >= (length - 4)))
-            self.comb += If(i >= length,
+            self.comb += is_end.eq((kind == KIND_DPP) & ((j + 4) >= rem))
+            self.comb += If(j >= rem,
                 data.eq(0x00),
-            ).Elif(i < 3,
+            ).Elif(start & (j < 3),
                 ctrl.eq(1), data.eq(start_k),
-            ).Elif(i == 3,
+            ).Elif(start & (j == 3),
                 ctrl.eq(1), data.eq(EPF),
-            ).Elif(is_end & (i == (length - 1)),
+            ).Elif(is_end & ((j + 1) == rem),
                 ctrl.eq(1), data.eq(EPF),
             ).Elif(is_end,
                 ctrl.eq(1), data.eq(Mux(byte == GEN2_EDB, EDB, END)),
@@ -397,8 +412,9 @@ class Gen2RXFraming(LiteXModule):
                 ((lc_word[0:11] & 0x7f8) == 0x080))), # LCRD_x/LCRD1_x/LCRD2_x.
             source_lc.data.eq(lc_word),
         ]
+        # Both outputs ready (not depending on the Link Command decode: timings).
         out_ready = Signal()
-        self.comb += out_ready.eq(Mux(lc_fast, source_lc.ready, source.ready))
+        self.comb += out_ready.eq(source_lc.ready & source.ready)
 
         # FSM --------------------------------------------------------------------------------------
         p_next = Signal(pw + 1)
@@ -407,21 +423,16 @@ class Gen2RXFraming(LiteXModule):
             If(avail,
                 If(found,
                     NextValue(p, q),
-                    NextValue(count, 0),
-                    If((first == GEN2_SHP),
-                        NextValue(kind, KIND_HP),   NextValue(length, 20),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_DPHP,
-                        NextValue(kind, KIND_DPH),  NextValue(length, 24),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_SLC,
-                        NextValue(kind, KIND_LC),   NextValue(length, 8),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_SDP,
-                        NextValue(kind, KIND_DPP),  NextValue(length, dpp_len + 12),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_EDB,
-                        NextValue(kind, KIND_EDB),  NextValue(length, 4),
+                    NextValue(start, 1),
+                    NextValue(kind, first - 1),
+                    Case(first, {
+                        KIND_HP  + 1 : NextValue(rem, 20),
+                        KIND_DPH + 1 : NextValue(rem, 24),
+                        KIND_LC  + 1 : NextValue(rem, 8),
+                        KIND_DPP + 1 : NextValue(rem, dpp_len12),
+                        KIND_EDB + 1 : NextValue(rem, 4),
+                    }),
+                    If(first != CODE_UNKNOWN,
                         NextState("PACKET")
                     ).Else(
                         # Unknown start: skip the byte.
@@ -451,9 +462,10 @@ class Gen2RXFraming(LiteXModule):
                 ),
                 If(out_ready,
                     If((kind == KIND_DPH) & last,
-                        NextValue(dpp_len, out[32:48]),
+                        NextValue(dpp_len12, out[32:48] + 12),
                     ),
-                    NextValue(count, count + nbytes),
+                    NextValue(rem, rem - nbytes),
+                    NextValue(start, 0),
                     If(~last,
                         shift.eq(1)
                     ).Else(
@@ -847,20 +859,38 @@ class Gen2LinkTX(LiteXModule):
             stream.AsyncFIFO(gen2_tx_unit_layout(nbytes), buffer_depth, buffered=True))
         self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker(nbytes))
         self.comb += [
-            sink.connect(framer.sink, omit={"words"}),
-            framer.sink.words.eq(sink.words if link_words == 2 else 1),
             buffer.source.connect(packer.sink),
             packer.source.connect(source),
         ]
         if nbytes == 16:
-            self.widener = widener = ResetInserter()(Gen2TXUnitsWidener())
+            # Registered valid/ready around the framer (timings: wider transceiver words with the
+            # framer at the PIPE frequency) and framer entries paired.
+            framer_sink = stream.Endpoint(gen2_link_layout())
             self.comb += [
+                sink.connect(framer_sink, omit={"words"}),
+                framer_sink.words.eq(sink.words if link_words == 2 else 1),
+            ]
+            self.sink_buffer = sink_buffer = ResetInserter()(stream.Buffer(gen2_link_layout(),
+                pipe_valid=True, pipe_ready=True))
+            self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener())
+            self.unit_buffer = unit_buffer = ResetInserter()(stream.Buffer(gen2_tx_unit_layout(16),
+                pipe_valid=True, pipe_ready=True))
+            self.comb += [
+                sink_buffer.reset.eq(self.flush),
                 widener.reset.eq(self.flush),
+                unit_buffer.reset.eq(self.flush),
+                framer_sink.connect(sink_buffer.sink),
+                sink_buffer.source.connect(framer.sink),
                 framer.source.connect(widener.sink),
-                widener.source.connect(buffer.sink),
+                widener.source.connect(unit_buffer.sink),
+                unit_buffer.source.connect(buffer.sink),
             ]
         else:
-            self.comb += framer.source.connect(buffer.sink)
+            self.comb += [
+                sink.connect(framer.sink, omit={"words"}),
+                framer.sink.words.eq(sink.words if link_words == 2 else 1),
+                framer.source.connect(buffer.sink),
+            ]
 
         # Complete units in the buffer: units written (sys) vs read (tx), units cut by a flush are not
         # counted (no last entry).
@@ -902,7 +932,8 @@ class Gen2LinkRX(LiteXModule):
 
         # # #
 
-        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8))
+        # Registered read with 16 bytes per cycle (timings).
+        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8, buffered=(nbytes == 16)))
         framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming(nbytes)))
         buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
             stream.AsyncFIFO(gen2_link_layout(nbytes//4), buffer_depth, buffered=True))

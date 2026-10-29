@@ -707,9 +707,9 @@ class Gen2TXDCBalance(LiteXModule):
     Pipelined over 3 cycles per block (popcounts, balance, output/update): the gearbox accepts a block
     every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
     and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex: 80-bit at
-    125MHz: a block every 1.65 cycles), the balance increments of the possible DC Balance Symbols
-    precomputed with the popcounts, the running balance loop is then two adders, a selection and the
-    saturation.
+    125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then the
+    balance increments of the possible DC Balance Symbols precomputed, the running balance loop is
+    then two adders, a selection and the saturation.
     """
     def __init__(self, one_per_cycle=False):
         self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
@@ -813,6 +813,34 @@ class Gen2TXDCBalance(LiteXModule):
         source = self.source
         ones   = lambda v: bin(v).count("1")
 
+        # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 4 chunks, 12-13, 14,
+        # 15).
+        v0        = Signal()
+        header0   = Signal(4)
+        data0     = Signal(192)
+        skp0      = Signal()
+        ts0       = Signal()
+        dc_reset0 = Signal()
+        ones_11   = [Signal(5) for _ in range(4)]
+        ones_13   = Signal(5)
+        ones_14   = Signal(4)
+        ones_15   = Signal(4)
+        ready1    = Signal()
+        self.comb += sink.ready.eq(~v0 | ready1)
+        bits_11 = Cat(sink.header, sink.data[0:96])
+        self.sync += If(sink.ready,
+            v0.eq(sink.valid),
+            header0.eq(sink.header),
+            data0.eq(sink.data),
+            skp0.eq(sink.skp),
+            ts0.eq(sink.ts),
+            dc_reset0.eq(sink.dc_reset),
+            [ones_11[i].eq(popcount(bits_11[25*i:25*(i+1)])) for i in range(4)],
+            ones_13.eq(popcount(sink.data[96:112])),
+            ones_14.eq(popcount(sink.data[112:120])),
+            ones_15.eq(popcount(sink.data[120:128])),
+        )
+
         # Stage 1: block, balance increment at the end of Symbol 11 and the balance increments of
         # Symbols 12-15 for each DC Balance Symbols choice (none, Symbol 15, Symbols 14/15; reduce
         # ones/zeros).
@@ -825,18 +853,15 @@ class Gen2TXDCBalance(LiteXModule):
         inc_11   = Signal((9, True))
         inc      = {k: Signal((8, True)) for k in ["none", "15p", "15n", "14p", "14n"]}
         advance  = Signal()
-        self.comb += sink.ready.eq(~v1 | advance)
-        ones_13 = popcount(sink.data[96:112])
-        ones_14 = popcount(sink.data[112:120])
-        ones_15 = popcount(sink.data[120:128])
-        self.sync += If(sink.ready,
-            v1.eq(sink.valid),
-            header.eq(sink.header),
-            data.eq(sink.data),
-            skp.eq(sink.skp),
-            ts.eq(sink.ts),
-            dc_reset.eq(sink.dc_reset),
-            inc_11.eq(2*popcount(Cat(sink.header, sink.data[0:96])) - 100),
+        self.comb += ready1.eq(~v1 | advance)
+        self.sync += If(ready1,
+            v1.eq(v0),
+            header.eq(header0),
+            data.eq(data0),
+            skp.eq(skp0),
+            ts.eq(ts0),
+            dc_reset.eq(dc_reset0),
+            inc_11.eq(2*(ones_11[0] + ones_11[1] + ones_11[2] + ones_11[3]) - 100),
             inc["none"].eq(2*(ones_13 + ones_14 + ones_15) - 32),
             inc["15p"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ONES[1])) - 32),
             inc["15n"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
@@ -1045,10 +1070,18 @@ class Gen2TXDatapath(LiteXModule):
 
         # # #
 
-        self.comb += [
-            tx.source.connect(dc_balance.sink),
-            dc_balance.source.connect(gearbox.sink),
-        ]
+        if 3*data_width > 132:
+            # Registered valid/ready between Gen2TX and the DC balance (timings: the Gen2TX block
+            # selection and the gearbox/DC balance readies at one block per cycle).
+            self.buffer = buffer = stream.Buffer(gen2_tx_block_layout(), pipe_valid=True,
+                pipe_ready=True)
+            self.comb += [
+                tx.source.connect(buffer.sink),
+                buffer.source.connect(dc_balance.sink),
+            ]
+        else:
+            self.comb += tx.source.connect(dc_balance.sink)
+        self.comb += dc_balance.source.connect(gearbox.sink)
 
 GEN2_RX_COUNTERS = [
     # (name, description).
