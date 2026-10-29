@@ -379,6 +379,7 @@ class Gen2RXFraming(LiteXModule):
         r_found   = [Signal(name=f"r_found{i}", reset_less=True) for i in range(nbytes)]
         r_q       = [Signal(pw, name=f"r_q{i}", reset_less=True) for i in range(nbytes)]
         r_code    = [Signal(3, name=f"r_code{i}", reset_less=True) for i in range(nbytes)]
+        r_skip    = [Signal(name=f"r_skip{i}", reset_less=True) for i in range(nbytes)]
         code = lambda j: in_codes[3*j:3*(j+1)]
         in_edb = Signal(nbytes)
         self.comb += [in_edb[j].eq(code(j) == (KIND_EDB + 1)) for j in range(nbytes)]
@@ -397,6 +398,10 @@ class Gen2RXFraming(LiteXModule):
             [r_found[i].eq(nxt_found[i]) for i in range(nbytes)],
             [r_q[i].eq(nxt_q[i]) for i in range(nbytes)],
             [r_code[i].eq(nxt_code[i]) for i in range(nbytes)],
+            # R consumed from position i in Idle (no packet start at/after i, or an unknown start on
+            # the last byte): registered (timings: window shift).
+            [r_skip[i].eq(~nxt_found[i] |
+                ((nxt_code[i] == CODE_UNKNOWN) & (nxt_q[i] == nbytes - 1))) for i in range(nbytes)],
         )
 
         # Packet start search (Idle) ---------------------------------------------------------------
@@ -405,7 +410,9 @@ class Gen2RXFraming(LiteXModule):
         q     = Signal(pw) # First non-Idle byte at/after p.
         found = Signal()
         first = Signal(3)  # Start code of the byte at q.
+        skip  = Signal()   # R consumed (Idle).
         self.comb += [
+            skip.eq(Array(r_skip)[p]),
             found.eq(Array(r_found)[p]),
             q.eq(Array(r_q)[p]),
             first.eq(Array(r_code)[p]),
@@ -522,16 +529,15 @@ class Gen2RXFraming(LiteXModule):
                         # Unknown start: skip the byte.
                         NextValue(self.errors, self.errors + 1),
                         If(q == (nbytes - 1),
-                            shift.eq(1),
                             NextValue(p, 0), NextValue(p_out, 0)
                         ).Else(
                             NextValue(p, q + 1), NextValue(p_out, q + 1)
                         )
                     )
                 ).Else(
-                    shift.eq(1),
                     NextValue(p, 0), NextValue(p_out, 0)
-                )
+                ),
+                shift.eq(skip),
             )
         )
         self.comb += p_next.eq(p + rem[0:pw + 1])
@@ -1191,8 +1197,8 @@ class Gen2LinkRX(LiteXModule):
         # Registered read with 16 bytes per cycle (timings). 16 bytes per cycle: 32 blocks (a Data
         # Block every 1.65 cycles, 2 cycles per short packet ending in the RX framing window: bursts
         # of short packets at the line rate, ex: units stored and forwarded behind a long DPP).
-        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 32 if nbytes == 16 else 8,
-            buffered=(nbytes == 16)))
+        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)],
+            32 if nbytes == 16 else 8, buffered=(nbytes == 16)))
         framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming(nbytes)))
         buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
             stream.AsyncFIFO(gen2_link_layout(nbytes//4), buffer_depth, buffered=True))
@@ -1209,7 +1215,8 @@ class Gen2LinkRX(LiteXModule):
         self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
             stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
         if nbytes == 16:
-            # Registered framing outputs (valid/ready) before the buffers (timings: buffers write side).
+            # Registered framing outputs (valid/ready) before the buffers (timings: buffers write
+            # side).
             out_buffer = ClockDomainsRenamer("rx")(Buffer(gen2_link_layout(4),
                 pipe_valid=True, pipe_ready=True))
             lc_out_buffer = ClockDomainsRenamer("rx")(Buffer([("data", 32), ("ctrl", 4)],
@@ -1234,8 +1241,8 @@ class Gen2LinkRX(LiteXModule):
                 converter.source.connect(framing.sink),
             ]
         else:
-            # Registered valid/ready between the blocks buffer and the RX framing (timings: RX framing
-            # decisions to the buffer read side).
+            # Registered valid/ready between the blocks buffer and the RX framing (timings: RX
+            # framing decisions to the buffer read side).
             in_buffer = ClockDomainsRenamer("rx")(Buffer([("data", 128)], pipe_valid=True,
                 pipe_ready=True))
             self.submodules += in_buffer
