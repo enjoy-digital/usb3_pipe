@@ -583,10 +583,12 @@ class USB3LinkLayer(LiteXModule):
         tx_two   = Signal()
         tx_ctrl  = Signal(4)
         tx_valid = Signal()
+        tx_first = Signal() # First word of a packet (Link Command, Header Packet, DPH + DPP).
         tx_last  = Signal() # Last word of a packet (Link Command, Header Packet, DPH + DPP).
         self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout() if lw == 1 else link_pairs_layout()) # Registered (timings).
         self.comb += [
             tx_pipe.sink.valid.eq(tx_valid),
+            tx_pipe.sink.first.eq(tx_first),
             tx_pipe.sink.last.eq(tx_last),
             tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2))),
             tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
@@ -730,6 +732,7 @@ class USB3LinkLayer(LiteXModule):
         )
         tx_fsm.act("LC0",
             tx_valid.eq(1),
+            tx_first.eq(1),
             tx_word.eq(FRAMING_SLC),
             tx_ctrl.eq(0b1111),
             If(tx_ready, NextState("LC1"))
@@ -746,6 +749,7 @@ class USB3LinkLayer(LiteXModule):
                 tx_word.eq([FRAMING_SHP, hp_dws[0:32], hp_dws[32:64], hp_dws[64:96],
                     Cat(crc16_tx.value, hp_lcw)][i]),
                 tx_ctrl.eq(0b1111 if i == 0 else 0b0000),
+                tx_first.eq(1) if i == 0 else [],
                 tx_last.eq(~hp_dpp & ~hp_null) if i == 4 else [],
                 If(tx_ready,
                     NextState(f"HP{i+1}") if i < 4 else

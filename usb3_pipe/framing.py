@@ -66,7 +66,8 @@ class WordsToPairs(LiteXModule):
         ]
 
 class PairsToWords(LiteXModule):
-    """Words pairs (gen2_link_layout, 1 or 2 words per entry) -> link words."""
+    """Words pairs (gen2_link_layout, 1 or 2 words per entry) -> link words (packets first/last on
+    their first/last words)."""
     def __init__(self):
         self.sink   = sink   = stream.Endpoint(gen2_link_layout())
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -76,6 +77,8 @@ class PairsToWords(LiteXModule):
         second = Signal()
         self.comb += [
             source.valid.eq(sink.valid),
+            source.first.eq(sink.first & ~second),
+            source.last.eq(sink.last & (second | (sink.words == 1))),
             source.data.eq(Mux(second, sink.data[32:64], sink.data[0:32])),
             source.ctrl.eq(Mux(second, sink.ctrl[4:8],   sink.ctrl[0:4])),
             sink.ready.eq(source.ready & (second | (sink.words == 1))),
