@@ -841,15 +841,15 @@ class Gen2TXDCBalance(LiteXModule):
         # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 8 chunks, 12-13, 14,
         # 15).
         v0        = Signal()
-        header0   = Signal(4)
-        data0     = Signal(192)
-        skp0      = Signal()
-        ts0       = Signal()
-        dc_reset0 = Signal()
-        ones_11   = [Signal(4) for _ in range(8)]
-        ones_13   = Signal(5)
-        ones_14   = Signal(4)
-        ones_15   = Signal(4)
+        header0   = Signal(4, reset_less=True)
+        data0     = Signal(192, reset_less=True)
+        skp0      = Signal(reset_less=True)
+        ts0       = Signal(reset_less=True)
+        dc_reset0 = Signal(reset_less=True)
+        ones_11   = [Signal(4, reset_less=True) for _ in range(8)]
+        ones_13   = Signal(5, reset_less=True)
+        ones_14   = Signal(4, reset_less=True)
+        ones_15   = Signal(4, reset_less=True)
         ready1    = Signal()
         self.comb += sink.ready.eq(~v0 | ready1)
         bits_11 = Cat(sink.header, sink.data[0:96])
@@ -870,13 +870,14 @@ class Gen2TXDCBalance(LiteXModule):
         # Symbols 12-15 for each DC Balance Symbols choice (none, Symbol 15, Symbols 14/15; reduce
         # ones/zeros).
         v1       = Signal()
-        header   = Signal(4)
-        data     = Signal(192)
-        skp      = Signal()
-        ts       = Signal()
-        dc_reset = Signal()
-        inc_11   = Signal((9, True))
-        inc      = {k: Signal((8, True)) for k in ["none", "15p", "15n", "14p", "14n"]}
+        header   = Signal(4, reset_less=True)
+        data     = Signal(192, reset_less=True)
+        skp      = Signal(reset_less=True)
+        ts       = Signal(reset_less=True)
+        dc_reset = Signal(reset_less=True)
+        inc_11   = Signal((9, True), reset_less=True)
+        inc      = {k: Signal((8, True), reset_less=True)
+            for k in ["none", "15p", "15n", "14p", "14n"]}
         advance  = Signal()
         self.comb += ready1.eq(~v1 | advance)
         self.sync += If(ready1,
@@ -900,15 +901,16 @@ class Gen2TXDCBalance(LiteXModule):
         # (inc_11 + inc[k]) with its saturation thresholds (+-511): the running balance loop is then
         # comparisons/adders with registered values and a selection.
         v2        = Signal()
-        header2   = Signal(4)
-        data2     = Signal(192)
-        skp2      = Signal()
-        ts2       = Signal()
-        dc_reset2 = Signal()
-        th        = {k: Signal((12, True)) for k in ["pos", "15p", "15n", "14p", "14n"]}
-        upd       = {k: Signal((12, True)) for k in inc}
-        sat_hi    = {k: Signal((12, True)) for k in inc}
-        sat_lo    = {k: Signal((12, True)) for k in inc}
+        header2   = Signal(4, reset_less=True)
+        data2     = Signal(192, reset_less=True)
+        skp2      = Signal(reset_less=True)
+        ts2       = Signal(reset_less=True)
+        dc_reset2 = Signal(reset_less=True)
+        th        = {k: Signal((12, True), reset_less=True)
+            for k in ["pos", "15p", "15n", "14p", "14n"]}
+        upd       = {k: Signal((12, True), reset_less=True) for k in inc}
+        sat_hi    = {k: Signal((12, True), reset_less=True) for k in inc}
+        sat_lo    = {k: Signal((12, True), reset_less=True) for k in inc}
         ready2    = Signal()
         self.comb += advance.eq(v1 & ready2)
         self.sync += If(ready2,

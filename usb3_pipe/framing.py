@@ -335,8 +335,8 @@ class Gen2RXFraming(LiteXModule):
         # Input stage: words with their bytes start codes (packet kind + 1, 0: Idle, CODE_UNKNOWN) ---
         CODE_UNKNOWN = 7
         in_valid = Signal()
-        in_data  = Signal(8*nbytes)
-        in_codes = Signal(3*nbytes)
+        in_data  = Signal(8*nbytes, reset_less=True)
+        in_codes = Signal(3*nbytes, reset_less=True)
         in_ready = Signal()
         codes = Signal(3*nbytes)
         for i in range(nbytes):
@@ -361,8 +361,8 @@ class Gen2RXFraming(LiteXModule):
         # For each position i of R, the first non-Idle byte at/after i (found, index, start code) is
         # computed on the incoming word and registered with R: the packet start search is then a
         # selection by the byte pointer.
-        r       = Signal(8*nbytes)
-        r_edb   = Signal(nbytes) # EDB bytes (DPPABORT).
+        r       = Signal(8*nbytes, reset_less=True)
+        r_edb   = Signal(nbytes, reset_less=True) # EDB bytes (DPPABORT).
         r_valid = Signal()
         shift   = Signal() # Consume R (R <- incoming word).
         win     = Signal(16*nbytes)
@@ -375,9 +375,9 @@ class Gen2RXFraming(LiteXModule):
         nxt_found = [Signal(name=f"nxt_found{i}") for i in range(nbytes)]
         nxt_q     = [Signal(pw, name=f"nxt_q{i}") for i in range(nbytes)]
         nxt_code  = [Signal(3, name=f"nxt_code{i}") for i in range(nbytes)]
-        r_found   = [Signal(name=f"r_found{i}") for i in range(nbytes)]
-        r_q       = [Signal(pw, name=f"r_q{i}") for i in range(nbytes)]
-        r_code    = [Signal(3, name=f"r_code{i}") for i in range(nbytes)]
+        r_found   = [Signal(name=f"r_found{i}", reset_less=True) for i in range(nbytes)]
+        r_q       = [Signal(pw, name=f"r_q{i}", reset_less=True) for i in range(nbytes)]
+        r_code    = [Signal(3, name=f"r_code{i}", reset_less=True) for i in range(nbytes)]
         code = lambda j: in_codes[3*j:3*(j+1)]
         in_edb = Signal(nbytes)
         self.comb += [in_edb[j].eq(code(j) == (KIND_EDB + 1)) for j in range(nbytes)]
@@ -949,7 +949,7 @@ class Gen2TXPacker16(LiteXModule):
 
         # # #
 
-        acc     = Signal(128) # Partial block (bytes acc[0:8*fill], oldest from acc[0:8]).
+        acc     = Signal(128, reset_less=True) # Partial block (bytes acc[0:8*fill], oldest first).
         fill    = Signal(4)   # Bytes in the partial block (0-15).
         in_unit = Signal()    # Reading a unit.
         hold    = Signal()    # Unit ended with a SKP Ordered Set pending: next unit after the block.

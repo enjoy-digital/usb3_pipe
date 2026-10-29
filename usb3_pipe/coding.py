@@ -263,7 +263,7 @@ class Gen2BlockAligner(LiteXModule):
         P    = r + 132 - dw         # Pointer positions.
 
         # Window (oldest bits at the bottom) -------------------------------------------------------
-        win      = Signal(n)
+        win      = Signal(n, reset_less=True)
         win_next = Signal(n)
         data     = Signal(dw)
         toggle   = Signal() # Polarity toggle (new words inverted).
@@ -291,12 +291,15 @@ class Gen2BlockAligner(LiteXModule):
         def dwords(p, o, j):
             # SKP Dwords at p + o + 32*i (i < j).
             return [dword[p + o + 32*i] for i in range(j)]
-        skp_pos   = Signal(r) # Control Block Header + SKP/SKPEND Symbol 0.
-        norm_pos  = Signal(r) # 132-bit block (Data/Control Block Header, not SKP/SKPEND).
-        bskp_pos  = [Signal(r, name=f"bskp_pos{j}") for j in range(m)] # SKP: SKPEND after j Dwords.
-        bcont_pos = Signal(r) # SKP: m Dwords (continued).
-        send_pos  = [Signal(r, name=f"send_pos{j}") for j in range(m)] # SKPEND after j Dwords.
-        scont_pos = Signal(r) # m Dwords (continued).
+        # Data registers without reset (datapath registers: reset fanout).
+        skp_pos   = Signal(r, reset_less=True) # Control Block Header + SKP/SKPEND Symbol 0.
+        norm_pos  = Signal(r, reset_less=True) # 132-bit block (Data/Control Header, not SKP/SKPEND).
+        bskp_pos  = [Signal(r, name=f"bskp_pos{j}", reset_less=True) # SKP: SKPEND after j Dwords.
+            for j in range(m)]
+        bcont_pos = Signal(r, reset_less=True) # SKP: m Dwords (continued).
+        send_pos  = [Signal(r, name=f"send_pos{j}", reset_less=True) # SKPEND after j Dwords.
+            for j in range(m)]
+        scont_pos = Signal(r, reset_less=True) # m Dwords (continued).
         for p in range(r):
             header = win_next[p:p+4]
             dist_d = popcount(header ^ BLOCK_HEADER_DATA)
@@ -324,8 +327,8 @@ class Gen2BlockAligner(LiteXModule):
         pairs        = {}
         pairs_inv    = {}
         for q in range(r + 4, n - 15):
-            pairs[q]     = Signal(name=f"sync_pair{q}")
-            pairs_inv[q] = Signal(name=f"sync_pair_inv{q}")
+            pairs[q]     = Signal(name=f"sync_pair{q}",     reset_less=True)
+            pairs_inv[q] = Signal(name=f"sync_pair_inv{q}", reset_less=True)
             self.sync += [
                 pairs[q].eq(    win_next[q:q+16] == 0xff00),
                 pairs_inv[q].eq(win_next[q:q+16] == 0x00ff),
@@ -469,7 +472,12 @@ class Gen2BlockAligner(LiteXModule):
             any_d.eq(any_v),
             any_dd.eq(any_d),
         )
-        self.sync += If(toggle, self.polarity.eq(~self.polarity))
+        # Polarity toggled from a registered toggle (fanout: new words inversion).
+        toggle_d = Signal()
+        self.sync += [
+            toggle_d.eq(toggle),
+            If(toggle_d, self.polarity.eq(~self.polarity)),
+        ]
         self.comb += self.aligned.eq(any_d)
 
         # Events/pointer (registered) --------------------------------------------------------------
@@ -480,8 +488,8 @@ class Gen2BlockAligner(LiteXModule):
             for i, part in enumerate(parts):
                 self.sync += part.eq(Reduce("OR", terms[16*i:16*(i+1)]) & sink.valid)
             return or_terms(parts)
-        e_idx   = Signal(kr)
-        e_win   = Signal(n)
+        e_idx   = Signal(kr, reset_less=True)
+        e_win   = Signal(n,  reset_less=True)
         e_found = Signal() # SYNC block (pointer set from the SYNC of the previous cycle).
         vany    = [Reduce("OR", [vb[p]] + [vs[k][p] for k in range(K)]) for p in range(r)]
         self.sync += [
@@ -526,13 +534,13 @@ class Gen2BlockAligner(LiteXModule):
                 ov_idx[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> i) & 1])
                     for i in range(kr)])),
             )
-        d_idx     = Signal(kr)
-        d_win     = Signal(132 + 15) # Window shifted by the pointer multiple of 16 (timings).
+        d_idx     = Signal(kr, reset_less=True)
+        d_win     = Signal(132 + 15, reset_less=True) # Window shifted by the pointer multiple of 16.
         d_found   = Signal()
         d_extract = Signal()
         d_skp     = Signal()
-        d_end     = Signal(7)
-        d_total   = Signal(6)
+        d_end     = Signal(7, reset_less=True)
+        d_total   = Signal(6, reset_less=True)
         idx = Signal(kr)
         self.comb += If(realign_d[0],
             idx.eq(ov_idx[0])
@@ -569,11 +577,11 @@ class Gen2BlockAligner(LiteXModule):
         bits     = Signal(132)
         o_valid  = Signal()
         o_skp    = Signal()
-        o_end    = Signal(7)
-        o_total  = Signal(6)
-        o_bits   = Signal(132)
+        o_end    = Signal(7,   reset_less=True)
+        o_total  = Signal(6,   reset_less=True)
+        o_bits   = Signal(132, reset_less=True)
         lfsr     = Signal(24)
-        out_bits = Signal(132)
+        out_bits = Signal(132, reset_less=True)
         self.comb += bits.eq(d_win >> d_idx[:4])
         self.sync += [
             o_valid.eq(d_found | d_extract),
