@@ -20,19 +20,25 @@ from usb3_core.link       import USB3LinkLayer
 # DUT ----------------------------------------------------------------------------------------------
 
 class LinkDUT(LiteXModule):
-    def __init__(self):
+    """link_words=2: Link Layer on PHY words pairs (64-bit words, ex: Gen 2 with pipe_cd), PHY
+    stand-in words on the test side."""
+    def __init__(self, link_words=1):
+        from test.model.device import PairsPHY
         self.phy = phy = PHYStandIn()
         phy.gen2_active = Signal(reset=1)
-        self.link = USB3LinkLayer(phy, sys_clk_freq=125e6, ssp_tt={1: TT_BULK})
+        link_phy = phy if link_words == 1 else PairsPHY(phy, self)
+        self.link = USB3LinkLayer(link_phy, sys_clk_freq=125e6, ssp_tt={1: TT_BULK})
 
 # Test ---------------------------------------------------------------------------------------------
 
 class TestCoreLinkSSP(unittest.TestCase):
+    link_words = 1
+
     def test_tx_header_buffers_types(self):
         # The host advertises its credits but never acknowledges (no LGOOD_n): the Port Capability
         # LMP and 3 ACK TPs fill the Type 1 buffers, 4 DPHs (TT Bulk) are still accepted in the Type 2
         # buffers, the 5th Type 1/Type 2 Header Packets are not.
-        dut  = LinkDUT()
+        dut  = LinkDUT(self.link_words)
         link = dut.link
         phy  = dut.phy
         accepted = []
@@ -93,10 +99,57 @@ class TestCoreLinkSSP(unittest.TestCase):
         run_simulation(dut, [host(), dpps(), scenario()])
         self.assertEqual(accepted, [("ack", True)]*3 + [("dph", True)]*4 + [("ack", False), ("dph", False)])
 
+    def test_tx_header_buffers_burst(self):
+        # DPHs (Type 2) offered on every cycle, never acknowledged: exactly 4 accepted (Type 2 buffers
+        # full flags including the previous pushes, ex: registered with 64-bit words).
+        dut  = LinkDUT(self.link_words)
+        link = dut.link
+        phy  = dut.phy
+        accepted = []
+
+        def host():
+            words = link_command(LGOOD(15))
+            for x in range(4):
+                words += link_command(LCRD(x)) + link_command(LCRD2(x))
+            yield phy.polling_idle.eq(1)
+            yield
+            yield phy.polling_idle.eq(0)
+            yield phy.u0.eq(1)
+            yield phy.sink.ready.eq(1)
+            for data, ctrl in words:
+                yield phy.source.valid.eq(1)
+                yield phy.source.data.eq(data)
+                yield phy.source.ctrl.eq(ctrl)
+                yield
+            yield phy.source.valid.eq(0)
+
+        def dpps():
+            yield "passive"
+            yield link.tx_dpp.valid.eq(1)
+            yield link.tx_dpp.bytes.eq(0)
+            yield link.tx_dpp.last.eq(1)
+            while True:
+                yield
+
+        def scenario():
+            for _ in range(128):
+                yield
+            yield link.tx_hp.valid.eq(1)
+            yield link.tx_hp.dw0.eq(TYPE_DP)
+            yield link.tx_hp.dw1.eq(dph_dw1(seq=0, ept=1, direction=1, length=0))
+            yield link.tx_hp.dpp.eq(1)
+            for _ in range(256):
+                yield
+                if (yield link.tx_hp.ready):
+                    accepted.append(1)
+
+        run_simulation(dut, [host(), dpps(), scenario()])
+        self.assertEqual(len(accepted), 4)
+
     def test_dph_retransmission_nullified_dpp(self):
         # LBAD received after a DPH: LRTY, then the DPH retransmitted (DL bit set) followed by a
         # nullified DPP (DPPABORT), the Gen 2 framing has a DPP after each DPH (7.2.4.1.13).
-        dut  = LinkDUT()
+        dut  = LinkDUT(self.link_words)
         link = dut.link
         phy  = dut.phy
         sent = []
@@ -170,7 +223,7 @@ class TestCoreLinkSSP(unittest.TestCase):
         # U0 period with Header Packets received (rx_seq advanced, an LGOOD_n not sent yet when U0
         # is exited), then a link reset (Polling.Idle) and a new U0 entry: the first Link Command
         # sent is the Header Sequence Number Advertisement LGOOD_15 (no stale LGOOD_n).
-        dut  = LinkDUT()
+        dut  = LinkDUT(self.link_words)
         link = dut.link
         phy  = dut.phy
         sent = []
@@ -222,6 +275,10 @@ class TestCoreLinkSSP(unittest.TestCase):
 
 def swap(w):
     return int.from_bytes(w.to_bytes(4, "little"), "big")
+
+class TestCoreLinkSSPPairs(TestCoreLinkSSP):
+    # 64-bit Link Layer words (registered Tx Header Buffers counts, spaced pushes).
+    link_words = 2
 
 if __name__ == "__main__":
     unittest.main()
