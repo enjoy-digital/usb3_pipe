@@ -202,9 +202,8 @@ class Gen2BlockAligner(LiteXModule):
     (6.4.1.2.4), one word per cycle (sink always ready).
 
     - Unaligned: the 132-bit SYNC Ordered Set block is searched at the data_width bit offsets of
-      each new word. A SYNC received inverted (polarity inversion, 6.4.2.2) toggles the polarity
-      (new words and buffered bits inverted, decodes valid one cycle later) and is used for the
-      alignment.
+      each new word. A SYNC received inverted (polarity inversion, 6.4.2.2) toggles the polarity of
+      the new words (the search resumes once the window is refilled): the next SYNC aligns.
     - Aligned: blocks are extracted with the alignment, an SDS Ordered Set moves to Locked. A SYNC
       received with a different alignment realigns (error pulse): a bit slip can keep valid Block
       Headers (ex: TSEQ, Symbol 0 bit 0 = 1 seen as a corrected Control Block Header).
@@ -223,14 +222,17 @@ class Gen2BlockAligner(LiteXModule):
     context: Block, SKP Ordered Set continued after 4*m*k SKP Symbols): each position is set from a
     few positions of the previous cycle (pointer bit and decode at that position, per consumed
     length), no pointer mux/adder in the loop, a pointer bit dropped (undefined Block Header, SKP
-    Ordered Set error, pointer behind the window) is an alignment loss. The SYNC search is done one
-    word ahead (one-hot offset registered), a realignment is applied one cycle later (both
-    decisions of that SYNC cancelled, SYNC block output). The read blocks/SKP Ordered Sets are
+    Ordered Set error, pointer behind the window) is an alignment loss. No control signal common to
+    the positions in the loop (fanout): the SYNC search is done one word ahead (one-hot offset
+    registered) and its pointer bit set one cycle later, a SYNC with a different alignment is
+    checked over 2 cycles and sets the pointer to its alignment (decisions of these cycles
+    replaced: SYNC block and the blocks following it). The read blocks/SKP Ordered Sets are
     extracted from the registered pointer/events (binary pointer, window delayed): outputs
-    registered (3 cycles).
+    registered (4 cycles).
 
-    Approximation: a SYNC received with a different alignment while a SKP Ordered Set is consumed
-    does not realign (the next one does).
+    Approximations: a SYNC received with a different alignment while a SKP Ordered Set is consumed
+    does not realign (the next one does), the blocks following a realigning SYNC on the next 2
+    cycles are 132-bit blocks.
 
     The source must always be ready (one block every 132 bits).
     """
@@ -261,21 +263,17 @@ class Gen2BlockAligner(LiteXModule):
         win      = Signal(n)
         win_next = Signal(n)
         data     = Signal(dw)
-        toggle   = Signal() # Polarity toggle (buffered bits inverted on the next cycle).
-        toggle_d = Signal()
+        toggle   = Signal() # Polarity toggle (new words inverted).
         self.comb += [
             sink.ready.eq(1),
             data.eq(sink.data ^ Replicate(self.polarity, dw)),
             If(sink.valid,
-                win_next.eq(Cat(win[dw:] ^ Replicate(toggle_d, n - dw), data))
+                win_next.eq(Cat(win[dw:], data))
             ).Else(
-                win_next.eq(win ^ Replicate(toggle_d, n))
+                win_next.eq(win)
             )
         ]
-        self.sync += [
-            win.eq(win_next),
-            toggle_d.eq(toggle),
-        ]
+        self.sync += win.eq(win_next)
 
         # Per position decodes (registered with the window) ----------------------------------------
         inv_pos   = Signal(r)    # Undefined Block Header.
@@ -325,7 +323,13 @@ class Gen2BlockAligner(LiteXModule):
         sync_oh      = Signal(dw)
         sync_inv_oh  = Signal(dw)
         sync_ok      = Signal()
-        self.comb += sync_ok.eq(sink.valid & ~toggle & ~toggle_d)
+        sync_wait    = Signal(max=n//dw + 3) # Window refilled after a polarity toggle.
+        self.comb += sync_ok.eq(sink.valid & ~toggle & (sync_wait == 0))
+        self.sync += If(toggle,
+            sync_wait.eq(n//dw + 2)
+        ).Elif(sink.valid & (sync_wait != 0),
+            sync_wait.eq(sync_wait - 1)
+        )
         self.sync += [
             sync_hit.eq(    (sync_pos     != 0) & sync_ok),
             sync_inv_hit.eq((sync_inv_pos != 0) & sync_ok),
@@ -339,19 +343,17 @@ class Gen2BlockAligner(LiteXModule):
         # window (held without a new word).
         vb        = Signal(P)
         vs        = [Signal(P, name=f"skp_ptr{k}") for k in range(K)]
-        pol       = Signal() # Polarity toggled: decodes not valid, pointer shifted only.
-        realign_d = Signal() # Realignment (SYNC of the previous cycle, Block context).
-        load_d    = Signal() # SYNC loaded (Unaligned) on the previous cycle.
-        sync_oh_d = Signal(dw)
         any_d     = Signal() # Pointer set on the previous cycle.
+        load_d    = Signal() # SYNC (Unaligned) on the previous cycles: pointer set on the next one.
+        load_dd   = Signal()
+        load_oh   = Signal(dw) # SYNC of the previous cycle (one-hot offset): pointer bit set.
+        clear     = Signal() # Pointer cleared (SYNC with a different alignment).
         unaligned = Signal()
         load      = Signal()
-        step      = Signal() # Pointer moved by the decodes.
         self.comb += [
-            unaligned.eq(~any_d & ~load_d),
-            load.eq(unaligned & (sync_hit | sync_inv_hit) & sink.valid),
-            toggle.eq(load & ~sync_hit),
-            step.eq(~pol & ~realign_d),
+            unaligned.eq(~any_d & ~load_d & ~load_dd),
+            load.eq(unaligned & sync_hit & sink.valid),
+            toggle.eq(unaligned & ~sync_hit & sync_inv_hit & sink.valid),
         ]
 
         # Transitions: position p (context, decode at p, consumed bits c) -> position p + c - dw.
@@ -375,63 +377,82 @@ class Gen2BlockAligner(LiteXModule):
             if p < r:
                 # Block context: 132-bit block, SKP Ordered Set (SKPEND after j < m Dwords or
                 # continued after m Dwords), undefined Block Header: dropped.
-                transition(vb, p, [step, ~inv_pos[p], ~skp_pos[p]], 132, next_b, "extract")
+                transition(vb, p, [~inv_pos[p], ~skp_pos[p]], 132, next_b, "extract")
                 for j in range(m):
-                    transition(vb, p, [step, skp_pos[p]] + dwords(p, 4, j) + [end_pos[p + 4 + 32*j]],
+                    transition(vb, p, [skp_pos[p]] + dwords(p, 4, j) + [end_pos[p + 4 + 32*j]],
                         4 + 32*(j + 1), next_b, ("skp_block", j))
-                transition(vb, p, [step, skp_pos[p]] + dwords(p, 4, m), 4 + 32*m, next_s[0])
+                transition(vb, p, [skp_pos[p]] + dwords(p, 4, m), 4 + 32*m, next_s[0])
                 # SKP context (up to 36 SKP Symbols): SKPEND after j Dwords or continued.
                 for k in range(K):
                     for j in range(min(m, 10 - m*(k + 1))):
-                        transition(vs[k], p, [step] + dwords(p, 0, j) + [end_pos[p + 32*j]],
-                            32*(j + 1), next_b, ("skp", k, j))
+                        transition(vs[k], p, dwords(p, 0, j) + [end_pos[p + 32*j]], 32*(j + 1),
+                            next_b, ("skp", k, j))
                     if (k + 1) < K:
-                        transition(vs[k], p, [step] + dwords(p, 0, m), 32*m, next_s[k + 1])
-                # Polarity toggled: shifted only.
-                transition(vb, p, [pol], 0, next_b)
-                for k in range(K):
-                    transition(vs[k], p, [pol], 0, next_s[k])
+                        transition(vs[k], p, dwords(p, 0, m), 32*m, next_s[k + 1])
             else:
                 # Block not in the pointer range yet: shifted.
-                transition(vb, p, [~realign_d], 0, next_b)
+                transition(vb, p, [], 0, next_b)
                 for k in range(K):
-                    transition(vs[k], p, [~realign_d], 0, next_s[k])
-        # SYNC loads (Unaligned: SYNC at r - dw + k, realignment: one cycle later), 132-bit block.
+                    transition(vs[k], p, [], 0, next_s[k])
+        # SYNC (Unaligned, at r - dw + k on the previous cycle): 132-bit block consumed.
         for k in range(dw):
-            q = r - dw + k + 132 - dw
-            t = Signal()
-            self.comb += t.eq(load & Mux(sync_hit, sync_oh[k], sync_inv_oh[k]))
-            next_b[q].append(t)
-            q = r - dw + k + 132 - 2*dw
-            t = Signal()
-            self.comb += t.eq(realign_d & sync_oh_d[k])
-            next_b[q].append(t)
+            next_b[r - dw + k + 132 - 2*dw].append(load_oh[k])
+        # SYNC with a different alignment (at r - dw + k, 2 cycles before the clear): pointer of the
+        # blocks following the SYNC (132-bit, consumed as available on these cycles: lost).
+        realign_pos = []
+        for k in range(dw):
+            q = r - dw + k
+            for c in range(3):
+                q = q + (132 if (c == 0) or (q < r) else 0) - dw
+            assert 0 <= q < P
+            realign_pos.append(q)
+        realign_oh = Signal(dw)
+        realign_vb = [0]*P
+        for k, q in enumerate(realign_pos):
+            realign_vb[q] = realign_oh[k]
         or_terms = lambda terms: Reduce("OR", terms) if terms else 0
-        self.sync += If(sink.valid,
+        self.sync += If(clear,
+            vb.eq(Cat(*realign_vb)),
+            [vs[k].eq(0) for k in range(K)],
+        ).Elif(sink.valid,
             vb.eq(Cat(*[or_terms(next_b[q]) for q in range(P)])),
             [vs[k].eq(Cat(*[or_terms(next_s[k][q]) for q in range(P)])) for k in range(K)],
         )
 
-        # Realignment: SYNC in the Block context not at the pointer (pointer not at the SYNC, not in
-        # a SKP Ordered Set).
-        hit_at_ptr = Signal()
-        skp_at_ptr = Signal()
-        in_skp     = Signal()
+        # SYNC with a different alignment: SYNC in the Block context not at the pointer (pointer not
+        # at the SYNC, not in a SKP Ordered Set), checked over 2 cycles (partial ORs by 16 positions
+        # registered), pointer set to the SYNC alignment on the next cycle.
+        def parts(terms):
+            regs = [Signal(name="realign_part") for _ in range((len(terms) + 15)//16)]
+            for i, reg in enumerate(regs):
+                self.sync += If(sink.valid, reg.eq(Reduce("OR", terms[16*i:16*(i+1)])))
+            return Reduce("OR", regs)
+        hit_at_ptr = parts([sync_oh[k] & vb[r - dw + k] for k in range(dw)])
+        skp_at_ptr = parts([vb[p] & skp_pos[p] for p in range(r)])
+        in_skp     = parts([v[p] for v in vs for p in range(P)])
+        sync_hit_d = Signal()
+        sync_oh_d  = Signal(dw)
+        any_dd     = Signal()
         realign    = Signal()
-        self.comb += [
-            hit_at_ptr.eq(Reduce("OR", [sync_oh[k] & vb[r - dw + k] for k in range(dw)])),
-            skp_at_ptr.eq(Reduce("OR", [vb[p] & skp_pos[p] for p in range(r)])),
-            in_skp.eq(Reduce("OR", vs) != 0),
-            realign.eq(sync_hit & any_d & ~hit_at_ptr & ~skp_at_ptr & ~in_skp & ~pol & ~realign_d),
-        ]
-        any_v = Signal()
-        self.comb += any_v.eq((vb != 0) | in_skp)
+        realign_d  = Signal(3)
+        self.comb += realign.eq(sync_hit_d & any_dd & ~hit_at_ptr & ~skp_at_ptr & ~in_skp &
+            (realign_d == 0))
         self.sync += If(sink.valid,
-            pol.eq(toggle),
-            realign_d.eq(realign),
-            load_d.eq(load),
+            sync_hit_d.eq(sync_hit),
             sync_oh_d.eq(sync_oh),
+            realign_oh.eq(Mux(realign, sync_oh_d, 0)),
+            realign_d.eq(Cat(realign, realign_d[:-1])),
+        )
+        self.comb += clear.eq(realign_d[0])
+
+        any_v = Signal()
+        self.comb += any_v.eq((vb != 0) | (Reduce("OR", vs) != 0))
+        self.sync += If(sink.valid,
+            load_d.eq(load),
+            load_dd.eq(load_d),
+            load_oh.eq(Mux(load, sync_oh, 0)),
             any_d.eq(any_v),
+            any_dd.eq(any_d),
         )
         self.sync += If(toggle, self.polarity.eq(~self.polarity))
         self.comb += self.aligned.eq(any_d)
@@ -446,21 +467,13 @@ class Gen2BlockAligner(LiteXModule):
             return or_terms(parts)
         e_idx   = Signal(kr)
         e_win   = Signal(n)
-        e_found = Signal()
-        e_drop  = Signal()
-        e_drop_d = Signal()
-        any_dd  = Signal()
+        e_found = Signal() # SYNC block (pointer set from the SYNC of the previous cycle).
         vany    = [Reduce("OR", [vb[p]] + [vs[k][p] for k in range(K)]) for p in range(r)]
         self.sync += [
             e_idx.eq(Cat(*[Reduce("OR", [vany[p] for p in range(r) if (p >> i) & 1])
                 for i in range(kr)])),
             e_win.eq(win),
-            e_found.eq((load | realign_d) & sink.valid),
-            # Pointer dropped (alignment loss) or realignment (decisions of the previous cycle
-            # cancelled).
-            any_dd.eq(any_d),
-            e_drop.eq(realign),
-            e_drop_d.eq(e_drop),
+            e_found.eq(load_d & sink.valid),
         ]
         e_extract = Signal()
         e_skp     = Signal()
@@ -478,8 +491,60 @@ class Gen2BlockAligner(LiteXModule):
             [If(c, e_end.eq(end), e_total.eq(total)) for c, end, total in skp_cases],
         ]
 
+        # SYNC with a different alignment: decisions of the SYNC cycle and of the 2 next ones
+        # replaced (SYNC block, then the blocks following the SYNC at their positions on these
+        # cycles, 132-bit, read when in the pointer range).
+        follow = [[], []] # Positions of the blocks following the SYNC on the 2 next cycles.
+        for k in range(dw):
+            q = r - dw + k + 132 - dw
+            for c in range(2):
+                follow[c].append(q if q < r else None)
+                q = q + (132 if q < r else 0) - dw
+        ov_idx = [Signal(kr, name=f"realign_idx{c}") for c in range(2)]
+        ov_ext = [Signal(name=f"realign_ext{c}") for c in range(2)]
+        ov_oh  = [sync_oh_d, Signal(dw)]
+        self.sync += If(sink.valid, ov_oh[1].eq(ov_oh[0]))
+        for c in range(2):
+            ks = [k for k in range(dw) if follow[c][k] is not None]
+            self.sync += If(sink.valid,
+                ov_ext[c].eq(or_terms([ov_oh[c][k] for k in ks])),
+                ov_idx[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> i) & 1])
+                    for i in range(kr)])),
+            )
+        d_idx     = Signal(kr)
+        d_win     = Signal(n)
+        d_found   = Signal()
+        d_extract = Signal()
+        d_skp     = Signal()
+        d_end     = Signal(7)
+        d_total   = Signal(6)
+        self.sync += [
+            d_win.eq(e_win),
+            d_end.eq(e_end),
+            d_total.eq(e_total),
+            If(realign,
+                d_found.eq(1),
+                d_extract.eq(0),
+                d_skp.eq(0),
+            ).Elif(realign_d[0],
+                d_found.eq(0),
+                d_extract.eq(ov_ext[0]),
+                d_skp.eq(0),
+                d_idx.eq(ov_idx[0]),
+            ).Elif(realign_d[1],
+                d_found.eq(0),
+                d_extract.eq(ov_ext[1]),
+                d_skp.eq(0),
+                d_idx.eq(ov_idx[1]),
+            ).Else(
+                d_found.eq(e_found),
+                d_extract.eq(e_extract),
+                d_skp.eq(e_skp),
+                d_idx.eq(e_idx),
+            )
+        ]
+
         # Outputs (registered) ---------------------------------------------------------------------
-        # Decisions of a realigned cycle cancelled (e_drop on the next cycle: realign_d).
         bits     = Signal(132)
         o_valid  = Signal()
         o_skp    = Signal()
@@ -488,13 +553,13 @@ class Gen2BlockAligner(LiteXModule):
         o_bits   = Signal(132)
         lfsr     = Signal(24)
         out_bits = Signal(132)
-        self.comb += bits.eq(e_win >> e_idx)
+        self.comb += bits.eq(d_win >> d_idx)
         self.sync += [
-            o_valid.eq((e_found | e_extract) & ~realign_d),
-            o_bits.eq(Mux(e_found, GEN2_SYNC_BITS, bits)),
-            o_skp.eq(e_skp & ~realign_d),
-            o_end.eq(e_end),
-            o_total.eq(e_total),
+            o_valid.eq(d_found | d_extract),
+            o_bits.eq(Mux(d_found, GEN2_SYNC_BITS, bits)),
+            o_skp.eq(d_skp),
+            o_end.eq(d_end),
+            o_total.eq(d_total),
         ]
         self.comb += Case(o_end, {e: lfsr.eq(o_bits[e+8:e+32]) for o in [0, 4]
             for e in range(o, o + 32*m, 32)})
@@ -504,8 +569,9 @@ class Gen2BlockAligner(LiteXModule):
             self.skp.eq(o_skp),
             self.skp_count.eq(o_total),
             self.skp_lfsr.eq(Cat(lfsr[16:24], lfsr[8:16], lfsr[0:7])),
-            # Alignment loss (pointer dropped, except on a realigned cycle) or realignment.
-            self.error.eq((any_dd & ~any_d & ~e_drop_d) | e_drop),
+            # Alignment loss (pointer dropped, except when cleared) or SYNC with a different
+            # alignment (before its SYNC block).
+            self.error.eq((any_dd & ~any_d & (realign_d == 0)) | realign_d[0]),
         ]
         out_dist_d = Signal(3)
         out_dist_c = Signal(3)

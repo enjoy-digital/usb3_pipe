@@ -654,8 +654,9 @@ class TestGen2Datapath(unittest.TestCase):
         # - channel: bit offset, polarity inversion, a bit removed during TS1 (and with tseq_slip a
         #   bit removed during TSEQ and a Block Header bit error in TS2), SKP Ordered Sets
         #   shortened/lengthened (re-timer clock compensation). Realignment on the next SYNC.
-        # - RX: polarity detected on SYNC, TSEQ/TS1/TS2 detected, SDS, Data Blocks recovered,
-        #   received SKP LFSR state equal to the RX descrambler state, counters.
+        # - RX: polarity detected on the first SYNC (aligned on the next one), TSEQ/TS1/TS2 detected,
+        #   SDS, Data Blocks recovered, received SKP LFSR state equal to the RX descrambler state,
+        #   counters.
         words, packets = run_tx(link_config=0x08, data_width=data_width, **kwargs)
         bits   = bits_from_words(words, data_width)
         blocks = Gen2ReferenceDecoder(self).decode(bits)
@@ -670,7 +671,7 @@ class TestGen2Datapath(unittest.TestCase):
         slips = [(ts1[3][1] + 50, -1)]
         flips = []
         if tseq_slip:
-            slips.append((tseq[2][1] + 70, -1))
+            slips.append((tseq[9][1] + 70, -1)) # After the second SYNC (aligned).
             flips.append(ts2[4][1] + 2)
         self.assertLess(ts1[3][1], skp_blocks[0][1])
         bits, expected_skp = gen2_channel(bits, blocks, skp_edits=edits, slips=slips, flips=flips,
@@ -718,10 +719,11 @@ class TestGen2Datapath(unittest.TestCase):
             # Bit error + misaligned TSEQ Block Headers (seen as corrected) until the next SYNC.
             self.assertGreaterEqual(events["header_errors_count"], 1)
         # Counters.
-        self.assertEqual(events["sync_count"], kinds.count("SYNC"))
+        self.assertEqual(events["sync_count"], kinds.count("SYNC") - 1) # First SYNC: polarity.
         self.assertEqual(events["align_errors_count"], len(slips))
         self.assertEqual(events["sds_count"], 1)
-        self.assertLessEqual(kinds.count("TSEQ") - events["tseq_count"], 8 if tseq_slip else 0)
+        # TSEQ before the second SYNC (polarity), until the SYNC after the slip.
+        self.assertLessEqual(kinds.count("TSEQ") - events["tseq_count"], 8 + (8 if tseq_slip else 0))
         self.assertLessEqual(kinds.count("TS1")  - events["ts1_count"], 32) # Until the next SYNC.
         self.assertEqual(events["ts2_count"], kinds.count("TS2"))
         self.assertEqual(events["skp_count"], len(events["skp"]))
@@ -743,17 +745,18 @@ class TestGen2Datapath(unittest.TestCase):
         # Hardware width (40-bit words at 250MHz): bit slips in TSEQ/TS1, Block Header bit error,
         # SKP Ordered Sets edits.
         self.loopback_test(edits={0: -4, 1: +8}, data_width=GEN2_DATA_WIDTH, tseq_slip=True,
-            **RUN_TX_SHORT)
+            n_tseq=32, **RUN_TX_SHORT)
 
     def test_loopback_80(self):
         # 80-bit words (Gowin GTR12 1:4 gear at 125MHz): bit slips in TSEQ/TS1, Block Header bit
         # error, SKP Ordered Sets edits.
-        self.loopback_test(edits={0: -4, 1: +8}, data_width=80, tseq_slip=True, **RUN_TX_SHORT)
+        self.loopback_test(edits={0: -4, 1: +8}, data_width=80, tseq_slip=True, n_tseq=32,
+            **RUN_TX_SHORT)
 
     @pytest.mark.slow
     def test_loopback_long(self):
         self.loopback_test()
-        self.loopback_test(data_width=GEN2_DATA_WIDTH, tseq_slip=True)
+        self.loopback_test(data_width=GEN2_DATA_WIDTH, tseq_slip=True, n_tseq=32)
 
 if __name__ == "__main__":
     unittest.main()
