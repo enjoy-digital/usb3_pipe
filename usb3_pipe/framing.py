@@ -312,21 +312,12 @@ class Gen2RXFraming(LiteXModule):
 
         # # #
 
-        # Window: R (oldest nbytes) + incoming word ------------------------------------------------
-        # Bytes start codes (packet kind + 1, 0: Idle, CODE_UNKNOWN) decoded on the incoming word and
-        # registered with R: the packet start search is then a priority selection.
+        # Input stage: words with their bytes start codes (packet kind + 1, 0: Idle, CODE_UNKNOWN) ---
         CODE_UNKNOWN = 7
-        r       = Signal(8*nbytes)
-        r_codes = Signal(3*nbytes)
-        r_valid = Signal()
-        shift   = Signal() # Consume R (R <- incoming word).
-        win     = Signal(16*nbytes)
-        avail   = Signal()
-        self.comb += [
-            win.eq(Cat(r, sink.data)),
-            avail.eq(r_valid & sink.valid),
-            sink.ready.eq(~r_valid | shift),
-        ]
+        in_valid = Signal()
+        in_data  = Signal(8*nbytes)
+        in_codes = Signal(3*nbytes)
+        in_ready = Signal()
         codes = Signal(3*nbytes)
         for i in range(nbytes):
             b = sink.data[8*i:8*(i+1)]
@@ -339,10 +330,48 @@ class Gen2RXFraming(LiteXModule):
                 GEN2_EDB  : codes[3*i:3*(i+1)].eq(KIND_EDB + 1),
                 "default" : codes[3*i:3*(i+1)].eq(CODE_UNKNOWN),
             })
-        self.sync += If(sink.valid & sink.ready,
-            r.eq(sink.data),
-            r_codes.eq(codes),
+        self.comb += sink.ready.eq(~in_valid | in_ready)
+        self.sync += If(sink.ready,
+            in_valid.eq(sink.valid),
+            in_data.eq(sink.data),
+            in_codes.eq(codes),
+        )
+
+        # Window: R (oldest nbytes) + incoming word ------------------------------------------------
+        # For each position i of R, the first non-Idle byte at/after i (found, index, start code) is
+        # computed on the incoming word and registered with R: the packet start search is then a
+        # selection by the byte pointer.
+        r       = Signal(8*nbytes)
+        r_valid = Signal()
+        shift   = Signal() # Consume R (R <- incoming word).
+        win     = Signal(16*nbytes)
+        avail   = Signal()
+        self.comb += [
+            win.eq(Cat(r, in_data)),
+            avail.eq(r_valid & in_valid),
+            in_ready.eq(~r_valid | shift),
+        ]
+        nxt_found = [Signal(name=f"nxt_found{i}") for i in range(nbytes)]
+        nxt_q     = [Signal(pw, name=f"nxt_q{i}") for i in range(nbytes)]
+        nxt_code  = [Signal(3, name=f"nxt_code{i}") for i in range(nbytes)]
+        r_found   = [Signal(name=f"r_found{i}") for i in range(nbytes)]
+        r_q       = [Signal(pw, name=f"r_q{i}") for i in range(nbytes)]
+        r_code    = [Signal(3, name=f"r_code{i}") for i in range(nbytes)]
+        code = lambda j: in_codes[3*j:3*(j+1)]
+        for i in range(nbytes):
+            self.comb += [
+                nxt_found[i].eq(Reduce("OR", [code(j) != 0 for j in range(i, nbytes)])),
+                nxt_q[i].eq(nbytes - 1),
+                nxt_code[i].eq(code(nbytes - 1)),
+            ]
+            for j in reversed(range(i, nbytes)):
+                self.comb += If(code(j) != 0, nxt_q[i].eq(j), nxt_code[i].eq(code(j)))
+        self.sync += If(in_valid & in_ready,
+            r.eq(in_data),
             r_valid.eq(1),
+            [r_found[i].eq(nxt_found[i]) for i in range(nbytes)],
+            [r_q[i].eq(nxt_q[i]) for i in range(nbytes)],
+            [r_code[i].eq(nxt_code[i]) for i in range(nbytes)],
         )
 
         # Packet start search (Idle) ---------------------------------------------------------------
@@ -350,16 +379,11 @@ class Gen2RXFraming(LiteXModule):
         q     = Signal(pw) # First non-Idle byte at/after p.
         found = Signal()
         first = Signal(3)  # Start code of the byte at q.
-        nonidle = Signal(nbytes)
-        for i in range(nbytes):
-            self.comb += nonidle[i].eq((r_codes[3*i:3*(i+1)] != 0) & (i >= p))
         self.comb += [
-            found.eq(nonidle != 0),
-            q.eq(nbytes - 1),
+            found.eq(Array(r_found)[p]),
+            q.eq(Array(r_q)[p]),
+            first.eq(Array(r_code)[p]),
         ]
-        for i in reversed(range(nbytes)):
-            self.comb += If(nonidle[i], q.eq(i))
-        self.comb += first.eq(Array([r_codes[3*i:3*(i+1)] for i in range(nbytes)])[q])
 
         # Packet -----------------------------------------------------------------------------------
         kind      = Signal(3)
@@ -780,23 +804,38 @@ class Gen2TXPacker(LiteXModule):
         # block: else, a block requested before its next entry (Gen2TX, a block every 3 cycles or
         # more) would find no block and send a Logical Idle Data Block inside the unit. The padded
         # block (Idle Symbols) is sent first.
+        # Both cases (output block taken this cycle or not) computed from the registered state, then
+        # selected with out_fire (timings: placement/read decisions not after the output handshake).
         fill_eff = Signal(len(fill))
         start_ok = Signal()
         rd       = Signal()
+        fill_fire = Signal(len(fill)) # Fill level after an output block.
+        self.comb += fill_fire.eq(Mux(fill >= 16, fill - 16, 0))
+        def read_ok(f):
+            start = (f == 0) | ((f + sink.bytes) >= 16)
+            return sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold & start)) & (f <= 16)
+        rd_keep = Signal()
+        rd_fire = Signal()
         self.comb += [
-            fill_eff.eq(Mux(out_fire, Mux(fill >= 16, fill - 16, 0), fill)),
-            start_ok.eq((fill_eff == 0) | ((fill_eff + sink.bytes) >= 16)),
-            rd.eq(sink.valid & ~self.flush &
-                (in_unit | (self.units_available & ~hold & start_ok)) &
-                (fill_eff <= 16)),
+            rd_keep.eq(read_ok(fill)),
+            rd_fire.eq(read_ok(fill_fire)),
+            fill_eff.eq(Mux(out_fire, fill_fire, fill)),
+            rd.eq(Mux(out_fire, rd_fire, rd_keep)),
             sink.ready.eq(rd | self.flush),
             self.unit_end.eq(sink.valid & sink.ready & sink.last),
         ]
         buf_shift = Signal(len(buf))
         self.comb += buf_shift.eq(Mux(out_fire, buf >> 128, buf))
+        placed_keep = Signal(len(buf))
+        placed_fire = Signal(len(buf))
+        self.comb += [
+            Case(fill, {f: placed_keep.eq((buf & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
+                for f in range(17)}),
+            Case(fill_fire, {f: placed_fire.eq(((buf >> 128) & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
+                for f in range(17)}),
+        ]
         placed = Signal(len(buf))
-        self.comb += Case(fill_eff, {f: placed.eq((buf_shift & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
-            for f in range(17)})
+        self.comb += placed.eq(Mux(out_fire, placed_fire, placed_keep))
         self.sync += [
             If(self.flush,
                 fill.eq(0),
@@ -858,10 +897,19 @@ class Gen2LinkTX(LiteXModule):
         self.buffer = buffer = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
             stream.AsyncFIFO(gen2_tx_unit_layout(nbytes), buffer_depth, buffered=True))
         self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker(nbytes))
-        self.comb += [
-            buffer.source.connect(packer.sink),
-            packer.source.connect(source),
-        ]
+        self.comb += buffer.source.connect(packer.sink)
+        if nbytes == 16:
+            # Registered valid/ready between the packer and Gen2TX (timings: Gen2TX block requests
+            # to the packer read/placement).
+            self.packer_buffer = packer_buffer = ClockDomainsRenamer("tx")(ResetInserter()(
+                stream.Buffer([("data", 128)], pipe_valid=True, pipe_ready=True)))
+            self.comb += [
+                packer_buffer.reset.eq(flush_tx),
+                packer.source.connect(packer_buffer.sink),
+                packer_buffer.source.connect(source),
+            ]
+        else:
+            self.comb += packer.source.connect(source)
         if nbytes == 16:
             # Registered valid/ready around the framer (timings: wider transceiver words with the
             # framer at the PIPE frequency) and framer entries paired.
@@ -945,8 +993,17 @@ class Gen2LinkRX(LiteXModule):
             fifo.sink.data.eq(sink.data),
             sink.ready.eq(1),
             framing.reset.eq(~self.data_stream),
-            framing.source.connect(buffer.sink),
         ]
+        if nbytes == 16:
+            # Registered framing output before the words buffer (timings: buffer write side).
+            out_buffer = ClockDomainsRenamer("rx")(stream.Buffer(gen2_link_layout(4)))
+            self.submodules += out_buffer
+            self.comb += [
+                framing.source.connect(out_buffer.sink),
+                out_buffer.source.connect(buffer.sink),
+            ]
+        else:
+            self.comb += framing.source.connect(buffer.sink)
         if nbytes == 8:
             converter = ClockDomainsRenamer("rx")(stream.Converter(128, 64))
             self.submodules += converter

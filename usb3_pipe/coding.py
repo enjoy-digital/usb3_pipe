@@ -374,7 +374,7 @@ class Gen2BlockAligner(LiteXModule):
 
         # SKP Ordered Set decisions: SKPEND after j Dwords (j < m) or m Dwords (continued in SKP).
         def all_dwords(offset, j):
-            return reduce(and_, [dwords[offset + 32*i] for i in range(j)], 1)
+            return Reduce("AND", [dwords[offset + 32*i] for i in range(j)]) if j else 1
         skp_block_cases = If(0)
         for j in range(m):
             skp_block_cases = skp_block_cases.Elif(all_dwords(4, j) & ends[4 + 32*j],
