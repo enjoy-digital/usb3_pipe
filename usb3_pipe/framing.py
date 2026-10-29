@@ -239,42 +239,57 @@ class PacketsBuffer(LiteXModule):
 
 class WordsWindow(LiteXModule):
     """Link words pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
-    w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n)."""
-    def __init__(self):
+    w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n).
+
+    decode: optional function (data, ctrl) -> nflags-bit flags of a word, computed on the incoming
+    words and stored with them (f0/f1: registered decodes for the window consumer, timings)."""
+    def __init__(self, decode=None, nflags=0):
         self.sink    = sink = stream.Endpoint(gen2_link_layout())
         self.n       = Signal(2)  # o
         self.w0      = Signal(32) # o
         self.c0      = Signal(4)  # o
         self.w1      = Signal(32) # o
         self.c1      = Signal(4)  # o
+        self.f0      = Signal(max(nflags, 1)) # o
+        self.f1      = Signal(max(nflags, 1)) # o
         self.consume = Signal(2)  # i
 
         # # #
 
+        cw    = 4 + nflags # ctrl + flags.
         data  = [Signal(32, reset_less=True) for _ in range(4)]
-        ctrl  = [Signal(4,  reset_less=True) for _ in range(4)]
+        ctrl  = [Signal(cw, reset_less=True) for _ in range(4)]
         level = Signal(3)
         rem   = Signal(3)
         self.comb += [
             self.n.eq(Mux(level >= 2, 2, level)),
-            self.w0.eq(data[0]), self.c0.eq(ctrl[0]),
-            self.w1.eq(data[1]), self.c1.eq(ctrl[1]),
+            self.w0.eq(data[0]), self.c0.eq(ctrl[0][:4]),
+            self.w1.eq(data[1]), self.c1.eq(ctrl[1][:4]),
             rem.eq(level - self.consume),
             sink.ready.eq(rem <= 2),
         ]
+        if nflags:
+            self.comb += [
+                self.f0.eq(ctrl[0][4:]),
+                self.f1.eq(ctrl[1][4:]),
+            ]
+        in_ctrl = []
+        for w in range(2):
+            d, c = sink.data[32*w:32*(w+1)], sink.ctrl[4*w:4*(w+1)]
+            in_ctrl.append(Cat(c, decode(d, c)) if nflags else c)
         accept = Signal()
         self.comb += accept.eq(sink.valid & sink.ready)
         for i in range(4):
             shifted_d = Signal(32)
-            shifted_c = Signal(4)
+            shifted_c = Signal(cw)
             self.comb += Case(self.consume, {c: [
                 shifted_d.eq(data[i + c] if (i + c) < 4 else 0),
                 shifted_c.eq(ctrl[i + c] if (i + c) < 4 else 0)] for c in range(3)})
             second = (accept & (sink.words == 2) & (rem == (i - 1))) if i > 0 else 0
             self.sync += If(accept & (rem == i),
-                data[i].eq(sink.data[0:32]), ctrl[i].eq(sink.ctrl[0:4])
+                data[i].eq(sink.data[0:32]), ctrl[i].eq(in_ctrl[0])
             ).Elif(second,
-                data[i].eq(sink.data[32:64]), ctrl[i].eq(sink.ctrl[4:8])
+                data[i].eq(sink.data[32:64]), ctrl[i].eq(in_ctrl[1])
             ).Else(
                 data[i].eq(shifted_d), ctrl[i].eq(shifted_c)
             )
@@ -599,7 +614,17 @@ class Gen2TXFramer(LiteXModule):
         # # #
 
         # Words window -----------------------------------------------------------------------------
-        self.window = window = WordsWindow()
+        # Words decodes stored with the words (timings): HPSTART, LCSTART, EPF K Symbols, Symbol 0
+        # EDB, DP Type (DW0), data word.
+        def decode(data, ctrl):
+            return Cat(
+                (ctrl == 0b1111) & (data[0:8] == SHP),
+                (ctrl == 0b1111) & (data[0:8] == SLC),
+                *[ctrl[j] & (data[8*j:8*(j+1)] == EPF) for j in range(4)],
+                data[0:8] == EDB,
+                data[0:5] == TYPE_DP,
+                ctrl == 0)
+        self.window = window = WordsWindow(decode, nflags=9)
         self.comb += sink.connect(window.sink)
         valid0 = Signal()
         data0  = window.w0
@@ -633,16 +658,12 @@ class Gen2TXFramer(LiteXModule):
         n        = Signal(3) # Word index in the Header Packet.
         word0    = Signal(32)
         word0_c  = Signal(4)
-        hpstart  = Signal()
-        lcstart  = Signal()
-        self.comb += [
-            hpstart.eq((ctrl0 == 0b1111) & (data0[0:8] == SHP)),
-            lcstart.eq((ctrl0 == 0b1111) & (data0[0:8] == SLC)),
-        ]
+        hpstart  = window.f0[0]
+        lcstart  = window.f0[1]
         # DPPEND/DPPABORT end: EPF K Symbol after the DPPSTART word.
-        epf  = Signal(4)
-        for j in range(4):
-            self.comb += epf[j].eq(ctrl0[j] & (data0[8*j:8*(j+1)] == EPF))
+        epf      = window.f0[2:6]
+        edb0     = window.f0[6] # Symbol 0 EDB.
+        type_dp  = window.f0[7] # DW0 Type: DP.
         epf_bytes = Signal(3)
         self.comb += If(epf[0], epf_bytes.eq(1)).Elif(epf[1], epf_bytes.eq(2)).Elif(epf[2],
             epf_bytes.eq(3)).Else(epf_bytes.eq(4))
@@ -679,10 +700,10 @@ class Gen2TXFramer(LiteXModule):
         fsm.act("HP-START",
             If(valid0,
                 chunk.valid.eq(1),
-                chunk.data.eq(mapped(word0, word0_c, dphp=(data0[0:5] == TYPE_DP))),
+                chunk.data.eq(mapped(word0, word0_c, dphp=type_dp)),
                 chunk.bytes.eq(4),
                 If(chunk.ready,
-                    NextValue(is_dph, data0[0:5] == TYPE_DP),
+                    NextValue(is_dph, type_dp),
                     NextValue(n, 1),
                     NextState("HP")
                 )
@@ -718,10 +739,10 @@ class Gen2TXFramer(LiteXModule):
             chunk.data.eq(mapped(data0, ctrl0)),
             chunk.bytes.eq(4),
             # Nullified DPP: DPPABORT right after the DPH.
-            chunk.last.eq(data0[0:8] == EDB),
+            chunk.last.eq(edb0),
             ready0.eq(chunk.ready),
             If(valid0 & chunk.ready,
-                If(data0[0:8] == EDB,
+                If(edb0,
                     NextState("IDLE")
                 ).Else(
                     NextState("DPP")
@@ -729,7 +750,7 @@ class Gen2TXFramer(LiteXModule):
             )
         )
         dpp_two = Signal() # Two data words available (no K Symbols): 8-byte chunk.
-        self.comb += dpp_two.eq((window.n == 2) & (ctrl0 == 0) & (window.c1 == 0))
+        self.comb += dpp_two.eq((window.n == 2) & window.f0[8] & window.f1[8])
         fsm.act("DPP",
             chunk.valid.eq(valid0),
             If(dpp_two,
