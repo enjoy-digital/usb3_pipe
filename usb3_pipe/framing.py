@@ -904,22 +904,23 @@ class Gen2TXPacker16(LiteXModule):
         hold    = Signal()    # Unit ended with a SKP Ordered Set pending: next unit after the block.
         o_pad   = Signal()    # Output register: partial block padded (replaceable while not taken).
 
-        # Entry placed at the fill level: block (16 bytes) and remaining bytes.
+        # Entry placed at the fill level: block (16 bytes, the entry bytes after its last one as Idle
+        # Symbols: padded block when ending the unit) and remaining bytes.
         total  = Signal(5) # Bytes in the partial block + entry bytes.
+        data   = Signal(128)
         block  = Signal(128)
         rest   = Signal(128)
         padded = Signal(128) # Partial block padded with Idle Symbols.
-        out    = Signal(128) # Block with the entry (padded with Idle Symbols when ending the unit).
         byte   = lambda v, i: v[8*i:8*(i+1)]
         self.comb += total.eq(fill + sink.bytes)
         for j in range(16):
             self.comb += [
-                Case(fill, {f: byte(block, j).eq(byte(acc, j) if j < f else byte(sink.data, j - f))
+                byte(data, j).eq(Mux(j >= sink.bytes, GEN2_IDLE, byte(sink.data, j))),
+                Case(fill, {f: byte(block, j).eq(byte(acc, j) if j < f else byte(data, j - f))
                     for f in range(16)}),
                 Case(fill, {f: byte(rest, j).eq(byte(sink.data, 16 + j - f) if j < f else 0)
                     for f in range(16)}),
                 byte(padded, j).eq(Mux(j < fill, byte(acc, j), GEN2_IDLE)),
-                byte(out, j).eq(Mux(j >= total, GEN2_IDLE, byte(block, j))),
             ]
 
         # Read/output decisions.
@@ -943,7 +944,7 @@ class Gen2TXPacker16(LiteXModule):
         ]
         self.sync += [
             If(load,
-                source.data.eq(Mux(pad, padded, out)),
+                source.data.eq(Mux(pad, padded, block)),
             ),
             If(source.ready,
                 source.valid.eq(0),
@@ -1089,9 +1090,10 @@ class Gen2LinkTX(LiteXModule):
             packer.flush.eq(flush_tx),
         ]
         if nbytes == 16:
-            # Registered (timings), with the units read count after this cycle (a unit just read is not
-            # available anymore).
-            self.sync.tx += packer.units_available.eq(units_written_d[-1] != units_read.q_next)
+            # Registered (timings): not set on the cycle after a unit is read (units read count not
+            # updated in the flag yet).
+            self.sync.tx += packer.units_available.eq((units_written_d[-1] != units_read.q) &
+                ~packer.unit_end)
         else:
             self.comb += packer.units_available.eq(units_written_d[-1] != units_read.q)
 
@@ -1164,7 +1166,15 @@ class Gen2LinkRX(LiteXModule):
                 converter.source.connect(framing.sink),
             ]
         else:
-            self.comb += fifo.source.connect(framing.sink)
+            # Registered valid/ready between the blocks buffer and the RX framing (timings: RX framing
+            # decisions to the buffer read side).
+            in_buffer = ClockDomainsRenamer("rx")(stream.Buffer([("data", 128)], pipe_valid=True,
+                pipe_ready=True))
+            self.submodules += in_buffer
+            self.comb += [
+                fifo.source.connect(in_buffer.sink),
+                in_buffer.source.connect(framing.sink),
+            ]
         self.sync.rx += If(fifo.sink.valid & ~fifo.sink.ready, self.overflow.eq(1))
 
         # Link Commands words (rx -> sys), gated by rx_ready.
