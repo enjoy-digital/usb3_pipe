@@ -276,23 +276,40 @@ class Gen2BlockAligner(LiteXModule):
         self.sync += win.eq(win_next)
 
         # Per position decodes (registered with the window) ----------------------------------------
-        inv_pos   = Signal(r)    # Undefined Block Header.
-        skp_pos   = Signal(r)    # Control Block Header + SKP/SKPEND Symbol 0.
-        dword_pos = Signal(npos) # SKP Dword (4 SKP Symbols).
-        end_pos   = Signal(npos) # SKPEND Symbol.
+        # Block Header/SKP Symbols decodes of the incoming window, combined per pointer transition
+        # (registered: the pointer loop is then the pointer bits and these decodes).
+        dword = [Signal(name=f"skp_dword{p}") for p in range(npos)] # SKP Dword (4 SKP Symbols).
+        end   = [Signal(name=f"skp_end{p}")   for p in range(npos)] # SKPEND Symbol.
+        for p in range(npos):
+            self.comb += [
+                dword[p].eq(win_next[p:p+32] == GEN2_SKP*0x01010101),
+                end[p].eq(  win_next[p:p+8]  == GEN2_SKPEND),
+            ]
+        def dwords(p, o, j):
+            # SKP Dwords at p + o + 32*i (i < j).
+            return [dword[p + o + 32*i] for i in range(j)]
+        skp_pos   = Signal(r) # Control Block Header + SKP/SKPEND Symbol 0.
+        norm_pos  = Signal(r) # 132-bit block (Data/Control Block Header, not SKP/SKPEND).
+        bskp_pos  = [Signal(r, name=f"bskp_pos{j}") for j in range(m)] # SKP: SKPEND after j Dwords.
+        bcont_pos = Signal(r) # SKP: m Dwords (continued).
+        send_pos  = [Signal(r, name=f"send_pos{j}") for j in range(m)] # SKPEND after j Dwords.
+        scont_pos = Signal(r) # m Dwords (continued).
         for p in range(r):
             header = win_next[p:p+4]
             dist_d = popcount(header ^ BLOCK_HEADER_DATA)
             dist_c = popcount(header ^ BLOCK_HEADER_CONTROL)
             sym0   = win_next[p+4:p+12]
+            skp    = Signal()
+            self.comb += skp.eq((dist_c <= 1) & ((sym0 == GEN2_SKP) | (sym0 == GEN2_SKPEND)))
             self.sync += [
-                inv_pos[p].eq((dist_d > 1) & (dist_c > 1)),
-                skp_pos[p].eq((dist_c <= 1) & ((sym0 == GEN2_SKP) | (sym0 == GEN2_SKPEND))),
-            ]
-        for p in range(npos):
-            self.sync += [
-                dword_pos[p].eq(win_next[p:p+32] == GEN2_SKP*0x01010101),
-                end_pos[p].eq(  win_next[p:p+8]  == GEN2_SKPEND),
+                skp_pos[p].eq(skp),
+                norm_pos[p].eq(~((dist_d > 1) & (dist_c > 1)) & ~skp),
+                [bskp_pos[j][p].eq(Reduce("AND", [skp] + dwords(p, 4, j) + [end[p + 4 + 32*j]]))
+                    for j in range(m)],
+                bcont_pos[p].eq(Reduce("AND", [skp] + dwords(p, 4, m))),
+                [send_pos[j][p].eq(Reduce("AND", dwords(p, 0, j) + [end[p + 32*j]]))
+                    for j in range(m)],
+                scont_pos[p].eq(Reduce("AND", dwords(p, 0, m))),
             ]
 
         # SYNC search (registered, one-hot offset) -------------------------------------------------
@@ -370,25 +387,20 @@ class Gen2BlockAligner(LiteXModule):
             targets[q].append(t)
             if event is not None:
                 events.setdefault(event, []).append(t)
-        def dwords(p, o, j):
-            # SKP Dwords at p + o + 32*i (i < j).
-            return [dword_pos[p + o + 32*i] for i in range(j)]
         for p in range(P):
             if p < r:
                 # Block context: 132-bit block, SKP Ordered Set (SKPEND after j < m Dwords or
                 # continued after m Dwords), undefined Block Header: dropped.
-                transition(vb, p, [~inv_pos[p], ~skp_pos[p]], 132, next_b, "extract")
+                transition(vb, p, [norm_pos[p]], 132, next_b, "extract")
                 for j in range(m):
-                    transition(vb, p, [skp_pos[p]] + dwords(p, 4, j) + [end_pos[p + 4 + 32*j]],
-                        4 + 32*(j + 1), next_b, ("skp_block", j))
-                transition(vb, p, [skp_pos[p]] + dwords(p, 4, m), 4 + 32*m, next_s[0])
+                    transition(vb, p, [bskp_pos[j][p]], 4 + 32*(j + 1), next_b, ("skp_block", j))
+                transition(vb, p, [bcont_pos[p]], 4 + 32*m, next_s[0])
                 # SKP context (up to 36 SKP Symbols): SKPEND after j Dwords or continued.
                 for k in range(K):
                     for j in range(min(m, 10 - m*(k + 1))):
-                        transition(vs[k], p, dwords(p, 0, j) + [end_pos[p + 32*j]], 32*(j + 1),
-                            next_b, ("skp", k, j))
+                        transition(vs[k], p, [send_pos[j][p]], 32*(j + 1), next_b, ("skp", k, j))
                     if (k + 1) < K:
-                        transition(vs[k], p, dwords(p, 0, m), 32*m, next_s[k + 1])
+                        transition(vs[k], p, [scont_pos[p]], 32*m, next_s[k + 1])
             else:
                 # Block not in the pointer range yet: shifted.
                 transition(vb, p, [], 0, next_b)
@@ -398,7 +410,7 @@ class Gen2BlockAligner(LiteXModule):
         for k in range(dw):
             next_b[r - dw + k + 132 - 2*dw].append(load_oh[k])
         # SYNC with a different alignment (at r - dw + k, 2 cycles before the clear): pointer of the
-        # blocks following the SYNC (132-bit, consumed as available on these cycles: lost).
+        # blocks following the SYNC (132-bit, read when in the pointer range on these cycles).
         realign_pos = []
         for k in range(dw):
             q = r - dw + k
@@ -512,16 +524,25 @@ class Gen2BlockAligner(LiteXModule):
                     for i in range(kr)])),
             )
         d_idx     = Signal(kr)
-        d_win     = Signal(n)
+        d_win     = Signal(132 + 15) # Window shifted by the pointer multiple of 16 (timings).
         d_found   = Signal()
         d_extract = Signal()
         d_skp     = Signal()
         d_end     = Signal(7)
         d_total   = Signal(6)
+        idx = Signal(kr)
+        self.comb += If(realign_d[0],
+            idx.eq(ov_idx[0])
+        ).Elif(realign_d[1],
+            idx.eq(ov_idx[1])
+        ).Else(
+            idx.eq(e_idx)
+        )
         self.sync += [
-            d_win.eq(e_win),
+            d_win.eq(e_win >> Cat(Constant(0, 4), idx[4:])),
             d_end.eq(e_end),
             d_total.eq(e_total),
+            d_idx.eq(idx),
             If(realign,
                 d_found.eq(1),
                 d_extract.eq(0),
@@ -530,17 +551,14 @@ class Gen2BlockAligner(LiteXModule):
                 d_found.eq(0),
                 d_extract.eq(ov_ext[0]),
                 d_skp.eq(0),
-                d_idx.eq(ov_idx[0]),
             ).Elif(realign_d[1],
                 d_found.eq(0),
                 d_extract.eq(ov_ext[1]),
                 d_skp.eq(0),
-                d_idx.eq(ov_idx[1]),
             ).Else(
                 d_found.eq(e_found),
                 d_extract.eq(e_extract),
                 d_skp.eq(e_skp),
-                d_idx.eq(e_idx),
             )
         ]
 
@@ -553,7 +571,7 @@ class Gen2BlockAligner(LiteXModule):
         o_bits   = Signal(132)
         lfsr     = Signal(24)
         out_bits = Signal(132)
-        self.comb += bits.eq(d_win >> d_idx)
+        self.comb += bits.eq(d_win >> d_idx[:4])
         self.sync += [
             o_valid.eq(d_found | d_extract),
             o_bits.eq(Mux(d_found, GEN2_SYNC_BITS, bits)),
