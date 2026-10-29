@@ -58,13 +58,16 @@ class USB3SerDesModel(LiteXModule):
     clock, as recovered by the CDR of a real transceiver. The RX datapath's CDC then moves the data
     to the local sys clock domain.
     """
-    def __init__(self, phy_dw=20, rx_word_shift=0, rx_clock_domain="sys", gen2_capable=False):
+    def __init__(self, phy_dw=20, rx_word_shift=0, rx_clock_domain="sys", gen2_capable=False,
+        gen2_dw=None):
         assert phy_dw in [20, 40]
         assert (not gen2_capable) or (phy_dw == 40)
+        gen2_dw = phy_dw if gen2_dw is None else gen2_dw
+        line_dw = max(phy_dw, gen2_dw) # Line words (Gen 1 symbols on the phy_dw LSBs).
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.tx     = stream.Endpoint([("data", phy_dw)])
-        self.rx     = stream.Endpoint([("data", phy_dw)])
+        self.tx     = stream.Endpoint([("data", line_dw)])
+        self.rx     = stream.Endpoint([("data", line_dw)])
 
         self.enable = Signal(reset=1) # i
         self.ready  = Signal()        # o
@@ -88,11 +91,12 @@ class USB3SerDesModel(LiteXModule):
 
         # Gen 2 (raw words, same word rate as Gen 1 in the model: the 10Gbps line rate is not
         # modelled, the words carry 128b/132b blocks instead of 8b/10b symbols).
-        self.gen2_capable   = gen2_capable
-        self.rate_10g       = Signal()       # i
-        self.gen2_tx_enable = Signal()       # i
-        self.gen2_tx_data   = Signal(phy_dw) # i
-        self.gen2_rx_data   = Signal(phy_dw) # o (rx clock domain).
+        self.gen2_capable    = gen2_capable
+        self.gen2_data_width = gen2_dw        # Raw words width (USB3PHY Gen2PIPE).
+        self.rate_10g        = Signal()       # i
+        self.gen2_tx_enable  = Signal()       # i
+        self.gen2_tx_data    = Signal(gen2_dw) # i
+        self.gen2_rx_data    = Signal(gen2_dw) # o (rx clock domain).
 
         # # #
 
@@ -178,8 +182,8 @@ class USB3SerDesModel(LiteXModule):
             ]
 
         # Pattern/Polarity/Shift emulation.
-        tx_data    = Signal(phy_dw)
-        rx_data     = Signal(phy_dw)
+        tx_data    = Signal(line_dw)
+        rx_data     = Signal(line_dw)
         rx_data_sr  = Signal(2*phy_dw)
         rx_polarity = Signal()
         self.specials += MultiReg(self.rx_polarity, rx_polarity, rx_clock_domain)
@@ -204,9 +208,9 @@ class USB3SerDesModel(LiteXModule):
                 rx_data.eq(self.rx.data)
             )
         ]
-        self.comb += self.gen2_rx_data.eq(rx_data)
+        self.comb += self.gen2_rx_data.eq(rx_data[:gen2_dw])
         sync_rx = getattr(self.sync, rx_clock_domain)
-        sync_rx += rx_data_sr.eq(Cat(rx_data_sr[phy_dw:], rx_data)) # Previous word in LSBs.
+        sync_rx += rx_data_sr.eq(Cat(rx_data_sr[phy_dw:], rx_data[:phy_dw])) # Previous word in LSBs.
         for i in range(nwords):
             self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
 
@@ -421,7 +425,7 @@ class USB3PIPESim(SoCMini):
 
     dev_u1u2=False (lanes=1): Device USB3PHY without U1/U2 (LGO_U1/LGO_U2 rejected).
 
-    dev_pipe_cd (lanes=1, Gen 1): Device USB3PHY with its USB3PIPE/SerDes model in the sys clock domain
+    dev_pipe_cd (lanes=1, Gen 1/Gen 2): Device USB3PHY with its USB3PIPE/SerDes model in the sys clock domain
     and its LTSSM/Link interface/Core at half the frequency (USB3PHY pipe_cd, as on FPGAs where the
     Core can't run at 125MHz), with 64-bit Link Layer words (link_words=2).
 
@@ -433,12 +437,13 @@ class USB3PIPESim(SoCMini):
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
         host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
-        gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True):
+        gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
+        gen2_data_width=None):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
         assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
-        assert (not dev_pipe_cd) or ((lanes == 1) and (not gen2_capable))
+        assert (not dev_pipe_cd) or (lanes == 1)
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on
         # hardware) and with 2 lanes, 2 with the PRBS stand-ins.
@@ -486,7 +491,8 @@ class USB3PIPESim(SoCMini):
                 phy_dw          = phy_dw,
                 rx_word_shift   = lane1_word_shift if (name, lane) == ("dev", 1) else rx_word_shift,
                 rx_clock_domain = "rx",
-                gen2_capable    = gen2)) for lane in range(lanes)]
+                gen2_capable    = gen2,
+                gen2_dw         = gen2_data_width)) for lane in range(lanes)]
             pipe_cd = "usb3" if (dev_pipe_cd and name == "dev") else None
             if pipe_cd is not None:
                 renamer = ClockDomainsRenamer({"sys": ltssm_cds[name], "usb3": cds[name],
@@ -741,6 +747,7 @@ def main():
     parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs).", choices=["1", "2"])
     parser.add_argument("--host-itp",      action="store_true", help="Host model Isochronous Timestamp Packets between the transfers.")
     parser.add_argument("--dev-pipe-cd",   action="store_true", help="Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, 64-bit Link Layer words).")
+    parser.add_argument("--gen2-data-width", default=None, type=int, help="Gen 2 raw words width of the SerDes models (default: 40, ex: 80 as GW5 GTR12 1:4 at 125MHz).")
     parser.add_argument("--dev-no-u1u2",   action="store_true", help="Device USB3PHY without U1/U2 Link Power Management.")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
@@ -773,7 +780,8 @@ def main():
         gen2             = args.gen2,
         link_words       = int(args.link_words),
         dev_pipe_cd      = args.dev_pipe_cd,
-        dev_u1u2         = not args.dev_no_u1u2)
+        dev_u1u2         = not args.dev_no_u1u2,
+        gen2_data_width  = args.gen2_data_width)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

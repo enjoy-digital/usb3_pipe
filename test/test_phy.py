@@ -131,6 +131,12 @@ class TestPHY(unittest.TestCase):
         # pairs: Logical Idle filtering, RX words packing, TX packets store-and-forward).
         self.run_link_words2(["--dev-pipe-cd"])
 
+    def test_phy_gen2_dev_pipe_cd(self):
+        # Gen 2 with the Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd):
+        # SuperSpeedPlus Polling/Gen 2 training through the LTSSM <-> PIPEs resynchronization, Gen 2
+        # words pairs and LGOOD_n/LCRD_x fast path through the AsyncFIFOs, RX credits throttling.
+        self.run_link_words2(["--gen2", "--dev-pipe-cd"])
+
     def test_phy_dev_pipe_cd_no_u1u2(self):
         # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE
         # frequency (FPGAs with slower fabrics): Host LGO_U1/LGO_U2 rejected (LXU), script done.
