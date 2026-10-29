@@ -623,6 +623,10 @@ class USB3LinkLayer(LiteXModule):
             can_send_hp.eq(adv_received & (send_seq != tx_seq) &
                 Mux(send_t2, remote_credits2 != 0, remote_credits != 0) & ~lrty_pending),
         ]
+        # RX throttling (PHY rx_throttle, ex: RX words buffered for a Link Layer at half the PHY words
+        # rate): Rx Header Buffer credits (LCRD_x) held, the partner stops sending Header Packets (and
+        # their DPPs) once its credits are used (Link Layer flow control, 7.2.4.1).
+        rx_throttle = getattr(phy, "rx_throttle", Constant(0, 1))
         start_hp = Signal()
         sel_lrty = Signal()
         sel_lbad = Signal()
@@ -640,9 +644,9 @@ class USB3LinkLayer(LiteXModule):
                     sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
                 ).Elif(lgood_seq != rx_seq,
                     sel_lgood.eq(1), lc_sel.eq(LCMD_LGOOD | lgood_seq)
-                ).Elif(lcrd_pending != 0,
+                ).Elif((lcrd_pending != 0) & ~rx_throttle,
                     sel_lcrd.eq(1), lc_sel.eq(LCMD_LCRD | lcrd_idx)
-                ).Elif(lcrd2_pending != 0,
+                ).Elif((lcrd2_pending != 0) & ~rx_throttle,
                     sel_lcrd2.eq(1), lc_sel.eq(LCMD_LCRD | 0b100 | lcrd2_idx)
                 ).Elif(lau_pending,
                     sel_lau.eq(1), lc_sel.eq(LCMD_LAU)

@@ -437,8 +437,12 @@ class USB3PHY(LiteXModule):
         # RX: pipe_cd -> sys.
         self.rx_cdc_buffer = rx_buffer = ClockDomainsRenamer(pipe_cd)(stream.Buffer(layout,
             pipe_ready=True))
+        # Deep (block RAM, read side at the Link Layer frequency): with words pairs at half the PIPE
+        # frequency, the Link Layer consumes the Header Packets/DPP tails one word per cycle and
+        # back-to-back DPH+DPPs (Bulk OUT bursts) accumulate words (~11 per 1024-byte DPP).
+        rx_depth = fifo_depth if self.link_words == 1 else 256
         self.rx_cdc        = rx_cdc    = ClockDomainsRenamer({"write": pipe_cd, "read": "sys"})(
-            AsyncFIFO(layout, fifo_depth))
+            stream.AsyncFIFO(layout, rx_depth, buffered=True))
         self.comb += [
             pipe_source.connect(rx_buffer.sink, omit={"ready"}),
             pipe_source.ready.eq(1),
@@ -446,6 +450,32 @@ class USB3PHY(LiteXModule):
             rx_buffer.source.ready.eq(1), # Dropped when the FIFO is full (Link Layer not reading).
             rx_cdc.source.connect(source),
         ]
+
+        # RX throttling (sys): rx_cdc level >= half, the Link Layer then holds its Rx Header Buffer
+        # Credits (LCRD_x) so the partner stops after its outstanding Header Packets (and their
+        # DPPs): bounded RX backlog with a Link Layer slower than the line rate. Level from a
+        # resynchronized (Gray) count of the written entries and the count of the read entries.
+        self.rx_throttle = Signal() # o
+        if self.link_words == 2:
+            cw       = bits_for(rx_depth) + 1
+            wr_count = Signal(cw)
+            wr_gray  = Signal(cw)
+            wr_sys   = Signal(cw)
+            rd_count = Signal(cw)
+            wr_bin   = Signal(cw)
+            level    = Signal(cw)
+            getattr(self.sync, pipe_cd).__iadd__([
+                If(rx_cdc.sink.valid & rx_cdc.sink.ready, wr_count.eq(wr_count + 1)),
+                wr_gray.eq(wr_count ^ (wr_count >> 1)),
+            ])
+            self.specials += MultiReg(wr_gray, wr_sys)
+            self.comb += [wr_bin[cw-1].eq(wr_sys[cw-1])] + [
+                wr_bin[i].eq(wr_bin[i+1] ^ wr_sys[i]) for i in reversed(range(cw-1))]
+            self.sync += [
+                If(source.valid & source.ready, rd_count.eq(rd_count + 1)),
+                level.eq(wr_bin - rd_count),
+                self.rx_throttle.eq(level >= rx_depth//2),
+            ]
         return sink, source
 
     def add_gen2_datapath(self, pipe):
