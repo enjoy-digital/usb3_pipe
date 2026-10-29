@@ -952,6 +952,7 @@ class Gen2TXPacker16(LiteXModule):
 
         acc     = Signal(128, reset_less=True) # Partial block (bytes acc[0:8*fill], oldest first).
         fill    = Signal(4)   # Bytes in the partial block (0-15).
+        fill_b  = Signal(4, attr={("syn_preserve", 1)}) # Copy for the bytes selection (fanout).
         in_unit = Signal()    # Reading a unit.
         hold    = Signal()    # Unit ended with a SKP Ordered Set pending: next unit after the block.
         o_pad   = Signal()    # Output register: partial block padded (replaceable while not taken).
@@ -968,11 +969,11 @@ class Gen2TXPacker16(LiteXModule):
         for j in range(16):
             self.comb += [
                 byte(data, j).eq(Mux(j >= sink.bytes, GEN2_IDLE, byte(sink.data, j))),
-                Case(fill, {f: byte(block, j).eq(byte(acc, j) if j < f else byte(data, j - f))
+                Case(fill_b, {f: byte(block, j).eq(byte(acc, j) if j < f else byte(data, j - f))
                     for f in range(16)}),
-                Case(fill, {f: byte(rest, j).eq(byte(sink.data, 16 + j - f) if j < f else 0)
+                Case(fill_b, {f: byte(rest, j).eq(byte(sink.data, 16 + j - f) if j < f else 0)
                     for f in range(16)}),
-                byte(padded, j).eq(Mux(j < fill, byte(acc, j), GEN2_IDLE)),
+                byte(padded, j).eq(Mux(j < fill_b, byte(acc, j), GEN2_IDLE)),
             ]
 
         # Read/output decisions.
@@ -1005,11 +1006,11 @@ class Gen2TXPacker16(LiteXModule):
             If(self.flush,
                 source.valid.eq(0),
                 o_pad.eq(0),
-                fill.eq(0),
+                fill.eq(0), fill_b.eq(0),
                 in_unit.eq(0),
                 hold.eq(0),
             ).Elif(sent,
-                fill.eq(0),
+                fill.eq(0), fill_b.eq(0),
                 hold.eq(0),
             ).Elif(sink.valid & sink.ready,
                 in_unit.eq(~sink.last),
@@ -1019,7 +1020,7 @@ class Gen2TXPacker16(LiteXModule):
                     # Block ending exactly at a unit end.
                     source.last.eq(sink.last & (total == 16)),
                     acc.eq(rest),
-                    fill.eq(total - 16),
+                    fill.eq(total - 16), fill_b.eq(total - 16),
                     hold.eq(sink.last & self.skp_pending & (total != 16)),
                 ).Else(
                     # Unit end in the partial block: output padded when writable.
@@ -1029,7 +1030,7 @@ class Gen2TXPacker16(LiteXModule):
                         source.last.eq(1),
                     ),
                     acc.eq(block),
-                    fill.eq(total),
+                    fill.eq(total), fill_b.eq(total),
                     hold.eq(sink.last & self.skp_pending),
                 )
             ).Elif(pad,
