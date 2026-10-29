@@ -189,12 +189,14 @@ class TestTSUnitTX(unittest.TestCase):
         self.assertEqual([i for i, t in enumerate(words) if t[6]], [63])
 
     def test_tx_enable_deassert_mid_burst(self):
-        # tx_enable deasserted mid-burst: transmission stops immediately, no tx_done.
+        # tx_enable deasserted mid-burst: transmission stops at the end of the Ordered Set in
+        # progress (words 8-11), no tx_done.
         trace = self.run_tx([
             (10, {"tx_enable": 1, "tx_ts2": 1}),
             (100, {"tx_enable": 0}),
         ])
-        self.assertEqual({t[0] for t in trace[10:]}, {0})
+        self.assertEqual(len(accepted(trace)), 12)
+        self.assertEqual({t[0] for t in trace[12:]}, {0})
         self.assertEqual(sum(t[6] for t in trace), 0)
 
     def check_restart_on_ordered_set_boundary(self, steps, request_steps):
@@ -285,8 +287,8 @@ class TestTSUnitRX(unittest.TestCase):
     def test_detection_on_last_word_of_8th_ordered_set(self):
         result = rx_detections(spec_words("TS1")*8)
         self.assertEqual(len(result["ts1"]), 1)
-        # Pulse on the 32th word (driver/monitor offset of 1 cycle).
-        self.assertEqual(result["ts1"][0], 8*4)
+        # Pulse on the 32th word (driver/monitor offset of 1 cycle) + TSChecker latency (2 cycles).
+        self.assertEqual(result["ts1"][0], 8*4 + 2)
 
     def test_8_consecutive_required(self):
         # Sequences broken before 8 consecutive Ordered Sets are not detected.

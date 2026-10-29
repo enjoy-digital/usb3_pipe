@@ -68,7 +68,8 @@ class TestDisableScrambling(unittest.TestCase):
         # Idle Symbols and data, and so do we.
         data, received, wire = self.run_pipe(DISABLE_SCRAMBLING)
         received = [w for w in received if w != (0, 0)] # Remove Idle Symbols.
-        self.assertEqual(received[:len(data) - 2], data[:len(data) - 2])
+        # Last words still in the RX pipeline (registers) when the stream ends.
+        self.assertEqual(received[:len(data) - 4], data[:len(data) - 4])
         self.assertEqual(set(wire), {(0, 0)}) # Unscrambled Idle Symbols.
 
     def test_scrambling_enabled_by_default(self):

@@ -31,6 +31,7 @@ setup(
     },
     packages                      = find_packages(exclude=("test*", "sim*", "doc*", "examples*", "bench*")),
     include_package_data          = True,
+    package_data                  = {"usb3_pipe": ["gw5/*.csr", "gw5/*.toml"]},
     keywords                      = "HDL ASIC FPGA hardware design",
     classifiers                   = [
         "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",

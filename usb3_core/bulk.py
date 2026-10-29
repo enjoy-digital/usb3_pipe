@@ -138,6 +138,24 @@ class USB3BulkIN(USB3Endpoint):
         # DPP jobs (slots of the DPHs pushed, in order).
         self.jobs = jobs = stream.SyncFIFO([("slot", slots.sbits)], 2*n)
 
+        # Send candidate (registered: timings): packet to send, its length/EOB/Sequence Number,
+        # evaluated on the previous cycle and discarded for one cycle after a change of the state
+        # (send, ACK TP, NRDY/ERDY sent, reset/flush). One cycle between DPHs (Header Packets take
+        # several cycles to be sent by the Link Layer).
+        cand_ok  = Signal()
+        cand_len = Signal(bits_for(MAX_PACKET_SIZE))
+        cand_eob = Signal()
+        cand_seq = Signal(5)
+        changed  = Signal()
+        self.sync += [
+            cand_ok.eq(avail & in_win & ~fc),
+            cand_len.eq(snd_len),
+            cand_eob.eq(snd_eob),
+            cand_seq.eq(snd_seq),
+            changed.eq((self.tx_hp.valid & self.tx_hp.ready) | ack | self.reset_seq | self.flush |
+                (flushing & (inflight == 0))),
+        ]
+
         # Sent packets not acknowledged by the host (ACK TP expected): U1/U2 entry rejected.
         self.comb += self.pm_busy.eq(inflight != 0)
 
@@ -152,12 +170,12 @@ class USB3BulkIN(USB3Endpoint):
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_TP),
                 self.tx_hp.dw1.eq(tp_dw1(TP_SUB_ERDY, ept=ept, direction=1, nump=n)),
-            ).Elif(avail & in_win & ~fc & jobs.sink.ready,
+            ).Elif(cand_ok & ~changed & jobs.sink.ready,
                 send.eq(self.tx_hp.ready),
                 self.tx_hp.valid.eq(1),
                 self.tx_hp.dw0.eq(TYPE_DP),
-                self.tx_hp.dw1.eq(dph_dw1(seq=snd_seq, ept=ept, direction=1, length=snd_len,
-                    eob=snd_eob)),
+                self.tx_hp.dw1.eq(dph_dw1(seq=cand_seq, ept=ept, direction=1, length=cand_len,
+                    eob=cand_eob)),
                 self.tx_hp.dpp.eq(1),
             ),
             jobs.sink.valid.eq(send),
@@ -168,18 +186,18 @@ class USB3BulkIN(USB3Endpoint):
         # own ACK TP expected), ACK TPs received while an EOB/short packet is sent.
         ack_stale = Signal()
         self.comb += ack_stale.eq((fc_short & (acked != inflight)) |
-            (send & (snd_eob | (snd_len != MAX_PACKET_SIZE))))
+            (send & (cand_eob | (cand_len != MAX_PACKET_SIZE))))
 
         self.sync += [
             If(send,
                 snd_ptr.eq(snd_ptr + 1),
-                If(snd_eob,
+                If(cand_eob,
                     fc_eob.eq(1),
                     win_nump.eq(0),
                 ),
                 # A short packet ends the transfer/burst (8.10.2): the host discards the next ones,
                 # wait for its ACK TP (new request or NumP=0 and ERDY).
-                If(snd_len != MAX_PACKET_SIZE,
+                If(cand_len != MAX_PACKET_SIZE,
                     win_nump.eq(0),
                     fc_short.eq(1),
                 ),

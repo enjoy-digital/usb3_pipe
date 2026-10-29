@@ -57,14 +57,24 @@ class USB3ProtocolLayer(LiteXModule):
         rx_hp = rx_hp.source
         h     = HeaderFields(rx_hp.dw0, rx_hp.dw1, rx_hp.dw2)
 
+        # DPP done/ok (registered with their Endpoint Number: timings, after the DPP data) ---------
+        dpp_done = Signal()
+        dpp_ok   = Signal()
+        dpp_ept  = Signal(4)
+        self.sync += [
+            dpp_done.eq(link.rx_dpp_done),
+            dpp_ok.eq(link.rx_dpp_ok),
+            dpp_ept.eq(link.rx_dpp.ept),
+        ]
+
         # DPP status (one per accepted DPH, in order) ----------------------------------------------
         landed = Signal()
         self.comb += landed.eq(Reduce("OR", [
-            (link.rx_dpp.ept == ep.ept) if adapted[ep] else ep.landed for ep in endpoints]))
+            (dpp_ept == ep.ept) if adapted[ep] else ep.landed for ep in endpoints]))
         self.status = status = stream.SyncFIFO(dpp_status_layout(), 8)
         self.comb += [
-            status.sink.valid.eq(link.rx_dpp_done),
-            status.sink.ok.eq(link.rx_dpp_ok),
+            status.sink.valid.eq(dpp_done),
+            status.sink.ok.eq(dpp_ok),
             status.sink.landed.eq(landed),
         ]
 
@@ -72,8 +82,12 @@ class USB3ProtocolLayer(LiteXModule):
         for ep in endpoints:
             if ep.direction == 1 and ep.ept != 0:
                 continue
-            sel = Signal()
-            self.comb += sel.eq(link.rx_dpp.ept == ep.ept)
+            sel      = Signal()
+            sel_done = Signal()
+            self.comb += [
+                sel.eq(link.rx_dpp.ept == ep.ept),
+                sel_done.eq(dpp_ept == ep.ept),
+            ]
             if adapted[ep]:
                 rx_adapter = DPPRXAdapter()
                 self.submodules += rx_adapter
@@ -84,8 +98,8 @@ class USB3ProtocolLayer(LiteXModule):
                     rx_adapter.sink.data.eq(link.rx_dpp.data),
                     rx_adapter.sink.bytes.eq(link.rx_dpp.bytes),
                     rx_adapter.setup.eq(link.rx_dpp.setup),
-                    rx_adapter.done.eq(link.rx_dpp_done & sel),
-                    rx_adapter.ok.eq(link.rx_dpp_ok),
+                    rx_adapter.done.eq(dpp_done & sel_done),
+                    rx_adapter.ok.eq(dpp_ok),
                     rx_adapter.source.connect(ep.rx_dpp),
                     ep.rx_dpp_done.eq(rx_adapter.source_done),
                     ep.rx_dpp_ok.eq(rx_adapter.source_ok),
@@ -99,8 +113,8 @@ class USB3ProtocolLayer(LiteXModule):
                 ep.rx_dpp.last.eq(link.rx_dpp.last),
                 ep.rx_dpp.data.eq(link.rx_dpp.data),
                 ep.rx_dpp.bytes.eq(link.rx_dpp.bytes),
-                ep.rx_dpp_done.eq(link.rx_dpp_done & sel),
-                ep.rx_dpp_ok.eq(link.rx_dpp_ok),
+                ep.rx_dpp_done.eq(dpp_done & sel_done),
+                ep.rx_dpp_ok.eq(dpp_ok),
             ]
             # SETUP DPs: Control Endpoint only.
             if ep.ept == 0:

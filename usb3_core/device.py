@@ -104,6 +104,19 @@ class USB3DeviceCore(LiteXModule):
         self._link_state   = CSRStatus(32, description="Link Layer state (debug): tx_seq, ack_seq, "
             "send_seq, remote credits (Type 1/2), adv_received, pm_block, pm_accepted, tx_hp valid/ready, "
             "lrty_pending, lbad_wait, ssp, tx_full, rx_seq.")
+        # Recovery causes (link dbg_recovery_cause): last cause and 8-bit saturating counts per cause.
+        causes = ["hp_seq", "lgood", "lcrd", "pending_hp", "credit_hp"]
+        self._recovery_cause = CSRStatus(fields=
+            [CSRField("last", size=len(causes), description="Last Recovery cause: " + ", ".join(causes))] +
+            [CSRField(c, size=8, offset=8*(i + 1), description=f"{c} Recovery requests (saturating).")
+                for i, c in enumerate(causes)])
+        cause = self.link.dbg_recovery_cause
+        self.sync += If(self.link.dbg_recovery,
+            self._recovery_cause.fields.last.eq(cause),
+            *[If(cause[i] & (getattr(self._recovery_cause.fields, c) != 255),
+                getattr(self._recovery_cause.fields, c).eq(getattr(self._recovery_cause.fields, c) + 1))
+                for i, c in enumerate(causes)]
+        )
         self.comb += [
             self._status.fields.ready.eq(self.link.ready),
             self._status.fields.configured.eq(self.ep0.configured),

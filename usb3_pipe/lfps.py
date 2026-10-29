@@ -223,8 +223,12 @@ class LFPSChecker(LiteXModule):
         gmin = max(2, gmin - stretch_cycles)
         gmax = scaled_cycles(sys_clk_freq, repeat.t_max - burst.t_min, timer_scale)
 
-        count    = Signal(32)
+        # Count saturated after the largest window (sized counter: timings).
+        cmax     = max(bmax, gmax) + 1
+        count    = Signal(max=cmax + 1)
+        count_ce = Signal()
         burst_ok = Signal()
+        self.comb += count_ce.eq(count != cmax)
         st_wait  = 0 # waiting for a burst
         st_burst = 1 # measuring burst length
         st_gap   = 2 # measuring gap length
@@ -239,14 +243,14 @@ class LFPSChecker(LiteXModule):
                     burst_ok.eq(0),
                 )
             ).Elif(state == st_burst,
-                count.eq(count + 1),
+                If(count_ce, count.eq(count + 1)),
                 If(idle,
                     burst_ok.eq((count >= bmin) & (count <= bmax)),
                     state.eq(st_gap),
                     count.eq(1),
                 )
             ).Else(
-                count.eq(count + 1),
+                If(count_ce, count.eq(count + 1)),
                 If(~idle,
                     self.detect.eq(burst_ok & (count >= gmin) & (count <= gmax)),
                     state.eq(st_burst),
@@ -282,12 +286,14 @@ class LFPSBurstChecker(LiteXModule):
         idle = idle_deglitcher.o
 
         # Burst Duration Measurement ---------------------------------------------------------------
-        count = Signal(32)
+        # Count saturated after the largest threshold (sized counter: timings).
+        cmax  = max(min_cycles, max_cycles, ping_min_cycles) + 1
+        count = Signal(max=cmax + 1)
         self.sync += [
             self.ping.eq(0),
             If(~idle,
-                count.eq(count + 1),
-                If((min_cycles > 0) & ((count + 1) >= min_cycles),
+                If(count != cmax, count.eq(count + 1)),
+                If((min_cycles > 0) & (count >= max(min_cycles - 1, 0)),
                     self.detect.eq(1)
                 )
             ).Else(

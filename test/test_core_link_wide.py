@@ -183,6 +183,52 @@ class TestCoreLinkWide(unittest.TestCase):
         self.assertEqual([list(p[1]) for p in dpps_rx], [p for p in payloads])
         self.assertEqual([p[2] for p in dpps_rx], [True]*len(payloads))
 
+    def test_rx_throttle(self):
+        # PHY rx_throttle: LGOOD_n still sent for the received DPHs, their LCRD_x held while throttled
+        # and sent once released (the host stops on its credits: RX flow control).
+        rng  = random.Random(0)
+        dut  = LinkDUT(link_words=2)
+        dut.phy.rx_throttle = rx_throttle = Signal()
+        dut.link = USB3LinkLayer(dut.phy, sys_clk_freq=125e6, ssp_tt={2: TT_BULK})
+        link = dut.link
+        phy  = dut.phy
+        sent   = []
+        counts = {}
+        words  = advertisement()
+        for seq in range(2):
+            words += dph(seq, 8, ept=2, tt=TT_BULK) + data_packet_payload(list(range(8)))
+
+        def host():
+            yield rx_throttle.eq(1)
+            yield from start(phy)
+            yield from send_words(phy, words, 2, rng)
+            for _ in range(512):
+                yield
+            counts["throttled"] = list(decode_packets(sent))
+            yield rx_throttle.eq(0)
+            for _ in range(512):
+                yield
+            counts["released"] = list(decode_packets(sent))
+
+        @passive
+        def monitor():
+            yield link.rx_hp.ready.eq(1)
+            while True:
+                if (yield phy.sink.valid) & (yield phy.sink.ready):
+                    data = (yield phy.sink.data)
+                    ctrl = (yield phy.sink.ctrl)
+                    for j in range((yield phy.sink.words)):
+                        sent.append(((data >> (32*j)) & 0xffffffff, (ctrl >> (4*j)) & 0xf))
+                yield
+
+        run_simulation(dut, [host(), monitor()])
+        def lcs(packets, cmd):
+            return [p for p in packets if p[0] == "LC" and (p[1] & 0x780) == cmd]
+        throttled, released = counts["throttled"], counts["released"]
+        self.assertEqual(len(lcs(throttled, 0x000)), 1 + 2) # LGOOD_n: advertisement + 2 DPHs.
+        self.assertEqual(len(lcs(throttled, 0x080)), 0)     # No LCRD_x while throttled.
+        self.assertGreaterEqual(len(lcs(released, 0x080)), 2)
+
     def test_rx_words(self):
         self.rx_test(link_words=1)
 

@@ -419,6 +419,12 @@ class USB3PIPESim(SoCMini):
     gen2_capable (lanes=1): Host and Device advertise Gen 2x1 in the SuperSpeedPlus Polling
     (SCD1/SCD2, LBPM), Gen 2 negotiated (training continues at Gen 1 speed).
 
+    dev_u1u2=False (lanes=1): Device USB3PHY without U1/U2 (LGO_U1/LGO_U2 rejected).
+
+    dev_pipe_cd (lanes=1, Gen 1): Device USB3PHY with its USB3PIPE/SerDes model in the sys clock domain
+    and its LTSSM/Link interface/Core at half the frequency (USB3PHY pipe_cd, as on FPGAs where the
+    Core can't run at 125MHz), with 64-bit Link Layer words (link_words=2).
+
     gen2 (lanes=1, gen2_capable): SerDes models with Gen 2 raw words, the training continues at Gen 2
     (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0, Link Layer packets with the
     Gen 2 framing in the Data Blocks, SuperSpeedPlus Link Layer (Host script and Device Core: 4-bit
@@ -426,12 +432,13 @@ class USB3PIPESim(SoCMini):
     """
     def __init__(self, phy_dw=None, timer_scale=1, with_core=True, rx_word_shift=0, ppm=0, ssc=False,
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
-        host_lpm=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
-        gen2_capable=False, gen2=False, link_words=1):
+        host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
+        gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
         assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
+        assert (not dev_pipe_cd) or ((lanes == 1) and (not gen2_capable))
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on
         # hardware) and with 2 lanes, 2 with the PRBS stand-ins.
@@ -455,6 +462,18 @@ class USB3PIPESim(SoCMini):
             cds = {"host": "host", "dev": "dev"}
         else:
             cds = {"host": "sys", "dev": "sys"}
+        ltssm_cds = dict(cds) # LTSSM/Link clock domains.
+        if dev_pipe_cd:
+            # Device LTSSM/Link Layer/Core at the Device frequency/2.
+            self.cd_dev_link = ClockDomain()
+            dev_link_clk = Signal()
+            getattr(self.sync, cds["dev"]).__iadd__(dev_link_clk.eq(~dev_link_clk))
+            self.comb += [
+                self.cd_dev_link.clk.eq(dev_link_clk),
+                self.cd_dev_link.rst.eq(ResetSignal("sys")),
+            ]
+            ltssm_cds["dev"] = "dev_link"
+            link_words = 2
 
         # USB3 Host (Host = Downstream Port) / Device (Device = Upstream Port).
         phys     = {}
@@ -468,15 +487,23 @@ class USB3PIPESim(SoCMini):
                 rx_word_shift   = lane1_word_shift if (name, lane) == ("dev", 1) else rx_word_shift,
                 rx_clock_domain = "rx",
                 gen2_capable    = gen2)) for lane in range(lanes)]
+            pipe_cd = "usb3" if (dev_pipe_cd and name == "dev") else None
+            if pipe_cd is not None:
+                renamer = ClockDomainsRenamer({"sys": ltssm_cds[name], "usb3": cds[name],
+                    "tx": cds[name], "rx": cds[partner]})
+            link_clk_freq = sys_clk_freq if pipe_cd is None else sys_clk_freq//2
             phy     = renamer(USB3PHY(
                 serdes               = serdes[0] if lanes == 1 else serdes,
-                sys_clk_freq         = sys_clk_freq,
+                sys_clk_freq         = link_clk_freq,
                 role                 = role,
                 timer_scale          = timer_scale,
                 with_endianness_swap = (lanes == 1),
                 lanes                = lanes,
                 gen2_capable         = gen2_capable,
-                link_words           = link_words if name == "dev" else 1))
+                link_words           = link_words if name == "dev" else 1,
+                pipe_cd              = pipe_cd,
+                pipe_clk_freq        = sys_clk_freq,
+                with_u1u2            = dev_u1u2 or (name == "host")))
             if lanes == 1:
                 self.add_module(name=f"{name}_usb3_serdes", module=serdes[0])
             else:
@@ -495,7 +522,7 @@ class USB3PIPESim(SoCMini):
                 # Gen 2: no Gen 1 SKP Ordered Sets/packets offsets in the script (Gen 2 SKP Ordered
                 # Sets by the Gen2TX, packets re-aligned by the Gen 2 framing).
                 host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp and not gen2, latency=host_latency,
-                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2).steps))
+                    status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2, itp=host_itp).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
@@ -516,7 +543,7 @@ class USB3PIPESim(SoCMini):
             elif with_core:
                 # USB3 Device Core, Bulk loopback: EP2 OUT -> EP1 IN.
                 dw   = 32*link_words
-                core = renamer(USB3DeviceCore(phy, sys_clk_freq,
+                core = renamer(USB3DeviceCore(phy, link_clk_freq,
                     descriptors = bulk_descriptors(max_burst=8),
                     endpoints   = [
                         USB3BulkIN(ept=1,  max_burst=8, data_width=dw),
@@ -567,7 +594,7 @@ class USB3PIPESim(SoCMini):
         # Simulation Status.
         for name, ltssm in ltssms.items():
             fsm  = ltssm.fsm
-            sync = getattr(self.sync, cds[name])
+            sync = getattr(self.sync, ltssm_cds[name])
             for state, value in fsm.encoding.items():
                 sync += [
                     If(fsm.next_state != fsm.state,
@@ -712,6 +739,9 @@ def main():
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
     parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs).", choices=["1", "2"])
+    parser.add_argument("--host-itp",      action="store_true", help="Host model Isochronous Timestamp Packets between the transfers.")
+    parser.add_argument("--dev-pipe-cd",   action="store_true", help="Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, 64-bit Link Layer words).")
+    parser.add_argument("--dev-no-u1u2",   action="store_true", help="Device USB3PHY without U1/U2 Link Power Management.")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -733,6 +763,7 @@ def main():
         host_latency  = int(args.host_latency),
         host_status_gap = int(args.host_status_gap),
         host_pm       = args.host_pm,
+        host_itp      = args.host_itp,
         host_lpm      = args.host_lpm,
         lanes            = lanes,
         lane_delays      = (int(args.lane0_delay), int(args.lane1_delay)),
@@ -740,7 +771,9 @@ def main():
         lane_skp         = int(args.lane_skp),
         gen2_capable     = args.gen2_capable or args.gen2,
         gen2             = args.gen2,
-        link_words       = int(args.link_words))
+        link_words       = int(args.link_words),
+        dev_pipe_cd      = args.dev_pipe_cd,
+        dev_u1u2         = not args.dev_no_u1u2)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

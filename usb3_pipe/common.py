@@ -123,6 +123,79 @@ TS2 = OrderedSet("TS2",
 # [2] : 0x45454545
 # [3] : 0x45454545
 
+# Asynchronous FIFO -------------------------------------------------------------------------------
+
+class _AsyncFIFORegisteredRead(Module):
+    """Asynchronous FIFO (migen AsyncFIFOBuffered interface/latency) with the read output register
+    loaded from an asynchronous read of the memory at the registered read pointer: the read pointer
+    update and the memory read are not chained (timings, FPGAs implementing the small memories as
+    registers/LUTs: Gowin GW5A)."""
+    def __init__(self, width, depth):
+        from migen.genlib.cdc import MultiReg, GrayCounter
+        self.width    = width
+        self.depth    = depth
+        self.din      = Signal(width)
+        self.we       = Signal()
+        self.writable = Signal()
+        self.dout     = Signal(width)
+        self.re       = Signal()
+        self.readable = Signal()
+
+        # # #
+
+        depth_bits = log2_int(depth, True)
+        produce = ClockDomainsRenamer("write")(GrayCounter(depth_bits + 1))
+        consume = ClockDomainsRenamer("read")(GrayCounter(depth_bits + 1))
+        self.submodules += produce, consume
+        produce_rdomain = Signal(depth_bits + 1)
+        consume_wdomain = Signal(depth_bits + 1)
+        self.specials += [
+            MultiReg(produce.q, produce_rdomain, "read"),
+            MultiReg(consume.q, consume_wdomain, "write"),
+        ]
+        writable = Signal()
+        readable = Signal()
+        self.comb += [
+            writable.eq((produce.q[-1] == consume_wdomain[-1]) |
+                        (produce.q[-2] == consume_wdomain[-2]) |
+                        (produce.q[:-2] != consume_wdomain[:-2]) if depth_bits > 1 else
+                        (produce.q[-1] == consume_wdomain[-1]) |
+                        (produce.q[-2] == consume_wdomain[-2])),
+            readable.eq(consume.q != produce_rdomain),
+            self.writable.eq(writable),
+            produce.ce.eq(writable & self.we),
+        ]
+
+        storage = Memory(width, depth)
+        wrport  = storage.get_port(write_capable=True, clock_domain="write")
+        rdport  = storage.get_port(async_read=True, clock_domain="read")
+        self.specials += storage, wrport, rdport
+        self.comb += [
+            wrport.adr.eq(produce.q_binary[:-1]),
+            wrport.dat_w.eq(self.din),
+            wrport.we.eq(produce.ce),
+            rdport.adr.eq(consume.q_binary[:-1]),
+        ]
+
+        # Output register (loaded when empty or read).
+        load = Signal()
+        self.comb += [
+            load.eq(self.re | ~self.readable),
+            consume.ce.eq(readable & load),
+        ]
+        self.sync.read += If(load,
+            self.dout.eq(rdport.dat_r),
+            self.readable.eq(readable),
+        )
+
+class AsyncFIFO(LiteXModule):
+    """stream.AsyncFIFO(layout, depth, buffered=True) equivalent with _AsyncFIFORegisteredRead."""
+    def __init__(self, layout, depth=8):
+        from litex.soc.interconnect.stream import _FIFOWrapper
+        self.wrapper = _FIFOWrapper(_AsyncFIFORegisteredRead, layout, depth)
+        self.sink    = self.wrapper.sink
+        self.source  = self.wrapper.source
+
 # Endianness Swap ----------------------------------------------------------------------------------
 
 class EndiannessSwap(LiteXModule):

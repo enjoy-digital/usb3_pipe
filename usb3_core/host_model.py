@@ -161,6 +161,10 @@ def dph(seq, length, addr=0, ept=0, dp_seq=0, setup=0, tt=0):
     dw1 = dp_seq | (ept << 8) | (tt << 12) | (setup << 15) | (length << 16)
     return header_packet(dw0, dw1, 0, seq)
 
+def itp(seq, timestamp=0):
+    # Isochronous Timestamp Packet (8.5.7): sent by the host every 125us (bus interval) in U0.
+    return header_packet(0x0c | ((timestamp & 0x7ffffff) << 5), 0, 0, seq)
+
 # Received Packets Decoding ------------------------------------------------------------------------
 
 def decode_packets(words, positions=None):
@@ -509,10 +513,16 @@ def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
-    ssp=False):
-    """Link initialization + enumeration-like control transfers (as Linux on an xHCI host)."""
+    ssp=False, itp=False):
+    """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
+    itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers."""
     s = HostScript(ssp=ssp)
+    def send_itp():
+        if itp:
+            s.send_hp(globals()["itp"], timestamp=len(s.steps))
+            s.idle(64)
     s.link_init()
+    send_itp()
     if skp:
         # SKP Ordered Set (2 symbols) between packets: the framing is then shifted by 2 symbols in
         # the received words (re-aligned by the PHY).
@@ -521,13 +531,17 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
     if skp:
         s.skp()
     s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor", latency, status_gap)
+    send_itp()
     s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor", latency, status_gap)
+    send_itp()
     s.control_write(setup_packet(0x00, 0x09, 0x0001, 0, 0), "set_configuration")
+    send_itp()
     if bulk:
         # Bulk OUT (EP2) then Bulk IN (EP1): looped back by the device.
         for i, payload in enumerate(bulk_payloads()):
             s.bulk_out(payload, ept=2, dp_seq=i, name=f"bulk_out_{i}")
         s.idle(1024)
+        send_itp()
         for i in range(len(bulk_payloads())):
             s.bulk_in(ept=1, dp_seq=i, name=f"bulk_in_{i}", latency=latency + 256,
                 erdy = (i + 1) < len(bulk_payloads()))

@@ -34,6 +34,19 @@ def lfsr_advance(state):
 LFSR_SEED_LANE0 = 0xffff
 LFSR_SEED_LANE1 = 0x8000
 
+def lfsr_shift(lfsr, shifts):
+    """LFSR state (integer) after shifts serial shifts."""
+    for _ in range(shifts):
+        msb  = (lfsr >> 15) & 0x1
+        lfsr = (lfsr << 1) & 0xffff
+        if msb:
+            lfsr ^= 0x0039
+    return lfsr
+
+def lfsr_value(lfsr):
+    """Scrambling value (integer) of a symbol from the LFSR state: D15 on each of the 8 shifts."""
+    return sum((((lfsr_shift(lfsr, n) >> 15) & 0x1) << n) for n in range(8))
+
 def lfsr_after_ts(seed=LFSR_SEED_LANE0):
     """LFSR state after a TS1/TS2 Ordered Set: initialized to seed after the COMs and advanced on
     the 12 following Symbols (TX scrambler start state, scrambling starts after the last TS2)."""
@@ -59,13 +72,22 @@ class ScramblerUnit(LiteXModule):
     This module generates the scrambling values of the 4 symbols of a USB3.0 link word (X^16 + X^5 +
     X^4 + X^3 + 1 polynom). The LFSR advances 8 serial shifts on each symbol except SKP and is
     initialized after each COM, including in the middle of a word (USB 3.2 6.3.1.3).
+
+    with_skp=False: no SKP symbols in the stream (TX before the SKP insertion, RX after the SKP
+    removal): the LFSR state of each symbol is computed directly from the current state (or is a
+    constant after a COM) instead of symbol after symbol (logic depth). with_com=False: no COM
+    symbols either (TX: the Training Sequences are not scrambled).
     """
-    def __init__(self, reset=LFSR_SEED_LANE0, seed=LFSR_SEED_LANE0):
+    def __init__(self, reset=LFSR_SEED_LANE0, seed=LFSR_SEED_LANE0, with_skp=True, with_com=True):
         self.skp   = Signal(4)  # i: SKP symbol on lane i.
         self.com   = Signal(4)  # i: COM symbol on lane i.
         self.value = Signal(32) # o: Scrambling value of lane i: value[8*i:8*(i+1)].
 
         # # #
+
+        if not with_skp:
+            self.add_direct(reset, seed, with_com)
+            return
 
         cur   = Signal(16, reset=reset)
         state = cur
@@ -90,22 +112,48 @@ class ScramblerUnit(LiteXModule):
             state = new
         self.sync += cur.eq(state)
 
+    def add_direct(self, reset, seed, with_com):
+        def advance(masks, shifts):
+            for _ in range(shifts):
+                masks = lfsr_advance(masks)
+            return masks
+
+        cur = Signal(16, reset=reset)
+        ref = [1 << n for n in range(16)] # LFSR bits as masks over cur.
+        for i in range(4):
+            # Symbol i value: from cur advanced i symbols or, after a COM on symbol j < i, constant
+            # (seed advanced i - 1 - j symbols).
+            value = Signal(8)
+            self.comb += [value[n].eq(lfsr_xor(cur, advance(ref, 8*i + n)[15])) for n in range(8)]
+            if with_com:
+                for j in range(i):
+                    self.comb += If(self.com[j], value.eq(lfsr_value(lfsr_shift(seed, 8*(i - 1 - j)))))
+            self.comb += self.value[8*i:8*(i+1)].eq(value)
+        # Next state: cur advanced 4 symbols or, after the last COM on symbol j, constant.
+        new = Signal(16)
+        self.comb += new.eq(Cat(*[lfsr_xor(cur, mask) for mask in advance(ref, 32)]))
+        if with_com:
+            for j in range(4):
+                self.comb += If(self.com[j], new.eq(lfsr_shift(seed, 8*(3 - j))))
+        self.sync += cur.eq(new)
+
 # Scrambler (Appendix B) ---------------------------------------------------------------------------
 
 class Scrambler(LiteXModule):
     """Scrambler
 
     This module scrambles the TX data/ctrl stream. K codes shall not be scrambled, the LFSR does not
-    advance on SKP and is initialized after COM.
+    advance on SKP and is initialized after COM (with_skp/with_com: see ScramblerUnit).
     """
-    def __init__(self, reset=lfsr_after_ts(LFSR_SEED_LANE0), seed=LFSR_SEED_LANE0):
+    def __init__(self, reset=lfsr_after_ts(LFSR_SEED_LANE0), seed=LFSR_SEED_LANE0, with_skp=True,
+        with_com=True):
         self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
-        self.unit = unit = ScramblerUnit(reset=reset, seed=seed)
+        self.unit = unit = ScramblerUnit(reset=reset, seed=seed, with_skp=with_skp, with_com=with_com)
         self.comb += unit.ce.eq(sink.valid & sink.ready)
         self.comb += sink.connect(source)
         for i in range(4):
@@ -128,14 +176,14 @@ class Descrambler(LiteXModule):
     automatically synchronizes itself to the incoming stream: the LFSR is initialized after each
     received COM.
     """
-    def __init__(self, reset=LFSR_SEED_LANE0, seed=LFSR_SEED_LANE0):
+    def __init__(self, reset=LFSR_SEED_LANE0, seed=LFSR_SEED_LANE0, with_skp=True):
         self.enable = Signal(reset=1)
         self.sink   =   sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
-        self.scrambler = scrambler = Scrambler(reset=reset, seed=seed)
+        self.scrambler = scrambler = Scrambler(reset=reset, seed=seed, with_skp=with_skp)
         self.comb += scrambler.enable.eq(self.enable)
 
         # Descramble data

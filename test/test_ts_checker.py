@@ -22,16 +22,17 @@ class TestTSChecker(unittest.TestCase):
         words = ordered_set_words(ordered_set, link_config=link_config)*n
 
         def generator(dut):
-            for data, ctrl in words:
-                yield dut.sink.valid.eq(1)
-                yield dut.sink.data.eq(data)
-                yield dut.sink.ctrl.eq(ctrl)
+            # Words, then idle cycles (detection latency).
+            for word in words + [None]*4:
+                yield dut.sink.valid.eq(word is not None)
+                if word is not None:
+                    data, ctrl = word
+                    yield dut.sink.data.eq(data)
+                    yield dut.sink.ctrl.eq(ctrl)
                 yield
-                if (yield dut.detected) and dut.config is None:
-                    yield
-                    dut.config = ((yield dut.reset), (yield dut.loopback), (yield dut.scrambling))
-                    dut.detections += 1
-                elif (yield dut.detected):
+                if (yield dut.detected):
+                    if dut.config is None:
+                        dut.config = ((yield dut.reset), (yield dut.loopback), (yield dut.scrambling))
                     dut.detections += 1
             yield dut.sink.valid.eq(0)
 
@@ -102,7 +103,9 @@ class TestTSChecker(unittest.TestCase):
                         yield
                         dut.detections += (yield dut.detected)
                     yield dut.sink.valid.eq(0)
-                    yield
+                    for i in range(4): # Detection latency.
+                        yield
+                        dut.detections += (yield dut.detected)
 
                 dut = TSChecker(ordered_set=ordered_set, n_ordered_sets=8)
                 run_simulation(dut, generator(dut))

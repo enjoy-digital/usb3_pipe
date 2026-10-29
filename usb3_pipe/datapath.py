@@ -24,7 +24,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import K, COM, SKP
+from usb3_pipe.common     import K, COM, SKP, AsyncFIFO
 from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
 from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ, GEN2_IDLE
 from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
@@ -196,8 +196,10 @@ class RXErrorSubstitution(LiteXModule):
     """RX Error Substitution
 
     Substitutes received 8b/10b decode errors and disparity errors with K28.4 symbols (6.3.1.4).
+    with_disparity=False: decode errors only (no running disparity tracking: shorter RX paths on
+    slow fabrics, corrupted packets still detected by the Link Layer CRCs).
     """
-    def __init__(self, serdes, clock_domain):
+    def __init__(self, serdes, clock_domain, with_disparity=True):
         n = len(serdes.decoders)
         self.sink   = stream.Endpoint([("data", 8*n), ("ctrl", n)])
         self.source = stream.Endpoint([("data", 8*n), ("ctrl", n)])
@@ -210,8 +212,11 @@ class RXErrorSubstitution(LiteXModule):
             checker = ClockDomainsRenamer(clock_domain)(checker)
         self.checker = checker
         for i in range(len(serdes.decoders)):
+            error = serdes.decoders[i].invalid | checker.invalid[i]
+            if with_disparity:
+                error = error | checker.disparity_error[i]
             self.comb += [
-                If(serdes.decoders[i].invalid | checker.invalid[i] | checker.disparity_error[i],
+                If(error,
                     self.source.ctrl[i].eq(1),
                     self.source.data[8*i:8*(i+1)].eq(K(28, 4)),
                 )
@@ -372,21 +377,30 @@ class TXDatapath(LiteXModule):
     - Clock compensation (SKP insertion).
     - Clock domain crossing (from system clock to transceiver's TX clock).
     - Data-width adaptation (from 32-bit to transceiver's data-width).
+
+    with_cdc=False: sys and clock_domain are the same clock (ex: SerDes logic renamed to the
+    transceiver's TX clock domain), no clock domain crossing.
     """
-    def __init__(self, clock_domain="sys", phy_dw=16):
+    def __init__(self, clock_domain="sys", phy_dw=16, with_cdc=True):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
 
         # # #
 
+        # Input register (registered ready: the PIPE TX logic isolated from the SKP insertion).
+        self.sink_buffer = sink_buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+
         # Clock compensation
         self.skip_inserter = skip_inserter = TXSKPInserter()
         self.skp_enable    = skip_inserter.enable
 
-        # Clock domain crossing
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
-        cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
-        self.cdc = cdc
+        # Clock domain crossing (registered FIFO write and ready: timings).
+        buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+        self.buffer = buffer
+        if with_cdc:
+            cdc = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+            cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
+            self.cdc = cdc
 
         # Data-width adaptation
         converter = stream.StrideConverter(
@@ -399,11 +413,18 @@ class TXDatapath(LiteXModule):
 
         # Flow
         self.comb += [
-            self.sink.connect(skip_inserter.sink),
-            skip_inserter.source.connect(cdc.sink),
-            cdc.source.connect(converter.sink),
+            self.sink.connect(sink_buffer.sink),
+            sink_buffer.source.connect(skip_inserter.sink),
+            skip_inserter.source.connect(buffer.sink),
             converter.source.connect(self.source)
         ]
+        if with_cdc:
+            self.comb += [
+                buffer.source.connect(cdc.sink),
+                cdc.source.connect(converter.sink),
+            ]
+        else:
+            self.comb += buffer.source.connect(converter.sink)
 
 class RXDatapath(LiteXModule):
     """RX Datapath
@@ -438,10 +459,13 @@ class RXDatapath(LiteXModule):
         skip_remover = ClockDomainsRenamer(clock_domain)(skip_remover)
         self.skip_remover = skip_remover
 
-        # Clock domain crossing
-        cdc = stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True)
-        cdc = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
-        self.cdc = cdc
+        # Clock domain crossing (registered FIFO write and ready: timings).
+        buffer = ClockDomainsRenamer(clock_domain)(
+            stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
+        cdc    = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+        cdc    = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
+        self.buffer = buffer
+        self.cdc    = cdc
 
         # Words alignment
         word_aligner = RXWordAligner()
@@ -452,7 +476,11 @@ class RXDatapath(LiteXModule):
         self.comb += [
             self.sink.connect(converter.sink),
             converter.source.connect(skip_remover.sink),
-            skip_remover.source.connect(cdc.sink),
+            skip_remover.source.connect(buffer.sink),
+            # No back-pressure on the received words (transceiver RX at the line rate, words
+            # dropped if the CDC FIFO is full): shorter RX paths.
+            buffer.source.connect(cdc.sink, omit={"ready"}),
+            buffer.source.ready.eq(1),
             cdc.source.connect(word_aligner.sink),
             word_aligner.source.connect(self.source),
         ]

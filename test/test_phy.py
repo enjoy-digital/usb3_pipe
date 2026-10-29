@@ -126,6 +126,16 @@ class TestPHY(unittest.TestCase):
         # Gen 2: words pairs to/from the Gen 2 framing (DPP data 8 bytes per cycle).
         self.run_link_words2(["--gen2"])
 
+    def test_phy_dev_pipe_cd(self):
+        # Gen 1: Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, words
+        # pairs: Logical Idle filtering, RX words packing, TX packets store-and-forward).
+        self.run_link_words2(["--dev-pipe-cd"])
+
+    def test_phy_dev_pipe_cd_no_u1u2(self):
+        # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE
+        # frequency (FPGAs with slower fabrics): Host LGO_U1/LGO_U2 rejected (LXU), script done.
+        self.run_link_words2(["--dev-pipe-cd", "--dev-no-u1u2", "--host-pm"])
+
     def test_phy_gen2_lpm(self):
         # Gen 2 U1/U2 (sim.py --gen2 --host-lpm): Host model LGO_U1/LGO_U2 after the enumeration,
         # U1/U2 exits (LFPS) and Recovery at Gen 2 back to U0, script done.

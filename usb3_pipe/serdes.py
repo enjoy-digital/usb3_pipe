@@ -89,18 +89,26 @@ class USB3SerDes(LiteXModule):
             rx_buffer_enable = True,
             tx_polarity      = self.tx_polarity,
             rx_polarity      = self.rx_polarity)
-        self.add_module(name=name, module=xcvr)
-        self.xcvr_name = name
         # Comma alignment on any byte: USB3 Ordered Sets start with consecutive COMs (4 for the
         # TS1/TS2), with 2 symbols per word half of them are on odd bytes. Aligning commas on even
         # bytes only (LiteICLink default) made the aligner slide on every Ordered Set when the first
         # COM was received on an odd byte (ex: after a U3 exit), duplicating/dropping a symbol each
         # time: no TS1/TS2 detected. The bytes rotation is handled by the RXWordAligner.
         getattr(xcvr, name + "_params").update(p_ALIGN_COMMA_WORD=1)
+        return self.add_xcvr_datapath(name, xcvr, data_width)
+
+    def add_xcvr_datapath(self, name, xcvr, data_width, rx_disparity_check=True, tx_cdc=True):
+        """TX/RX datapaths of a LiteICLink transceiver (added as name): 8b/10b stream endpoints,
+        SKP insertion/removal, CDC, word alignment, RX errors substitution."""
+        self.add_module(name=name, module=xcvr)
+        self.xcvr_name = name
         xcvr.add_stream_endpoints()
         phy_dw = 8*(data_width//10)
-        self.tx_datapath     = tx_datapath     = TXDatapath("tx", phy_dw=phy_dw)
-        self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx")
+        self.tx_datapath     = tx_datapath     = TXDatapath("tx", phy_dw=phy_dw, with_cdc=tx_cdc)
+        self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx",
+            with_disparity=rx_disparity_check)
+        self.rx_buffer       = rx_buffer       = ClockDomainsRenamer("rx")(
+            stream.Buffer(rx_substitution.source.description, pipe_ready=True)) # Timings.
         self.rx_datapath     = rx_datapath     = RXDatapath("rx", phy_dw=phy_dw)
         self.comb += [
             xcvr.tx_enable.eq(self.enable),
@@ -111,7 +119,8 @@ class USB3SerDes(LiteXModule):
             tx_datapath.skp_enable.eq(self.tx_skp_enable),
             tx_datapath.source.connect(xcvr.sink),
             xcvr.source.connect(rx_substitution.sink),
-            rx_substitution.source.connect(rx_datapath.sink),
+            rx_substitution.source.connect(rx_buffer.sink),
+            rx_buffer.source.connect(rx_datapath.sink),
             rx_datapath.source.connect(self.source),
         ]
         return xcvr
@@ -385,3 +394,69 @@ class USPUSB3SerDes(USB3SerDes):
 
         # Timing constraints -----------------------------------------------------------------------
         self.add_timing_constraints(platform, sys_clk, gty)
+
+# Gowin GW5AST USB3 Serializer/Deserializer --------------------------------------------------------
+
+class GW5USB3SerDes(USB3SerDes):
+    """Gowin GW5AST-138B GTR12 USB3 SerDes (Q1 lane 0/1: SFP0/SFP1 of the Tang Mega 138K Pro dock,
+    100 MHz REFCLK1).
+
+    5Gbps, raw 20-bit PMA with 40-bit fabric words (125MHz, 4 symbols per cycle), 8b/10b and polarity
+    in the fabric (LiteICLink GTR12), comma alignment by the PCS. The register configuration is
+    generated from usb3_pipe/gw5 TOML files with Gowin's tools.
+
+    TX Electrical Idle: DC (constant raw words) between the LFPS bursts (no transitions on the AC
+    coupled link). rx_idle_source: RX Electrical Idle indicator of the lane ("~astat5": analog status
+    bit 5 inverted, set while a signal is detected (LFPS bursts toggle it, measured on hardware),
+    "elecidle": RXELECIDLE, "[~]astat<n>"), with_upar: SerDes registers runtime access, upar_clk: UPAR
+    (and quad AHB) clock, xcvr_cd: clock domain of the GTR12 control logic (free-running, see the
+    Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
+    """
+    def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
+        with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True):
+        USB3SerDes.__init__(self)
+
+        # # #
+
+        from liteiclink.serdes.gtr12_gw5 import GTR12
+        from usb3_pipe.gw5 import gw5_usb3_csr_config
+
+        # Transceiver ------------------------------------------------------------------------------
+        gtr12 = GTR12(platform,
+            line_rate   = 5e9,
+            csr_config  = gw5_usb3_csr_config(lane, "5G", refclk) if csr_config is None else csr_config,
+            data_width  = 40,
+            position    = "Q1",
+            lane        = lane,
+            tx_polarity = self.tx_polarity,
+            rx_polarity = self.rx_polarity,
+            csr_name    = f"usb3_5g_ln{lane}.csr",
+            with_upar   = with_upar,
+            upar_clk    = upar_clk)
+        # GTR12 control logic (PLL lock resynchronization, resets, UPAR) in xcvr_cd: a free-running
+        # clock domain when this SerDes "sys" clock domain is renamed to the GTR12 TX clock.
+        if xcvr_cd != "sys":
+            gtr12 = ClockDomainsRenamer({"sys": xcvr_cd})(gtr12)
+        # No RX running disparity check (RX paths at 125MHz on the GW5A fabric).
+        self.add_xcvr_datapath("gtr12", gtr12, data_width=40, rx_disparity_check=False,
+            tx_cdc=tx_cdc)
+
+        # LFPS -------------------------------------------------------------------------------------
+        rx_idle = Signal()
+        if rx_idle_source == "elecidle":
+            self.comb += rx_idle.eq(gtr12.rx_elecidle)
+        else:
+            invert = rx_idle_source.startswith("~")
+            source = rx_idle_source.lstrip("~")
+            assert source.startswith("astat")
+            bit = gtr12.astat[int(source[5:])]
+            self.comb += rx_idle.eq(~bit if invert else bit)
+        self.add_lfps(gtr12, rx_idle)
+        # TX Electrical Idle: constant (zeros) raw words when idle and no LFPS burst.
+        self.comb += If(self.tx_idle & ~self.tx_lfps & (self.tx_pattern == 0),
+            gtr12.tx_produce_pattern.eq(1),
+            gtr12.tx_pattern.eq(0),
+        )
+
+        # Timing constraints -----------------------------------------------------------------------
+        self.add_timing_constraints(platform, sys_clk, gtr12)
