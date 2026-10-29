@@ -1092,7 +1092,8 @@ class Gen2LinkTX(LiteXModule):
             # decision to the buffer read side). Not reset: flushed entries drained by the packer
             # (units read count).
             self.read_buffer = read_buffer = ClockDomainsRenamer("tx")(
-                Buffer(gen2_tx_unit_layout(16), pipe_valid=True, pipe_ready=True))
+                Buffer(gen2_tx_unit_layout(16), pipe_valid=True, pipe_ready=True,
+                    ready_first=True))
             self.comb += [
                 buffer.source.connect(read_buffer.sink),
                 read_buffer.source.connect(packer.sink),
@@ -1244,7 +1245,7 @@ class Gen2LinkRX(LiteXModule):
             # Registered valid/ready between the blocks buffer and the RX framing (timings: RX
             # framing decisions to the buffer read side).
             in_buffer = ClockDomainsRenamer("rx")(Buffer([("data", 128)], pipe_valid=True,
-                pipe_ready=True))
+                pipe_ready=True, ready_first=True))
             self.submodules += in_buffer
             self.comb += [
                 fifo.source.connect(in_buffer.sink),
