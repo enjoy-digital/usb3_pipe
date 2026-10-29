@@ -24,7 +24,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import K, COM, SKP, AsyncFIFO
+from usb3_pipe.common     import K, COM, SKP, AsyncFIFO, Buffer
 from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
 from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ, GEN2_IDLE
 from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
@@ -1137,9 +1137,9 @@ class Gen2TXDatapath(LiteXModule):
             # Registered valid/ready between Gen2TX and the DC balance and between the DC balance and
             # the gearbox (timings: the Gen2TX block selection and the gearbox/DC balance readies at
             # one block per cycle).
-            self.buffer      = buffer      = stream.Buffer(gen2_tx_block_layout(), pipe_valid=True,
+            self.buffer      = buffer      = Buffer(gen2_tx_block_layout(), pipe_valid=True,
                 pipe_ready=True)
-            self.gear_buffer = gear_buffer = stream.Buffer(gen2_block_layout(), pipe_valid=True,
+            self.gear_buffer = gear_buffer = Buffer(gen2_block_layout(), pipe_valid=True,
                 pipe_ready=True)
             self.comb += [
                 tx.source.connect(buffer.sink),

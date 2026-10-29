@@ -30,6 +30,7 @@ from usb3_pipe.common import SHP as _SHP, SDP as _SDP, EDB as _EDB, END as _END,
 from usb3_pipe.common import EPF as _EPF
 from usb3_pipe.common import GEN2_IDLE, GEN2_SHP, GEN2_DPHP, GEN2_SDP, GEN2_EDB, GEN2_END
 from usb3_pipe.common import GEN2_SLC, GEN2_EPF
+from usb3_pipe.common import Buffer, PipeReady
 
 # Gen 1 K Symbols (Link Layer words).
 SHP, SDP, EDB, END, SLC, EPF = [s.value for s in [_SHP, _SDP, _EDB, _END, _SLC, _EPF]]
@@ -468,15 +469,22 @@ class Gen2RXFraming(LiteXModule):
         lc_fast   = Signal()
         out_ready = Signal()
         if nbytes == 16:
-            self.out_buffer = out_buffer = stream.Buffer(gen2_link_layout(nbytes//4) + [("lc", 1)],
-                pipe_valid=True, pipe_ready=True)
+            # Registered valid/ready (PipeValid then PipeReady), the Link Command decode done on the
+            # PipeValid registers and stored with the payload (timings: not after the PipeReady
+            # output selection).
+            self.out_pipe_valid = out_pipe_valid = stream.PipeValid(gen2_link_layout(nbytes//4) +
+                [("lc", 1)])
+            self.out_buffer     = out_buffer     = PipeReady(gen2_link_layout(nbytes//4) +
+                [("lc", 1)])
             fast = Signal()
             self.comb += [
                 output.lc.eq(kind == KIND_LC),
-                output.connect(out_buffer.sink),
+                output.connect(out_pipe_valid.sink),
+                out_pipe_valid.source.connect(out_buffer.sink, omit={"lc"}),
+                out_buffer.sink.lc.eq(out_pipe_valid.source.lc &
+                    is_fast_lc(out_pipe_valid.source.data[32:64])),
                 out_ready.eq(output.ready),
-                fast.eq(self.lc_enable & out_buffer.source.lc &
-                    is_fast_lc(out_buffer.source.data[32:64])),
+                fast.eq(self.lc_enable & out_buffer.source.lc),
                 out_buffer.source.connect(source, omit={"valid", "ready", "lc"}),
                 source.valid.eq(out_buffer.source.valid & ~fast),
                 source_lc.valid.eq(out_buffer.source.valid & fast),
@@ -774,7 +782,7 @@ class Gen2TXFramer(LiteXModule):
 
         # Chunks -> 8-byte entries (4-byte chunks paired, 8-byte chunks never last) ----------------
         # Registered valid/ready (timings: window/FSM decisions to the pairing).
-        self.chunk_buffer = chunk_buffer = stream.Buffer([("data", 64), ("bytes", 4)],
+        self.chunk_buffer = chunk_buffer = Buffer([("data", 64), ("bytes", 4)],
             pipe_valid=True, pipe_ready=True)
         self.comb += chunk.connect(chunk_buffer.sink)
         chunk  = chunk_buffer.source
@@ -1078,7 +1086,7 @@ class Gen2LinkTX(LiteXModule):
             # decision to the buffer read side). Not reset: flushed entries drained by the packer
             # (units read count).
             self.read_buffer = read_buffer = ClockDomainsRenamer("tx")(
-                stream.Buffer(gen2_tx_unit_layout(16), pipe_valid=True, pipe_ready=True))
+                Buffer(gen2_tx_unit_layout(16), pipe_valid=True, pipe_ready=True))
             self.comb += [
                 buffer.source.connect(read_buffer.sink),
                 read_buffer.source.connect(packer.sink),
@@ -1089,7 +1097,7 @@ class Gen2LinkTX(LiteXModule):
             # Registered valid/ready between the packer and Gen2TX (timings: Gen2TX block requests
             # to the packer read/placement).
             self.packer_buffer = packer_buffer = ClockDomainsRenamer("tx")(ResetInserter()(
-                stream.Buffer([("data", 128)], pipe_valid=True, pipe_ready=True)))
+                Buffer([("data", 128)], pipe_valid=True, pipe_ready=True)))
             self.comb += [
                 packer_buffer.reset.eq(flush_tx),
                 packer.source.connect(packer_buffer.sink),
@@ -1105,10 +1113,10 @@ class Gen2LinkTX(LiteXModule):
                 sink.connect(framer_sink, omit={"words"}),
                 framer_sink.words.eq(sink.words if link_words == 2 else 1),
             ]
-            self.sink_buffer = sink_buffer = ResetInserter()(stream.Buffer(gen2_link_layout(),
+            self.sink_buffer = sink_buffer = ResetInserter()(Buffer(gen2_link_layout(),
                 pipe_valid=True, pipe_ready=True))
             self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener())
-            self.unit_buffer = unit_buffer = ResetInserter()(stream.Buffer(gen2_tx_unit_layout(16),
+            self.unit_buffer = unit_buffer = ResetInserter()(Buffer(gen2_tx_unit_layout(16),
                 pipe_valid=True, pipe_ready=True))
             self.comb += [
                 sink_buffer.reset.eq(self.flush),
@@ -1202,9 +1210,9 @@ class Gen2LinkRX(LiteXModule):
             stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
         if nbytes == 16:
             # Registered framing outputs (valid/ready) before the buffers (timings: buffers write side).
-            out_buffer = ClockDomainsRenamer("rx")(stream.Buffer(gen2_link_layout(4),
+            out_buffer = ClockDomainsRenamer("rx")(Buffer(gen2_link_layout(4),
                 pipe_valid=True, pipe_ready=True))
-            lc_out_buffer = ClockDomainsRenamer("rx")(stream.Buffer([("data", 32), ("ctrl", 4)],
+            lc_out_buffer = ClockDomainsRenamer("rx")(Buffer([("data", 32), ("ctrl", 4)],
                 pipe_valid=True, pipe_ready=True))
             self.submodules += out_buffer, lc_out_buffer
             self.comb += [
@@ -1228,7 +1236,7 @@ class Gen2LinkRX(LiteXModule):
         else:
             # Registered valid/ready between the blocks buffer and the RX framing (timings: RX framing
             # decisions to the buffer read side).
-            in_buffer = ClockDomainsRenamer("rx")(stream.Buffer([("data", 128)], pipe_valid=True,
+            in_buffer = ClockDomainsRenamer("rx")(Buffer([("data", 128)], pipe_valid=True,
                 pipe_ready=True))
             self.submodules += in_buffer
             self.comb += [
