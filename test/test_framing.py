@@ -12,7 +12,7 @@ from migen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common  import GEN2_IDLE
-from usb3_pipe.framing import Gen2TXFramer, Gen2TXPacker, Gen2RXFraming, gen2_tx_unit_layout
+from usb3_pipe.framing import Gen2TXFramer, Gen2TXPacker, Gen2TXPacker16, Gen2RXFraming, gen2_tx_unit_layout
 from usb3_pipe.framing import Gen2TXUnitsWidener, WordsNarrower
 from usb3_pipe.framing import SHP, SDP, EDB, END, SLC, EPF
 
@@ -92,7 +92,7 @@ class Gen2FramingLoopback(Module):
     def __init__(self, slots=False, nbytes=8):
         self.framer  = framer  = Gen2TXFramer()
         self.fifo    = fifo    = stream.SyncFIFO(gen2_tx_unit_layout(nbytes), 512, buffered=True)
-        self.packer  = packer  = Gen2TXPacker(nbytes)
+        self.packer  = packer  = Gen2TXPacker16() if nbytes == 16 else Gen2TXPacker(nbytes)
         self.rx      = rx      = Gen2RXFraming(nbytes)
         self.submodules += framer, fifo, packer, rx
         if nbytes == 16:
@@ -337,6 +337,69 @@ class TestGen2LinkTX(unittest.TestCase):
         run_simulation(dut, {"sys": [generator(dut), timeout(dut)], "tx": [checker(dut)]},
             clocks={"sys": 8, "tx": 4})
         self.assertEqual((out, lcs), split_units(units))
+
+# Gen2TXPacker16: random block requests, no Idle Symbols inside a unit ---------------------------
+
+class Gen2TXPacker16Bench(Module):
+    def __init__(self):
+        self.submodules.packer = packer = Gen2TXPacker16()
+        self.slot  = Signal() # Block request (Gen2TX).
+        self.taken = Signal() # Block request of the previous cycle.
+        self.valid = Signal()
+        self.data  = Signal(128)
+        self.comb += [
+            packer.units_available.eq(1),
+            packer.source.ready.eq(self.slot),
+        ]
+        self.sync += [
+            self.taken.eq(self.slot),
+            self.valid.eq(packer.source.valid),
+            self.data.eq(packer.source.data),
+        ]
+
+class TestGen2TXPacker16(unittest.TestCase):
+    def test_random_requests(self):
+        rng   = random.Random(0)
+        # Units bytes (no Idle Symbol value), 16 bytes entries (entries before the last one full).
+        units = [[rng.randrange(GEN2_IDLE) for _ in range(rng.choice([1, 4, 8, 12, 16, 20, 24, 40]))]
+            for _ in range(80)]
+        entries = [(u[i:i+16], (i + 16) >= len(u)) for u in units for i in range(0, len(u), 16)]
+        dut    = Gen2TXPacker16Bench()
+        blocks = []
+        def generator(dut):
+            for data, last in entries:
+                yield dut.packer.sink.valid.eq(1)
+                yield dut.packer.sink.data.eq(int.from_bytes(bytes(data), "little"))
+                yield dut.packer.sink.bytes.eq(len(data))
+                yield dut.packer.sink.last.eq(last)
+                yield
+                while not (yield dut.packer.sink.ready):
+                    yield
+            yield dut.packer.sink.valid.eq(0)
+        def requests(dut):
+            for _ in range(3000):
+                yield dut.slot.eq(rng.random() < 0.6)
+                yield dut.packer.skp_pending.eq(rng.random() < 0.3)
+                yield
+                if (yield dut.taken):
+                    # Logical Idle Data Block when no block.
+                    data = (yield dut.data) if (yield dut.valid) else int.from_bytes(
+                        bytes([GEN2_IDLE])*16, "little")
+                    blocks.append(data.to_bytes(16, "little"))
+        run_simulation(dut, [generator(dut), requests(dut)])
+        stream = b"".join(blocks)
+        self.assertEqual([b for b in stream if b != GEN2_IDLE], [b for u in units for b in u])
+        # Idle Symbols only between units.
+        owner = [n for n, u in enumerate(units) for _ in u]
+        k, idle = 0, False
+        for b in stream:
+            if b == GEN2_IDLE:
+                idle = True
+                continue
+            if idle and k > 0:
+                self.assertNotEqual(owner[k], owner[k - 1])
+            idle = False
+            k += 1
 
 # Gen2RXFraming: packets at any byte position, random Idle Symbols between them ----------------------
 

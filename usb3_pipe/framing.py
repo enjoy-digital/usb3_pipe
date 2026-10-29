@@ -871,6 +871,116 @@ class Gen2TXPacker(LiteXModule):
             ),
         ]
 
+class Gen2TXPacker16(LiteXModule):
+    """Gen2TXPacker with 16 bytes entries (Gen2TX at 80-bit: a Data Block every 1.65 cycles) for
+    slower fabrics (ex: GW5A at 125MHz).
+
+    The entries before the last one of a unit are full (16 bytes): the fill level of the partial
+    block only changes at the units ends. Blocks are a byte selection of the partial block and the
+    entry by the registered fill level (no per entry placement in a wider buffer), registered output.
+    A unit is started in a partial block when its first entry completes the block or is its last
+    entry (the unit then fits in the block). A partial block with a unit end is output padded with
+    Idle Symbols as soon as the output register is free (never an empty output register at a block
+    request between the blocks of a unit) and replaced while not taken when the next unit is packed
+    in it. Same interface as Gen2TXPacker."""
+    def __init__(self):
+        self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout(16))
+        self.source          = source = stream.Endpoint([("data", 128)])
+        self.units_available = Signal() # i: A complete unit is available on sink.
+        self.unit_end        = Signal() # o: A unit is read (pulse, last entry).
+        self.flush           = Signal() # i: Discard the sink entries (link not in U0).
+        self.skp_pending     = Signal() # i: SKP Ordered Set pending (Gen2TX, see Gen2TXPacker).
+
+        # # #
+
+        acc     = Signal(128) # Partial block (bytes acc[0:8*fill], oldest from acc[0:8]).
+        fill    = Signal(4)   # Bytes in the partial block (0-15).
+        in_unit = Signal()    # Reading a unit.
+        hold    = Signal()    # Unit ended with a SKP Ordered Set pending: next unit after the block.
+        o_pad   = Signal()    # Output register: partial block padded (replaceable while not taken).
+
+        # Entry placed at the fill level: block (16 bytes) and remaining bytes.
+        total  = Signal(5) # Bytes in the partial block + entry bytes.
+        block  = Signal(128)
+        rest   = Signal(128)
+        padded = Signal(128) # Partial block padded with Idle Symbols.
+        out    = Signal(128) # Block with the entry (padded with Idle Symbols when ending the unit).
+        byte   = lambda v, i: v[8*i:8*(i+1)]
+        self.comb += total.eq(fill + sink.bytes)
+        for j in range(16):
+            self.comb += [
+                Case(fill, {f: byte(block, j).eq(byte(acc, j) if j < f else byte(sink.data, j - f))
+                    for f in range(16)}),
+                Case(fill, {f: byte(rest, j).eq(byte(sink.data, 16 + j - f) if j < f else 0)
+                    for f in range(16)}),
+                byte(padded, j).eq(Mux(j < fill, byte(acc, j), GEN2_IDLE)),
+                byte(out, j).eq(Mux(j >= total, GEN2_IDLE, byte(block, j))),
+            ]
+
+        # Read/output decisions.
+        sent     = Signal() # Padded partial block taken: the partial block is sent.
+        free     = Signal() # Output register free (empty or block taken).
+        wr       = Signal() # Output register writable (free or padded partial block not taken).
+        load     = Signal() # Output register loaded.
+        start_ok = Signal()
+        take     = Signal()
+        pad      = Signal() # Partial block with a unit end output padded.
+        self.comb += [
+            sent.eq(source.valid & o_pad & source.ready),
+            free.eq(~source.valid | (source.ready & ~o_pad)),
+            wr.eq(free | (o_pad & ~source.ready)),
+            start_ok.eq(self.units_available & ~hold & ((fill == 0) | (total >= 16) | sink.last)),
+            take.eq(sink.valid & ~self.flush & ~sent & (in_unit | start_ok)),
+            sink.ready.eq(self.flush | (take & (wr | (total < 16)))),
+            pad.eq(~in_unit & (fill != 0) & ~take & free),
+            load.eq(pad | (take & wr)),
+            self.unit_end.eq(sink.valid & sink.ready & sink.last),
+        ]
+        self.sync += [
+            If(load,
+                source.data.eq(Mux(pad, padded, out)),
+            ),
+            If(source.ready,
+                source.valid.eq(0),
+                o_pad.eq(0),
+            ),
+            If(self.flush,
+                source.valid.eq(0),
+                o_pad.eq(0),
+                fill.eq(0),
+                in_unit.eq(0),
+                hold.eq(0),
+            ).Elif(sent,
+                fill.eq(0),
+                hold.eq(0),
+            ).Elif(sink.valid & sink.ready,
+                in_unit.eq(~sink.last),
+                If(total >= 16,
+                    source.valid.eq(1),
+                    o_pad.eq(0),
+                    # Block ending exactly at a unit end.
+                    source.last.eq(sink.last & (total == 16)),
+                    acc.eq(rest),
+                    fill.eq(total - 16),
+                    hold.eq(sink.last & self.skp_pending & (total != 16)),
+                ).Else(
+                    # Unit end in the partial block: output padded when writable.
+                    If(wr,
+                        source.valid.eq(1),
+                        o_pad.eq(1),
+                        source.last.eq(1),
+                    ),
+                    acc.eq(block),
+                    fill.eq(total),
+                    hold.eq(sink.last & self.skp_pending),
+                )
+            ).Elif(pad,
+                source.valid.eq(1),
+                o_pad.eq(1),
+                source.last.eq(1),
+            ),
+        ]
+
 # Gen 2 Link TX ------------------------------------------------------------------------------------
 
 class Gen2LinkTX(LiteXModule):
@@ -902,8 +1012,20 @@ class Gen2LinkTX(LiteXModule):
         self.comb += framer.reset.eq(self.flush)
         self.buffer = buffer = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
             stream.AsyncFIFO(gen2_tx_unit_layout(nbytes), buffer_depth, buffered=True))
-        self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker(nbytes))
-        self.comb += buffer.source.connect(packer.sink)
+        self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker16() if nbytes == 16 else
+            Gen2TXPacker(nbytes))
+        if nbytes == 16:
+            # Registered valid/ready between the buffer and the packer (timings: packer read
+            # decision to the buffer read side). Not reset: flushed entries drained by the packer
+            # (units read count).
+            self.read_buffer = read_buffer = ClockDomainsRenamer("tx")(
+                stream.Buffer(gen2_tx_unit_layout(16), pipe_valid=True, pipe_ready=True))
+            self.comb += [
+                buffer.source.connect(read_buffer.sink),
+                read_buffer.source.connect(packer.sink),
+            ]
+        else:
+            self.comb += buffer.source.connect(packer.sink)
         if nbytes == 16:
             # Registered valid/ready between the packer and Gen2TX (timings: Gen2TX block requests
             # to the packer read/placement).
@@ -1000,16 +1122,25 @@ class Gen2LinkRX(LiteXModule):
             sink.ready.eq(1),
             framing.reset.eq(~self.data_stream),
         ]
+        # Link Commands words buffer (rx -> sys).
+        self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
+            stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
         if nbytes == 16:
-            # Registered framing output before the words buffer (timings: buffer write side).
+            # Registered framing outputs before the buffers (timings: buffers write side).
             out_buffer = ClockDomainsRenamer("rx")(stream.Buffer(gen2_link_layout(4)))
-            self.submodules += out_buffer
+            lc_out_buffer = ClockDomainsRenamer("rx")(stream.Buffer([("data", 32), ("ctrl", 4)]))
+            self.submodules += out_buffer, lc_out_buffer
             self.comb += [
                 framing.source.connect(out_buffer.sink),
                 out_buffer.source.connect(buffer.sink),
+                framing.source_lc.connect(lc_out_buffer.sink),
+                lc_out_buffer.source.connect(lc_buffer.sink),
             ]
         else:
-            self.comb += framing.source.connect(buffer.sink)
+            self.comb += [
+                framing.source.connect(buffer.sink),
+                framing.source_lc.connect(lc_buffer.sink),
+            ]
         if nbytes == 8:
             converter = ClockDomainsRenamer("rx")(stream.Converter(128, 64))
             self.submodules += converter
@@ -1023,10 +1154,7 @@ class Gen2LinkRX(LiteXModule):
 
         # Link Commands words (rx -> sys), gated by rx_ready.
         self.specials += MultiReg(self.lc_enable, framing.lc_enable, "rx")
-        self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
-            stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
         self.comb += [
-            framing.source_lc.connect(lc_buffer.sink),
             self.source_lc.valid.eq(lc_buffer.source.valid & self.rx_ready),
             self.source_lc.data.eq(lc_buffer.source.data),
             lc_buffer.source.ready.eq(~self.rx_ready | self.source_lc.ready),
