@@ -1071,17 +1071,24 @@ class Gen2TXDatapath(LiteXModule):
         # # #
 
         if 3*data_width > 132:
-            # Registered valid/ready between Gen2TX and the DC balance (timings: the Gen2TX block
-            # selection and the gearbox/DC balance readies at one block per cycle).
-            self.buffer = buffer = stream.Buffer(gen2_tx_block_layout(), pipe_valid=True,
+            # Registered valid/ready between Gen2TX and the DC balance and between the DC balance and
+            # the gearbox (timings: the Gen2TX block selection and the gearbox/DC balance readies at
+            # one block per cycle).
+            self.buffer      = buffer      = stream.Buffer(gen2_tx_block_layout(), pipe_valid=True,
+                pipe_ready=True)
+            self.gear_buffer = gear_buffer = stream.Buffer(gen2_block_layout(), pipe_valid=True,
                 pipe_ready=True)
             self.comb += [
                 tx.source.connect(buffer.sink),
                 buffer.source.connect(dc_balance.sink),
+                dc_balance.source.connect(gear_buffer.sink),
+                gear_buffer.source.connect(gearbox.sink),
             ]
         else:
-            self.comb += tx.source.connect(dc_balance.sink)
-        self.comb += dc_balance.source.connect(gearbox.sink)
+            self.comb += [
+                tx.source.connect(dc_balance.sink),
+                dc_balance.source.connect(gearbox.sink),
+            ]
 
 GEN2_RX_COUNTERS = [
     # (name, description).
