@@ -1137,16 +1137,23 @@ class Gen2LinkTX(LiteXModule):
             units_written_d[i].eq(units_written_d[i-1]) for i in range(1, units_delay)]
         self.comb += [
             units_written.ce.eq(buffer.sink.valid & buffer.sink.ready & buffer.sink.last),
-            units_read.ce.eq(packer.unit_end),
             packer.flush.eq(flush_tx),
         ]
         if nbytes == 16:
-            # Registered (timings): not set on the cycle after a unit is read (units read count not
-            # updated in the flag yet).
-            self.sync.tx += packer.units_available.eq((units_written_d[-1] != units_read.q) &
-                ~packer.unit_end)
+            # Registered (timings): units read counted from the registered unit ends, available
+            # flag not set on the 2 cycles after a unit is read (count not updated in the flag yet).
+            unit_end_d = Signal()
+            self.sync.tx += [
+                unit_end_d.eq(packer.unit_end),
+                packer.units_available.eq((units_written_d[-1] != units_read.q) &
+                    ~packer.unit_end & ~unit_end_d),
+            ]
+            self.comb += units_read.ce.eq(unit_end_d)
         else:
-            self.comb += packer.units_available.eq(units_written_d[-1] != units_read.q)
+            self.comb += [
+                units_read.ce.eq(packer.unit_end),
+                packer.units_available.eq(units_written_d[-1] != units_read.q),
+            ]
 
 # Gen 2 Link RX ------------------------------------------------------------------------------------
 
