@@ -161,6 +161,7 @@ class Gen2BlockGearbox(LiteXModule):
         dw  = data_width
         buf = Signal(196 + dw)
         rl  = Signal(max=196 + dw + 1) # Bits after the output of the cycle (placement position).
+        assert dw % 4 == 0
         out = Signal()                 # Word output this cycle (bits >= dw).
         self.comb += [
             source.valid.eq(out),
@@ -184,7 +185,9 @@ class Gen2BlockGearbox(LiteXModule):
         self.comb += accept.eq(sink.valid & sink.ready)
         self.sync += [
             If(accept,
-                buf.eq(shifted | (Cat(block, Constant(0, dw)) << rl[:bits_for(dw)])), # rl <= dw.
+                # rl <= dw, multiple of 4 (blocks/words lengths): 4-bit steps shift.
+                buf.eq(shifted | (Cat(block, Constant(0, dw)) <<
+                    Cat(Constant(0, 2), rl[2:bits_for(dw)]))),
                 # Bits >= 132 > dw: word output on the next cycle.
                 out.eq(1),
                 rl.eq(rl + length - dw),
