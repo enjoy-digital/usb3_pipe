@@ -342,6 +342,7 @@ class Gen2RXFraming(LiteXModule):
         # computed on the incoming word and registered with R: the packet start search is then a
         # selection by the byte pointer.
         r       = Signal(8*nbytes)
+        r_edb   = Signal(nbytes) # EDB bytes (DPPABORT).
         r_valid = Signal()
         shift   = Signal() # Consume R (R <- incoming word).
         win     = Signal(16*nbytes)
@@ -358,6 +359,8 @@ class Gen2RXFraming(LiteXModule):
         r_q       = [Signal(pw, name=f"r_q{i}") for i in range(nbytes)]
         r_code    = [Signal(3, name=f"r_code{i}") for i in range(nbytes)]
         code = lambda j: in_codes[3*j:3*(j+1)]
+        in_edb = Signal(nbytes)
+        self.comb += [in_edb[j].eq(code(j) == (KIND_EDB + 1)) for j in range(nbytes)]
         for i in range(nbytes):
             self.comb += [
                 nxt_found[i].eq(Reduce("OR", [code(j) != 0 for j in range(i, nbytes)])),
@@ -368,6 +371,7 @@ class Gen2RXFraming(LiteXModule):
                 self.comb += If(code(j) != 0, nxt_q[i].eq(j), nxt_code[i].eq(code(j)))
         self.sync += If(in_valid & in_ready,
             r.eq(in_data),
+            r_edb.eq(in_edb),
             r_valid.eq(1),
             [r_found[i].eq(nxt_found[i]) for i in range(nbytes)],
             [r_q[i].eq(nxt_q[i]) for i in range(nbytes)],
@@ -392,8 +396,10 @@ class Gen2RXFraming(LiteXModule):
         last      = Signal()
         dpp_len12 = Signal(11, reset=12) # Last DPH Length Field Replica + 12 (DPP length).
         out       = Signal(8*nbytes)
+        out_edb   = Signal(nbytes)
         self.comb += [
             out.eq((win >> byte_offset(p))[0:8*nbytes]),
+            out_edb.eq((Cat(r_edb, in_edb) >> p)[0:nbytes]),
             last.eq(rem <= nbytes),
         ]
 
@@ -422,7 +428,7 @@ class Gen2RXFraming(LiteXModule):
             ).Elif(is_end & ((j + 1) == rem),
                 ctrl.eq(1), data.eq(EPF),
             ).Elif(is_end,
-                ctrl.eq(1), data.eq(Mux(byte == GEN2_EDB, EDB, END)),
+                ctrl.eq(1), data.eq(Mux(out_edb[j], EDB, END)),
             ).Else(
                 data.eq(byte),
             )

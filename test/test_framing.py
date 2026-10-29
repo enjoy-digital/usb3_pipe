@@ -59,17 +59,17 @@ def split_units(units, lc_enable=True):
     lcs   = [u[1][0] for u in units if fast(u)]
     return words, lcs
 
-def dpp(rng, length, nullified=False):
+def dpp(rng, length, nullified=False, aborted=False):
     if nullified:
         return [k_word(EDB)]
     data = [(rng.getrandbits(8), 0) for _ in range(length + 4)] # Data + CRC-32.
-    end  = [(END, 1)]*3 + [(EPF, 1)]
+    end  = [(EDB if aborted else END, 1)]*3 + [(EPF, 1)] # DPPABORT/DPPEND.
     return [k_word(SDP)] + words_from_bytes(data + end)
 
 def random_units(rng, n, short=False):
     units = []
     for _ in range(n):
-        kind = rng.choice(["hp", "lc", "dp", "dp", "nullified"])
+        kind = rng.choice(["hp", "lc", "dp", "dp", "nullified", "aborted"])
         if kind == "hp":
             units.append(header_packet(rng))
         elif kind == "lc":
@@ -77,7 +77,7 @@ def random_units(rng, n, short=False):
         else:
             length = rng.choice([0, 1, 2, 3, 4, 5, 13] + ([] if short else [64, 255, 1024]))
             units.append(header_packet(rng, dw0_type=0x08, length=length) +
-                dpp(rng, length, nullified=(kind == "nullified")))
+                dpp(rng, length, nullified=(kind == "nullified"), aborted=(kind == "aborted")))
     return units
 
 # Loopback -----------------------------------------------------------------------------------------
