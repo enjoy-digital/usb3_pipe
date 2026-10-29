@@ -158,7 +158,9 @@ class WordsWindow(LiteXModule):
         self.comb += [
             self.w0.eq(data[0]), self.c0.eq(ctrl[0]),
             self.w1.eq(data[1]), self.c1.eq(ctrl[1]),
-            rem.eq(level - self.consume),
+            # level - consume: candidates computed from the registered level, selected by consume
+            # (timings: consume late).
+            Case(self.consume, {c: rem.eq(level - c) for c in range(3)}),
             sink.ready.eq(rem <= 2),
         ]
         accept = Signal()
