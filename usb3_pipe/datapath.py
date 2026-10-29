@@ -533,12 +533,17 @@ class Gen2TX(LiteXModule):
         self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed, per_byte_advance=False)
 
         # Block selection --------------------------------------------------------------------------
+        # SYNC/SKP selection conditions registered (sync_zero, skp_go: timings).
         tx_os        = Signal()
         sync_count   = Signal(max=max(sync_interval_ts, sync_interval_tseq))
+        sync_zero    = Signal(reset=1) # sync_count == 0.
         sync_period  = Signal.like(sync_count)
         y            = Signal(max=skp_interval)
         skp_pending  = Signal(2)
         skp_allowed  = Signal()
+        skp_next     = Signal(2) # skp_pending/skp_allowed after this cycle.
+        allowed_next = Signal()
+        skp_go       = Signal()  # (skp_pending != 0) & skp_allowed.
         sds_sent     = Signal()
         self.comb += [
             tx_os.eq(self.tx_tseq | self.tx_ts1 | self.tx_ts2),
@@ -552,9 +557,9 @@ class Gen2TX(LiteXModule):
         sel_ts   = Signal()
         self.comb += [
             If(self.enable,
-                If(tx_os & (sync_count == 0),
+                If(tx_os & sync_zero,
                     sel_sync.eq(1)
-                ).Elif((skp_pending != 0) & skp_allowed,
+                ).Elif(skp_go,
                     sel_skp.eq(1)
                 ).Elif(self.tx_data,
                     If(~sds_sent,
@@ -641,40 +646,60 @@ class Gen2TX(LiteXModule):
         ]
 
         # State ------------------------------------------------------------------------------------
+        # SKP scheduling.
+        self.comb += [
+            skp_next.eq(skp_pending),
+            allowed_next.eq(skp_allowed),
+            If(~self.enable,
+                skp_next.eq(0),
+                allowed_next.eq(0),
+            ).Elif(source.valid & source.ready,
+                If(~sel_skp,
+                    If(~(self.tx_tseq & ~self.tx_data) & (y == (skp_interval - 1)) &
+                        (skp_pending != 2),
+                        skp_next.eq(skp_pending + 1)
+                    ),
+                    allowed_next.eq(sel_sync | sel_sds | (sel_ts & ~self.tx_tseq) | idle |
+                        (sel_data & sink.last)),
+                ).Else(
+                    skp_next.eq(skp_pending - 1)
+                )
+            )
+        ]
+        self.sync += [
+            skp_pending.eq(skp_next),
+            skp_allowed.eq(allowed_next),
+            skp_go.eq((skp_next != 0) & allowed_next),
+        ]
         self.sync += [
             If(~self.enable,
                 sync_count.eq(0),
+                sync_zero.eq(1),
                 y.eq(0),
-                skp_pending.eq(0),
-                skp_allowed.eq(0),
                 sds_sent.eq(0),
             ).Elif(source.valid & source.ready,
                 # SYNC scheduling (TS Ordered Sets count).
                 If(sel_ts,
                     If(sync_count == sync_period,
-                        sync_count.eq(0)
+                        sync_count.eq(0),
+                        sync_zero.eq(1),
                     ).Else(
-                        sync_count.eq(sync_count + 1)
+                        sync_count.eq(sync_count + 1),
+                        sync_zero.eq(0),
                     )
                 ).Elif(sel_sync,
-                    sync_count.eq(1)
+                    sync_count.eq(1),
+                    sync_zero.eq(0),
                 ),
-                # SKP scheduling.
+                # SKP interval.
                 If(~sel_skp,
                     If(self.tx_tseq & ~self.tx_data,
                         y.eq(0)
                     ).Elif(y == (skp_interval - 1),
                         y.eq(0),
-                        If(skp_pending != 2,
-                            skp_pending.eq(skp_pending + 1)
-                        )
                     ).Else(
                         y.eq(y + 1)
                     ),
-                    skp_allowed.eq(sel_sync | sel_sds | (sel_ts & ~self.tx_tseq) | idle |
-                        (sel_data & sink.last)),
-                ).Else(
-                    skp_pending.eq(skp_pending - 1)
                 ),
                 # Data Stream.
                 If(sel_sds,
@@ -813,7 +838,7 @@ class Gen2TXDCBalance(LiteXModule):
         source = self.source
         ones   = lambda v: bin(v).count("1")
 
-        # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 4 chunks, 12-13, 14,
+        # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 8 chunks, 12-13, 14,
         # 15).
         v0        = Signal()
         header0   = Signal(4)
@@ -821,7 +846,7 @@ class Gen2TXDCBalance(LiteXModule):
         skp0      = Signal()
         ts0       = Signal()
         dc_reset0 = Signal()
-        ones_11   = [Signal(5) for _ in range(4)]
+        ones_11   = [Signal(4) for _ in range(8)]
         ones_13   = Signal(5)
         ones_14   = Signal(4)
         ones_15   = Signal(4)
@@ -835,7 +860,7 @@ class Gen2TXDCBalance(LiteXModule):
             skp0.eq(sink.skp),
             ts0.eq(sink.ts),
             dc_reset0.eq(sink.dc_reset),
-            [ones_11[i].eq(popcount(bits_11[25*i:25*(i+1)])) for i in range(4)],
+            [ones_11[i].eq(popcount(bits_11[13*i:min(13*(i+1), 100)])) for i in range(8)],
             ones_13.eq(popcount(sink.data[96:112])),
             ones_14.eq(popcount(sink.data[112:120])),
             ones_15.eq(popcount(sink.data[120:128])),
@@ -861,7 +886,8 @@ class Gen2TXDCBalance(LiteXModule):
             skp.eq(skp0),
             ts.eq(ts0),
             dc_reset.eq(dc_reset0),
-            inc_11.eq(2*(ones_11[0] + ones_11[1] + ones_11[2] + ones_11[3]) - 100),
+            inc_11.eq(2*(((ones_11[0] + ones_11[1]) + (ones_11[2] + ones_11[3])) +
+                         ((ones_11[4] + ones_11[5]) + (ones_11[6] + ones_11[7]))) - 100),
             inc["none"].eq(2*(ones_13 + ones_14 + ones_15) - 32),
             inc["15p"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ONES[1])) - 32),
             inc["15n"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
