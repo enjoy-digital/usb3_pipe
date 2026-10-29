@@ -262,7 +262,6 @@ class WordsWindow(LiteXModule):
         level = Signal(3)
         rem   = Signal(3)
         self.comb += [
-            self.n.eq(Mux(level >= 2, 2, level)),
             self.w0.eq(data[0]), self.c0.eq(ctrl[0][:4]),
             self.w1.eq(data[1]), self.c1.eq(ctrl[1][:4]),
             rem.eq(level - self.consume),
@@ -293,7 +292,13 @@ class WordsWindow(LiteXModule):
             ).Else(
                 data[i].eq(shifted_d), ctrl[i].eq(shifted_c)
             )
-        self.sync += level.eq(rem + Mux(accept, sink.words, 0))
+        level_next = Signal(3)
+        self.comb += level_next.eq(rem + Mux(accept, sink.words, 0))
+        self.sync += [
+            level.eq(level_next),
+            # Available words registered (timings).
+            self.n.eq(Mux(level_next >= 2, 2, level_next)),
+        ]
 
 # Gen 2 RX Framing ---------------------------------------------------------------------------------
 
