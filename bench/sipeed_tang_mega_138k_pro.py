@@ -57,6 +57,7 @@ class _CRG(LiteXModule):
 class USB3SoC(USB3BaseSoC):
     def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
         with_gtr12_debug=False, with_gtr12_analyzer=False, with_analyzer=False, analyzer_group="link",
+        gen2_capable=False,
         analyzer_csv="analyzer.csv", usb3_kwargs={}, **kwargs):
         # USB3 PIPE/SerDes at 125MHz (Gen 1 32-bit words); with a lower sys_clk_freq, the PIPE runs on
         # the GTR12 TX fabric clock ("tx" clock domain: frequency-locked to the transmitted words, no
@@ -86,7 +87,8 @@ class USB3SoC(USB3BaseSoC):
             xcvr_cd        = "sys" if phy_cd is None else "gtr12",
             tx_cdc         = phy_cd != "tx", # SerDes logic on the GTR12 TX clock: no TX CDC.
             refclk         = refclk,
-            csr_config     = None if serdes_csr is None else open(serdes_csr).read())
+            csr_config     = None if serdes_csr is None else open(serdes_csr).read(),
+            gen2_capable   = gen2_capable)
         if phy_cd is not None:
             # GTR12 control logic on sys (free-running), SerDes datapath on the GTR12 TX clock.
             self.cd_gtr12 = ClockDomain()
@@ -107,7 +109,7 @@ class USB3SoC(USB3BaseSoC):
         # GTR12 bring-up: lane status, SerDes registers access (UPAR).
         gtr12 = usb3_serdes.gtr12
         gtr12.add_status_csr()
-        if with_upar and ((phy_cd is None) or with_gtr12_debug): # UPAR on the sys clock.
+        if with_upar and ((phy_cd is None) or with_gtr12_debug or gen2_capable): # UPAR on the sys clock.
             gtr12.upar.add_csr()
 
         # Bring-up debug: GTR12 status transitions, PIPE counters, RX snapshots, LTSSM history.
@@ -303,6 +305,7 @@ def main():
     parser.add_argument("--serdes-csr",     default=None, help="GTR12 register configuration file override (bring-up: serdes_toml_to_csr output).")
     parser.add_argument("--rx-idle-source", default="~astat5", help="RX Electrical Idle indicator (~astat5, elecidle, [~]astat<n>).")
     parser.add_argument("--no-upar",        action="store_true", help="No SerDes registers runtime access (UPAR).")
+    parser.add_argument("--gen2-capable",        action="store_true", help="Gen 2 (10Gbps) capable SerDes/PHY (GTR12 rate change through UPAR, 80-bit raw words).")
     parser.add_argument("--with-gtr12-debug",    action="store_true", help="GTR12/PIPE bring-up debug (transitions/PIPE counters, RX snapshots, LTSSM history).")
     parser.add_argument("--with-gtr12-analyzer", action="store_true", help="LiteScope Analyzer on the GTR12 raw RX words.")
     parser.add_argument("--place-option",   default=2, type=int, help="Gowin place algorithm.", choices=[0, 1, 2])
@@ -323,6 +326,7 @@ def main():
         rx_idle_source = args.rx_idle_source,
         with_upar      = not args.no_upar,
         with_gtr12_debug    = args.with_gtr12_debug,
+        gen2_capable        = args.gen2_capable,
         with_gtr12_analyzer = args.with_gtr12_analyzer,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)

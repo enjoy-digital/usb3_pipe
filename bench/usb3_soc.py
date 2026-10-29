@@ -407,7 +407,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
     gen2_capable = getattr(serdes, "gen2_capable", False)
-    assert (phy_cd is None) or not (gen2_capable or with_debug or with_serdes_debug or with_profile)
+    assert (phy_cd is None) or not (with_debug or with_serdes_debug or with_profile)
     soc.usb3_phy = usb3_phy = USB3PHY(
         serdes        = serdes,
         sys_clk_freq  = sys_clk_freq,
@@ -445,9 +445,16 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     else:
         soc.comb += usb3_phy.source.ready.eq(1)
 
-    # Gen 2 bring-up debug (after the core: Link Layer probes).
-    if gen2_capable:
+    # Gen 2 bring-up debug (after the core: Link Layer probes). With phy_cd (slow fabrics): Gen 2
+    # capability/status only.
+    if gen2_capable and phy_cd is None:
         add_usb3_gen2_rx(soc, serdes, usb3_phy)
+    elif gen2_capable:
+        from litex.soc.interconnect.csr import CSRStorage, CSRStatus
+        soc.usb3_gen2_capable = CSRStorage(1, reset=1, description="Gen 2 capability advertised.")
+        soc.comb += usb3_phy.ssp.gen2_capable.eq(soc.usb3_gen2_capable.storage)
+        soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
+        soc.comb += soc.usb3_gen2_status.status.eq(Cat(usb3_phy.gen2, serdes.rate_10g))
 
     # Throughput profile (Bulk IN/Link Layer TX cycles).
     if with_core and with_profile and hasattr(soc, "usb3_bench"):

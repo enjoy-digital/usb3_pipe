@@ -10,7 +10,7 @@ idle, filtered RX electrical idle, RX decode errors).
 """
 
 from migen import *
-from migen.genlib.cdc import PulseSynchronizer
+from migen.genlib.cdc import PulseSynchronizer, MultiReg
 
 from litex.gen import *
 
@@ -52,6 +52,7 @@ class USB3SerDes(LiteXModule):
         self.rx_align      = Signal()        # i
         self.rx_reset      = Signal()        # i: RX re-initialization (PMA/CDR/PCS reset sequence).
         self.rx_reinit     = Signal()        # RX re-initialization request of the SerDes itself (ex: rate change).
+        self.tx_reinit     = Signal()        # TX re-initialization request of the SerDes itself (ex: lane reconfiguration).
 
         self.rx_idle_stretch = 0    # rx_idle stretch (cycles) of the RX idle filter (add_lfps).
         self.xcvr_name       = None # Transceiver submodule name (add_transceiver).
@@ -111,7 +112,7 @@ class USB3SerDes(LiteXModule):
             stream.Buffer(rx_substitution.source.description, pipe_ready=True)) # Timings.
         self.rx_datapath     = rx_datapath     = RXDatapath("rx", phy_dw=phy_dw)
         self.comb += [
-            xcvr.tx_enable.eq(self.enable),
+            xcvr.tx_enable.eq(self.enable & ~self.tx_reinit),
             xcvr.rx_enable.eq(self.enable & ~self.rx_reset & ~self.rx_reinit),
             self.ready.eq(xcvr.tx_ready & xcvr.rx_ready),
             xcvr.rx_align.eq(self.rx_align),
@@ -397,6 +398,61 @@ class USPUSB3SerDes(USB3SerDes):
 
 # Gowin GW5AST USB3 Serializer/Deserializer --------------------------------------------------------
 
+class GW5RateSequencer(LiteXModule):
+    """GTR12 lane rate change (5Gbps <-> 10Gbps): on a rate_10g change, the lane is held in reset
+    (busy), the rate dependent registers are written through UPAR (writes: [(addr, value_5g,
+    value_10g)]), then the lane is released after a settling delay. rate_10g is resynchronized
+    (asynchronous input)."""
+    def __init__(self, upar, writes, settle_cycles=256):
+        self.rate_10g = Signal() # i: Asynchronous.
+        self.busy     = Signal() # o: Lane held in reset.
+
+        # # #
+
+        rate_10g = Signal()
+        current  = Signal()
+        self.specials += MultiReg(self.rate_10g, rate_10g)
+
+        index = Signal(max=max(len(writes), 2))
+        timer = Signal(max=settle_cycles + 1)
+        self.comb += [
+            upar.addr.eq(Array([C(a, 24) for a, v5, v10 in writes])[index]),
+            upar.wrdata.eq(Mux(current,
+                Array([C(v10, 32) for a, v5, v10 in writes])[index],
+                Array([C(v5,  32) for a, v5, v10 in writes])[index])),
+        ]
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            If(rate_10g != current,
+                NextValue(current, rate_10g),
+                NextValue(index, 0),
+                NextValue(timer, settle_cycles),
+                NextState("RESET")
+            )
+        )
+        fsm.act("RESET",
+            # Lane in reset before the registers writes.
+            self.busy.eq(1),
+            NextValue(timer, timer - 1),
+            If(timer == 0, NextState("WRITE"))
+        )
+        fsm.act("WRITE",
+            self.busy.eq(1),
+            upar.we.eq(1),
+            If(upar.done,
+                NextValue(index, index + 1),
+                If(index == (len(writes) - 1),
+                    NextValue(timer, settle_cycles),
+                    NextState("SETTLE")
+                )
+            )
+        )
+        fsm.act("SETTLE",
+            self.busy.eq(1),
+            NextValue(timer, timer - 1),
+            If(timer == 0, NextState("IDLE"))
+        )
+
 class GW5USB3SerDes(USB3SerDes):
     """Gowin GW5AST-138B GTR12 USB3 SerDes (Q1 lane 0/1: SFP0/SFP1 of the Tang Mega 138K Pro dock,
     100 MHz REFCLK1).
@@ -404,6 +460,11 @@ class GW5USB3SerDes(USB3SerDes):
     5Gbps, raw 20-bit PMA with 40-bit fabric words (125MHz, 4 symbols per cycle), 8b/10b and polarity
     in the fabric (LiteICLink GTR12), comma alignment by the PCS. The register configuration is
     generated from usb3_pipe/gw5 TOML files with Gowin's tools.
+
+    gen2_capable: 10Gbps selected with `rate_10g` (Gen 2): the rate dependent registers (CDR, QPLL1
+    output divider, TX lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) are written through UPAR with
+    the lane held in reset (GW5RateSequencer), 80-bit raw words at 125MHz (Gen 2 raw 128b/132b
+    blocks), same fabric clocks at both rates.
 
     TX Electrical Idle: DC (constant raw words) between the LFPS bursts (no transitions on the AC
     coupled link). rx_idle_source: RX Electrical Idle indicator of the lane ("~astat5": analog status
@@ -413,19 +474,27 @@ class GW5USB3SerDes(USB3SerDes):
     Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
-        with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True):
+        with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
+        gen2_capable=False):
         USB3SerDes.__init__(self)
+        assert (not gen2_capable) or with_upar
+        self.gen2_capable = gen2_capable
+        if gen2_capable:
+            self.gen2_data_width = 80
+            self.gen2_tx_data    = Signal(80) # i: Raw TX words (tx clock domain, bit 0 first).
+            self.gen2_rx_data    = Signal(80) # o: Raw RX words (rx clock domain, bit 0 first).
 
         # # #
 
         from liteiclink.serdes.gtr12_gw5 import GTR12
-        from usb3_pipe.gw5 import gw5_usb3_csr_config
+        from usb3_pipe.gw5 import gw5_usb3_csr_config, gw5_usb3_rate_writes
 
         # Transceiver ------------------------------------------------------------------------------
         gtr12 = GTR12(platform,
             line_rate   = 5e9,
             csr_config  = gw5_usb3_csr_config(lane, "5G", refclk) if csr_config is None else csr_config,
             data_width  = 40,
+            raw_width   = 80 if gen2_capable else 40,
             position    = "Q1",
             lane        = lane,
             tx_polarity = self.tx_polarity,
@@ -440,6 +509,19 @@ class GW5USB3SerDes(USB3SerDes):
         # No RX running disparity check (RX paths at 125MHz on the GW5A fabric).
         self.add_xcvr_datapath("gtr12", gtr12, data_width=40, rx_disparity_check=False,
             tx_cdc=tx_cdc)
+
+        # Gen 2: rate changes (UPAR registers writes, lane held in reset), raw words ---------------
+        if gen2_capable:
+            self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(
+                GW5RateSequencer(gtr12.upar, gw5_usb3_rate_writes(lane, refclk)))
+            self.comb += [
+                rate_sequencer.rate_10g.eq(self.rate_10g),
+                self.tx_reinit.eq(rate_sequencer.busy),
+                self.rx_reinit.eq(rate_sequencer.busy),
+                gtr12.tx_raw_enable.eq(self.gen2_tx_enable),
+                gtr12.tx_raw.eq(self.gen2_tx_data),
+                self.gen2_rx_data.eq(gtr12.rx_raw),
+            ]
 
         # LFPS -------------------------------------------------------------------------------------
         rx_idle = Signal()

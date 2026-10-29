@@ -8,10 +8,23 @@
 serdes_toml_to_csr from the TOML files, see gen_toml.py)."""
 
 import os
+import re
 
 def gw5_usb3_csr_config(lane, rate="5G", refclk="100M"):
-    """GTR12 register configuration of Q1 lane (0/1) at rate (5G) from the 100MHz REFCLK1 (100M) or
-    the 125MHz REFCLK0 (125M) of the quad."""
+    """GTR12 register configuration of Q1 lane (0/1) at rate (5G/10G) from the 100MHz REFCLK1 (100M)
+    or the 125MHz REFCLK0 (125M, 5G only) of the quad."""
     assert refclk in ["100M", "125M"]
+    assert (rate == "5G") or (refclk == "100M")
     suffix = "" if refclk == "100M" else "_ref125"
     return open(os.path.join(os.path.dirname(__file__), f"usb3_{rate.lower()}_ln{lane}{suffix}.csr")).read()
+
+def gw5_usb3_rate_writes(lane, refclk="100M"):
+    """Register writes of the 5G <-> 10G rate change of a lane: [(addr, value_5g, value_10g)], the
+    writes of the 5G and 10G configurations that differ (same writes sequence)."""
+    def writes(rate):
+        csr = gw5_usb3_csr_config(lane, rate, refclk)
+        return [(int(a, 16), int(v, 16)) for a, v in
+            re.findall(r"upar_write_driver\((0x[0-9a-fA-F]+),(0x[0-9a-fA-F]+)\)", csr)]
+    w5, w10 = writes("5G"), writes("10G")
+    assert [a for a, v in w5] == [a for a, v in w10]
+    return [(a, v5, v10) for (a, v5), (_, v10) in zip(w5, w10) if v5 != v10]
