@@ -84,6 +84,7 @@ class USB3SoC(USB3BaseSoC):
             with_upar      = with_upar,
             upar_clk       = self.crg.cd_sys.clk, # Quad AHB/UPAR clock running from the start.
             xcvr_cd        = "sys" if phy_cd is None else "gtr12",
+            tx_cdc         = phy_cd != "tx", # SerDes logic on the GTR12 TX clock: no TX CDC.
             refclk         = refclk,
             csr_config     = None if serdes_csr is None else open(serdes_csr).read())
         if phy_cd is not None:

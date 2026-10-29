@@ -377,8 +377,11 @@ class TXDatapath(LiteXModule):
     - Clock compensation (SKP insertion).
     - Clock domain crossing (from system clock to transceiver's TX clock).
     - Data-width adaptation (from 32-bit to transceiver's data-width).
+
+    with_cdc=False: sys and clock_domain are the same clock (ex: SerDes logic renamed to the
+    transceiver's TX clock domain), no clock domain crossing.
     """
-    def __init__(self, clock_domain="sys", phy_dw=16):
+    def __init__(self, clock_domain="sys", phy_dw=16, with_cdc=True):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
 
@@ -393,10 +396,11 @@ class TXDatapath(LiteXModule):
 
         # Clock domain crossing (registered FIFO write and ready: timings).
         buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
-        cdc    = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
-        cdc    = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
         self.buffer = buffer
-        self.cdc    = cdc
+        if with_cdc:
+            cdc = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
+            cdc = ClockDomainsRenamer({"write": "sys", "read": clock_domain})(cdc)
+            self.cdc = cdc
 
         # Data-width adaptation
         converter = stream.StrideConverter(
@@ -412,10 +416,15 @@ class TXDatapath(LiteXModule):
             self.sink.connect(sink_buffer.sink),
             sink_buffer.source.connect(skip_inserter.sink),
             skip_inserter.source.connect(buffer.sink),
-            buffer.source.connect(cdc.sink),
-            cdc.source.connect(converter.sink),
             converter.source.connect(self.source)
         ]
+        if with_cdc:
+            self.comb += [
+                buffer.source.connect(cdc.sink),
+                cdc.source.connect(converter.sink),
+            ]
+        else:
+            self.comb += buffer.source.connect(converter.sink)
 
 class RXDatapath(LiteXModule):
     """RX Datapath
