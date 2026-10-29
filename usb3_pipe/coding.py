@@ -364,8 +364,10 @@ class Gen2BlockAligner(LiteXModule):
         # vb: block start (Block context), vs[k]: SKP Ordered Set continued (4*m*(k + 1) SKP Symbols
         # consumed). Positions 0 to P - 1 (P - 1: 132-bit block read at r - 1). Updated with the
         # window (held without a new word).
-        vb        = Signal(P)
-        vs        = [Signal(P, name=f"skp_ptr{k}") for k in range(K)]
+        # Pointer vectors without reset: cleared by a registered reset (reset fanout).
+        vb        = Signal(P, reset_less=True)
+        vs        = [Signal(P, name=f"skp_ptr{k}", reset_less=True) for k in range(K)]
+        reset     = Signal(reset=1)
         any_d     = Signal() # Pointer set on the previous cycle.
         load_d    = Signal() # SYNC (Unaligned) on the previous cycles: pointer set on the next one.
         load_dd   = Signal()
@@ -461,7 +463,8 @@ class Gen2BlockAligner(LiteXModule):
             realign_oh.eq(Mux(realign, sync_oh_d, 0)),
             realign_d.eq(Cat(realign, realign_d[:-1])),
         )
-        self.comb += clear.eq(realign_d[0])
+        self.sync += reset.eq(0)
+        self.comb += clear.eq(realign_d[0] | reset)
 
         any_v = Signal()
         self.comb += any_v.eq((vb != 0) | (Reduce("OR", vs) != 0))
