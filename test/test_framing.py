@@ -13,6 +13,7 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common  import GEN2_IDLE
 from usb3_pipe.framing import Gen2TXFramer, Gen2TXPacker, Gen2RXFraming, gen2_tx_unit_layout
+from usb3_pipe.framing import Gen2TXUnitsWidener, WordsNarrower
 from usb3_pipe.framing import SHP, SDP, EDB, END, SLC, EPF
 
 # Helpers ------------------------------------------------------------------------------------------
@@ -85,17 +86,25 @@ class Gen2FramingLoopback(Module):
     """Gen2TXFramer -> units FIFO (store and forward) -> Gen2TXPacker -> Data Blocks (Gen2TX model:
     a block every 3 cycles at most, Idle Data Blocks when no block) -> Gen2RXFraming.
 
-    slots: block requests from the slot Signal (driven by the test) instead of every 3 cycles."""
-    def __init__(self, slots=False):
+    slots: block requests from the slot Signal (driven by the test) instead of every 3 cycles.
+    nbytes=16: framer entries paired (Gen2TXUnitsWidener), 16 bytes per cycle packer/RX framing, a
+    block every 1.65 cycles (80-bit Gen2TX: 20 blocks per 33 cycles)."""
+    def __init__(self, slots=False, nbytes=8):
         self.framer  = framer  = Gen2TXFramer()
-        self.fifo    = fifo    = stream.SyncFIFO(gen2_tx_unit_layout(), 512, buffered=True)
-        self.packer  = packer  = Gen2TXPacker()
-        self.rx      = rx      = Gen2RXFraming()
+        self.fifo    = fifo    = stream.SyncFIFO(gen2_tx_unit_layout(nbytes), 512, buffered=True)
+        self.packer  = packer  = Gen2TXPacker(nbytes)
+        self.rx      = rx      = Gen2RXFraming(nbytes)
         self.submodules += framer, fifo, packer, rx
-        self.comb += [
-            framer.source.connect(fifo.sink),
-            fifo.source.connect(packer.sink),
-        ]
+        if nbytes == 16:
+            widener = Gen2TXUnitsWidener()
+            self.submodules += widener
+            self.comb += [
+                framer.source.connect(widener.sink),
+                widener.source.connect(fifo.sink),
+            ]
+        else:
+            self.comb += framer.source.connect(fifo.sink)
+        self.comb += fifo.source.connect(packer.sink)
         units_written = Signal(16)
         units_started = Signal(16)
         self.sync += [
@@ -108,14 +117,21 @@ class Gen2FramingLoopback(Module):
         self.sync += skp_timer.eq(skp_timer + 1)
         self.comb += packer.skp_pending.eq(skp_timer[5])
 
-        # Gen2TX model: block every 3 cycles, idle block when none.
+        # Gen2TX model: block every 3 cycles (1.65 with 16 bytes), idle block when none.
         self.block       = block = Signal(128)
         self.block_valid = block_valid = Signal()
-        timer = Signal(2)
         self.slot = slot = Signal()
-        self.sync += If(timer == 2, timer.eq(0)).Else(timer.eq(timer + 1))
-        if not slots:
-            self.comb += slot.eq(timer == 2)
+        if nbytes == 16:
+            # 132-bit blocks from 80-bit words: a block when the bits count reaches 132.
+            acc = Signal(8)
+            self.sync += If(acc + 80 >= 132, acc.eq(acc + 80 - 132)).Else(acc.eq(acc + 80))
+            if not slots:
+                self.comb += slot.eq(acc + 80 >= 132)
+        else:
+            timer = Signal(2)
+            self.sync += If(timer == 2, timer.eq(0)).Else(timer.eq(timer + 1))
+            if not slots:
+                self.comb += slot.eq(timer == 2)
         idle = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
         self.comb += [
             packer.source.ready.eq(slot),
@@ -126,18 +142,26 @@ class Gen2FramingLoopback(Module):
                 block.eq(Mux(packer.source.valid, packer.source.data, idle))
             )
         ]
-        # Blocks -> 8 bytes per cycle (2 cycles per block, then 1 idle cycle).
-        half = Signal()
-        hold = Signal(128)
-        self.sync += [
-            If(block_valid, hold.eq(block), half.eq(1)).Elif(half, half.eq(0)),
-        ]
         # RX FIFO (the RX framing stalls 1 cycle on each packet start).
-        rx_fifo = stream.SyncFIFO([("data", 64)], 8)
+        rx_fifo = stream.SyncFIFO([("data", 8*nbytes)], 8)
         self.submodules += rx_fifo
+        if nbytes == 16:
+            self.comb += [
+                rx_fifo.sink.valid.eq(block_valid),
+                rx_fifo.sink.data.eq(block),
+            ]
+        else:
+            # Blocks -> 8 bytes per cycle (2 cycles per block, then 1 idle cycle).
+            half = Signal()
+            hold = Signal(128)
+            self.sync += [
+                If(block_valid, hold.eq(block), half.eq(1)).Elif(half, half.eq(0)),
+            ]
+            self.comb += [
+                rx_fifo.sink.valid.eq(block_valid | half),
+                rx_fifo.sink.data.eq(Mux(block_valid, block[0:64], hold[64:128])),
+            ]
         self.comb += [
-            rx_fifo.sink.valid.eq(block_valid | half),
-            rx_fifo.sink.data.eq(Mux(block_valid, block[0:64], hold[64:128])),
             rx_fifo.source.connect(rx.sink),
             rx.source.ready.eq(1),
             rx.source_lc.ready.eq(1),
@@ -147,13 +171,15 @@ class Gen2FramingLoopback(Module):
         self.sync += If(rx_fifo.sink.valid & ~rx_fifo.sink.ready, self.rx_overflow.eq(1))
 
 class TestGen2Framing(unittest.TestCase):
-    def loopback_test(self, seed, n_units=24, slots=False, short=False, pairs=False):
+    def loopback_test(self, seed, n_units=24, slots=False, short=False, pairs=False, nbytes=8,
+        gaps=0.2):
         rng   = random.Random(seed)
         units = random_units(rng, n_units, short=short)
         words = [w for u in units for w in u]
         out   = []
         lcs   = []
-        dut   = Gen2FramingLoopback(slots=slots)
+        overflow = []
+        dut   = Gen2FramingLoopback(slots=slots, nbytes=nbytes)
         # Words pairs: 1 or 2 words per entry (pairs=True), else 1.
         entries = []
         i = 0
@@ -171,7 +197,7 @@ class TestGen2Framing(unittest.TestCase):
                 while not (yield dut.framer.sink.ready):
                     yield
                 # Random gaps between words (core TX).
-                if rng.random() < 0.2:
+                if rng.random() < gaps:
                     yield dut.framer.sink.valid.eq(0)
                     yield
             yield dut.framer.sink.valid.eq(0)
@@ -185,6 +211,8 @@ class TestGen2Framing(unittest.TestCase):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
                 if (yield dut.rx.source_lc.valid):
                     lcs.append((yield dut.rx.source_lc.data))
+                if (yield dut.rx_overflow) and not overflow:
+                    overflow.append(i)
                 yield
         @passive
         def slots_generator(dut):
@@ -198,6 +226,7 @@ class TestGen2Framing(unittest.TestCase):
         generators = [generator(dut), checker(dut)] + ([slots_generator(dut)] if slots else [])
         run_simulation(dut, generators)
         self.assertEqual((out, lcs), split_units(units))
+        self.assertEqual(overflow, [])
 
 
     def test_loopback(self):
@@ -215,6 +244,17 @@ class TestGen2Framing(unittest.TestCase):
         # Words pairs input (64-bit Link Layer words): DPP data 8 bytes per cycle.
         for seed in range(3):
             self.loopback_test(seed, pairs=True)
+
+    def test_loopback_16_bytes(self):
+        # 16 bytes per cycle (80-bit Gen2TX/Gen2RX, a Data Block every 1.65 cycles): units stored
+        # in the FIFO before the packer reads them, no Logical Idle Data Block inside a unit and no
+        # RX FIFO overflow at the line rate.
+        for seed in range(2):
+            self.loopback_test(seed, pairs=True, nbytes=16)
+
+    def test_loopback_16_bytes_short(self):
+        # Short units back to back (1 cycle per packet start in the RX framing).
+        self.loopback_test(0, n_units=120, pairs=True, short=True, nbytes=16, gaps=0)
 
 if __name__ == "__main__":
     unittest.main()
@@ -333,7 +373,11 @@ class TestGen2RXFraming(unittest.TestCase):
         for lc_enable in [0, 1]:
             self.rx_framing_idle_gaps(lc_enable)
 
-    def rx_framing_idle_gaps(self, lc_enable):
+    def test_rx_framing_idle_gaps_16_bytes(self):
+        for lc_enable in [0, 1]:
+            self.rx_framing_idle_gaps(lc_enable, nbytes=16)
+
+    def rx_framing_idle_gaps(self, lc_enable, nbytes=8):
         rng   = random.Random(3)
         units = random_units(rng, 40)
         stream_bytes = []
@@ -344,9 +388,10 @@ class TestGen2RXFraming(unittest.TestCase):
             # Expected words: unit words with the bytes after the DPP end zeroed (DPHs: 20 bytes).
             expected += u
         stream_bytes += [GEN2_IDLE]*64
-        stream_bytes += [GEN2_IDLE]*((-len(stream_bytes)) % 8)
-        words8 = [int.from_bytes(bytes(stream_bytes[i:i+8]), "little") for i in range(0, len(stream_bytes), 8)]
-        dut = Gen2RXFraming()
+        stream_bytes += [GEN2_IDLE]*((-len(stream_bytes)) % nbytes)
+        words8 = [int.from_bytes(bytes(stream_bytes[i:i+nbytes]), "little")
+            for i in range(0, len(stream_bytes), nbytes)]
+        dut = Gen2RXFraming(nbytes)
         out = []
         lcs = []
         def generator(dut):
@@ -377,6 +422,45 @@ class TestGen2RXFraming(unittest.TestCase):
                 yield
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual((out, lcs), split_units(units, lc_enable))
+
+# WordsNarrower ------------------------------------------------------------------------------------
+
+class TestWordsNarrower(unittest.TestCase):
+    def narrower_test(self, n_in, n_out, words):
+        rng = random.Random(n_in*10 + n_out)
+        entries = [[(rng.getrandbits(32), rng.getrandbits(4)) for _ in range(rng.randint(1, n_in))]
+            for _ in range(64)]
+        dut = WordsNarrower(n_in, n_out, words=words)
+        out = []
+        def generator(dut):
+            for entry in entries:
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(sum(d << (32*j) for j, (d, c) in enumerate(entry)))
+                yield dut.sink.ctrl.eq(sum(c << (4*j) for j, (d, c) in enumerate(entry)))
+                yield dut.sink.words.eq(len(entry))
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+            for _ in range(8):
+                yield
+        @passive
+        def checker(dut):
+            while True:
+                yield dut.source.ready.eq(rng.random() < 0.7)
+                yield
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    n = (yield dut.source.words) if words else 1
+                    self.assertTrue(1 <= n <= n_out)
+                    data, ctrl = (yield dut.source.data), (yield dut.source.ctrl)
+                    out.extend(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf) for w in range(n))
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(out, [w for e in entries for w in e])
+
+    def test_narrower(self):
+        self.narrower_test(4, 2, words=True)
+        self.narrower_test(4, 1, words=False)
+        self.narrower_test(2, 1, words=False)
 
 # Generated Verilog --------------------------------------------------------------------------------
 

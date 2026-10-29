@@ -327,14 +327,17 @@ class Gen2PIPE(LiteXModule):
     Link Layer side (sys clock domain, U0): sink/source 32-bit words with K Symbols (Symbol 0 on
     data[0:8], framing Ordered Sets at word boundaries, as in Gen 1 operation), Gen 2 packet framing
     in the Data Blocks (Gen2TXFramer/Gen2TXPacker, Gen2RXFraming): TX units (Header Packet, Link
-    Command, DPH with its DPP) stored and forwarded (tx_buffer_depth 8-byte entries), RX packets
-    buffered (rx_buffer_depth words pairs, ~1.2GB/s peak on the line vs 500MB/s on the Link Layer
-    words at 125MHz).
+    Command, DPH with its DPP) stored and forwarded (tx_buffer_depth entries), RX packets
+    buffered (rx_buffer_depth entries, ~1.2GB/s peak on the line vs 500MB/s on the Link Layer
+    words at 125MHz). The framing processes 8 bytes per cycle up to 40-bit raw words (a Data Block
+    every 3.3 cycles), 16 bytes per cycle on wider words (ex: 80-bit, a Data Block every 1.65
+    cycles).
 
     Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
     """
     def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
         tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1):
+        framing_bytes = 8 if data_width <= 40 else 16
         link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout()
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
@@ -434,7 +437,8 @@ class Gen2PIPE(LiteXModule):
         ]
 
         # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
-        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words)
+        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words,
+            nbytes=framing_bytes)
         self.comb += [
             self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
             link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
@@ -446,7 +450,8 @@ class Gen2PIPE(LiteXModule):
         self.tx_packer = link_tx.packer
 
         # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
-        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth, link_words=link_words)
+        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth, link_words=link_words,
+            nbytes=framing_bytes)
         self.comb += [
             # Data Blocks (after SDS), framing reset out of the Data Stream.
             link_rx.sink.valid.eq(rx.source.valid),
