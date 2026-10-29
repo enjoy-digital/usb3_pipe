@@ -531,9 +531,16 @@ class USB3LinkLayer(LiteXModule):
             [tx_in_buf[i].eq(((i - ack_seq[0:ib]) & (tx_bufs - 1)) < tx_count) for i in range(tx_bufs)],
             tx_count2.eq(reduce(add, [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3)) for i in range(tx_bufs)])),
             tx_full.eq(tx_count >= LINK_HP_BUFFERS),
+        ]
+        # SuperSpeedPlus Type 1/Type 2 buffers full: registered with 64-bit words (slower fabrics,
+        # timings), the pushes then spaced by a cycle (the flags do not include the previous push,
+        # acknowledgements only lower the counts). Else combinatorial.
+        tx_push_d = Signal()
+        tx_full_t = getattr(self.sync if lw == 2 else self.comb, "__iadd__")
+        tx_full_t([
             tx_full1.eq((tx_count - tx_count2) >= LINK_HP_BUFFERS),
             tx_full2.eq(tx_count2 >= LINK_HP_BUFFERS),
-        ]
+        ])
 
         # Header Packets from the Link Layer (LMPs) or the Protocol Layer.
         lmp_push     = Signal()
@@ -546,9 +553,9 @@ class USB3LinkLayer(LiteXModule):
         tx_hp_full   = Signal() # No buffer for the Protocol Layer Header Packet.
         self.comb += [
             tx_hp_full.eq(Mux(ssp,
-                Mux(is_type2(self.tx_hp.dw0, tx_dw1), tx_full2, tx_full1),
+                Mux(is_type2(self.tx_hp.dw0, tx_dw1), tx_full2, tx_full1) | tx_push_d,
                 tx_full)),
-            lmp_push.eq(adv_received & Mux(ssp, ~tx_full1, ~tx_full) &
+            lmp_push.eq(adv_received & Mux(ssp, ~tx_full1 & ~tx_push_d, ~tx_full) &
                 (portcap_pending | portcfg_pending)),
             # SuperSpeedPlus operation: Link Speed and Num HP Buffers fields reserved (zero, 8.4.5).
             If(portcap_pending,
@@ -567,6 +574,8 @@ class USB3LinkLayer(LiteXModule):
                 tx_push_dpp.eq(self.tx_hp.dpp),
             ),
         ]
+        if lw == 2:
+            self.sync += tx_push_d.eq(tx_push)
         # Transfer Type (TT) of the ACK TPs/DPHs in SuperSpeedPlus operation (8.2, 8.10.4).
         tx_tt = Signal(3)
         self.comb += Case(self.tx_hp.dw1[8:12], {**{ept: tx_tt.eq(tt) for ept, tt in ssp_tt.items()},
