@@ -220,12 +220,13 @@ class Gen2BlockAligner(LiteXModule):
 
     Implementation (40-bit words at 250MHz, 80-bit words at 125MHz on slower fabrics): the last
     words are kept in a window and blocks are read at a bit pointer in a small range (2**k >=
-    data_width + 24 positions). The per position decodes (Block Header, SKP Dwords/SKPEND) are
-    computed on the incoming window and registered with it. The pointer is one-hot (one vector per
-    context: Block, SKP Ordered Set continued after 4*m*k SKP Symbols): each position is set from a
-    few positions of the previous cycle (pointer bit and decode at that position, per consumed
-    length), no pointer mux/adder in the loop, a pointer bit dropped (undefined Block Header, SKP
-    Ordered Set error, pointer behind the window) is an alignment loss. No control signal common to
+    data_width + 24 positions). The per position decodes (Block Header, SKP Dwords/SKPEND, SYNC
+    Symbols pairs) are registered with the window and shifted with it (only the positions reaching
+    the new word decoded), combined per pointer transition on the incoming window. The pointer is
+    one-hot (one vector per context: Block, SKP Ordered Set continued after 4*m*k SKP Symbols): each
+    position is set from a few positions of the previous cycle (pointer bit and decode at that
+    position, per consumed length), no pointer mux/adder in the loop, a pointer bit dropped
+    (undefined Block Header, SKP Ordered Set error, pointer behind the window) is an alignment loss. No control signal common to
     the positions in the loop (fanout): the SYNC search is done one word ahead (one-hot offset
     registered) and its pointer bit set one cycle later, a SYNC with a different alignment is
     checked over 2 cycles and sets the pointer to its alignment (decisions of these cycles
@@ -258,7 +259,7 @@ class Gen2BlockAligner(LiteXModule):
         r    = 2**kr        # Pointer range (blocks read at ptr < r).
         n    = r + 131 + dw # Window (+ SYNC search one word ahead).
         m    = 2 if dw <= 64 else 4 # SKP Dwords consumed per cycle (at most).
-        npos = r + 32*(m - 1) + 5   # SKP Dwords/SKPEND decode positions (ptr + 0/4 + 32*j).
+        npos = r + 32*(m - 1) + 4   # SKP Dwords/SKPEND decode positions (ptr + 0/4 + 32*j, j < m).
         K    = 9//m                 # SKP contexts (4*m*k SKP Symbols consumed, up to 36).
         P    = r + 132 - dw         # Pointer positions.
 
@@ -279,21 +280,46 @@ class Gen2BlockAligner(LiteXModule):
         self.sync += win.eq(win_next)
 
         # Per position decodes (registered with the window) ----------------------------------------
-        # Block Header/SKP Symbols decodes of the incoming window, combined per pointer transition
-        # (registered: the pointer loop is then the pointer bits and these decodes).
-        dword = [Signal(name=f"skp_dword{p}") for p in range(npos)] # SKP Dword (4 SKP Symbols).
-        end   = [Signal(name=f"skp_end{p}")   for p in range(npos)] # SKPEND Symbol.
-        for p in range(npos):
-            self.comb += [
-                dword[p].eq(win_next[p:p+32] == GEN2_SKP*0x01010101),
-                end[p].eq(  win_next[p:p+8]  == GEN2_SKPEND),
-            ]
+        # Block Header/SKP Symbols decodes of the window positions, registered with the window and
+        # shifted with it: only the positions reaching the new word are decoded (incoming window),
+        # the others are the registered decodes dw positions higher (no wide compare on the window
+        # in the decodes of the pointer transitions, window bits fanout). Combined per pointer
+        # transition (registered: the pointer loop is then the pointer bits and these decodes).
+        win_new = Cat(win[dw:], data) # Incoming window (new word).
+        def decodes(name, nq, w, f):
+            # Decodes of the w bits at positions 0 to nq - 1: registered vector (window) and decodes
+            # of the incoming window at positions 0 to nq - dw - 1 (registered decodes shifted).
+            v   = Signal(nq, name=name, reset_less=True)
+            nxt = []
+            for q in range(nq):
+                if (q + dw) < nq:
+                    nxt.append(v[q + dw])
+                else:
+                    assert (q + w) <= n
+                    d = Signal(name=f"{name}_new{q}")
+                    self.comb += d.eq(f(win_new[q:q+w]))
+                    nxt.append(d)
+            self.sync += If(sink.valid, v.eq(Cat(*nxt)))
+            return v, [Mux(sink.valid, nxt[q], v[q]) for q in range(nq - dw)]
+        def skp_decode(b):
+            # Control Block Header (single bit error corrected) + SKP/SKPEND Symbol 0.
+            return ((popcount(b[0:4] ^ BLOCK_HEADER_CONTROL) <= 1) &
+                ((b[4:12] == GEN2_SKP) | (b[4:12] == GEN2_SKPEND)))
+        def norm_decode(b):
+            # 132-bit block (Data/Control Header, not SKP/SKPEND).
+            dist_d = popcount(b[0:4] ^ BLOCK_HEADER_DATA)
+            dist_c = popcount(b[0:4] ^ BLOCK_HEADER_CONTROL)
+            return ~((dist_d > 1) & (dist_c > 1)) & ~skp_decode(b)
+        # Data registers without reset (datapath registers: reset fanout). skp_pos: Control Block
+        # Header + SKP/SKPEND Symbol 0, norm_pos: 132-bit block (positions < r used by the pointer),
+        # dword: SKP Dword (4 SKP Symbols), end: SKPEND Symbol (incoming window, positions < npos).
+        skp_pos,  skp  = decodes("skp_pos",   r + dw,    12, skp_decode)
+        norm_pos, _    = decodes("norm_pos",  r + dw,    12, norm_decode)
+        _,        dword = decodes("skp_dword", npos + dw, 32, lambda b: b == GEN2_SKP*0x01010101)
+        _,        end   = decodes("skp_end",   npos + dw,  8, lambda b: b == GEN2_SKPEND)
         def dwords(p, o, j):
             # SKP Dwords at p + o + 32*i (i < j).
             return [dword[p + o + 32*i] for i in range(j)]
-        # Data registers without reset (datapath registers: reset fanout).
-        skp_pos   = Signal(r, reset_less=True) # Control Block Header + SKP/SKPEND Symbol 0.
-        norm_pos  = Signal(r, reset_less=True) # 132-bit block (Data/Control Header, not SKP/SKPEND).
         bskp_pos  = [Signal(r, name=f"bskp_pos{j}", reset_less=True) # SKP: SKPEND after j Dwords.
             for j in range(m)]
         bcont_pos = Signal(r, reset_less=True) # SKP: m Dwords (continued).
@@ -301,18 +327,10 @@ class Gen2BlockAligner(LiteXModule):
             for j in range(m)]
         scont_pos = Signal(r, reset_less=True) # m Dwords (continued).
         for p in range(r):
-            header = win_next[p:p+4]
-            dist_d = popcount(header ^ BLOCK_HEADER_DATA)
-            dist_c = popcount(header ^ BLOCK_HEADER_CONTROL)
-            sym0   = win_next[p+4:p+12]
-            skp    = Signal()
-            self.comb += skp.eq((dist_c <= 1) & ((sym0 == GEN2_SKP) | (sym0 == GEN2_SKPEND)))
             self.sync += [
-                skp_pos[p].eq(skp),
-                norm_pos[p].eq(~((dist_d > 1) & (dist_c > 1)) & ~skp),
-                [bskp_pos[j][p].eq(Reduce("AND", [skp] + dwords(p, 4, j) + [end[p + 4 + 32*j]]))
+                [bskp_pos[j][p].eq(Reduce("AND", [skp[p]] + dwords(p, 4, j) + [end[p + 4 + 32*j]]))
                     for j in range(m)],
-                bcont_pos[p].eq(Reduce("AND", [skp] + dwords(p, 4, m))),
+                bcont_pos[p].eq(Reduce("AND", [skp[p]] + dwords(p, 4, m))),
                 [send_pos[j][p].eq(Reduce("AND", dwords(p, 0, j) + [end[p + 32*j]]))
                     for j in range(m)],
                 scont_pos[p].eq(Reduce("AND", dwords(p, 0, m))),
@@ -322,17 +340,11 @@ class Gen2BlockAligner(LiteXModule):
         # Offsets r to r + dw - 1 of the window (00h/FFh Symbols pairs shared): used one word later
         # (window shifted), the SYNC is then at r - dw + offset (at most one SYNC match per word: SYNC
         # pattern, 132-bit block).
+        # 00h/FFh Symbols pairs decodes registered with the window (positions r + 4 to n - 16 used).
         sync_pos     = Signal(dw)
         sync_inv_pos = Signal(dw)
-        pairs        = {}
-        pairs_inv    = {}
-        for q in range(r + 4, n - 15):
-            pairs[q]     = Signal(name=f"sync_pair{q}",     reset_less=True)
-            pairs_inv[q] = Signal(name=f"sync_pair_inv{q}", reset_less=True)
-            self.sync += [
-                pairs[q].eq(    win_next[q:q+16] == 0xff00),
-                pairs_inv[q].eq(win_next[q:q+16] == 0x00ff),
-            ]
+        pairs,     _ = decodes("sync_pair",     n - 15, 16, lambda b: b == 0xff00)
+        pairs_inv, _ = decodes("sync_pair_inv", n - 15, 16, lambda b: b == 0x00ff)
         for k in range(dw):
             p = r + k
             self.comb += [
@@ -341,24 +353,32 @@ class Gen2BlockAligner(LiteXModule):
                 sync_inv_pos[k].eq((win[p:p+4] == (~BLOCK_HEADER_CONTROL & 0xf)) &
                     Reduce("AND", [pairs_inv[p + 4 + 16*i] for i in range(8)])),
             ]
+        # Registered without the polarity toggle of the cycle (masked by the registered toggle:
+        # fanout), hits from partial ORs registered by 16 offsets (timings).
         sync_hit     = Signal()
         sync_inv_hit = Signal()
         sync_oh      = Signal(dw)
-        sync_inv_oh  = Signal(dw)
+        sync_oh_r    = Signal(dw)
         sync_ok      = Signal()
         sync_wait    = Signal(max=n//dw + 3) # Window refilled after a polarity toggle.
-        self.comb += sync_ok.eq(sink.valid & ~toggle & (sync_wait == 0))
+        toggle_d     = Signal()
+        self.comb += sync_ok.eq(sink.valid & (sync_wait == 0))
         self.sync += If(toggle,
             sync_wait.eq(n//dw + 2)
         ).Elif(sink.valid & (sync_wait != 0),
             sync_wait.eq(sync_wait - 1)
         )
-        self.sync += [
-            sync_hit.eq(    (sync_pos     != 0) & sync_ok),
-            sync_inv_hit.eq((sync_inv_pos != 0) & sync_ok),
-            sync_oh.eq(    Mux(sync_ok, sync_pos,     0)),
-            sync_inv_oh.eq(Mux(sync_ok, sync_inv_pos, 0)),
+        def hit_parts(pos):
+            regs = [Signal(name="sync_hit_part") for _ in range((dw + 15)//16)]
+            for i, reg in enumerate(regs):
+                self.sync += reg.eq((pos[16*i:16*(i+1)] != 0) & sync_ok)
+            return Reduce("OR", regs)
+        self.comb += [
+            sync_hit.eq(    hit_parts(sync_pos)     & ~toggle_d),
+            sync_inv_hit.eq(hit_parts(sync_inv_pos) & ~toggle_d),
+            sync_oh.eq(Mux(toggle_d, 0, sync_oh_r)),
         ]
+        self.sync += sync_oh_r.eq(Mux(sync_ok, sync_pos, 0))
 
         # One-hot pointer --------------------------------------------------------------------------
         # vb: block start (Block context), vs[k]: SKP Ordered Set continued (4*m*(k + 1) SKP Symbols
@@ -471,12 +491,11 @@ class Gen2BlockAligner(LiteXModule):
         self.sync += If(sink.valid,
             load_d.eq(load),
             load_dd.eq(load_d),
-            load_oh.eq(Mux(load, sync_oh, 0)),
+            load_oh.eq(Mux(unaligned, sync_oh, 0)), # sync_oh != 0: sync_hit (load).
             any_d.eq(any_v),
             any_dd.eq(any_d),
         )
         # Polarity toggled from a registered toggle (fanout: new words inversion).
-        toggle_d = Signal()
         self.sync += [
             toggle_d.eq(toggle),
             If(toggle_d, self.polarity.eq(~self.polarity)),
