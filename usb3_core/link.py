@@ -242,6 +242,25 @@ class USB3LinkLayer(LiteXModule):
         # RX Parser --------------------------------------------------------------------------------
         hp_count  = Signal(2, reset_less=True)
         dpp_rem   = Signal(17, reset_less=True)
+        # dpp_rem comparisons, registered with dpp_rem (timings: from registers on the DPP path).
+        rem_ge8 = Signal(reset_less=True)
+        rem_gt4 = Signal(reset_less=True)
+        rem_eq8 = Signal(reset_less=True)
+        rem_le4 = Signal(reset_less=True)
+        rem_ne0 = Signal(reset_less=True)
+        rem_pb  = Signal(3, reset_less=True)
+        def load_rem(v):
+            v_s = Signal(17)
+            self.comb += v_s.eq(v)
+            return [
+                NextValue(dpp_rem, v_s),
+                NextValue(rem_ge8, v_s >= 8),
+                NextValue(rem_gt4, v_s > 4),
+                NextValue(rem_eq8, v_s == 8),
+                NextValue(rem_le4, v_s <= 4),
+                NextValue(rem_ne0, v_s != 0),
+                NextValue(rem_pb,  Mux(v_s >= 4, 4, v_s)),
+            ]
         dpp_off   = Signal(2, reset_less=True)
         dpp_first = Signal(reset_less=True)
         dpp_prev  = Signal(32, reset_less=True)
@@ -258,11 +277,11 @@ class USB3LinkLayer(LiteXModule):
         rx_fsm_dpp_data = Signal()
         if lw == 2:
             self.comb += [
-                dpp_two.eq(rx_fsm_dpp_data & ~dpp_held_v & (rx_window.n == 2) & (dpp_rem >= 8)),
-                dpp_hold.eq(~dpp_two & ~dpp_held_v & (dpp_rem > 4)),
+                dpp_two.eq(rx_fsm_dpp_data & ~dpp_held_v & (rx_window.n == 2) & rem_ge8),
+                dpp_hold.eq(~dpp_two & ~dpp_held_v & rem_gt4),
             ]
         self.comb += [
-            dpp_pb.eq(Mux(dpp_rem >= 4, 4, dpp_rem)),
+            dpp_pb.eq(rem_pb),
             Case(dpp_off, {
                 0: dpp_crc.eq(rx_data),
                 1: dpp_crc.eq(Cat(dpp_prev[ 8:32], rx_data[0: 8])),
@@ -298,7 +317,7 @@ class USB3LinkLayer(LiteXModule):
                     NextState("LC")
                 ).Elif(rx_sdp & expect_now,
                     crc32_rx.clear.eq(1),
-                    NextValue(dpp_rem,   length_now),
+                    *load_rem(length_now),
                     NextValue(dpp_off,   length_now[0:2]),
                     NextValue(dpp_first, 1),
                     NextValue(dpp_held_v, 0),
@@ -327,16 +346,16 @@ class USB3LinkLayer(LiteXModule):
             If(~u0,
                 NextState("IDLE")
             ).Elif(rx_valid,
-                If(dpp_rem != 0,
+                If(rem_ne0,
                     self.rx_dpp.valid.eq(~dpp_hold),
                     self.rx_dpp.first.eq(dpp_first),
-                    self.rx_dpp.last.eq(Mux(dpp_two, dpp_rem == 8, dpp_rem <= 4)),
+                    self.rx_dpp.last.eq(Mux(dpp_two, rem_eq8, rem_le4)),
                     crc32_rx.ce.eq(1),
                     rx_two.eq(dpp_two),
                     If(~dpp_hold, NextValue(dpp_first, 0)),
                     NextValue(dpp_held,   rx_data),
                     NextValue(dpp_held_v, dpp_hold),
-                    NextValue(dpp_rem,  dpp_rem - Mux(dpp_two, 8, dpp_pb)),
+                    *load_rem(dpp_rem - Mux(dpp_two, 8, dpp_pb)),
                     NextValue(dpp_prev, Mux(dpp_two, rx_data1, rx_data)),
                 ).Else(
                     dpp_end.eq(1),
@@ -461,10 +480,12 @@ class USB3LinkLayer(LiteXModule):
             ~lau_pending & ~lxu_pending & ~pm_accepted & ~self.pm_busy)
         lgo_u12 = Signal()
         lgo_fwd = Signal()
+        lgo_u12_accept = force_pm_accept | (self.lpm_enable & lpm_idle)
+        if not getattr(phy, "with_u1u2", True):
+            lgo_u12_accept = 0 # No PHY U1/U2 support: LGO_U1/LGO_U2 always rejected (LXU).
         self.comb += [
             lgo_u12.eq(lc_lgo & (lc_info[0:2] != 3)),
-            lgo_fwd.eq(lc_lgo &
-                ((lc_info[0:2] == 3) | force_pm_accept | (self.lpm_enable & lpm_idle))),
+            lgo_fwd.eq(lc_lgo & ((lc_info[0:2] == 3) | lgo_u12_accept)),
         ]
         self.sync += [
             phy.lgo_u1.eq(lgo_fwd & (lc_info[0:2] == 1)),
@@ -562,9 +583,11 @@ class USB3LinkLayer(LiteXModule):
         tx_two   = Signal()
         tx_ctrl  = Signal(4)
         tx_valid = Signal()
+        tx_last  = Signal() # Last word of a packet (Link Command, Header Packet, DPH + DPP).
         self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout() if lw == 1 else link_pairs_layout()) # Registered (timings).
         self.comb += [
             tx_pipe.sink.valid.eq(tx_valid),
+            tx_pipe.sink.last.eq(tx_last),
             tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2))),
             tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
             tx_pipe.sink.words.eq(Mux(tx_two, 2, 1)) if lw == 2 else [],
@@ -640,9 +663,15 @@ class USB3LinkLayer(LiteXModule):
         if lw == 1:
             tx_dpp = self.tx_dpp
         else:
+            # Registered splitter output: CRC-32/END tail logic from registers (timings).
             self.tx_dpp_splitter = tx_dpp_splitter = DPPSplitter()
-            self.comb += self.tx_dpp.connect(tx_dpp_splitter.sink)
-            tx_dpp = tx_dpp_splitter.source
+            self.tx_dpp_buffer   = tx_dpp_buffer   = stream.Buffer(tx_dpp_splitter.source.description,
+                pipe_ready=True) # Registered ready: endpoints DPP read path isolated from the TX.
+            self.comb += [
+                self.tx_dpp.connect(tx_dpp_splitter.sink),
+                tx_dpp_splitter.source.connect(tx_dpp_buffer.sink),
+            ]
+            tx_dpp = tx_dpp_buffer.source
             self.comb += tx_word2.eq(tx_dpp.data[32:64])
         self.crc32_tx = crc32_tx = CRC32(data_width=dw)
         self.comb += [
@@ -707,6 +736,7 @@ class USB3LinkLayer(LiteXModule):
         )
         tx_fsm.act("LC1",
             tx_valid.eq(1),
+            tx_last.eq(1),
             tx_word.eq(lc_word),
             If(tx_ready, NextState("IDLE"))
         )
@@ -716,6 +746,7 @@ class USB3LinkLayer(LiteXModule):
                 tx_word.eq([FRAMING_SHP, hp_dws[0:32], hp_dws[32:64], hp_dws[64:96],
                     Cat(crc16_tx.value, hp_lcw)][i]),
                 tx_ctrl.eq(0b1111 if i == 0 else 0b0000),
+                tx_last.eq(~hp_dpp & ~hp_null) if i == 4 else [],
                 If(tx_ready,
                     NextState(f"HP{i+1}") if i < 4 else
                     If(hp_dpp,
@@ -731,6 +762,7 @@ class USB3LinkLayer(LiteXModule):
         # (DPPABORT, 7.2.4.1.13/7.2.1.2.2), the Gen 2 framing has a DPP after each DPH.
         tx_fsm.act("DPP-ABORT",
             tx_valid.eq(1),
+            tx_last.eq(1),
             tx_word.eq(FRAMING_EDB),
             tx_ctrl.eq(0b1111),
             If(tx_ready, NextState("IDLE"))
@@ -758,6 +790,7 @@ class USB3LinkLayer(LiteXModule):
         )
         tx_fsm.act("DPP-TAIL1",
             tx_valid.eq(1),
+            tx_last.eq(dpp_b == 0),
             tx_word.eq(dpp_tail1),
             tx_ctrl.eq(dpp_ctrl1),
             If(tx_ready,
@@ -766,6 +799,7 @@ class USB3LinkLayer(LiteXModule):
         )
         tx_fsm.act("DPP-TAIL2",
             tx_valid.eq(1),
+            tx_last.eq(1),
             tx_word.eq(dpp_tail2),
             tx_ctrl.eq(dpp_ctrl2),
             If(tx_ready, NextState("IDLE"))

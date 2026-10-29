@@ -84,6 +84,125 @@ class PairsToWords(LiteXModule):
             second.eq(~second & (sink.words == 2))
         )
 
+class WordsPacker(LiteXModule):
+    """Link words -> full words pairs (gen2_link_layout, two words per entry; a lone word is output
+    alone when no word follows it): words pairs at the words rate/2 (ex: Link Layer in a clock domain
+    at half the PHY frequency)."""
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint(gen2_link_layout())
+
+        # # #
+
+        held      = Signal()
+        held_data = Signal(32, reset_less=True)
+        held_ctrl = Signal(4,  reset_less=True)
+        self.comb += [
+            source.valid.eq(held),
+            source.data.eq(Cat(held_data, sink.data)),
+            source.ctrl.eq(Cat(held_ctrl, sink.ctrl)),
+            source.words.eq(Mux(sink.valid, 2, 1)),
+            sink.ready.eq(~held | source.ready),
+        ]
+        self.sync += [
+            If(source.valid & source.ready,
+                held.eq(0)
+            ),
+            If(sink.valid & sink.ready & ~(held & sink.valid),
+                held.eq(1),
+                held_data.eq(sink.data),
+                held_ctrl.eq(sink.ctrl),
+            )
+        ]
+
+class LogicalIdleFilter(LiteXModule):
+    """Gen 1 Link words: Logical Idle words (00h data symbols) between the packets dropped, the packets
+    words kept (Header Packet: SHP framing word and 4 words, Link Command: SLC framing word and 1 word,
+    DPP: from the SDP framing word to the EPF of its END/EDB framing). Ex: Link Layer in a clock domain
+    at half the PHY frequency, consuming one word per cycle outside of the DPP data. The framing
+    Symbols/Logical Idle are decoded in a register stage (timings, one cycle of latency)."""
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        # Decode stage.
+        flags = ["idle", "shp", "slc", "sdp", "epf"]
+        self.decode = decode = stream.Buffer([("data", 32), ("ctrl", 4)] + [(f, 1) for f in flags])
+        def has(symbol):
+            return Reduce("OR", [sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == symbol) for i in range(4)])
+        self.comb += [
+            sink.connect(decode.sink),
+            decode.sink.idle.eq((sink.data == 0) & (sink.ctrl == 0)),
+            decode.sink.shp.eq(has(SHP)),
+            decode.sink.slc.eq(has(SLC)),
+            decode.sink.sdp.eq(has(SDP)),
+            decode.sink.epf.eq(has(EPF)),
+        ]
+        d = decode.source
+
+        # Filter.
+        count = Signal(3)
+        drop  = Signal()
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            drop.eq(d.idle),
+            If(d.valid & d.ready,
+                If(d.shp,
+                    NextValue(count, 4 - 1),
+                    NextState("HP-LC")
+                ).Elif(d.slc,
+                    NextValue(count, 1 - 1),
+                    NextState("HP-LC")
+                ).Elif(d.sdp,
+                    NextState("DPP")
+                )
+            )
+        )
+        fsm.act("HP-LC",
+            If(d.valid & d.ready,
+                NextValue(count, count - 1),
+                If(count == 0, NextState("IDLE"))
+            )
+        )
+        fsm.act("DPP",
+            If(d.valid & d.ready & d.epf,
+                NextState("IDLE")
+            )
+        )
+        self.comb += [
+            d.connect(source, omit={"valid", "ready", *flags}),
+            source.valid.eq(d.valid & ~drop),
+            d.ready.eq(source.ready | drop),
+        ]
+
+class PacketsBuffer(LiteXModule):
+    """Store-and-forward of the packets (last: last entry of a packet): the entries of a packet are
+    output once the whole packet is buffered, without gaps (ex: Link Layer words from a clock domain
+    at half the PHY frequency: no Logical Idle inside the packets). depth: entries of the largest
+    packet (DPH + 1024 bytes DPP)."""
+    def __init__(self, layout, depth=256):
+        self.sink   = sink   = stream.Endpoint(layout)
+        self.source = source = stream.Endpoint(layout)
+        self.drop   = Signal() # i: Drop the buffered entries.
+
+        # # #
+
+        self.fifo = fifo = stream.SyncFIFO(layout, depth, buffered=True)
+        packets = Signal(max=depth + 1)
+        packet_in  = Signal()
+        packet_out = Signal()
+        self.comb += [
+            sink.connect(fifo.sink),
+            packet_in.eq(sink.valid & sink.ready & sink.last),
+            packet_out.eq(fifo.source.valid & fifo.source.ready & fifo.source.last),
+            fifo.source.connect(source, omit={"valid", "ready"}),
+            source.valid.eq(fifo.source.valid & (packets != 0) & ~self.drop),
+            fifo.source.ready.eq((source.ready & (packets != 0)) | self.drop),
+        ]
+        self.sync += packets.eq(packets + packet_in - packet_out)
+
 class WordsWindow(LiteXModule):
     """Link words pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
     w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n)."""

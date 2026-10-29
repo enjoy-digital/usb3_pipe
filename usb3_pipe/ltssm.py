@@ -41,8 +41,14 @@ from usb3_pipe.lfps import (LFPSRXFrontEnd, SCDGenerator, SCDChecker, LBPMGenera
 
 @ResetInserter()
 class USB3LTSSM(LiteXModule):
-    """Link Training and Status State Machine (7.5)."""
-    def __init__(self, sys_clk_freq, with_timers=True, timer_scale=1, ssp=False):
+    """Link Training and Status State Machine (7.5).
+
+    with_u1u2: U1/U2 Link Power Management states (7.2.4.2). Without, the partner's LGO_U1/LGO_U2
+    are not accepted (the Link Layer rejects them: LXU) and U1/U2 are never requested (U3 kept: an
+    upstream port shall not reject U3, 7.2.4.2.4): less logic when power saving is not required.
+    """
+    def __init__(self, sys_clk_freq, with_timers=True, timer_scale=1, ssp=False, with_u1u2=True):
+        self.with_u1u2 = with_u1u2
         # Status -----------------------------------------------------------------------------------
         # (rx_ready/tx_ready: PIPE interface below).
         self.u0                 = Signal()
@@ -313,6 +319,12 @@ class USB3LTSSM(LiteXModule):
 
         # FSM --------------------------------------------------------------------------------------
         self.fsm = fsm = FSM(reset_state="Polling.Entry")
+        # U1/U2 states and PM handshake inputs (with_u1u2).
+        act_u1u2 = fsm.act if with_u1u2 else (lambda *args, **kwargs: None)
+        lgo_u1   = self.lgo_u1 if with_u1u2 else Constant(0)
+        lgo_u2   = self.lgo_u2 if with_u1u2 else Constant(0)
+        req_u1   = self.req_u1 if with_u1u2 else Constant(0)
+        req_u2   = self.req_u2 if with_u1u2 else Constant(0)
 
         # Transitions shared by several states (lists of statements). The signals are bound as
         # default arguments: a closure would turn the captured __init__ locals into cell variables
@@ -333,6 +345,8 @@ class USB3LTSSM(LiteXModule):
 
         def goto_ux(kind):
             # Ux entry for a PM handshake kind (1: U1, 2: U2, 3: U3).
+            if not with_u1u2:
+                return [NextState("U3")]
             return [If(kind == 1,
                 NextState("U1")
             ).Elif(kind == 2,
@@ -567,32 +581,32 @@ class USB3LTSSM(LiteXModule):
             ).Elif(self.lgo_u3 & ~pm_sent_lgo & (pm_acc_kind == 0),
                 NextValue(pm_acc_kind, 3),
                 NextValue(pm_lau_fire, 1)
-            ).Elif(self.lgo_u1 & ~pm_sent_lgo & (pm_acc_kind == 0),
+            ).Elif(lgo_u1 & ~pm_sent_lgo & (pm_acc_kind == 0),
                 NextValue(pm_acc_kind, 1),
                 NextValue(pm_lau_fire, 1)
-            ).Elif(self.lgo_u2 & ~pm_sent_lgo & (pm_acc_kind == 0),
+            ).Elif(lgo_u2 & ~pm_sent_lgo & (pm_acc_kind == 0),
                 NextValue(pm_acc_kind, 2),
                 NextValue(pm_lau_fire, 1)
             # PM concurrency (7.2.4.2.5): LGO sent + LGO received.
             # - DS: rejects the UFP LGO_U1/U2 (LXU), its own request stays outstanding.
             # - UFP: waits for the DS LXU (rejecting its own request), then answers the DS request
             #   (LAU: an upstream port shall not reject U3, 7.2.4.2.4).
-            ).Elif(pm_sent_lgo & self.ds_port & (self.lgo_u1 | self.lgo_u2),
+            ).Elif(pm_sent_lgo & self.ds_port & (lgo_u1 | lgo_u2),
                 NextValue(pm_lxu_fire, 1)
-            ).Elif(pm_sent_lgo & ~self.ds_port & (self.lgo_u1 | self.lgo_u2 | self.lgo_u3),
+            ).Elif(pm_sent_lgo & ~self.ds_port & (lgo_u1 | lgo_u2 | self.lgo_u3),
                 If(self.lgo_u3,
                     NextValue(pm_conc_kind, 3)
-                ).Elif(self.lgo_u2,
+                ).Elif(lgo_u2,
                     NextValue(pm_conc_kind, 2)
                 ).Else(
                     NextValue(pm_conc_kind, 1)
                 )
             # PM: requester trigger (conditions of 7.2.4.2.2 assumed met by upper layers).
             ).Elif(~pm_sent_lgo & (pm_acc_kind == 0) &
-                (self.req_u1 | self.req_u2 | (self.req_u3 & self.ds_port)),
+                (req_u1 | req_u2 | (self.req_u3 & self.ds_port)),
                 If(self.req_u3 & self.ds_port,
                     NextValue(pm_kind, 3)
-                ).Elif(self.req_u2,
+                ).Elif(req_u2,
                     NextValue(pm_kind, 2)
                 ).Else(
                     NextValue(pm_kind, 1)
@@ -646,7 +660,7 @@ class USB3LTSSM(LiteXModule):
         )
 
         # U1 State (7.5.7) -------------------------------------------------------------------------
-        fsm.act("U1",
+        act_u1u2("U1",
             self.lfps_tx_idle.eq(1),
             NextValue(pm_sent_lgo, 0),
             NextValue(pm_acc_kind, 0),
@@ -685,7 +699,7 @@ class USB3LTSSM(LiteXModule):
         )
 
         # U2 State (7.5.8) -------------------------------------------------------------------------
-        fsm.act("U2",
+        act_u1u2("U2",
             self.lfps_tx_idle.eq(1),
             NextValue(pm_sent_lgo, 0),
             NextValue(pm_acc_kind, 0),
@@ -1014,8 +1028,8 @@ class USB3LTSSM(LiteXModule):
 
         # State-dependent logic --------------------------------------------------------------------
         # (fsm.ongoing references after the states definitions: the state encoding is unchanged).
-        in_u1               = fsm.ongoing("U1")
-        in_u2               = fsm.ongoing("U2")
+        in_u1               = fsm.ongoing("U1") if with_u1u2 else Constant(0)
+        in_u2               = fsm.ongoing("U2") if with_u1u2 else Constant(0)
         in_u3               = fsm.ongoing("U3")
         in_loopback         = fsm.ongoing("Loopback")
         in_hot_reset_active = fsm.ongoing("HotReset.Active")
