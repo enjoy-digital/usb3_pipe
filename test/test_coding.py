@@ -119,6 +119,10 @@ class TestGen2Coding(unittest.TestCase):
         # Hardware width (40-bit words at 250MHz).
         self.gearbox_aligner_roundtrip_test(data_width=40)
 
+    def test_gearbox_aligner_roundtrip_80(self):
+        # 80-bit words (ex: Gowin GTR12 1:4 gear at 125MHz).
+        self.gearbox_aligner_roundtrip_test(data_width=80)
+
     def test_gearbox_aligner_roundtrip_64(self):
         self.gearbox_aligner_roundtrip_test(data_width=64)
 

@@ -621,15 +621,24 @@ class TestGen2Datapath(unittest.TestCase):
         # Hardware width (40-bit words at 250MHz).
         self.tx_vs_reference_test(data_width=GEN2_DATA_WIDTH, **RUN_TX_SHORT)
 
+    def test_tx_vs_reference_80(self):
+        # 80-bit words (Gowin GTR12 1:4 gear at 125MHz): DC balance at one block per cycle.
+        self.tx_vs_reference_test(data_width=80, **RUN_TX_SHORT)
+
     @pytest.mark.slow
     def test_tx_vs_reference_long(self):
         self.tx_vs_reference_test()
         self.tx_vs_reference_test(data_width=GEN2_DATA_WIDTH)
 
     def test_dc_balance(self):
+        for data_width in [32, 80]: # 3 cycles/block, one block per cycle.
+            with self.subTest(data_width=data_width):
+                self.dc_balance_test(data_width)
+
+    def dc_balance_test(self, data_width):
         # Long TS1 run: the running DC Balance stays bounded (DC Balance Symbols, 6.4.1.2.2).
-        words, _ = run_tx(n_tseq=1, n_ts1=120, n_ts2=1, n_packets=1)
-        bits    = bits_from_words(words)
+        words, _ = run_tx(n_tseq=1, n_ts1=120, n_ts2=1, n_packets=1, data_width=data_width)
+        bits    = bits_from_words(words, data_width)
         decoder = Gen2ReferenceDecoder(self)
         decoder.decode(bits)
         dc, worst = 0, 0
@@ -735,6 +744,11 @@ class TestGen2Datapath(unittest.TestCase):
         # SKP Ordered Sets edits.
         self.loopback_test(edits={0: -4, 1: +8}, data_width=GEN2_DATA_WIDTH, tseq_slip=True,
             **RUN_TX_SHORT)
+
+    def test_loopback_80(self):
+        # 80-bit words (Gowin GTR12 1:4 gear at 125MHz): bit slips in TSEQ/TS1, Block Header bit
+        # error, SKP Ordered Sets edits.
+        self.loopback_test(edits={0: -4, 1: +8}, data_width=80, tseq_slip=True, **RUN_TX_SHORT)
 
     @pytest.mark.slow
     def test_loopback_long(self):

@@ -706,15 +706,21 @@ class Gen2TXDCBalance(LiteXModule):
 
     Pipelined over 3 cycles per block (popcounts, balance, output/update): the gearbox accepts a block
     every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
-    and saturation.
+    and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex: 80-bit at
+    125MHz: a block every 1.65 cycles), the balance increments of the possible DC Balance Symbols
+    precomputed with the popcounts, the running balance loop is then two adders, a selection and the
+    saturation.
     """
-    def __init__(self):
+    def __init__(self, one_per_cycle=False):
         self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
         self.source = source = stream.Endpoint(gen2_block_layout())
 
         # # #
 
         self.dc_balance = dc_balance = Signal((11, True))
+        if one_per_cycle:
+            self.add_one_per_cycle(dc_balance)
+            return
 
         # Stage 1: block and popcounts (Symbols 0-11 with the Block Header, 12-13, 14, 15).
         header   = Signal(4)
@@ -801,6 +807,91 @@ class Gen2TXDCBalance(LiteXModule):
                 NextState("CAPTURE")
             )
         )
+
+    def add_one_per_cycle(self, dc_balance):
+        sink   = self.sink
+        source = self.source
+        ones   = lambda v: bin(v).count("1")
+
+        # Stage 1: block, balance increment at the end of Symbol 11 and the balance increments of
+        # Symbols 12-15 for each DC Balance Symbols choice (none, Symbol 15, Symbols 14/15; reduce
+        # ones/zeros).
+        v1       = Signal()
+        header   = Signal(4)
+        data     = Signal(192)
+        skp      = Signal()
+        ts       = Signal()
+        dc_reset = Signal()
+        inc_11   = Signal((9, True))
+        inc      = {k: Signal((8, True)) for k in ["none", "15p", "15n", "14p", "14n"]}
+        advance  = Signal()
+        self.comb += sink.ready.eq(~v1 | advance)
+        ones_13 = popcount(sink.data[96:112])
+        ones_14 = popcount(sink.data[112:120])
+        ones_15 = popcount(sink.data[120:128])
+        self.sync += If(sink.ready,
+            v1.eq(sink.valid),
+            header.eq(sink.header),
+            data.eq(sink.data),
+            skp.eq(sink.skp),
+            ts.eq(sink.ts),
+            dc_reset.eq(sink.dc_reset),
+            inc_11.eq(2*popcount(Cat(sink.header, sink.data[0:96])) - 100),
+            inc["none"].eq(2*(ones_13 + ones_14 + ones_15) - 32),
+            inc["15p"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ONES[1])) - 32),
+            inc["15n"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
+            inc["14p"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ONES[0]) + ones(GEN2_DC_REDUCE_ONES[1])) - 32),
+            inc["14n"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ZEROS[0]) + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
+        )
+
+        # Stage 2: balance, DC Balance Symbols, running balance update, output.
+        balance  = Signal((12, True))
+        positive = Signal()
+        fix_14   = Signal()
+        fix_15   = Signal()
+        update   = Signal((12, True))
+        updated  = Signal((12, True))
+        self.comb += [
+            balance.eq(dc_balance + inc_11),
+            positive.eq(balance > 0),
+            fix_14.eq((balance > 31) | (balance < -31)),
+            fix_15.eq((balance > 15) | (balance < -15)),
+            If(fix_14,
+                update.eq(Mux(positive, inc["14p"], inc["14n"]))
+            ).Elif(fix_15,
+                update.eq(Mux(positive, inc["15p"], inc["15n"]))
+            ).Else(
+                update.eq(inc["none"])
+            ),
+            updated.eq(balance + update),
+        ]
+        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data[112:120])
+        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data[120:128])
+        self.comb += advance.eq(v1 & (~source.valid | source.ready))
+        self.sync += [
+            If(source.ready, source.valid.eq(0)),
+            If(advance,
+                source.valid.eq(1),
+                source.header.eq(header),
+                source.skp.eq(skp),
+                If(ts,
+                    source.data.eq(Cat(data[0:112], sym14, sym15, data[128:]))
+                ).Else(
+                    source.data.eq(data)
+                ),
+                If(ts,
+                    If(updated > 511,
+                        dc_balance.eq(511)
+                    ).Elif(updated < -511,
+                        dc_balance.eq(-511)
+                    ).Else(
+                        dc_balance.eq(updated)
+                    )
+                ).Elif(dc_reset,
+                    dc_balance.eq(0)
+                ),
+            ),
+        ]
 
 # Gen 2 RX -----------------------------------------------------------------------------------------
 
@@ -945,7 +1036,9 @@ class Gen2TXDatapath(LiteXModule):
     on tx (Gen2TX)."""
     def __init__(self, data_width=GEN2_DATA_WIDTH, **kwargs):
         self.tx         = tx         = Gen2TX(**kwargs)
-        self.dc_balance = dc_balance = Gen2TXDCBalance()
+        # One block per cycle in the DC balance when the words need a block more often than every 3
+        # cycles (132-bit blocks, ex: 80-bit words).
+        self.dc_balance = dc_balance = Gen2TXDCBalance(one_per_cycle=(3*data_width > 132))
         self.gearbox    = gearbox    = Gen2BlockGearbox(data_width)
         self.sink    = tx.sink
         self.source  = gearbox.source
