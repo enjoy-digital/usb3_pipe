@@ -24,17 +24,20 @@ from test.model.gen2 import int_to_bits, bits_from_words, words_from_bits
 # Gen 2 --------------------------------------------------------------------------------------------
 
 class TestGen2Coding(unittest.TestCase):
-    def gearbox_aligner_roundtrip_test(self, data_width=32):
+    def gearbox_aligner_roundtrip_test(self, data_width=32, skp_period=10, skp_lengths=[0, 4, 8, 20, 36],
+        offset=37, header_error=True):
         # Blocks (SYNC first, data/control, SKP Ordered Sets of 0-36 SKP Symbols) -> gearbox -> bit
         # offset -> aligner: blocks recovered after the SYNC, SKP removed, Block Header single bit
         # error corrected.
         rng    = random.Random(1)
         blocks = [(BLOCK_HEADER_CONTROL, symbols_to_int(gen2_sync_payload()), 0)]
         skps   = []
+        lfsrs  = []
         for i in range(64):
-            if i % 10 == 5:
-                n = rng.choice([0, 4, 8, 20, 36])
+            if i % skp_period == (skp_period//2):
+                n = rng.choice(skp_lengths)
                 skps.append(n)
+                lfsrs.append(0x123456 + i)
                 payload = gen2_skp_payload(0x123456 + i, n)
                 blocks.append(("SKP", payload))
             else:
@@ -78,10 +81,10 @@ class TestGen2Coding(unittest.TestCase):
         self.assertGreaterEqual(data_width*len(words), len(ref) - (data_width - 1))
         self.assertEqual(bits_from_words(words, data_width)[:len(ref)], ref[:data_width*len(words)])
 
-        # Channel: random bit offset, a Block Header single bit error.
-        offset = 37
+        # Channel: random bit offset, a Block Header single bit error (block 3).
         bits   = [rng.getrandbits(1) for _ in range(offset)] + bits + [0]*64
-        bits[offset + 132*3 + 1] ^= 1
+        if header_error:
+            bits[offset + 132*3 + 1] ^= 1
 
         # RX aligner.
         rx  = Gen2BlockAligner(data_width)
@@ -108,9 +111,9 @@ class TestGen2Coding(unittest.TestCase):
         received = [(h, p) for h, p, e in out]
         self.assertEqual(received, expected[:len(received)])
         self.assertGreaterEqual(len(received), len(expected) - 1)
-        self.assertEqual([i for i, (h, p, e) in enumerate(out) if e], [3])
+        self.assertEqual([i for i, (h, p, e) in enumerate(out) if e], [3] if header_error else [])
         self.assertEqual([n for n, l in skp], skps)
-        self.assertEqual([l for n, l in skp], [0x123456 + i for i in range(64) if i % 10 == 5])
+        self.assertEqual([l for n, l in skp], lfsrs)
 
     def test_gearbox_aligner_roundtrip(self):
         self.gearbox_aligner_roundtrip_test(data_width=32)
@@ -125,6 +128,14 @@ class TestGen2Coding(unittest.TestCase):
 
     def test_gearbox_aligner_roundtrip_64(self):
         self.gearbox_aligner_roundtrip_test(data_width=64)
+
+    def test_gearbox_aligner_long_skp_80(self):
+        # Long SKP Ordered Sets (28-36 SKP Symbols) every 3 blocks at 80-bit, bit offsets: the SKP
+        # Dwords must be consumed as fast as the words are received (else the pointer falls behind
+        # and the alignment is lost).
+        for offset in range(0, 80, 11):
+            self.gearbox_aligner_roundtrip_test(data_width=80, skp_period=3,
+                skp_lengths=[28, 32, 36], offset=offset, header_error=False)
 
     @unittest.skipIf(shutil.which("yosys") is None, "yosys not found")
     def test_popcount_verilog(self):

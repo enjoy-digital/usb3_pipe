@@ -216,7 +216,8 @@ class Gen2BlockAligner(LiteXModule):
     Unaligned (error pulse), single bit errors are corrected (header_error). SKP Ordered Sets (control
     block starting with SKP or SKPEND) are consumed by Dwords of 4 SKP Symbols until SKPEND (0 to 36
     SKP Symbols, multiple of 4, 6.4.3.3): they are not output, skp pulses with the received LFSR
-    state.
+    state. Up to 2 Dwords per cycle, 4 with words wider than 64 bits (the consumed bits must keep up
+    with the received words: else the pointer falls behind in a long SKP Ordered Set).
 
     Implementation (40-bit words at 250MHz for 10Gbps): the last words are kept in a window and
     blocks are read at a bit pointer in a small range (2**k >= data_width + 24 positions: pointer
@@ -248,7 +249,8 @@ class Gen2BlockAligner(LiteXModule):
         kr   = log2_int(dw + 24, need_pow2=False)
         r    = 2**kr        # Pointer range (blocks read at ptr < r).
         n    = r + 131 + dw # Window (+ SYNC search one word ahead).
-        npos = r + 37       # SKP Dwords/SKPEND decode positions (ptr + 0/4/32/36).
+        m    = 2 if dw <= 64 else 4 # SKP Dwords consumed per cycle (at most).
+        npos = r + 32*(m - 1) + 5   # SKP Dwords/SKPEND decode positions (ptr + 0/4 + 32*j).
 
         # Window (oldest bits at the bottom) -------------------------------------------------------
         win      = Signal(n)
@@ -361,7 +363,7 @@ class Gen2BlockAligner(LiteXModule):
         realign   = Signal()
         extract   = Signal()
         skp_done  = Signal()
-        skp_end   = Signal(6) # SKPEND position (from ptr).
+        skp_end   = Signal(7) # SKPEND position (from ptr).
         skp_count = Signal(6)
         skp_total = Signal(6)
         self.comb += [
@@ -369,6 +371,39 @@ class Gen2BlockAligner(LiteXModule):
             drop.eq(error | (self.aligned & (ptr_next < 0))),
             self.error.eq(drop | realign),
         ]
+
+        # SKP Ordered Set decisions: SKPEND after j Dwords (j < m) or m Dwords (continued in SKP).
+        def all_dwords(offset, j):
+            return reduce(and_, [dwords[offset + 32*i] for i in range(j)], 1)
+        skp_block_cases = If(0)
+        for j in range(m):
+            skp_block_cases = skp_block_cases.Elif(all_dwords(4, j) & ends[4 + 32*j],
+                consumed.eq(4 + 32*(j + 1)),
+                skp_done.eq(1),
+                skp_end.eq(4 + 32*j),
+                skp_total.eq(4*j),
+            )
+        skp_block_cases = skp_block_cases.Elif(all_dwords(4, m),
+            consumed.eq(4 + 32*m),
+            NextValue(skp_count, 4*m),
+            NextState("SKP")
+        ).Else(
+            error.eq(1)
+        )
+        skp_cases = If(0)
+        for j in range(m):
+            skp_cases = skp_cases.Elif(all_dwords(0, j) & ends[32*j] & (skp_count <= (36 - 4*j)),
+                consumed.eq(32*(j + 1)),
+                skp_done.eq(1),
+                skp_end.eq(32*j),
+                skp_total.eq(skp_count + 4*j),
+            )
+        skp_cases = skp_cases.Elif(all_dwords(0, m) & (skp_count <= (36 - 4*m)),
+            consumed.eq(32*m),
+            NextValue(skp_count, skp_count + 4*m),
+        ).Else(
+            error.eq(1)
+        )
 
         self.fsm = fsm = FSM(reset_state="UNALIGNED")
         fsm.act("UNALIGNED",
@@ -411,24 +446,8 @@ class Gen2BlockAligner(LiteXModule):
                 If(inv[0],
                     error.eq(1)
                 ).Elif(skp[0],
-                    # SKP Dwords after the Block Header until SKPEND (up to 2 Dwords per cycle).
-                    If(ends[4],
-                        consumed.eq(36),
-                        skp_done.eq(1),
-                        skp_end.eq(4),
-                        skp_total.eq(0),
-                    ).Elif(dwords[4] & ends[36],
-                        consumed.eq(68),
-                        skp_done.eq(1),
-                        skp_end.eq(36),
-                        skp_total.eq(4),
-                    ).Elif(dwords[4] & dwords[36],
-                        consumed.eq(68),
-                        NextValue(skp_count, 8),
-                        NextState("SKP")
-                    ).Else(
-                        error.eq(1)
-                    )
+                    # SKP Dwords after the Block Header until SKPEND (up to m Dwords per cycle).
+                    skp_block_cases
                 ).Else(
                     consumed.eq(132),
                     extract.eq(1),
@@ -439,24 +458,7 @@ class Gen2BlockAligner(LiteXModule):
         fsm.act("SKP",
             self.aligned.eq(1),
             ptr_base.eq(ptr),
-            If(avail,
-                If(ends[0],
-                    consumed.eq(32),
-                    skp_done.eq(1),
-                    skp_end.eq(0),
-                    skp_total.eq(skp_count),
-                ).Elif(dwords[0] & ends[32] & (skp_count <= 32),
-                    consumed.eq(64),
-                    skp_done.eq(1),
-                    skp_end.eq(32),
-                    skp_total.eq(skp_count + 4),
-                ).Elif(dwords[0] & dwords[32] & (skp_count <= 28),
-                    consumed.eq(64),
-                    NextValue(skp_count, skp_count + 8),
-                ).Else(
-                    error.eq(1)
-                )
-            ),
+            If(avail, skp_cases),
             If(skp_done, NextState("BLOCK")),
             If(drop, NextState("UNALIGNED"))
         )
@@ -468,7 +470,7 @@ class Gen2BlockAligner(LiteXModule):
         out_bits = Signal(132)
         self.comb += [
             bits.eq(win >> idx),
-            Case(skp_end, {e: lfsr.eq(bits[e+8:e+32]) for e in [0, 4, 32, 36]}),
+            Case(skp_end, {e: lfsr.eq(bits[e+8:e+32]) for o in [0, 4] for e in range(o, o + 32*m, 32)}),
         ]
         self.sync += [
             source.valid.eq((found | extract) & ~drop),
