@@ -95,11 +95,13 @@ class RX8b10bChecker(LiteXModule):
 
         # Code lookup (distributed ROM), registered (as the decoders outputs). A block RAM would
         # absorb the decoders input register as its address register: transceiver RX data to the
-        # block RAM address in one RX clock cycle (250MHz), missing timing on large designs.
+        # block RAM address in one RX clock cycle (250MHz), missing timing on large designs. Logic
+        # on Gowin (syn_romstyle): GowinSynthesis merges the block ROMs inferred from the lookups on
+        # the same address (decoders/checker) into wrong contents.
         lookups = []
         for decoder in decoders:
             lookup_comb = Signal(4, attr={("rom_style", "distributed")})
-            lookup      = Signal(4)
+            lookup      = Signal(4, attr={("syn_romstyle", "logic")})
             self.comb += Case(decoder.input, {code: lookup_comb.eq(v) for code, v in rom.items()})
             self.sync += lookup.eq(lookup_comb)
             lookups.append(lookup)

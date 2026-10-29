@@ -36,6 +36,46 @@ scrambler_ref = [
 ]
 
 class TestScrambling(unittest.TestCase):
+    def check_direct(self, with_com, n=256, seed=0):
+        # Scrambler with_skp=False (direct LFSR states) == generic Scrambler on a stream without SKP
+        # (with/without COM symbols, random valid).
+        random.seed(seed)
+        words = []
+        for _ in range(n):
+            data, ctrl = random.getrandbits(32), 0
+            for i in range(4):
+                if with_com and random.random() < 0.1:
+                    data = (data & ~(0xff << 8*i)) | (COM.value << 8*i)
+                    ctrl |= 1 << i
+            words.append((data, ctrl, random.random() < 0.8))
+        class DUT(Module):
+            def __init__(self):
+                self.submodules.ref    = Scrambler(reset=0xffff)
+                self.submodules.direct = Scrambler(reset=0xffff, with_skp=False, with_com=with_com)
+        dut  = DUT()
+        outs = {"ref": [], "direct": []}
+        # Both scramblers sampled the same way (same inputs, after the clock edge).
+        def generator(dut):
+            for data, ctrl, valid in words:
+                for name in outs:
+                    s = getattr(dut, name)
+                    yield s.sink.valid.eq(valid)
+                    yield s.sink.data.eq(data)
+                    yield s.sink.ctrl.eq(ctrl)
+                    yield s.source.ready.eq(1)
+                yield
+                for name in outs:
+                    if valid:
+                        outs[name].append((yield getattr(dut, name).source.data))
+        run_simulation(dut, generator(dut))
+        self.assertEqual(outs["direct"], outs["ref"])
+
+    def test_scrambler_direct(self):
+        self.check_direct(with_com=False)
+
+    def test_scrambler_direct_com(self):
+        self.check_direct(with_com=True)
+
     def test_reference_model_matches_table(self):
         # The golden table is the Gen1 LFSR keystream (scrambled zeros) from FFFFh (6.3.1.3).
         symbols = ScramblerModel().process([(0x00, 0)]*4*len(scrambler_ref))

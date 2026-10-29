@@ -200,7 +200,10 @@ class USB3PIPE(LiteXModule):
         # Hot Reset.Exit) and continues in U0, the Link Layer data is only accepted with tx_ready.
         tx_enable = Signal()
         self.comb += tx_enable.eq(self.tx_ready | self.idle_handshake)
-        scrambler = Scrambler(reset=lfsr_after_ts(lfsr_seed), seed=lfsr_seed)
+        # No COM/SKP in the scrambled stream (Training Sequences not scrambled, SKP Ordered Sets
+        # inserted by the SerDes TX datapath).
+        scrambler = Scrambler(reset=lfsr_after_ts(lfsr_seed), seed=lfsr_seed, with_skp=False,
+            with_com=False)
         scrambler = ResetInserter()(scrambler)
         self.comb += scrambler.reset.eq(~tx_enable)
         self.scrambler = scrambler
@@ -211,14 +214,20 @@ class USB3PIPE(LiteXModule):
             # data, the transceiver would otherwise re-transmit stale symbols and desync the
             # partner's descrambler.
             If(sink.valid & self.tx_ready,
-                sink.connect(scrambler.sink),
+                sink.connect(scrambler.sink, omit={"ready"}),
+                # Link Layer words accepted on the SerDes ready only (timings): the Training
+                # Sequences are not transmitted with tx_ready (U0, entered from the Idle Symbol
+                # handshake; on an exit, tx_ready is deasserted with the TS1 request: at most one
+                # word dropped while leaving U0).
+                sink.ready.eq(serdes.sink.ready),
             ).Else(
                 tx_idle.eq(1),
                 scrambler.sink.valid.eq(1),
                 scrambler.sink.data.eq(0x00000000),
                 scrambler.sink.ctrl.eq(0b0000),
             ),
-            If(tx_enable,
+            # Once the Training Sequences Ordered Set in progress is transmitted.
+            If(tx_enable & ~ts.tx_active,
                 scrambler.source.connect(serdes.sink)
             )
         ]
@@ -228,9 +237,15 @@ class USB3PIPE(LiteXModule):
         # before U0: its LFSR is initialized on every received COM and advances on every non-SKP
         # symbol (6.3.1.3), so it is synchronized with the partner's scrambler when rx_ready is set.
         # Only the output to the Link Layer is gated by rx_ready.
-        self.descrambler = descrambler = Descrambler(reset=lfsr_seed, seed=lfsr_seed)
+        # No SKP in the received stream (SKP Ordered Sets removed by the SerDes RX datapath).
+        self.descrambler = descrambler = Descrambler(reset=lfsr_seed, seed=lfsr_seed, with_skp=False)
         self.comb += descrambler.enable.eq(scrambling)
-        self.comb += serdes.source.connect(descrambler.sink)
+        # Registered descrambler input (timings: SerDes RX datapath output to the descrambler).
+        self.descrambler_buffer = descrambler_buffer = stream.Buffer([("data", 32), ("ctrl", 4)])
+        self.comb += [
+            serdes.source.connect(descrambler_buffer.sink),
+            descrambler_buffer.source.connect(descrambler.sink),
+        ]
 
         # Framing Alignment ------------------------------------------------------------------------
         # The SerDes word alignment is acquired on COM (TS1/TS2) and no COM is received in U0. The
@@ -244,25 +259,34 @@ class USB3PIPE(LiteXModule):
         if x2_lane:
             self.comb += descrambler.source.connect(source)
         else:
+            # Registered descrambler output and ready (timings).
+            self.framing_buffer  = framing_buffer  = stream.Buffer([("data", 32), ("ctrl", 4)],
+                pipe_ready=True)
             self.framing_aligner = framing_aligner = RXWordAligner(markers=[SHP, SDP, SLC])
             self.comb += [
-                descrambler.source.connect(framing_aligner.sink),
+                descrambler.source.connect(framing_buffer.sink),
+                framing_buffer.source.connect(framing_aligner.sink),
                 framing_aligner.source.connect(source, omit={"valid", "ready"}),
                 source.valid.eq(framing_aligner.source.valid & self.rx_ready),
                 framing_aligner.source.ready.eq(source.ready | ~self.rx_ready),
             ]
 
         # Idle Handshake ---------------------------------------------------------------------------
+        # Idle Symbols sent, registered (timings).
+        tx_idle_sent = Signal()
+        self.sync += tx_idle_sent.eq(tx_enable & tx_idle & scrambler.sink.valid & scrambler.sink.ready)
+        # Received symbols from the registered descrambler output (timings).
         self.idle_handshake_unit = idle_handshake = IdleHandshake()
+        rx_words = descrambler.source if x2_lane else framing_buffer.source
         rx_valid = Signal()
-        rx_data  = descrambler.source.data
-        rx_ctrl  = descrambler.source.ctrl
+        rx_data  = rx_words.data
+        rx_ctrl  = rx_words.ctrl
         self.comb += [
-            rx_valid.eq(descrambler.source.valid & descrambler.source.ready),
+            rx_valid.eq(rx_words.valid & rx_words.ready),
             idle_handshake.enable.eq(self.idle_handshake),
             idle_handshake.rx_idle.eq(rx_valid & (rx_data == 0) & (rx_ctrl == 0)),
             idle_handshake.rx_data.eq(rx_valid & ((rx_data != 0) | (rx_ctrl != 0))),
-            idle_handshake.tx_idle.eq(tx_enable & tx_idle & scrambler.sink.ready),
+            idle_handshake.tx_idle.eq(tx_idle_sent),
             self.idle_handshake_done.eq(idle_handshake.done),
         ]
 

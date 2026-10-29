@@ -443,7 +443,7 @@ class TestUSB3PIPELoopRandom(unittest.TestCase):
                 while not (yield dut.sink.ready):
                     yield
             yield dut.sink.valid.eq(0)
-            for _ in range(40):
+            for _ in range(100): # TX/RX pipelines latency.
                 yield
             top.done = True
 

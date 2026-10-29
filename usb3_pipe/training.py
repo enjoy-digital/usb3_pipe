@@ -27,6 +27,14 @@ TSEQ_COUNT = 65536
 
 # Training Sequence Checker ------------------------------------------------------------------------
 
+class OrderedSetROM:
+    """Ordered Set words ROM (adr/dat_r, asynchronous read) as constants lookup: no Memory with
+    init contents and asynchronous read (not kept by some toolchains, ex: GowinSynthesis)."""
+    def __init__(self, module, init):
+        self.adr   = Signal(max=max(len(init), 2))
+        self.dat_r = Signal(32)
+        module.comb += self.dat_r.eq(Array(Constant(v, 32) for v in init)[self.adr])
+
 class TSChecker(LiteXModule):
     """Training Sequence Checker
 
@@ -35,7 +43,8 @@ class TSChecker(LiteXModule):
     This module detects a specific Training Sequence Ordered Set by analyzing the RX stream. When N
     consecutive Ordered Sets have been detected without errors (N configured by n_ordered_sets), a
     detection is reported on detected signals for one cycle. Training config is also reported for
-    TS1/TS2 Ordered Sets.
+    TS1/TS2 Ordered Sets. The input words and the detection are registered (timings, 2 cycles of
+    latency).
     """
     def __init__(self, ordered_set, n_ordered_sets=1):
         self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -50,12 +59,18 @@ class TSChecker(LiteXModule):
 
         self.comb += self.sink.ready.eq(1)
 
+        # Input register (timings) -----------------------------------------------------------------
+        sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.sync += [
+            sink.valid.eq(self.sink.valid),
+            sink.data.eq(self.sink.data),
+            sink.ctrl.eq(self.sink.ctrl),
+        ]
+
         # Memory -----------------------------------------------------------------------------------
         mem_init  = ordered_set_words(ordered_set)
         mem_depth = len(mem_init)
-        mem       = Memory(32, mem_depth, mem_init)
-        port      = mem.get_port(async_read=True)
-        self.specials += mem, port
+        port      = OrderedSetROM(self, mem_init)
 
         # Ctrl check -------------------------------------------------------------------------------
         ctrl_init = []
@@ -64,8 +79,6 @@ class TSChecker(LiteXModule):
             for b in range(4):
                 ctrl |= (isinstance(ordered_set[4*i + b], Symbol) << b)
             ctrl_init.append(ctrl)
-        ctrl_expected = Signal(4)
-        self.comb += ctrl_expected.eq(Array(ctrl_init)[port.adr])
 
         # Data check -------------------------------------------------------------------------------
         # The Link Functionality Symbol (Symbol 5, Table 6-4/6-5) of TS1/TS2 is variable and
@@ -74,20 +87,15 @@ class TSChecker(LiteXModule):
         mask_init = [0xffffffff]*mem_depth
         if has_link_config:
             mask_init[1] = 0xffff00ff
-        mask      = Signal(32)
-        self.comb += mask.eq(Array(mask_init)[port.adr])
+        # Received word compared to each Ordered Set word (constants) and the comparison of the
+        # expected word selected (shorter than comparing to the selected word: timings).
+        matches = Signal(mem_depth)
+        for i in range(mem_depth):
+            self.comb += matches[i].eq((sink.ctrl == ctrl_init[i]) &
+                ((sink.data & mask_init[i]) == (mem_init[i] & mask_init[i])))
         error = Signal()
         self.comb += [
-            If(self.sink.valid,
-                # Check Ctrl
-                If(self.sink.ctrl != ctrl_expected,
-                    error.eq(1)
-                ),
-                # Check Word
-                If((self.sink.data & mask) != (port.dat_r & mask),
-                    error.eq(1)
-                )
-            ),
+            error.eq(sink.valid & ~Array(matches)[port.adr]),
             self.error.eq(error)
         ]
 
@@ -98,13 +106,13 @@ class TSChecker(LiteXModule):
         # TS1 (or corrupted TS) must not change the reported TS2 config.
         link_config   = Signal(8)
         link_config_r = Signal(8, reset_less=True)
-        self.comb += link_config.eq(self.sink.data[8:16])
+        self.comb += link_config.eq(sink.data[8:16])
         if has_link_config:
             self.sync += [
-                If(self.sink.valid & (port.adr == 1),
+                If(sink.valid & (port.adr == 1),
                     link_config_r.eq(link_config)
                 ),
-                If(self.sink.valid & ~error & (port.adr == (mem_depth - 1)),
+                If(sink.valid & ~error & (port.adr == (mem_depth - 1)),
                     If(link_config_r[0] & link_config_r[2],
                         self.reset.eq(0),
                         self.loopback.eq(0),
@@ -119,7 +127,7 @@ class TSChecker(LiteXModule):
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [
-            If(self.sink.valid,
+            If(sink.valid,
                 If(~error,
                     If(port.adr == (mem_depth - 1),
                         port.adr.eq(0)
@@ -136,7 +144,7 @@ class TSChecker(LiteXModule):
         count      = Signal(max=mem_depth*n_ordered_sets)
         count_done = (count == (mem_depth*n_ordered_sets - 1))
         self.sync += [
-            If(self.sink.valid,
+            If(sink.valid,
                 If(~error & ~count_done,
                     count.eq(count + 1)
                 ).Else(
@@ -147,7 +155,7 @@ class TSChecker(LiteXModule):
 
         # Result -----------------------------------------------------------------------------------
         # The last word of the last Ordered Set must also be received without error.
-        self.comb += self.detected.eq(self.sink.valid & self.sink.ready & ~error & count_done)
+        self.sync += self.detected.eq(sink.valid & ~error & count_done)
 
 # Training Sequence Generator ----------------------------------------------------------------------
 
@@ -165,6 +173,7 @@ class TSGenerator(LiteXModule):
         self.start  = Signal() # i (Level)
         self.abort  = Signal() # i (Level): Abort the generation (next one restarts with COM).
         self.done   = Signal() # o (Pulse)
+        self.busy   = Signal() # o (Level): Inside an Ordered Set (not on its first word).
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         has_link_config = ordered_set.has_link_config
@@ -180,9 +189,7 @@ class TSGenerator(LiteXModule):
         # Memory -----------------------------------------------------------------------------------
         mem_init  = ordered_set_words(ordered_set)
         mem_depth = len(mem_init)
-        mem       = Memory(32, mem_depth, mem_init)
-        port      = mem.get_port(async_read=True)
-        self.specials += mem, port
+        port      = OrderedSetROM(self, mem_init)
 
         # Memory address generation ----------------------------------------------------------------
         self.sync += [
@@ -198,6 +205,8 @@ class TSGenerator(LiteXModule):
                 port.adr.eq(0)
             )
         ]
+
+        self.comb += self.busy.eq(port.adr != 0)
 
         # Link Config ------------------------------------------------------------------------------
         link_config = Signal(8)
@@ -268,6 +277,10 @@ class TSUnit(LiteXModule):
 
     The detection is always enabled: TS1 must also be detected in U0 (partner entering Recovery,
     7.5.6.2).
+
+    The TSEQ/TS1/TS2 transmission requests are taken into account on the Ordered Sets boundaries: an
+    Ordered Set is always completed (tx_active while transmitting), including when the requests come
+    from a LTSSM in another clock domain and change after the end of a burst (tx_done).
     """
     def __init__(self, serdes):
         self.rx_ts1            = Signal()        # o (Pulse)
@@ -285,6 +298,7 @@ class TSUnit(LiteXModule):
         self.tx_ts2_loopback   = Signal()        # i (Level)
         self.tx_ts2_scrambling = Signal(reset=1) # i (Level)
         self.tx_done           = Signal()        # o (Pulse)
+        self.tx_active         = Signal()        # o (Level): Ordered Sets transmitted on serdes.sink.
 
         # # #
 
@@ -311,29 +325,34 @@ class TSUnit(LiteXModule):
         self.tseq_generator = tseq_generator = TSGenerator(TSEQ, n_ordered_sets=TSEQ_COUNT)
         self.ts1_generator  = ts1_generator  = TSGenerator(TS1,  n_ordered_sets=16)
         self.ts2_generator  = ts2_generator  = TSGenerator(TS2,  n_ordered_sets=16)
+        # Requests selection, kept inside the Ordered Sets.
+        generators = [tseq_generator, ts1_generator, ts2_generator]
+        requests   = [self.tx_tseq, self.tx_ts1, self.tx_ts2]
+        busy       = Signal()
+        sel        = Signal(3)
+        sel_r      = Signal(3)
+        self.comb += [
+            busy.eq(Reduce("OR", [g.busy for g in generators])),
+            If(busy,
+                sel.eq(sel_r)
+            ).Else(
+                sel.eq(Cat(*[self.tx_enable & r for r in requests]))
+            ),
+            self.tx_active.eq(sel != 0),
+        ]
+        self.sync += sel_r.eq(sel)
         # Generations are aborted when no longer requested (tx_enable deasserted or other TS
         # requested by the LTSSM): an interrupted burst restarts on an Ordered Set boundary (with
         # COM, 6.4.1.1) and with a full burst.
+        for i, g in enumerate(generators):
+            self.comb += [
+                g.abort.eq(~sel[i]),
+                If(sel[i],
+                    g.start.eq(1),
+                    g.source.connect(serdes.sink),
+                ),
+            ]
         self.comb += [
-            tseq_generator.abort.eq(~(self.tx_enable & self.tx_tseq)),
-            ts1_generator.abort.eq( ~(self.tx_enable & self.tx_ts1)),
-            ts2_generator.abort.eq( ~(self.tx_enable & self.tx_ts2)),
-        ]
-        self.comb += [
-            If(self.tx_enable,
-                If(self.tx_tseq,
-                    tseq_generator.start.eq(1),
-                    tseq_generator.source.connect(serdes.sink),
-                ),
-                If(self.tx_ts1,
-                    ts1_generator.start.eq(1),
-                    ts1_generator.source.connect(serdes.sink),
-                ),
-                If(self.tx_ts2,
-                    ts2_generator.start.eq(1),
-                    ts2_generator.source.connect(serdes.sink),
-                ),
-            ),
             self.tx_done.eq(tseq_generator.done | ts1_generator.done | ts2_generator.done),
             # Link Functionality of the transmitted TS2 (Hot Reset/Loopback, 7.5.4.9.1).
             ts2_generator.reset.eq(self.tx_ts2_reset),
