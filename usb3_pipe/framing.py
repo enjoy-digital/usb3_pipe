@@ -721,6 +721,11 @@ class Gen2TXFramer(LiteXModule):
         )
 
         # Chunks -> 8-byte entries (4-byte chunks paired, 8-byte chunks never last) ----------------
+        # Registered valid/ready (timings: window/FSM decisions to the pairing).
+        self.chunk_buffer = chunk_buffer = stream.Buffer([("data", 64), ("bytes", 4)],
+            pipe_valid=True, pipe_ready=True)
+        self.comb += chunk.connect(chunk_buffer.sink)
+        chunk  = chunk_buffer.source
         held   = Signal(32)
         held_v = Signal()
         wide   = Signal()
@@ -1113,8 +1118,11 @@ class Gen2LinkRX(LiteXModule):
 
         # # #
 
-        # Registered read with 16 bytes per cycle (timings).
-        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8, buffered=(nbytes == 16)))
+        # Registered read with 16 bytes per cycle (timings). 16 bytes per cycle: 32 blocks (a Data
+        # Block every 1.65 cycles, 2 cycles per short packet ending in the RX framing window: bursts
+        # of short packets at the line rate, ex: units stored and forwarded behind a long DPP).
+        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 32 if nbytes == 16 else 8,
+            buffered=(nbytes == 16)))
         framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming(nbytes)))
         buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
             stream.AsyncFIFO(gen2_link_layout(nbytes//4), buffer_depth, buffered=True))

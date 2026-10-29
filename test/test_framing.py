@@ -142,8 +142,8 @@ class Gen2FramingLoopback(Module):
                 block.eq(Mux(packer.source.valid, packer.source.data, idle))
             )
         ]
-        # RX FIFO (the RX framing stalls 1 cycle on each packet start).
-        rx_fifo = stream.SyncFIFO([("data", 8*nbytes)], 8)
+        # RX FIFO (Gen2LinkRX blocks buffer: the RX framing stalls 1 cycle on each packet start).
+        rx_fifo = stream.SyncFIFO([("data", 8*nbytes)], 32 if nbytes == 16 else 8)
         self.submodules += rx_fifo
         if nbytes == 16:
             self.comb += [
@@ -248,9 +248,10 @@ class TestGen2Framing(unittest.TestCase):
     def test_loopback_16_bytes(self):
         # 16 bytes per cycle (80-bit Gen2TX/Gen2RX, a Data Block every 1.65 cycles): units stored
         # in the FIFO before the packer reads them, no Logical Idle Data Block inside a unit and no
-        # RX FIFO overflow at the line rate.
-        for seed in range(2):
-            self.loopback_test(seed, pairs=True, nbytes=16)
+        # RX FIFO overflow at the line rate (bursts of short units behind long ones). Link Layer
+        # words at half the PIPE frequency (pipe_cd): an entry every 2 cycles.
+        for seed in range(4):
+            self.loopback_test(seed, pairs=True, nbytes=16, gaps=1)
 
     def test_loopback_16_bytes_short(self):
         # Short units back to back (1 cycle per packet start in the RX framing).
