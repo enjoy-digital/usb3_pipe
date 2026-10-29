@@ -400,6 +400,7 @@ class Gen2RXFraming(LiteXModule):
 
         # Packet start search (Idle) ---------------------------------------------------------------
         p     = Signal(pw) # Byte pointer in R.
+        p_out = Signal(pw, attr={("syn_preserve", 1)}) # Copy for the output bytes (fanout).
         q     = Signal(pw) # First non-Idle byte at/after p.
         found = Signal()
         first = Signal(3)  # Start code of the byte at q.
@@ -418,8 +419,8 @@ class Gen2RXFraming(LiteXModule):
         out       = Signal(8*nbytes)
         out_edb   = Signal(nbytes)
         self.comb += [
-            out.eq((win >> byte_offset(p))[0:8*nbytes]),
-            out_edb.eq((Cat(r_edb, in_edb) >> p)[0:nbytes]),
+            out.eq((win >> byte_offset(p_out))[0:8*nbytes]),
+            out_edb.eq((Cat(r_edb, in_edb) >> p_out)[0:nbytes]),
             last.eq(rem <= nbytes),
         ]
 
@@ -497,7 +498,7 @@ class Gen2RXFraming(LiteXModule):
         fsm.act("IDLE",
             If(avail,
                 If(found,
-                    NextValue(p, q),
+                    NextValue(p, q), NextValue(p_out, q),
                     NextValue(start, 1),
                     NextValue(kind, first - 1),
                     Case(first, {
@@ -514,14 +515,14 @@ class Gen2RXFraming(LiteXModule):
                         NextValue(self.errors, self.errors + 1),
                         If(q == (nbytes - 1),
                             shift.eq(1),
-                            NextValue(p, 0)
+                            NextValue(p, 0), NextValue(p_out, 0)
                         ).Else(
-                            NextValue(p, q + 1)
+                            NextValue(p, q + 1), NextValue(p_out, q + 1)
                         )
                     )
                 ).Else(
                     shift.eq(1),
-                    NextValue(p, 0)
+                    NextValue(p, 0), NextValue(p_out, 0)
                 )
             )
         )
@@ -547,9 +548,9 @@ class Gen2RXFraming(LiteXModule):
                         NextState("IDLE"),
                         If(p_next >= nbytes,
                             shift.eq(1),
-                            NextValue(p, p_next - nbytes)
+                            NextValue(p, p_next - nbytes), NextValue(p_out, p_next - nbytes)
                         ).Else(
-                            NextValue(p, p_next)
+                            NextValue(p, p_next), NextValue(p_out, p_next)
                         )
                     )
                 )
