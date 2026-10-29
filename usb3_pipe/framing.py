@@ -1081,9 +1081,14 @@ class Gen2LinkTX(LiteXModule):
         self.comb += [
             units_written.ce.eq(buffer.sink.valid & buffer.sink.ready & buffer.sink.last),
             units_read.ce.eq(packer.unit_end),
-            packer.units_available.eq(units_written_d[-1] != units_read.q),
             packer.flush.eq(flush_tx),
         ]
+        if nbytes == 16:
+            # Registered (timings), with the units read count after this cycle (a unit just read is not
+            # available anymore).
+            self.sync.tx += packer.units_available.eq(units_written_d[-1] != units_read.q_next)
+        else:
+            self.comb += packer.units_available.eq(units_written_d[-1] != units_read.q)
 
 # Gen 2 Link RX ------------------------------------------------------------------------------------
 
@@ -1126,9 +1131,11 @@ class Gen2LinkRX(LiteXModule):
         self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
             stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
         if nbytes == 16:
-            # Registered framing outputs before the buffers (timings: buffers write side).
-            out_buffer = ClockDomainsRenamer("rx")(stream.Buffer(gen2_link_layout(4)))
-            lc_out_buffer = ClockDomainsRenamer("rx")(stream.Buffer([("data", 32), ("ctrl", 4)]))
+            # Registered framing outputs (valid/ready) before the buffers (timings: buffers write side).
+            out_buffer = ClockDomainsRenamer("rx")(stream.Buffer(gen2_link_layout(4),
+                pipe_valid=True, pipe_ready=True))
+            lc_out_buffer = ClockDomainsRenamer("rx")(stream.Buffer([("data", 32), ("ctrl", 4)],
+                pipe_valid=True, pipe_ready=True))
             self.submodules += out_buffer, lc_out_buffer
             self.comb += [
                 framing.source.connect(out_buffer.sink),
