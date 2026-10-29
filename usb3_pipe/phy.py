@@ -469,8 +469,11 @@ class USB3PHY(LiteXModule):
                 wr_gray.eq(wr_count ^ (wr_count >> 1)),
             ])
             self.specials += MultiReg(wr_gray, wr_sys)
-            self.comb += [wr_bin[cw-1].eq(wr_sys[cw-1])] + [
-                wr_bin[i].eq(wr_bin[i+1] ^ wr_sys[i]) for i in reversed(range(cw-1))]
+            # Gray -> binary (per bit signals: no self-referencing combinatorial assignment).
+            bins = [Signal() for _ in range(cw)]
+            self.comb += [bins[cw-1].eq(wr_sys[cw-1])] + [
+                bins[i].eq(bins[i+1] ^ wr_sys[i]) for i in reversed(range(cw-1))]
+            self.comb += wr_bin.eq(Cat(*bins))
             self.sync += [
                 If(source.valid & source.ready, rd_count.eq(rd_count + 1)),
                 level.eq(wr_bin - rd_count),
