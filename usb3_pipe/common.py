@@ -236,8 +236,8 @@ class PipeReady(LiteXModule):
 
 class Buffer(LiteXModule):
     """stream.Buffer equivalent with PipeReady (pipe_ready: payload registers enable not from the
-    source ready)."""
-    def __init__(self, layout, pipe_valid=True, pipe_ready=False):
+    source ready). ready_first: PipeReady then PipeValid (registered source payload/valid)."""
+    def __init__(self, layout, pipe_valid=True, pipe_ready=False, ready_first=False):
         self.sink   = sink   = stream.Endpoint(layout)
         self.source = source = stream.Endpoint(layout)
 
@@ -250,6 +250,8 @@ class Buffer(LiteXModule):
         if pipe_ready:
             self.pipe_ready = PipeReady(layout)
             pipeline.append(self.pipe_ready)
+        if ready_first:
+            pipeline.reverse()
         self.pipeline = stream.Pipeline(sink, *pipeline, source)
 
 # Endianness Swap ----------------------------------------------------------------------------------

@@ -930,22 +930,25 @@ class Gen2TXDCBalance(LiteXModule):
             [sat_lo[k].eq(-511 - (inc_11 + inc[k])) for k in inc],
         )
 
-        # Stage 3: DC Balance Symbols, running balance update, output.
+        # Stage 3: DC Balance Symbols, running balance update, output. Running balance copies for the
+        # thresholds and the updates (fanout).
+        dcb_th   = Signal((11, True), attr={("syn_preserve", 1)})
+        dcb_upd  = Signal((11, True), attr={("syn_preserve", 1)})
         positive = Signal()
         fix_14   = Signal()
         fix_15   = Signal()
         value    = {k: Signal((12, True)) for k in inc} # Saturated running balance of each choice.
         updated  = Signal((12, True))
         self.comb += [
-            positive.eq(dc_balance > th["pos"]),
-            fix_14.eq((dc_balance > th["14p"]) | (dc_balance < th["14n"])),
-            fix_15.eq((dc_balance > th["15p"]) | (dc_balance < th["15n"])),
-            [If(dc_balance > sat_hi[k],
+            positive.eq(dcb_th > th["pos"]),
+            fix_14.eq((dcb_th > th["14p"]) | (dcb_th < th["14n"])),
+            fix_15.eq((dcb_th > th["15p"]) | (dcb_th < th["15n"])),
+            [If(dcb_upd > sat_hi[k],
                 value[k].eq(511)
-            ).Elif(dc_balance < sat_lo[k],
+            ).Elif(dcb_upd < sat_lo[k],
                 value[k].eq(-511)
             ).Else(
-                value[k].eq(dc_balance + upd[k])
+                value[k].eq(dcb_upd + upd[k])
             ) for k in inc],
             If(fix_14,
                 updated.eq(Mux(positive, value["14p"], value["14n"]))
@@ -974,9 +977,13 @@ class Gen2TXDCBalance(LiteXModule):
                     source.data.eq(data2)
                 ),
                 If(ts2,
-                    dc_balance.eq(updated)
+                    dc_balance.eq(updated),
+                    dcb_th.eq(updated),
+                    dcb_upd.eq(updated),
                 ).Elif(dc_reset2,
-                    dc_balance.eq(0)
+                    dc_balance.eq(0),
+                    dcb_th.eq(0),
+                    dcb_upd.eq(0),
                 ),
             ),
         ]
@@ -1140,7 +1147,7 @@ class Gen2TXDatapath(LiteXModule):
             self.buffer      = buffer      = Buffer(gen2_tx_block_layout(), pipe_valid=True,
                 pipe_ready=True)
             self.gear_buffer = gear_buffer = Buffer(gen2_block_layout(), pipe_valid=True,
-                pipe_ready=True)
+                pipe_ready=True, ready_first=True) # Registered blocks to the gearbox placement.
             self.comb += [
                 tx.source.connect(buffer.sink),
                 buffer.source.connect(dc_balance.sink),
