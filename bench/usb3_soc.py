@@ -384,9 +384,18 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     example           = "loopback",
     with_lpm          = False,
     max_burst         = 8,
-    link_words        = 1):
+    link_words        = 1,
+    with_debug        = True,
+    with_profile      = True,
+    with_trace        = True,
+    phy_cd            = None,
+    phy_clk_freq      = None):
     """Add a USB3 device on serdes to soc: USB3PHY + debug, USB3 Device Core example design (with_core)
     and LEDs (SerDes ready, U0, Recovery).
+
+    phy_cd: USB3PIPE (and serdes, renamed by the caller) in the phy_cd clock domain at phy_clk_freq,
+    LTSSM/Link Layer/Core in sys (USB3PHY pipe_cd, ex: PIPE at 125MHz, Core at 62.5MHz with
+    link_words=2), without PHY/SerDes debug.
 
     Note: a function (as add_usb3_example), not a USB3BaseSoC method, and the debug modules (XADC,
     LiteScope analyzer: usb3_analyzer) assigned from the target __init__: Migen signal names follow
@@ -398,15 +407,33 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
     gen2_capable = getattr(serdes, "gen2_capable", False)
+    assert (phy_cd is None) or not (gen2_capable or with_debug or with_serdes_debug or with_profile)
     soc.usb3_phy = usb3_phy = USB3PHY(
-        serdes       = serdes,
-        sys_clk_freq = sys_clk_freq,
-        role         = "device",
-        gen2_capable = gen2_capable,
-        link_words   = link_words)
+        serdes        = serdes,
+        sys_clk_freq  = sys_clk_freq,
+        role          = "device",
+        gen2_capable  = gen2_capable,
+        link_words    = link_words,
+        pipe_cd       = phy_cd,
+        pipe_clk_freq = phy_clk_freq,
+        with_u1u2     = with_lpm or (phy_cd is None)) # U1/U2 only with LPM on slow fabrics.
+    if phy_cd is not None:
+        # Minimal PHY status (no USB3PHYDebug): LTSSM state (get_ltssm_states), U0, SerDes ready.
+        from litex.soc.interconnect.csr import CSRStatus, CSRField
+        usb3_phy.status = CSRStatus(fields=[
+            CSRField("ltssm_state", size=len(usb3_phy.ltssm_state)),
+            CSRField("u0",          size=1, offset=8),
+            CSRField("ready",       size=1, offset=9),
+        ])
+        soc.comb += [
+            usb3_phy.status.fields.ltssm_state.eq(usb3_phy.ltssm_state),
+            usb3_phy.status.fields.u0.eq(usb3_phy.u0),
+            usb3_phy.status.fields.ready.eq(usb3_phy.ready),
+        ]
 
     # USB3 PHY/SerDes Debug ------------------------------------------------------------------------
-    soc.usb3_debug = USB3PHYDebug(usb3_phy, serdes, sys_clk_freq)
+    if with_debug:
+        soc.usb3_debug = USB3PHYDebug(usb3_phy, serdes, sys_clk_freq)
     if with_serdes_debug:
         soc.usb3_serdes_debug = USB3SerDesDebug(serdes, sys_clk_freq,
             ltssm_state = usb3_phy.ltssm_state)
@@ -414,7 +441,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     # USB3 Core (Example design) -------------------------------------------------------------------
     if with_core:
         add_usb3_example(soc, usb3_phy, sys_clk_freq, example=example, with_lpm=with_lpm,
-            max_burst=max_burst)
+            max_burst=max_burst, with_trace=with_trace)
     else:
         soc.comb += usb3_phy.source.ready.eq(1)
 
@@ -423,7 +450,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         add_usb3_gen2_rx(soc, serdes, usb3_phy)
 
     # Throughput profile (Bulk IN/Link Layer TX cycles).
-    if with_core and hasattr(soc, "usb3_bench"):
+    if with_core and with_profile and hasattr(soc, "usb3_bench"):
         add_usb3_profile(soc, usb3_phy)
 
     # Leds -----------------------------------------------------------------------------------------
@@ -460,6 +487,7 @@ def usb3_soc_args(parser, output_dir, with_uartbone=True):
     parser.add_argument("--no-core",           action="store_true", help="Build without the USB3 Core (PHY only).")
     parser.add_argument("--example",           default="loopback",  help="USB3 Device Core example design.", choices=USB3_EXAMPLES)
     parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
+    parser.add_argument("--lean",              action="store_true", help="No PHY debug, throughput profile and core trace (timings).")
     parser.add_argument("--max-burst",         default=8, type=int, help="Bulk endpoints Max Burst (loopback/bench examples).", choices=[2, 4, 8, 16])
     parser.add_argument("--link-words",        default=1, type=int, help="Link Layer words: 1 (32-bit) or 2 (64-bit, loopback/bench examples: Gen 2 bandwidth).", choices=[1, 2])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
@@ -483,6 +511,9 @@ def usb3_soc_argdict(args):
             "with_lpm"          : args.with_lpm,
             "max_burst"         : args.max_burst,
             "link_words"        : args.link_words,
+            "with_debug"        : not args.lean,
+            "with_profile"      : not args.lean,
+            "with_trace"        : not args.lean,
         },
     }
 

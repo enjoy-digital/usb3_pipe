@@ -64,9 +64,10 @@ def add_usb3_console(soc, usb3_acm):
 
 # USB3 Example -------------------------------------------------------------------------------------
 
-def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False, max_burst=8):
+def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False, max_burst=8,
+    with_trace=True):
     """Add a USB3 Device Core example design to soc (on usb3_phy), with_lpm: U1/U2 Link Power
-    Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples)."""
+    Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples), with_trace: core traces."""
     assert example in USB3_EXAMPLES
     # Link Layer words (USB3PHY link_words): 64-bit Bulk endpoints in the vendor Bulk examples.
     dw = 32*getattr(usb3_phy, "link_words", 1)
@@ -96,7 +97,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
                 USB3BulkIN(ept=4,  max_burst=2),  # CDC-ACM notifications (unused).
             ],
             with_ep0_handler = True)
-        usb3_core.add_csr(with_trace=True)
+        usb3_core.add_csr(with_trace=with_trace)
         ep0 = usb3_core.ep0
         eps = usb3_core.endpoints
         soc.usb3_uvc = USB3UVCFunction(ep0, eps[0], usb3_core.link.reset, sys_clk_freq)
@@ -109,7 +110,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
                  "(LiteX/usb3_pipe).\n"
         image  = msc_fat_image(512*1024, {"README.TXT": readme})
         soc.usb3_msc = usb3_msc = USB3MSC(usb3_phy, sys_clk_freq, size=512*1024, image=image)
-        usb3_msc.core.add_csr(with_trace=True)
+        usb3_msc.core.add_csr(with_trace=with_trace)
 
     # Mass Storage DRAM disk (upper half of the DRAM, not formatted: mkfs.vfat /dev/sdX): /dev/sdX.
     elif example == "msc_dram":
@@ -134,24 +135,24 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
             storage         = usb3_msc_dram,
             product         = "USB3-PIPE DRAM Disk",
             inquiry_product = "USB3-PIPE DRAM")
-        usb3_msc.core.add_csr(with_trace=True)
+        usb3_msc.core.add_csr(with_trace=with_trace)
 
     # UVC camera (test pattern):
     # ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 /dev/videoX.
     elif example == "uvc":
         soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq)
-        usb3_uvc.core.add_csr(with_trace=True)
+        usb3_uvc.core.add_csr(with_trace=with_trace)
 
     # UVC camera (test pattern), Isochronous streaming (16KB per 125us service interval, ~131MB/s):
     # ffplay -f v4l2 -input_format yuyv422 -video_size 1280x720 -framerate 60 /dev/videoX.
     elif example == "uvc_iso":
         soc.usb3_uvc = usb3_uvc = USB3UVC(usb3_phy, sys_clk_freq, transfer="iso", max_burst=16)
-        usb3_uvc.core.add_csr(with_trace=True)
+        usb3_uvc.core.add_csr(with_trace=with_trace)
 
     # USB3 CDC-ACM serial port: SoC console or Wishbone bridge.
     elif example in ["console", "cdc_uartbone"]:
         soc.usb3_acm = usb3_acm = USB3CDCACM(usb3_phy, sys_clk_freq)
-        usb3_acm.core.add_csr(with_trace=True)
+        usb3_acm.core.add_csr(with_trace=with_trace)
         if example == "console":
             add_usb3_console(soc, usb3_acm)
         if example == "cdc_uartbone":
@@ -169,7 +170,7 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
         soc.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints,
             with_lpm         = with_lpm,
             with_ep0_handler = example == "wishbone")
-        usb3_core.add_csr(with_trace=True)
+        usb3_core.add_csr(with_trace=with_trace)
 
         # Wishbone bridge over EP0 vendor requests: litex_server --usb.
         if example == "wishbone":
