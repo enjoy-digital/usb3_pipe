@@ -298,5 +298,13 @@ needed a host port power cycle: capability changes between trainings are a test-
      Recovery.
    - Throughput: the 64-bit Link Layer at 62.5MHz is ~500MB/s (credit throttled at Gen 2, about half
      of the 10Gbps rate): 128-bit Link Layer words (or a faster Link Layer clock) for full rate.
-   - Timing: the 80-bit Gen 2 datapaths (aligner, gearbox, scrambler, framing) at 125MHz on the GW5A
-     fabric.
+   - Timing (in progress): the 80-bit Gen 2 datapaths at 125MHz on the GW5A fabric. Paths are
+     routing dominated (about 1.3ns per hop, 2/3 of the delays): restructured for few logic levels
+     and low fanout (one-hot block aligner pointer with per transition decodes registered and
+     shifted with the window, `Gen2TXPacker16`, gearbox and DC balance loops on registered values,
+     registered valid/ready buffers with `usb3_pipe.common.PipeReady`, data registers without
+     reset). Gen 2 capable Tang Mega 138K Pro build: tx/rx 41 -> 81-95MHz, sys 45 -> 55-57MHz
+     (125/62.5MHz needed, about +-15% between place and route runs, Gowin `route_option 0`: the
+     timing driven router leaves unrouted nets). Remaining: the loops of the 16 bytes framing (RX
+     framing byte pointer/window, packer fill level), gearbox and DC balance at 125MHz, and the
+     Link Layer at 62.5MHz; a framing at 32 bytes per cycle in the 62.5MHz domain could be needed.

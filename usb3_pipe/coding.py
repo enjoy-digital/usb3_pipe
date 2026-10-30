@@ -510,13 +510,16 @@ class Gen2BlockAligner(LiteXModule):
             for i, part in enumerate(parts):
                 self.sync += part.eq(Reduce("OR", terms[16*i:16*(i+1)]) & sink.valid)
             return or_terms(parts)
+        ng      = (r + 15)//16 # Pointer groups of 16 positions.
         e_idx   = Signal(kr, reset_less=True)
+        e_grp   = Signal(ng, reset_less=True) # Pointer group (one-hot).
         e_win   = Signal(n,  reset_less=True)
         e_found = Signal() # SYNC block (pointer set from the SYNC of the previous cycle).
         vany    = [Reduce("OR", [vb[p]] + [vs[k][p] for k in range(K)]) for p in range(r)]
         self.sync += [
             e_idx.eq(Cat(*[Reduce("OR", [vany[p] for p in range(r) if (p >> i) & 1])
                 for i in range(kr)])),
+            e_grp.eq(Cat(*[Reduce("OR", vany[16*g:16*(g+1)]) for g in range(ng)])),
             e_win.eq(win),
             e_found.eq(load_d & sink.valid),
         ]
@@ -546,6 +549,7 @@ class Gen2BlockAligner(LiteXModule):
                 follow[c].append(q if q < r else None)
                 q = q + (132 if q < r else 0) - dw
         ov_idx = [Signal(kr, name=f"realign_idx{c}") for c in range(2)]
+        ov_grp = [Signal(ng, name=f"realign_grp{c}") for c in range(2)]
         ov_ext = [Signal(name=f"realign_ext{c}") for c in range(2)]
         ov_oh  = [sync_oh_d, Signal(dw)]
         self.sync += If(sink.valid, ov_oh[1].eq(ov_oh[0]))
@@ -555,6 +559,8 @@ class Gen2BlockAligner(LiteXModule):
                 ov_ext[c].eq(or_terms([ov_oh[c][k] for k in ks])),
                 ov_idx[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> i) & 1])
                     for i in range(kr)])),
+                ov_grp[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> 4) == g])
+                    for g in range(ng)])),
             )
         d_idx     = Signal(kr, reset_less=True)
         d_win     = Signal(132 + 15, reset_less=True) # Window shifted by the pointer multiple of 16.
@@ -564,15 +570,21 @@ class Gen2BlockAligner(LiteXModule):
         d_end     = Signal(7, reset_less=True)
         d_total   = Signal(6, reset_less=True)
         idx = Signal(kr)
+        grp = Signal(ng)
         self.comb += If(realign_d[0],
-            idx.eq(ov_idx[0])
+            idx.eq(ov_idx[0]),
+            grp.eq(ov_grp[0]),
         ).Elif(realign_d[1],
-            idx.eq(ov_idx[1])
+            idx.eq(ov_idx[1]),
+            grp.eq(ov_grp[1]),
         ).Else(
-            idx.eq(e_idx)
+            idx.eq(e_idx),
+            grp.eq(e_grp),
         )
         self.sync += [
-            d_win.eq(e_win >> Cat(Constant(0, 4), idx[4:])),
+            # Shift by the pointer group (one-hot selection).
+            d_win.eq(Reduce("OR", [Replicate(grp[g], len(d_win)) & e_win[16*g:16*g + len(d_win)]
+                for g in range(ng)])),
             d_end.eq(e_end),
             d_total.eq(e_total),
             d_idx.eq(idx),
