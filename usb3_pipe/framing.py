@@ -586,7 +586,8 @@ def gen2_tx_unit_layout(nbytes=8):
 
 class Gen2TXUnitsWidener(LiteXModule):
     """Transmission units entries: 8 bytes -> 16 bytes (entries of a unit paired, the entries before
-    the last one of a unit are full: 8 bytes)."""
+    the last one of a unit are full: 8 bytes). The bytes after the last one of an entry are Idle
+    Symbols (Gen2TXPacker16 padding)."""
     def __init__(self):
         self.sink   = sink   = stream.Endpoint(gen2_tx_unit_layout(8))
         self.source = source = stream.Endpoint(gen2_tx_unit_layout(16))
@@ -595,18 +596,22 @@ class Gen2TXUnitsWidener(LiteXModule):
 
         held   = Signal()
         held_d = Signal(64, reset_less=True)
+        data   = Signal(64)
+        idle   = int.from_bytes(bytes([GEN2_IDLE])*8, "little")
+        self.comb += [data[8*j:8*(j+1)].eq(Mux(j >= sink.bytes, GEN2_IDLE, sink.data[8*j:8*(j+1)]))
+            for j in range(8)]
         self.comb += [
             If(held,
                 # Held full entry + entry: 16-byte entry.
                 source.valid.eq(sink.valid),
-                source.data.eq(Cat(held_d, sink.data)),
+                source.data.eq(Cat(held_d, data)),
                 source.bytes.eq(8 + sink.bytes),
                 source.last.eq(sink.last),
                 sink.ready.eq(source.ready),
             ).Elif(sink.last,
                 # Single last entry.
                 source.valid.eq(sink.valid),
-                source.data.eq(sink.data),
+                source.data.eq(Cat(data, Constant(idle, 64))),
                 source.bytes.eq(sink.bytes),
                 source.last.eq(1),
                 sink.ready.eq(source.ready),
@@ -953,7 +958,8 @@ class Gen2TXPacker16(LiteXModule):
     entry (the unit then fits in the block). A partial block with a unit end is output padded with
     Idle Symbols as soon as the output register is free (never an empty output register at a block
     request between the blocks of a unit) and replaced while not taken when the next unit is packed
-    in it. Same interface as Gen2TXPacker."""
+    in it. Same interface as Gen2TXPacker, the entry bytes after the last one must be Idle Symbols
+    (Gen2TXUnitsWidener)."""
     def __init__(self):
         self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout(16))
         self.source          = source = stream.Endpoint([("data", 128)])
@@ -971,10 +977,10 @@ class Gen2TXPacker16(LiteXModule):
         hold    = Signal()    # Unit ended with a SKP Ordered Set pending: next unit after the block.
         o_pad   = Signal()    # Output register: partial block padded (replaceable while not taken).
 
-        # Entry placed at the fill level: block (16 bytes, the entry bytes after its last one as Idle
+        # Entry placed at the fill level: block (16 bytes, the entry bytes after its last one are Idle
         # Symbols: padded block when ending the unit) and remaining bytes.
         total  = Signal(5) # Bytes in the partial block + entry bytes.
-        data   = Signal(128)
+        data   = sink.data
         block  = Signal(128)
         rest   = Signal(128)
         padded = Signal(128) # Partial block padded with Idle Symbols.
@@ -982,7 +988,6 @@ class Gen2TXPacker16(LiteXModule):
         self.comb += total.eq(fill + sink.bytes)
         for j in range(16):
             self.comb += [
-                byte(data, j).eq(Mux(j >= sink.bytes, GEN2_IDLE, byte(sink.data, j))),
                 Case(fill_b, {f: byte(block, j).eq(byte(acc, j) if j < f else byte(data, j - f))
                     for f in range(16)}),
                 Case(fill_b, {f: byte(rest, j).eq(byte(sink.data, 16 + j - f) if j < f else 0)

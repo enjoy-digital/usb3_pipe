@@ -280,9 +280,9 @@ needed a host port power cycle: capability changes between trainings are a test-
    and the LTSSM/Link Layer/Core at 62.5MHz on 64-bit words. Remaining for 10Gbps:
    - GTR12 rate switch: 5Gbps -> 10Gbps is 6 register writes (CDR divider, QPLL1 output divider, TX
      lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) with the same 5GHz VCO and 125MHz fabric clock
-     (40-bit -> 80-bit raw words), back to 5Gbps for the next SuperSpeedPlus Polling. Needs the GTR12
-     runtime register access (UPAR), whose accesses do not complete yet, or another rate control
-     (fabric rate input, reconfiguration).
+     (40-bit -> 80-bit raw words), back to 5Gbps for the next SuperSpeedPlus Polling. Done:
+     `GW5RateSequencer` writes them through the GTR12 runtime register access (UPAR, LiteICLink
+     `GTR12UPAR`) with the lane held in reset (`GW5USB3SerDes(gen2_capable=True)`).
    - 80-bit raw words in LiteICLink's GTR12 (8b/10b on 40 bits at 5Gbps, raw 80 bits at 10Gbps) and
      `GW5USB3SerDes` as a Gen 2 capable SerDes (`gen2_data_width = 80`).
    - Gen 2 with `pipe_cd` (follow-up branch `gw5/gen2`): done in simulation (`sim.py --gen2 --dev-pipe-cd`, Gen2PIPE in the PIPE

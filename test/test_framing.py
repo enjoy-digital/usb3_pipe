@@ -370,7 +370,7 @@ class TestGen2TXPacker16(unittest.TestCase):
         def generator(dut):
             for data, last in entries:
                 yield dut.packer.sink.valid.eq(1)
-                yield dut.packer.sink.data.eq(int.from_bytes(bytes(data), "little"))
+                yield dut.packer.sink.data.eq(int.from_bytes(bytes(data + [GEN2_IDLE]*(16 - len(data))), "little"))
                 yield dut.packer.sink.bytes.eq(len(data))
                 yield dut.packer.sink.last.eq(last)
                 yield
