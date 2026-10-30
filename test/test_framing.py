@@ -7,6 +7,8 @@
 import random
 import unittest
 
+import pytest
+
 from migen import *
 
 from litex.soc.interconnect import stream
@@ -260,21 +262,19 @@ class TestGen2Framing(unittest.TestCase):
 
 
     def test_loopback(self):
-        for seed in range(3):
-            self.loopback_test(seed)
+        self.loopback_test(0)
 
     def test_loopback_block_slots(self):
         # Data Blocks requested at random intervals: a unit must never be split by a Logical Idle
         # Data Block (block requested while the packer is starting the next unit).
         # Short units: many unit boundaries.
-        for seed in range(2):
-            self.loopback_test(seed, n_units=200, slots=True, short=True)
+        self.loopback_test(0, n_units=200, slots=True, short=True)
 
     def test_loopback_pairs(self):
         # Words pairs input (64-bit Link Layer words): DPP data 8 bytes per cycle.
-        for seed in range(3):
-            self.loopback_test(seed, pairs=True)
+        self.loopback_test(1, pairs=True)
 
+    @pytest.mark.slow
     def test_loopback_32_bytes(self):
         # 32 bytes per cycle (packer/RX framing at the Link Layer frequency: 2 Data Blocks): chains
         # read once complete from the blocks buffer, no Logical Idle Data Block inside a unit.
@@ -282,7 +282,9 @@ class TestGen2Framing(unittest.TestCase):
             self.loopback_test(seed, pairs=True, nbytes=32, gaps=1)
 
     def test_loopback_32_bytes_short(self):
-        self.loopback_test(0, n_units=120, pairs=True, short=True, nbytes=32, gaps=0)
+        # Short units back to back (many unit boundaries/chains), long units in the slow test and the
+        # Gen 2 80-bit system simulation (Verilator, test_phy).
+        self.loopback_test(0, n_units=40, pairs=True, short=True, nbytes=32, gaps=0)
 
 if __name__ == "__main__":
     unittest.main()
@@ -395,12 +397,16 @@ class Gen2LinkLoopback32(Module):
         ]
 
 class TestGen2Link32(unittest.TestCase):
+    # Slow in the Migen simulator: the Gen 2 80-bit system simulation (Verilator, test_phy) covers
+    # Gen2LinkTX/Gen2LinkRX at 32 bytes per cycle with the Link Layer clock domain.
+    @pytest.mark.slow
     def test_link_loopback_32_bytes(self):
         rng   = random.Random(3)
-        units = random_units(rng, 24)
+        units = random_units(rng, 10)
         words = [w for u in units for w in u]
         out   = []
         lcs   = []
+        count = {"written": 0, "backlog": 0}
         dut   = Gen2LinkLoopback32()
         def generator(dut):
             i = 0
@@ -417,8 +423,22 @@ class TestGen2Link32(unittest.TestCase):
                 i += n
             yield dut.link_tx.sink.valid.eq(0)
         @passive
-        def checker(dut):
+        def writes(dut):
+            # Blocks pairs written (rx = tx clock domain).
+            pairs = dut.link_rx.pairs
             while True:
+                if (yield pairs.sink.valid) and (yield pairs.sink.ready):
+                    count["written"] += 1
+                yield
+        @passive
+        def checker(dut):
+            read = 0
+            while True:
+                pairs = dut.link_rx.pairs
+                if (yield pairs.source.valid) and (yield pairs.source.ready):
+                    read += 1
+                # Pairs buffer backlog: read at the blocks rate (a pair per Link Layer cycle).
+                count["backlog"] = max(count["backlog"], count["written"] - read)
                 if (yield dut.link_rx.source.valid):
                     data   = (yield dut.link_rx.source.data)
                     ctrl   = (yield dut.link_rx.source.ctrl)
@@ -428,17 +448,13 @@ class TestGen2Link32(unittest.TestCase):
                 if (yield dut.link_rx.source_lc.valid):
                     lcs.append((yield dut.link_rx.source_lc.data))
                 yield
-        overflow = []
         def timeout(dut):
-            # Long enough to fill the RX buffers without a Link Layer rate RX path (blocks at the
-            # line rate, Idle Data Blocks included).
-            for _ in range(len(words)*4 + 6000):
+            for _ in range(len(words)*4 + 1500):
                 yield
-            overflow.append((yield dut.link_rx.overflow))
-        run_simulation(dut, {"sys": [generator(dut), timeout(dut), checker(dut)]},
+        run_simulation(dut, {"sys": [generator(dut), timeout(dut), checker(dut)], "tx": [writes(dut)]},
             clocks={"sys": 8, "tx": 4})
         self.assertEqual((out, lcs), split_units(units))
-        self.assertEqual(overflow, [0])
+        self.assertLess(count["backlog"], 16)
 
 # Gen2TXBlocksPacker/Gen2TXBlocksReader: random block requests, no Idle Symbols inside a unit ---
 

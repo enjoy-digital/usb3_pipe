@@ -14,6 +14,8 @@ import tempfile
 import subprocess
 import unittest
 
+import pytest
+
 from migen import *
 
 from usb3_pipe.common import *
@@ -133,6 +135,12 @@ class TestGen2Coding(unittest.TestCase):
         # Long SKP Ordered Sets (28-36 SKP Symbols) every 3 blocks at 80-bit, bit offsets: the SKP
         # Dwords must be consumed as fast as the words are received (else the pointer falls behind
         # and the alignment is lost).
+        for offset in [37]:
+            self.gearbox_aligner_roundtrip_test(data_width=80, skp_period=3,
+                skp_lengths=[28, 32, 36], offset=offset, header_error=False)
+
+    @pytest.mark.slow
+    def test_gearbox_aligner_long_skp_80_offsets(self):
         for offset in range(0, 80, 11):
             self.gearbox_aligner_roundtrip_test(data_width=80, skp_period=3,
                 skp_lengths=[28, 32, 36], offset=offset, header_error=False)
