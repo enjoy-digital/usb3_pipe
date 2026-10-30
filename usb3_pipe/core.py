@@ -338,8 +338,13 @@ class Gen2PIPE(LiteXModule):
     def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
         tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1, link_cd=None):
         # link_cd: clock domain of the TX framing and sink (default: sys), ex: the Link Layer clock
-        # domain when this module runs at a higher PIPE frequency.
-        framing_bytes = 8 if data_width <= 40 else 16
+        # domain when this module runs at a higher PIPE frequency. Wider raw words (ex: 80-bit at
+        # 125MHz): framing/packing at 32 bytes per cycle in link_cd (TX sink, RX source/source_lc
+        # in link_cd).
+        framing_bytes = 8 if data_width <= 40 else 32
+        if (framing_bytes == 32) and (link_cd is None):
+            link_cd = "sys"
+        self.link_rx_cd = "sys" if framing_bytes == 8 else link_cd # RX source/source_lc domain.
         link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout()
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
@@ -452,25 +457,33 @@ class Gen2PIPE(LiteXModule):
             self.sink.ready.eq(link_tx.sink.ready & tx_ready),
             link_tx.source.connect(tx.sink),
             link_tx.flush.eq(~tx_ready),
-            link_tx.packer.skp_pending.eq(tx.tx.skp_pending),
+            link_tx.skp_pending.eq(tx.tx.skp_pending),
         ]
         self.tx_packer = link_tx.packer
+        self.tx_blocks = link_tx.source # Data Blocks payloads to Gen2TX (tx clock domain).
 
-        # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
-        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth, link_words=link_words,
-            nbytes=framing_bytes)
+        # Link Layer RX: blocks (rx) -> framing (rx or link_cd) -> words (sys or link_cd) ----------
+        link_rx  = Gen2LinkRX(rx_buffer_depth, link_words=link_words, nbytes=framing_bytes)
+        rx_ready = self.rx_ready
+        if framing_bytes == 32:
+            link_rx  = ClockDomainsRenamer({"sys": link_cd})(link_rx)
+            rx_ready = Signal()
+            self.specials += MultiReg(self.rx_ready, rx_ready, link_cd)
+        self.link_rx = link_rx
         self.comb += [
             # Data Blocks (after SDS), framing reset out of the Data Stream.
             link_rx.sink.valid.eq(rx.source.valid),
             link_rx.sink.data.eq(rx.source.data),
             link_rx.data_stream.eq(rx.data_stream),
-            link_rx.rx_ready.eq(self.rx_ready),
+            link_rx.rx_ready.eq(rx_ready),
             link_rx.source.connect(self.source),
             link_rx.source_lc.connect(self.source_lc),
             link_rx.lc_enable.eq(self.source_lc_enable),
             self.rx_overflow.eq(link_rx.overflow),
         ]
         self.rx_framing = link_rx.framing
+        if framing_bytes == 32:
+            self.rx_level = link_rx.level # RX words buffer level (link_cd, RX throttling).
 
         # Idle Symbol handshake (7.5.4.10.2) -------------------------------------------------------
         # RX: a Logical Idle Data Block (16 Idle Symbols) received while enabled. TX: a Logical Idle

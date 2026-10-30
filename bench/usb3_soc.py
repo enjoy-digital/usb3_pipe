@@ -169,9 +169,9 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     if hasattr(phy, "gen2_pipe"):
         soc.cd_tx_nr = ClockDomain(reset_less=True)
         soc.comb += soc.cd_tx_nr.clk.eq(ClockSignal("tx"))
-        packer = phy.gen2_pipe.tx_packer
+        blocks = phy.gen2_pipe.tx_blocks
         soc.usb3_gen2_tx_snapshot = RXRawSnapshot(phy.gen2_pipe.tx_data, clock_domain="tx_nr",
-            flags=Cat(packer.source.valid & packer.source.ready, packer.source.last))
+            flags=Cat(blocks.valid & blocks.ready, blocks.last))
     # PHY Gen2PIPE events (sys): TS1/TS2 (8 consecutive) pulses at the Gen2PIPE and LTSSM inputs, PHY
     # Gen 2 RX aligner status.
     if hasattr(phy, "gen2_pipe"):
@@ -275,7 +275,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets, with
         # the unscrambled sink data.
         g2tx = phy.gen2_pipe.tx.tx
-        pk   = phy.gen2_pipe.tx_packer.source
+        pk   = phy.gen2_pipe.tx_blocks
         soc.usb3_gen2_txblocks_snapshot = RXRawSnapshot(
             Cat(pk.data, pk.last, g2tx.tx_data_blk, g2tx.tx_idle, g2tx.tx_skp),
             flags=Cat(u0_exit_tx), depth=1024, clock_domain="tx_nr",

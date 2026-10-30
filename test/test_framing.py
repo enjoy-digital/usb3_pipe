@@ -12,8 +12,9 @@ from migen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common  import GEN2_IDLE
-from usb3_pipe.framing import Gen2TXFramer, Gen2TXPacker, Gen2TXPacker16, Gen2RXFraming, gen2_tx_unit_layout
+from usb3_pipe.framing import Gen2TXFramer, Gen2TXPacker, Gen2RXFraming, gen2_tx_unit_layout
 from usb3_pipe.framing import Gen2TXUnitsWidener, WordsNarrower
+from usb3_pipe.framing import Gen2TXBlocksPacker, Gen2TXBlocksReader, gen2_tx_blocks_layout
 from usb3_pipe.framing import SHP, SDP, EDB, END, SLC, EPF
 
 # Helpers ------------------------------------------------------------------------------------------
@@ -87,16 +88,17 @@ class Gen2FramingLoopback(Module):
     a block every 3 cycles at most, Idle Data Blocks when no block) -> Gen2RXFraming.
 
     slots: block requests from the slot Signal (driven by the test) instead of every 3 cycles.
-    nbytes=16: framer entries paired (Gen2TXUnitsWidener), 16 bytes per cycle packer/RX framing, a
-    block every 1.65 cycles (80-bit Gen2TX: 20 blocks per 33 cycles)."""
+    nbytes=32: framer entries grouped by 32 bytes (Gen2TXUnitsWidener), Gen2TXBlocksPacker, blocks
+    buffer and Gen2TXBlocksReader, a block every 1.65 cycles (80-bit Gen2TX: 20 blocks per 33
+    cycles), blocks paired for the RX framing (32 bytes per cycle)."""
     def __init__(self, slots=False, nbytes=8):
         self.framer  = framer  = Gen2TXFramer()
         self.fifo    = fifo    = stream.SyncFIFO(gen2_tx_unit_layout(nbytes), 512, buffered=True)
-        self.packer  = packer  = Gen2TXPacker16() if nbytes == 16 else Gen2TXPacker(nbytes)
+        self.packer  = packer  = {8: Gen2TXPacker(8), 32: Gen2TXBlocksPacker()}[nbytes]
         self.rx      = rx      = Gen2RXFraming(nbytes)
         self.submodules += framer, fifo, packer, rx
-        if nbytes == 16:
-            widener = Gen2TXUnitsWidener()
+        if nbytes >= 16:
+            widener = Gen2TXUnitsWidener(nbytes)
             self.submodules += widener
             self.comb += [
                 framer.source.connect(widener.sink),
@@ -117,11 +119,35 @@ class Gen2FramingLoopback(Module):
         self.sync += skp_timer.eq(skp_timer + 1)
         self.comb += packer.skp_pending.eq(skp_timer[5])
 
-        # Gen2TX model: block every 3 cycles (1.65 with 16 bytes), idle block when none.
+        # 32 bytes: blocks entries buffer, chains read once complete (written count delayed: buffer
+        # latency).
+        blocks = packer.source
+        if nbytes == 32:
+            blocks_fifo = stream.SyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True)
+            reader      = Gen2TXBlocksReader()
+            self.submodules += blocks_fifo, reader
+            chains_written = Signal(16)
+            chains_read    = Signal(16)
+            chains_d       = [Signal(16) for _ in range(4)]
+            self.sync += [
+                If(blocks_fifo.sink.valid & blocks_fifo.sink.ready & blocks_fifo.sink.last,
+                    chains_written.eq(chains_written + 1)),
+                If(reader.chain_end, chains_read.eq(chains_read + 1)),
+                chains_d[0].eq(chains_written),
+                [chains_d[i].eq(chains_d[i - 1]) for i in range(1, 4)],
+            ]
+            self.comb += [
+                packer.source.connect(blocks_fifo.sink),
+                blocks_fifo.source.connect(reader.sink),
+                reader.chains_available.eq(chains_d[-1] != chains_read),
+            ]
+            blocks = reader.source
+
+        # Gen2TX model: block every 3 cycles (1.65 with 16/32 bytes), idle block when none.
         self.block       = block = Signal(128)
         self.block_valid = block_valid = Signal()
         self.slot = slot = Signal()
-        if nbytes == 16:
+        if nbytes >= 16:
             # 132-bit blocks from 80-bit words: a block when the bits count reaches 132.
             acc = Signal(8)
             self.sync += If(acc + 80 >= 132, acc.eq(acc + 80 - 132)).Else(acc.eq(acc + 80))
@@ -134,21 +160,25 @@ class Gen2FramingLoopback(Module):
                 self.comb += slot.eq(timer == 2)
         idle = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
         self.comb += [
-            packer.source.ready.eq(slot),
+            blocks.ready.eq(slot),
         ]
         self.sync += [
             block_valid.eq(slot),
             If(slot,
-                block.eq(Mux(packer.source.valid, packer.source.data, idle))
+                block.eq(Mux(blocks.valid, blocks.data[:128], idle))
             )
         ]
         # RX FIFO (Gen2LinkRX blocks buffer: the RX framing stalls 1 cycle on each packet start).
-        rx_fifo = stream.SyncFIFO([("data", 8*nbytes)], 32 if nbytes == 16 else 8)
+        rx_fifo = stream.SyncFIFO([("data", 8*nbytes)], 32 if nbytes >= 16 else 8)
         self.submodules += rx_fifo
-        if nbytes == 16:
+        if nbytes == 32:
+            # Blocks pairs.
+            second = Signal()
+            first  = Signal(128)
+            self.sync += If(block_valid, second.eq(~second), first.eq(block))
             self.comb += [
-                rx_fifo.sink.valid.eq(block_valid),
-                rx_fifo.sink.data.eq(block),
+                rx_fifo.sink.valid.eq(block_valid & second),
+                rx_fifo.sink.data.eq(Cat(first, block)),
             ]
         else:
             # Blocks -> 8 bytes per cycle (2 cycles per block, then 1 idle cycle).
@@ -245,17 +275,14 @@ class TestGen2Framing(unittest.TestCase):
         for seed in range(3):
             self.loopback_test(seed, pairs=True)
 
-    def test_loopback_16_bytes(self):
-        # 16 bytes per cycle (80-bit Gen2TX/Gen2RX, a Data Block every 1.65 cycles): units stored
-        # in the FIFO before the packer reads them, no Logical Idle Data Block inside a unit and no
-        # RX FIFO overflow at the line rate (bursts of short units behind long ones). Link Layer
-        # words at half the PIPE frequency (pipe_cd): an entry every 2 cycles.
+    def test_loopback_32_bytes(self):
+        # 32 bytes per cycle (packer/RX framing at the Link Layer frequency: 2 Data Blocks): chains
+        # read once complete from the blocks buffer, no Logical Idle Data Block inside a unit.
         for seed in range(4):
-            self.loopback_test(seed, pairs=True, nbytes=16, gaps=1)
+            self.loopback_test(seed, pairs=True, nbytes=32, gaps=1)
 
-    def test_loopback_16_bytes_short(self):
-        # Short units back to back (1 cycle per packet start in the RX framing).
-        self.loopback_test(0, n_units=120, pairs=True, short=True, nbytes=16, gaps=0)
+    def test_loopback_32_bytes_short(self):
+        self.loopback_test(0, n_units=120, pairs=True, short=True, nbytes=32, gaps=0)
 
 if __name__ == "__main__":
     unittest.main()
@@ -339,38 +366,130 @@ class TestGen2LinkTX(unittest.TestCase):
             clocks={"sys": 8, "tx": 4})
         self.assertEqual((out, lcs), split_units(units))
 
-# Gen2TXPacker16: random block requests, no Idle Symbols inside a unit ---------------------------
-
-class Gen2TXPacker16Bench(Module):
+class Gen2LinkLoopback32(Module):
+    """Gen2LinkTX (32 bytes, sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx
+    clock domain: a block every 1.65 cycles, Idle Data Blocks when no block) -> Gen2LinkRX (32 bytes,
+    rx = tx clock domain, words pairs in sys)."""
     def __init__(self):
-        self.submodules.packer = packer = Gen2TXPacker16()
+        from usb3_pipe.framing import Gen2LinkTX, Gen2LinkRX
+        self.link_tx = link_tx = Gen2LinkTX(units_delay=UNITS_DELAY, link_words=2, nbytes=32)
+        self.link_rx = link_rx = ClockDomainsRenamer({"rx": "tx"})(Gen2LinkRX(link_words=2,
+            nbytes=32))
+        self.submodules += link_tx, link_rx
+        acc  = Signal(8)
+        slot = Signal()
+        self.sync.tx += If(acc + 80 >= 132, acc.eq(acc + 80 - 132)).Else(acc.eq(acc + 80))
+        self.comb += slot.eq(acc + 80 >= 132)
+        idle = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
+        self.comb += link_tx.source.ready.eq(slot)
+        self.sync.tx += [
+            link_rx.sink.valid.eq(slot),
+            link_rx.sink.data.eq(Mux(link_tx.source.valid, link_tx.source.data, idle)),
+        ]
+        self.comb += [
+            link_rx.data_stream.eq(1),
+            link_rx.rx_ready.eq(1),
+            link_rx.lc_enable.eq(1),
+            link_rx.source.ready.eq(1),
+            link_rx.source_lc.ready.eq(1),
+        ]
+
+class TestGen2Link32(unittest.TestCase):
+    def test_link_loopback_32_bytes(self):
+        rng   = random.Random(3)
+        units = random_units(rng, 24)
+        words = [w for u in units for w in u]
+        out   = []
+        lcs   = []
+        dut   = Gen2LinkLoopback32()
+        def generator(dut):
+            i = 0
+            while i < len(words):
+                n = 2 if (i + 1) < len(words) and rng.random() < 0.7 else 1
+                entry = words[i:i+n]
+                yield dut.link_tx.sink.valid.eq(1)
+                yield dut.link_tx.sink.data.eq(sum(d << (32*j) for j, (d, c) in enumerate(entry)))
+                yield dut.link_tx.sink.ctrl.eq(sum(c << (4*j) for j, (d, c) in enumerate(entry)))
+                yield dut.link_tx.sink.words.eq(n)
+                yield
+                while not (yield dut.link_tx.sink.ready):
+                    yield
+                i += n
+            yield dut.link_tx.sink.valid.eq(0)
+        @passive
+        def checker(dut):
+            while True:
+                if (yield dut.link_rx.source.valid):
+                    data   = (yield dut.link_rx.source.data)
+                    ctrl   = (yield dut.link_rx.source.ctrl)
+                    nwords = (yield dut.link_rx.source.words)
+                    for w in range(nwords):
+                        out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                if (yield dut.link_rx.source_lc.valid):
+                    lcs.append((yield dut.link_rx.source_lc.data))
+                yield
+        overflow = []
+        def timeout(dut):
+            # Long enough to fill the RX buffers without a Link Layer rate RX path (blocks at the
+            # line rate, Idle Data Blocks included).
+            for _ in range(len(words)*4 + 6000):
+                yield
+            overflow.append((yield dut.link_rx.overflow))
+        run_simulation(dut, {"sys": [generator(dut), timeout(dut), checker(dut)]},
+            clocks={"sys": 8, "tx": 4})
+        self.assertEqual((out, lcs), split_units(units))
+        self.assertEqual(overflow, [0])
+
+# Gen2TXBlocksPacker/Gen2TXBlocksReader: random block requests, no Idle Symbols inside a unit ---
+
+class Gen2TXBlocksBench(Module):
+    def __init__(self):
+        self.submodules.packer = packer = Gen2TXBlocksPacker()
+        self.submodules.fifo   = fifo   = stream.SyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True)
+        self.submodules.reader = reader = Gen2TXBlocksReader()
         self.slot  = Signal() # Block request (Gen2TX).
         self.taken = Signal() # Block request of the previous cycle.
         self.valid = Signal()
         self.data  = Signal(128)
+        self.hold  = Signal() # Buffer writes held (slower write side).
+        # Complete chains in the buffer (written count delayed: buffer latency).
+        written = Signal(16)
+        read    = Signal(16)
+        delayed = [Signal(16) for _ in range(4)]
+        self.sync += [
+            If(fifo.sink.valid & fifo.sink.ready & fifo.sink.last, written.eq(written + 1)),
+            If(reader.chain_end, read.eq(read + 1)),
+            delayed[0].eq(written),
+            [delayed[i].eq(delayed[i - 1]) for i in range(1, 4)],
+        ]
         self.comb += [
             packer.units_available.eq(1),
-            packer.source.ready.eq(self.slot),
+            packer.source.connect(fifo.sink, omit={"valid", "ready"}),
+            fifo.sink.valid.eq(packer.source.valid & ~self.hold),
+            packer.source.ready.eq(fifo.sink.ready & ~self.hold),
+            fifo.source.connect(reader.sink),
+            reader.chains_available.eq(delayed[-1] != read),
+            reader.source.ready.eq(self.slot),
         ]
         self.sync += [
             self.taken.eq(self.slot),
-            self.valid.eq(packer.source.valid),
-            self.data.eq(packer.source.data),
+            self.valid.eq(reader.source.valid),
+            self.data.eq(reader.source.data),
         ]
 
-class TestGen2TXPacker16(unittest.TestCase):
+class TestGen2TXBlocks(unittest.TestCase):
     def test_random_requests(self):
         rng   = random.Random(0)
-        # Units bytes (no Idle Symbol value), 16 bytes entries (entries before the last one full).
-        units = [[rng.randrange(GEN2_IDLE) for _ in range(rng.choice([1, 4, 8, 12, 16, 20, 24, 40]))]
+        # Units bytes (no Idle Symbol value), 32 bytes entries (entries before the last one full).
+        units = [[rng.randrange(GEN2_IDLE) for _ in range(rng.choice([1, 4, 8, 12, 16, 20, 24, 40, 100]))]
             for _ in range(80)]
-        entries = [(u[i:i+16], (i + 16) >= len(u)) for u in units for i in range(0, len(u), 16)]
-        dut    = Gen2TXPacker16Bench()
+        entries = [(u[i:i+32], (i + 32) >= len(u)) for u in units for i in range(0, len(u), 32)]
+        dut    = Gen2TXBlocksBench()
         blocks = []
         def generator(dut):
             for data, last in entries:
                 yield dut.packer.sink.valid.eq(1)
-                yield dut.packer.sink.data.eq(int.from_bytes(bytes(data + [GEN2_IDLE]*(16 - len(data))), "little"))
+                yield dut.packer.sink.data.eq(int.from_bytes(bytes(data + [GEN2_IDLE]*(32 - len(data))), "little"))
                 yield dut.packer.sink.bytes.eq(len(data))
                 yield dut.packer.sink.last.eq(last)
                 yield
@@ -378,8 +497,9 @@ class TestGen2TXPacker16(unittest.TestCase):
                     yield
             yield dut.packer.sink.valid.eq(0)
         def requests(dut):
-            for _ in range(3000):
+            for _ in range(12000):
                 yield dut.slot.eq(rng.random() < 0.6)
+                yield dut.hold.eq(rng.random() < 0.75)
                 yield dut.packer.skp_pending.eq(rng.random() < 0.3)
                 yield
                 if (yield dut.taken):
@@ -440,6 +560,11 @@ class TestGen2RXFraming(unittest.TestCase):
     def test_rx_framing_idle_gaps_16_bytes(self):
         for lc_enable in [0, 1]:
             self.rx_framing_idle_gaps(lc_enable, nbytes=16)
+
+    def test_rx_framing_idle_gaps_32_bytes(self):
+        # 32 bytes per cycle (2 Data Blocks: RX framing at the Link Layer frequency).
+        for lc_enable in [0, 1]:
+            self.rx_framing_idle_gaps(lc_enable, nbytes=32)
 
     def rx_framing_idle_gaps(self, lc_enable, nbytes=8):
         rng   = random.Random(3)
