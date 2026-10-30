@@ -496,17 +496,18 @@ class GW5TXElectricalIdle(LiteXModule):
         )
 
 class GW5USB3SerDes(USB3SerDes):
-    """Gowin GW5AST-138B GTR12 USB3 SerDes (Q1 lane 0/1: SFP0/SFP1 of the Tang Mega 138K Pro dock,
-    100 MHz REFCLK1).
+    """Gowin GW5AST-138B/GW5AT-15 GTR12 USB3 SerDes (GW5AST-138B: Q1 lane 0/1, SFP0/SFP1 of the Tang
+    Mega 138K Pro dock, 100 MHz REFCLK1 or 125 MHz REFCLK0; GW5AT-15: Q0 lane 0, 125 MHz REFCLK0, single
+    quad devices).
 
     5Gbps, raw 20-bit PMA with 40-bit fabric words (125MHz, 4 symbols per cycle), 8b/10b and polarity
     in the fabric (LiteICLink GTR12), comma alignment by the PCS. The register configuration is
     generated from usb3_pipe/gw5 TOML files with Gowin's tools.
 
-    gen2_capable: 10Gbps selected with `rate_10g` (Gen 2): the rate dependent registers (CDR, QPLL1
-    output divider, TX lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) are written through UPAR with
-    the lane held in reset (GW5RateSequencer), 80-bit raw words at 125MHz (Gen 2 raw 128b/132b
-    blocks), same fabric clocks at both rates.
+    gen2_capable: 10Gbps selected with `rate_10g` (Gen 2, GW5AST-138B Q1 lanes): the rate dependent
+    registers (CDR, QPLL1 output divider, TX lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) are
+    written through UPAR with the lane held in reset (GW5RateSequencer), 80-bit raw words at 125MHz
+    (Gen 2 raw 128b/132b blocks), same fabric clocks at both rates.
 
     TX Electrical Idle: lane TX driver control register written through UPAR (GW5TXElectricalIdle),
     LFPS square wave in the raw TX words while idle (bursts made by the driver control).
@@ -514,11 +515,13 @@ class GW5USB3SerDes(USB3SerDes):
     inverted, set while a signal is detected (LFPS bursts toggle it, measured on hardware),
     "elecidle": RXELECIDLE, "[~]astat<n>"), with_upar: SerDes registers runtime access (required),
     upar_clk: UPAR (and quad AHB) clock, xcvr_cd: clock domain of the GTR12 control logic
-    (free-running, see the Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
+    (free-running, see the Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock), pll:
+    lane PLL of the register configuration (default: QPLL1 on the GW5AST-138B, QPLL0 on the GW5AT-15
+    as Gowin's USB 3.0 PHY IP).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
         with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
-        gen2_capable=False):
+        position=None, pll=None, gen2_capable=False):
         USB3SerDes.__init__(self)
         assert with_upar # TX Electrical Idle through UPAR.
         self.gen2_capable = gen2_capable
@@ -529,18 +532,29 @@ class GW5USB3SerDes(USB3SerDes):
 
         # # #
 
-        from liteiclink.serdes.gtr12_gw5 import GTR12
+        from liteiclink.serdes.gtr12_gw5 import GTR12, gtr12_primitives
         from usb3_pipe.gw5 import gw5_usb3_csr_config, gw5_usb3_rate_writes
         from usb3_pipe.gw5 import gw5_tx_idle_reg, GW5_TX_IDLE_VALUE, GW5_TX_ACTIVE_VALUE
 
+        # Quad position: Q0 on single quad devices (GW5AT-15), Q1 on the GW5AST-138B.
+        if position is None:
+            quad, _  = gtr12_primitives(platform.devicename)
+            position = "Q0" if quad == "GTR12_QUADB" else "Q1"
+        if pll is None:
+            pll = "QPLL0" if position == "Q0" else "QPLL1"
+        assert (not gen2_capable) or (position == "Q1") # 10G rate writes: Q1 lanes.
+
         # Transceiver ------------------------------------------------------------------------------
+        if csr_config is None:
+            csr_config = gw5_usb3_csr_config(lane, "5G", refclk, position=position, pll=pll)
         gtr12 = GTR12(platform,
             line_rate   = 5e9,
-            csr_config  = gw5_usb3_csr_config(lane, "5G", refclk) if csr_config is None else csr_config,
+            csr_config  = csr_config,
             data_width  = 40,
             raw_width   = 80 if gen2_capable else 40,
-            position    = "Q1",
+            position    = position,
             lane        = lane,
+            pll         = pll,
             tx_polarity = self.tx_polarity,
             rx_polarity = self.rx_polarity,
             csr_name    = f"usb3_5g_ln{lane}.csr",
@@ -559,7 +573,7 @@ class GW5USB3SerDes(USB3SerDes):
         # hardware as LFPS bursts lengthened/merged by the link partner, LBPMs not decoded).
         idle_port = GW5UPARPort()
         self.tx_electrical_idle = tx_electrical_idle = ClockDomainsRenamer({"sys": xcvr_cd})(
-            GW5TXElectricalIdle(idle_port, gw5_tx_idle_reg(lane), GW5_TX_IDLE_VALUE,
+            GW5TXElectricalIdle(idle_port, gw5_tx_idle_reg(lane, position), GW5_TX_IDLE_VALUE,
                 GW5_TX_ACTIVE_VALUE))
         self.comb += tx_electrical_idle.idle.eq(self.tx_idle & ~self.tx_lfps)
 
