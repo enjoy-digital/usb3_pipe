@@ -39,7 +39,7 @@ disk (and DDR3 disk), composite camera + console.
 
 [> Features
 -----------
-- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST GTR12 SerDes (LiteICLink), LFPS, Training
+- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST/GW5AT GTR12 SerDes (LiteICLink), LFPS, Training
   Sequences, 8b/10b, scrambling, SKP insertion/removal, word/framing alignment, polarity, LTSSM
   (Polling/U0/Recovery/U1-U3/Hot/Warm Reset/Compliance/Loopback), debug counters. **Gen 2x1** on
   UltraScale+ GTY: SuperSpeedPlus Polling (SCD/LBPM), 128b/132b blocks, Gen 2 scrambler/SKP/SYNC,
@@ -74,6 +74,9 @@ disk (and DDR3 disk), composite camera + console.
   validated at Gen 1 (5Gbps): IN 372MB/s, OUT 433MB/s, full duplex 262 + 383MB/s, 0 errors (PIPE at
   125MHz on the GTR12 TX clock, Link Layer/Core at 62.5MHz on 64-bit words). Needs
   [LiteICLink](https://github.com/enjoy-digital/liteiclink) GTR12 support.
+- Gowin GW5AT-15 (`GW5USB3SerDes`: GTR12 Q0 lane 0, 125MHz REFCLK0, QPLL0 as Gowin's USB 3.0 PHY IP):
+  validated at Gen 1 (5Gbps) on a GW5AT-15 device with a direct USB-C connection: Bulk IN ~400MB/s with
+  `max_burst=16` (Link Layer/Core at 62.5MHz on 64-bit words).
 - [SFP2USB](http://xillybus.com/sfp2usb-module) adapter (from the [XillyUSB](http://xillybus.com/xillyusb)
   project) or the [PCIsh-to-USB3.0](doc/breakout_board.pdf) breakout board.
 

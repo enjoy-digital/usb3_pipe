@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""GW5AT-15 Q0 USB3 SerDes configuration TOML (single quad devices, ex: Sipeed SLogic16U3).
+"""GW5AT-15 Q0 USB3 SerDes configuration TOML (single quad devices).
 
 Usage: python3 gen_toml_q0.py usb3_5g_ln0_ref125.toml [--pll qpll1] > usb3_5g_q0_ln0_ref125.toml, then
        serdes_toml_to_csr_15k.bin $PWD/usb3_5g_q0_ln0_ref125.toml -o $PWD/usb3_5g_q0_ln0_ref125.csr --comment
