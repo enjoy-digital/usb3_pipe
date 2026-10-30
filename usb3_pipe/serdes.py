@@ -454,6 +454,47 @@ class GW5RateSequencer(LiteXModule):
             If(timer == 0, NextState("IDLE"))
         )
 
+class GW5UPARPort:
+    """UPAR user requests (addr/wrdata/we, done) of a GW5RateSequencer/GW5TXElectricalIdle."""
+    def __init__(self):
+        self.addr   = Signal(24)
+        self.wrdata = Signal(32)
+        self.we     = Signal()
+        self.done   = Signal()
+
+class GW5TXElectricalIdle(LiteXModule):
+    """GTR12 lane TX Electrical Idle: the TX driver control register (addr) is written with
+    idle_value/active_value through UPAR on each change of idle (asynchronous input), the last
+    requested value written again when changed during a write."""
+    def __init__(self, upar, addr, idle_value, active_value):
+        self.idle = Signal() # i: Asynchronous.
+
+        # # #
+
+        idle    = Signal(reset=1)
+        written = Signal()
+        current = Signal()
+        self.specials += MultiReg(self.idle, idle, reset=1)
+        self.comb += [
+            upar.addr.eq(addr),
+            upar.wrdata.eq(Mux(current, idle_value, active_value)),
+        ]
+        # The register is written at start (written != idle at reset).
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            If(idle != written,
+                NextValue(current, idle),
+                NextState("WRITE")
+            )
+        )
+        fsm.act("WRITE",
+            upar.we.eq(1),
+            If(upar.done,
+                NextValue(written, current),
+                NextState("IDLE")
+            )
+        )
+
 class GW5USB3SerDes(USB3SerDes):
     """Gowin GW5AST-138B GTR12 USB3 SerDes (Q1 lane 0/1: SFP0/SFP1 of the Tang Mega 138K Pro dock,
     100 MHz REFCLK1).
@@ -467,18 +508,19 @@ class GW5USB3SerDes(USB3SerDes):
     the lane held in reset (GW5RateSequencer), 80-bit raw words at 125MHz (Gen 2 raw 128b/132b
     blocks), same fabric clocks at both rates.
 
-    TX Electrical Idle: DC (constant raw words) between the LFPS bursts (no transitions on the AC
-    coupled link). rx_idle_source: RX Electrical Idle indicator of the lane ("~astat5": analog status
-    bit 5 inverted, set while a signal is detected (LFPS bursts toggle it, measured on hardware),
-    "elecidle": RXELECIDLE, "[~]astat<n>"), with_upar: SerDes registers runtime access, upar_clk: UPAR
-    (and quad AHB) clock, xcvr_cd: clock domain of the GTR12 control logic (free-running, see the
-    Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
+    TX Electrical Idle: lane TX driver control register written through UPAR (GW5TXElectricalIdle),
+    LFPS square wave in the raw TX words while idle (bursts made by the driver control).
+    rx_idle_source: RX Electrical Idle indicator of the lane ("~astat5": analog status bit 5
+    inverted, set while a signal is detected (LFPS bursts toggle it, measured on hardware),
+    "elecidle": RXELECIDLE, "[~]astat<n>"), with_upar: SerDes registers runtime access (required),
+    upar_clk: UPAR (and quad AHB) clock, xcvr_cd: clock domain of the GTR12 control logic
+    (free-running, see the Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
         with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
         gen2_capable=False):
         USB3SerDes.__init__(self)
-        assert (not gen2_capable) or with_upar
+        assert with_upar # TX Electrical Idle through UPAR.
         self.gen2_capable = gen2_capable
         if gen2_capable:
             self.gen2_data_width = 80
@@ -489,6 +531,7 @@ class GW5USB3SerDes(USB3SerDes):
 
         from liteiclink.serdes.gtr12_gw5 import GTR12
         from usb3_pipe.gw5 import gw5_usb3_csr_config, gw5_usb3_rate_writes
+        from usb3_pipe.gw5 import gw5_tx_idle_reg, GW5_TX_IDLE_VALUE, GW5_TX_ACTIVE_VALUE
 
         # Transceiver ------------------------------------------------------------------------------
         gtr12 = GTR12(platform,
@@ -511,17 +554,39 @@ class GW5USB3SerDes(USB3SerDes):
         self.add_xcvr_datapath("gtr12", gtr12, data_width=40, rx_disparity_check=False,
             tx_cdc=tx_cdc)
 
+        # TX Electrical Idle (UPAR writes of the lane TX driver control register): no TX Electrical
+        # Idle from the fabric data (constant words: DC level on the AC coupled link, seen on
+        # hardware as LFPS bursts lengthened/merged by the link partner, LBPMs not decoded).
+        idle_port = GW5UPARPort()
+        self.tx_electrical_idle = tx_electrical_idle = ClockDomainsRenamer({"sys": xcvr_cd})(
+            GW5TXElectricalIdle(idle_port, gw5_tx_idle_reg(lane), GW5_TX_IDLE_VALUE,
+                GW5_TX_ACTIVE_VALUE))
+        self.comb += tx_electrical_idle.idle.eq(self.tx_idle & ~self.tx_lfps)
+
         # Gen 2: rate changes (UPAR registers writes, lane held in reset), raw words ---------------
         if gen2_capable:
+            rate_port = GW5UPARPort()
             self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(
-                GW5RateSequencer(gtr12.upar, gw5_usb3_rate_writes(lane, refclk)))
+                GW5RateSequencer(rate_port, gw5_usb3_rate_writes(lane, refclk)))
             self.comb += [
                 rate_sequencer.rate_10g.eq(self.rate_10g),
                 self.tx_reinit.eq(rate_sequencer.busy),
                 self.rx_reinit.eq(rate_sequencer.busy),
-                gtr12.tx_raw_enable.eq(self.gen2_tx_enable),
-                gtr12.tx_raw.eq(self.gen2_tx_data),
                 self.gen2_rx_data.eq(gtr12.rx_raw),
+            ]
+            # UPAR user requests: rate sequencer while busy (its writes start after the lane reset
+            # delay: a TX Electrical Idle write in progress ends before, rewritten if cut).
+            ports = [(rate_sequencer.busy, rate_port), (~rate_sequencer.busy, idle_port)]
+        else:
+            ports = [(1, idle_port)]
+        for sel, port in ports:
+            self.comb += [
+                If(sel,
+                    gtr12.upar.addr.eq(port.addr),
+                    gtr12.upar.wrdata.eq(port.wrdata),
+                    gtr12.upar.we.eq(port.we),
+                ),
+                port.done.eq(sel & gtr12.upar.done),
             ]
 
         # LFPS -------------------------------------------------------------------------------------
@@ -535,11 +600,57 @@ class GW5USB3SerDes(USB3SerDes):
             bit = gtr12.astat[int(source[5:])]
             self.comb += rx_idle.eq(~bit if invert else bit)
         self.add_lfps(gtr12, rx_idle)
-        # TX Electrical Idle: constant (zeros) raw words when idle and no LFPS burst.
-        self.comb += If(self.tx_idle & ~self.tx_lfps & (self.tx_pattern == 0),
-            gtr12.tx_produce_pattern.eq(1),
-            gtr12.tx_pattern.eq(0),
-        )
+        # TX LFPS: bit-level square wave with a 24ns period (41.7MHz, Table 6-29: 20-80ns for
+        # SuperSpeedPlus) through the raw TX words whenever the transmitter is idle, the bursts made
+        # by the TX Electrical Idle register (the square wave is already running when the driver is
+        # enabled and still running when disabled: same UPAR write latency on both burst edges).
+        # Measured on hardware (SFP2USB, xHCI Gen 2 host): Polling LFPS/SCDs with the PIPE LFPS
+        # pattern (constant words: 48ns period) not received, received with 20-28ns periods.
+        self.add_gw5_lfps_tx(gtr12, raw_width=80 if gen2_capable else 40)
 
         # Timing constraints -----------------------------------------------------------------------
         self.add_timing_constraints(platform, sys_clk, gtr12)
+
+    def add_gw5_lfps_tx(self, gtr12, raw_width, half_period=12e-9):
+        """LFPS square wave as raw TX words while idle or in LFPS bursts (tx clock domain):
+        half_period in bits at 5Gbps (40-bit words) or 10Gbps (80-bit words, rate_10g)."""
+        def lfps_words(bit_rate, word_bits):
+            half   = int(half_period*bit_rate)
+            period = 2*half
+            n      = 1
+            while (word_bits*n) % period:
+                n += 1
+            bits = [int((i % period) < half) for i in range(word_bits*n)]
+            return [sum(b << j for j, b in enumerate(bits[word_bits*k:word_bits*(k + 1)]))
+                for k in range(n)]
+        words_5g = lfps_words(5e9, 40)
+        words    = [words_5g]
+        if raw_width == 80:
+            words_10g = lfps_words(10e9, 80)
+            assert len(words_10g) == len(words_5g)
+            words.append(words_10g)
+
+        lfps_tx    = Signal()
+        rate_10g   = Signal()
+        index      = Signal(max=len(words_5g))
+        lfps_word  = Signal(raw_width)
+        self.specials += [
+            MultiReg(self.tx_lfps | self.tx_idle, lfps_tx, "tx"),
+            MultiReg(self.rate_10g, rate_10g, "tx"),
+        ]
+        self.sync.tx += [
+            If(index == len(words_5g) - 1,
+                index.eq(0)
+            ).Else(
+                index.eq(index + 1)
+            ),
+            lfps_word.eq(Array(Constant(w, raw_width) for w in words_5g)[index]),
+        ]
+        if raw_width == 80:
+            self.sync.tx += If(rate_10g,
+                lfps_word.eq(Array(Constant(w, raw_width) for w in words[1])[index])
+            )
+        self.comb += [
+            gtr12.tx_raw_enable.eq(lfps_tx | self.gen2_tx_enable),
+            gtr12.tx_raw.eq(Mux(lfps_tx, lfps_word, self.gen2_tx_data if raw_width == 80 else 0)),
+        ]

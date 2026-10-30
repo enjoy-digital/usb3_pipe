@@ -28,3 +28,13 @@ def gw5_usb3_rate_writes(lane, refclk="100M"):
     w5, w10 = writes("5G"), writes("10G")
     assert [a for a, v in w5] == [a for a, v in w10]
     return [(a, v5, v10) for (a, v5), (_, v10) in zip(w5, w10) if v5 != v10]
+
+# TX Electrical Idle: lane TX driver control register (Q1 lanes), as written by the Gowin USB 3.2 PHY
+# IP (Gowin IDE SerDes IP library) on its TxElecIdle changes (measured on hardware): 0x1 driver in
+# electrical idle, 0x7 driver active. The Gowin IP generator also writes 0x1 at initialization.
+GW5_TX_IDLE_VALUE   = 0x1
+GW5_TX_ACTIVE_VALUE = 0x7
+
+def gw5_tx_idle_reg(lane):
+    """Address of the TX driver control register of a Q1 lane."""
+    return 0x9003a4 + 0x200*lane
