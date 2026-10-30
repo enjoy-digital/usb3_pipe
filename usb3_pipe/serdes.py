@@ -411,11 +411,12 @@ class GW5USB3SerDes(USB3SerDes):
     bit 5 inverted, set while a signal is detected (LFPS bursts toggle it, measured on hardware),
     "elecidle": RXELECIDLE, "[~]astat<n>"), with_upar: SerDes registers runtime access, upar_clk: UPAR
     (and quad AHB) clock, xcvr_cd: clock domain of the GTR12 control logic (free-running, see the
-    Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock).
+    Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock), pll: lane PLL of the register
+    configuration (QPLL1, or QPLL0 on the GW5AT-15).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
         with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
-        position=None):
+        position=None, pll="QPLL1"):
         USB3SerDes.__init__(self)
 
         # # #
@@ -430,13 +431,14 @@ class GW5USB3SerDes(USB3SerDes):
 
         # Transceiver ------------------------------------------------------------------------------
         if csr_config is None:
-            csr_config = gw5_usb3_csr_config(lane, "5G", refclk, position=position)
+            csr_config = gw5_usb3_csr_config(lane, "5G", refclk, position=position, pll=pll)
         gtr12 = GTR12(platform,
             line_rate   = 5e9,
             csr_config  = csr_config,
             data_width  = 40,
             position    = position,
             lane        = lane,
+            pll         = pll,
             tx_polarity = self.tx_polarity,
             rx_polarity = self.rx_polarity,
             csr_name    = f"usb3_5g_ln{lane}.csr",

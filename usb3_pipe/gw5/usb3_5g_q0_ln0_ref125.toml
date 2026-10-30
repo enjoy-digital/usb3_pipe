@@ -1,4 +1,9 @@
-# GW5AT-15 Q0 lane 0: 125 MHz REFCLK0, 5Gb/s, raw 20-bit PMA, 40-bit fabric, K28.5 alignment.
+# GW5AT-15 Q0 lane 0: 125 MHz REFCLK0, QPLL1, 5Gb/s, raw 20-bit PMA, 40-bit fabric, K28.5 alignment.
+device = "GW5AT-15"
+
+[regulator]
+regulator_enable = false
+
 [q0]
 enable = true
 quad_clk_to_mac_sel = "CM0"
@@ -18,7 +23,14 @@ ref_prop_dir = 0
 refomux0_sel = 0
 qpll0_ref_sel = 0
 qpll1_ref_sel = 0
-
+mclk_freq = "0M"
+gpio_freq = "0M"
+por_toggle_by_fabric = false
+pd_toggle_by_fabric = false
+cmu0_reset_by_fabric = false
+cmu1_reset_by_fabric = false
+bias_tc = "0"
+bias_res = "0"
 
 [q1]
 enable = false
@@ -39,7 +51,14 @@ ref_prop_dir = 1
 refomux0_sel = 0
 qpll0_ref_sel = 0
 qpll1_ref_sel = 0
-
+mclk_freq = "0M"
+gpio_freq = "0M"
+por_toggle_by_fabric = false
+pd_toggle_by_fabric = false
+cmu0_reset_by_fabric = false
+cmu1_reset_by_fabric = false
+bias_tc = "0"
+bias_res = "0"
 
 [q0.ln0]
 chbond_trigger_by_fabric = true
@@ -51,8 +70,6 @@ loopBack = "OFF"
 width_mode = 20
 tx_gear_rate = "1:2"
 rx_gear_rate = "1:2"
-encode_enable = false
-decode_enable = false
 word_align_enable = true
 comma = "K28.5"
 comma_mask = "1111111111"
@@ -115,7 +132,14 @@ tx_slip_distance = 8
 vddt = 900.0
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q0.ln1]
 chbond_trigger_by_fabric = true
@@ -125,8 +149,6 @@ chbond_align_pattern2 = 124
 chbond_align_pattern2_is_kcode = false
 chbond_align_pattern3 = 124
 chbond_align_pattern3_is_kcode = false
-decode_enable = false
-encode_enable = false
 preamEn = false
 rxBistInv = false
 rxPattern = "PRBS31"
@@ -190,7 +212,14 @@ comma = "K28.5"
 comma_mask = "1111111111"
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q0.ln2]
 chbond_trigger_by_fabric = true
@@ -200,8 +229,6 @@ chbond_align_pattern2 = 124
 chbond_align_pattern2_is_kcode = false
 chbond_align_pattern3 = 124
 chbond_align_pattern3_is_kcode = false
-decode_enable = false
-encode_enable = false
 preamEn = false
 rxBistInv = false
 rxPattern = "PRBS31"
@@ -265,7 +292,14 @@ comma = "K28.5"
 comma_mask = "1111111111"
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q0.ln3]
 chbond_trigger_by_fabric = true
@@ -275,8 +309,6 @@ chbond_align_pattern2 = 124
 chbond_align_pattern2_is_kcode = false
 chbond_align_pattern3 = 124
 chbond_align_pattern3_is_kcode = false
-decode_enable = false
-encode_enable = false
 preamEn = false
 rxBistInv = false
 rxPattern = "PRBS31"
@@ -340,7 +372,14 @@ comma = "K28.5"
 comma_mask = "1111111111"
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q1.ln0]
 chbond_trigger_by_fabric = true
@@ -352,8 +391,6 @@ loopBack = "OFF"
 width_mode = 20
 tx_gear_rate = "1:2"
 rx_gear_rate = "1:2"
-encode_enable = false
-decode_enable = false
 word_align_enable = true
 comma = "K28.5"
 comma_mask = "1111111111"
@@ -416,7 +453,14 @@ tx_slip_distance = 8
 vddt = 900.0
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q1.ln1]
 chbond_trigger_by_fabric = true
@@ -428,8 +472,6 @@ loopBack = "OFF"
 width_mode = 20
 tx_gear_rate = "1:4"
 rx_gear_rate = "1:4"
-encode_enable = false
-decode_enable = false
 word_align_enable = false
 comma = "K28.5"
 comma_mask = "1111111111"
@@ -492,7 +534,14 @@ tx_slip_distance = 8
 vddt = 900.0
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q1.ln2]
 chbond_trigger_by_fabric = true
@@ -503,8 +552,6 @@ chbond_align_pattern2_is_kcode = false
 chbond_align_pattern3 = 124
 align_pattern3 = 124
 chbond_align_pattern3_is_kcode = false
-decode_enable = false
-encode_enable = false
 preamEn = false
 rxBistInv = false
 rxPattern = "PRBS31"
@@ -568,7 +615,14 @@ comma = "K28.5"
 comma_mask = "1111111111"
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
 [q1.ln3]
 chbond_trigger_by_fabric = true
@@ -579,8 +633,6 @@ chbond_align_pattern2_is_kcode = false
 chbond_align_pattern3 = 124
 align_pattern3 = 124
 chbond_align_pattern3_is_kcode = false
-decode_enable = false
-encode_enable = false
 preamEn = false
 rxBistInv = false
 rxPattern = "PRBS31"
@@ -644,5 +696,12 @@ comma = "K28.5"
 comma_mask = "1111111111"
 cpll_ref_sel = 0
 ffe_c0 = 40
-
+encode_mode = "OFF"
+decode_mode = "OFF"
+cpll_to_mipi_enable = false
+cpll_to_mipi_freq = "0M"
+rx_seperated_width_mode = "share"
+cpll_reset_by_fabric = false
+rxsd_use_dlogic = false
+locked_from_fabric = false
 
