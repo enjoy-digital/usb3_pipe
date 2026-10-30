@@ -161,6 +161,7 @@ class Gen2BlockGearbox(LiteXModule):
         dw  = data_width
         buf = Signal(196 + dw)
         rl  = Signal(max=196 + dw + 1) # Bits after the output of the cycle (placement position).
+        rl_b = Signal(len(rl), attr={("syn_preserve", 1)}) # Copy for the placement shift (fanout).
         assert dw % 4 == 0
         out = Signal()                 # Word output this cycle (bits >= dw).
         self.comb += [
@@ -187,14 +188,16 @@ class Gen2BlockGearbox(LiteXModule):
             If(accept,
                 # rl <= dw, multiple of 4 (blocks/words lengths): 4-bit steps shift.
                 buf.eq(shifted | (Cat(block, Constant(0, dw)) <<
-                    Cat(Constant(0, 2), rl[2:bits_for(dw)]))),
+                    Cat(Constant(0, 2), rl_b[2:bits_for(dw)]))),
                 # Bits >= 132 > dw: word output on the next cycle.
                 out.eq(1),
                 rl.eq(rl + length - dw),
+                rl_b.eq(rl + length - dw),
             ).Else(
                 buf.eq(shifted),
                 out.eq(rl >= dw),
                 rl.eq(Mux(rl >= dw, rl - dw, rl)),
+                rl_b.eq(Mux(rl >= dw, rl - dw, rl)),
             )
         ]
 
@@ -636,16 +639,25 @@ class Gen2BlockAligner(LiteXModule):
             # alignment (before its SYNC block).
             self.error.eq((any_dd & ~any_d & (realign_d == 0)) | realign_d[0]),
         ]
+        # Block Header decode on the output stage input (registered with the outputs: timings).
         out_dist_d = Signal(3)
         out_dist_c = Signal(3)
+        o_ctl      = Signal()
         out_ctl    = Signal()
+        out_err    = Signal()
         self.comb += [
-            out_dist_d.eq(popcount(out_bits[0:4] ^ BLOCK_HEADER_DATA)),
-            out_dist_c.eq(popcount(out_bits[0:4] ^ BLOCK_HEADER_CONTROL)),
-            out_ctl.eq(out_dist_c <= 1),
+            out_dist_d.eq(popcount(o_bits[0:4] ^ BLOCK_HEADER_DATA)),
+            out_dist_c.eq(popcount(o_bits[0:4] ^ BLOCK_HEADER_CONTROL)),
+            o_ctl.eq(out_dist_c <= 1),
+        ]
+        self.sync += [
+            out_ctl.eq(o_ctl),
+            out_err.eq((out_dist_d != 0) & (out_dist_c != 0)),
+        ]
+        self.comb += [
             source.header.eq(Mux(out_ctl, BLOCK_HEADER_CONTROL, BLOCK_HEADER_DATA)),
             source.data.eq(out_bits[4:132]),
-            source.header_error.eq((out_dist_d != 0) & (out_dist_c != 0)),
+            source.header_error.eq(out_err),
         ]
         self.sync += [
             If(source.valid & out_ctl & (out_bits[4:12] == GEN2_SDS),
