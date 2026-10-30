@@ -16,8 +16,9 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE, EndiannessSwap, AsyncFIFO
+from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE, EndiannessSwap, AsyncFIFO, Buffer
 from usb3_pipe.core       import USB3PIPE, Gen2PIPE, GEN2_PIPE_INTERFACE
+from usb3_pipe.datapath   import GEN2_DATA_WIDTH
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, link_layout
@@ -128,7 +129,8 @@ class USB3PHY(LiteXModule):
         assert (lanes == 1) or (not with_endianness_swap)
         assert link_words in [1, 2]
         assert (lanes == 1) or (link_words == 1)
-        assert (pipe_cd is None) or ((lanes == 1) and not gen2_capable)
+        assert (pipe_cd is None) or (lanes == 1)
+        assert (pipe_cd is None) or (not gen2_capable) or (link_words == 2)
         self.link_words = link_words # Link Layer words (1: 32-bit) or words pairs (2: 64-bit).
         self.pipe_cd    = pipe_cd
         self.with_u1u2  = with_u1u2 # U1/U2 Link Power Management (USB3LTSSM with_u1u2).
@@ -178,7 +180,7 @@ class USB3PHY(LiteXModule):
 
         # Endpoints --------------------------------------------------------------------------------
         if lanes == 1:
-            if hasattr(self, "gen2_pipe"):
+            if hasattr(self, "gen2_pipe") and (pipe_cd is None):
                 self.add_gen2_datapath(pipe)
             elif pipe_cd is not None:
                 self.sink, self.source = self.add_pipe_cdc(pipe, pipe_cd, rx_depth=pipe_rx_depth)
@@ -296,13 +298,23 @@ class USB3PHY(LiteXModule):
         self.comb += [
             ssp.start.eq(self.ltssm.ssp_polling),
             ssp.ds_port.eq(role == "host"),
-            ssp.idle.eq(serdes.rx_idle),
             self.ltssm.ssp_done.eq(ssp.done),
             self.ltssm.ssp_fallback.eq(ssp.ss_fallback),
-            # TX: SuperSpeedPlus Polling LFPS, else the PIPE (LFPS/electrical idle/data).
-            pipe.lfps_tx_ssp.eq(ssp.tx_active),
-            pipe.lfps_tx_ssp_lfps.eq(ssp.tx_lfps),
         ]
+        # TX: SuperSpeedPlus Polling LFPS, else the PIPE (LFPS/electrical idle/data). With pipe_cd,
+        # resynchronized (LBPM/SCD timings in us, a few cycles of uncertainty).
+        if self.pipe_cd is None:
+            self.comb += [
+                ssp.idle.eq(serdes.rx_idle),
+                pipe.lfps_tx_ssp.eq(ssp.tx_active),
+                pipe.lfps_tx_ssp_lfps.eq(ssp.tx_lfps),
+            ]
+        else:
+            self.specials += [
+                MultiReg(serdes.rx_idle, ssp.idle),
+                MultiReg(ssp.tx_active, pipe.lfps_tx_ssp,      self.pipe_cd),
+                MultiReg(ssp.tx_lfps,   pipe.lfps_tx_ssp_lfps, self.pipe_cd),
+            ]
         self.sync += If(ssp.done,
             self.x2.eq(ssp.x2),
             self.gen2.eq(ssp.gen2),
@@ -342,28 +354,37 @@ class USB3PHY(LiteXModule):
         detections/bursts ends, LFPS detections), lfps_tx_count updated when stable (2 equal
         resynchronized samples: incremented once per LFPS burst)."""
         for name, width, direction in LTSSM_PIPE_INTERFACE:
-            ltssm_s = getattr(ltssm, name)
-            pipe_s  = getattr(pipe,  name)
             if direction == "o":
-                self.specials += MultiReg(ltssm_s, pipe_s, pipe_cd)
-            elif name in LTSSM_PIPE_PULSES:
-                # Registered pulse (timings) to the PulseSynchronizer.
-                pulse = Signal()
-                sync  = getattr(self.sync, pipe_cd)
-                sync += pulse.eq(pipe_s)
-                ps = PulseSynchronizer(pipe_cd, "sys")
-                self.submodules += ps
-                self.comb += [ps.i.eq(pulse), ltssm_s.eq(ps.o)]
-            elif width > 1:
-                s_sys = Signal(width)
-                s_d   = Signal(width)
-                self.specials += MultiReg(pipe_s, s_sys)
-                self.sync += [
-                    s_d.eq(s_sys),
-                    If(s_sys == s_d, ltssm_s.eq(s_sys)),
-                ]
+                self.ltssm_to_pipe(getattr(ltssm, name), getattr(pipe, name), pipe_cd)
             else:
-                self.specials += MultiReg(pipe_s, ltssm_s)
+                self.pipe_to_ltssm(name, getattr(pipe, name), getattr(ltssm, name), pipe_cd)
+
+    def ltssm_to_pipe(self, value, pipe_s, pipe_cd):
+        """LTSSM control (level, sys) -> PIPE (pipe_cd)."""
+        self.specials += MultiReg(value, pipe_s, pipe_cd)
+
+    def pipe_to_ltssm(self, name, pipe_s, ltssm_s, pipe_cd):
+        """PIPE status (pipe_cd) -> LTSSM (sys): pulses (LTSSM_PIPE_PULSES), multi-bit values (taken
+        when stable) or levels."""
+        width = len(pipe_s)
+        if name in LTSSM_PIPE_PULSES:
+            # Registered pulse (timings) to the PulseSynchronizer.
+            pulse = Signal()
+            sync  = getattr(self.sync, pipe_cd)
+            sync += pulse.eq(pipe_s)
+            ps = PulseSynchronizer(pipe_cd, "sys")
+            self.submodules += ps
+            self.comb += [ps.i.eq(pulse), ltssm_s.eq(ps.o)]
+        elif width > 1:
+            s_sys = Signal(width)
+            s_d   = Signal(width)
+            self.specials += MultiReg(pipe_s, s_sys)
+            self.sync += [
+                s_d.eq(s_sys),
+                If(s_sys == s_d, ltssm_s.eq(s_sys)),
+            ]
+        else:
+            self.specials += MultiReg(pipe_s, ltssm_s)
 
     def add_pipe_cdc(self, pipe, pipe_cd, fifo_depth=32, rx_depth=None):
         """Link words (link_words=1) or words pairs (link_words=2) sys <-> pipe_cd through AsyncFIFOs
@@ -397,17 +418,15 @@ class USB3PHY(LiteXModule):
             # Registered PIPE output (timings: framing aligner to the Logical Idle filter decoding).
             rx_pipe  = ClockDomainsRenamer(pipe_cd)(stream.Buffer([("data", 32), ("ctrl", 4)]))
             rx_idle  = ClockDomainsRenamer(pipe_cd)(LogicalIdleFilter())
-            rx_words = ClockDomainsRenamer(pipe_cd)(stream.Buffer([("data", 32), ("ctrl", 4)],
+            rx_words = ClockDomainsRenamer(pipe_cd)(Buffer([("data", 32), ("ctrl", 4)],
                 pipe_ready=True))
             to_pairs = ClockDomainsRenamer(pipe_cd)(WordsPacker())
             self.submodules += to_words, rx_pipe, rx_idle, rx_words, to_pairs
             # TX skid buffer (registered ready: PIPE TX ready logic isolated from the packets
             # buffer), emptied while the PIPE is not ready (no stale words).
-            tx_skid = ResetInserter()(stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
+            tx_skid = ResetInserter()(Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
             self.tx_skid = tx_skid = ClockDomainsRenamer(pipe_cd)(tx_skid)
             self.comb += [
-                tx_packets.drop.eq(~pipe.tx_ready),
-                tx_packets.source.connect(to_words.sink),
                 to_words.source.connect(tx_skid.sink),
                 tx_skid.source.connect(pipe.sink),
                 # RX: no back-pressure (received words at the line rate), always ready.
@@ -425,25 +444,47 @@ class USB3PHY(LiteXModule):
             sync += tx_skid.reset.eq(~pipe.tx_ready)
             pipe_sink, pipe_source = tx_packets.sink, to_pairs.source
 
-        # TX: sys -> pipe_cd (registered ready: the Link Layer TX path from a register).
-        self.tx_cdc_buffer = tx_buffer = stream.Buffer(layout, pipe_ready=True)
+            # Gen 2 (Gen2PIPE, words pairs) or Gen 1 words, selected by gen2_active.
+            if hasattr(self, "gen2_pipe"):
+                pipe_source = self.add_gen2_pipe_cdc(pipe, pipe_cd, layout, tx_packets, to_words,
+                    to_pairs)
+            else:
+                self.comb += [
+                    tx_packets.drop.eq(~pipe.tx_ready),
+                    tx_packets.source.connect(to_words.sink),
+                ]
+
+        # TX: sys -> pipe_cd (registered ready: the Link Layer TX path from a register). Gen 2:
+        # words to the Gen2PIPE framing (sys) while gen2_active.
+        self.tx_cdc_buffer = tx_buffer = Buffer(layout, pipe_ready=True)
         self.tx_cdc        = tx_cdc    = ClockDomainsRenamer({"write": "sys", "read": pipe_cd})(
             AsyncFIFO(layout, fifo_depth))
+        if hasattr(self, "gen2_tx_sink"):
+            self.comb += If(self.gen2_active,
+                sink.connect(self.gen2_tx_sink),
+            ).Else(
+                sink.connect(tx_buffer.sink),
+            )
+        else:
+            self.comb += sink.connect(tx_buffer.sink)
         self.comb += [
-            sink.connect(tx_buffer.sink),
             tx_buffer.source.connect(tx_cdc.sink),
             tx_cdc.source.connect(pipe_sink),
         ]
 
         # RX: pipe_cd -> sys.
-        self.rx_cdc_buffer = rx_buffer = ClockDomainsRenamer(pipe_cd)(stream.Buffer(layout,
+        self.rx_cdc_buffer = rx_buffer = ClockDomainsRenamer(pipe_cd)(Buffer(layout,
             pipe_ready=True))
         # Deep (block RAM, read side at the Link Layer frequency): with words pairs at half the PIPE
         # frequency, the Link Layer consumes the Header Packets/DPP tails one word per cycle and
-        # back-to-back DPH+DPPs (Bulk OUT bursts) accumulate words (~11 per 1024-byte DPP). rx_depth:
+        # back-to-back DPH+DPPs (Bulk OUT bursts) accumulate words (~11 per 1024-byte DPP).
+        # Gen 2: the Link Layer (64-bit at half the PIPE frequency) reads at about half the received
+        # rate (~64 entries per 1024-byte DPP) and up to 8 Header Packets (Type 1/Type 2 credits) can
+        # be received after the throttling: deeper FIFO, throttling from a quarter. rx_depth:
         # override (ex: devices without Bulk OUT endpoints, distributed RAM on small FPGAs).
+        gen2 = hasattr(self, "gen2_pipe")
         if rx_depth is None:
-            rx_depth = fifo_depth if self.link_words == 1 else 256
+            rx_depth = fifo_depth if self.link_words == 1 else (1024 if gen2 else 256)
         self.rx_cdc        = rx_cdc    = ClockDomainsRenamer({"write": pipe_cd, "read": "sys"})(
             stream.AsyncFIFO(layout, rx_depth, buffered=True))
         self.comb += [
@@ -451,8 +492,21 @@ class USB3PHY(LiteXModule):
             pipe_source.ready.eq(1),
             rx_buffer.source.connect(rx_cdc.sink, omit={"ready"}),
             rx_buffer.source.ready.eq(1), # Dropped when the FIFO is full (Link Layer not reading).
-            rx_cdc.source.connect(source),
         ]
+        if hasattr(self, "gen2_rx_source"):
+            # Gen 2 words (sys) while gen2_active, else Gen 1 words.
+            self.comb += [
+                self.gen2_rx_source.ready.eq(1),
+                rx_cdc.source.ready.eq(1),
+                If(self.gen2_active,
+                    self.gen2_rx_source.connect(source, omit={"ready"}),
+                    self.gen2_rx_source.ready.eq(source.ready),
+                ).Else(
+                    rx_cdc.source.connect(source),
+                )
+            ]
+        else:
+            self.comb += rx_cdc.source.connect(source)
 
         # RX throttling (sys): rx_cdc level >= half, the Link Layer then holds its Rx Header Buffer
         # Credits (LCRD_x) so the partner stops after its outstanding Header Packets (and their
@@ -467,6 +521,7 @@ class USB3PHY(LiteXModule):
             rd_count = Signal(cw)
             wr_bin   = Signal(cw)
             level    = Signal(cw)
+            throttle = Signal()
             getattr(self.sync, pipe_cd).__iadd__([
                 If(rx_cdc.sink.valid & rx_cdc.sink.ready, wr_count.eq(wr_count + 1)),
                 wr_gray.eq(wr_count ^ (wr_count >> 1)),
@@ -480,8 +535,14 @@ class USB3PHY(LiteXModule):
             self.sync += [
                 If(source.valid & source.ready, rd_count.eq(rd_count + 1)),
                 level.eq(wr_bin - rd_count),
-                self.rx_throttle.eq(level >= rx_depth//2),
+                throttle.eq(level >= (rx_depth//4 if gen2 else rx_depth//2)),
             ]
+            self.comb += self.rx_throttle.eq(throttle)
+            if hasattr(self, "gen2_rx_source"):
+                # Gen 2: words buffer level (entries of up to 8 words, 2048 bytes as above).
+                gen2_throttle = Signal()
+                self.sync += gen2_throttle.eq(self.gen2_pipe.rx_level >= 64)
+                self.comb += If(self.gen2_active, self.rx_throttle.eq(gen2_throttle))
         return sink, source
 
     def add_gen2_datapath(self, pipe):
@@ -539,20 +600,39 @@ class USB3PHY(LiteXModule):
         self.gen2_endianness_swap = with_endianness_swap
         # tx/rx clock domains reset with the PHY (sys) reset, synchronized (do_finalize): the TX units
         # and RX words buffers have their write/read sides in different clock domains.
-        self.gen2_pipe = gen2_pipe = ResetInserter(["tx", "rx"])(Gen2PIPE(link_words=self.link_words))
+        pipe_cd = self.pipe_cd
+        # Raw words width (transceiver words at 10Gbps): from the SerDes (ex: 80-bit at 125MHz).
+        gen2_data_width = getattr(serdes, "gen2_data_width", GEN2_DATA_WIDTH)
+        # With pipe_cd: TX framing at the Link Layer frequency (sys, "gen2_link"), the rest of the
+        # Gen2PIPE in pipe_cd (renamed in this order).
+        gen2_pipe = ResetInserter(["tx", "rx"])(Gen2PIPE(link_words=self.link_words,
+            data_width=gen2_data_width, link_cd=None if pipe_cd is None else "gen2_link"))
+        if pipe_cd is not None:
+            gen2_pipe = ClockDomainsRenamer({"sys": pipe_cd, "gen2_link": "sys"})(gen2_pipe)
+        self.gen2_pipe = gen2_pipe
         self.gen2_active = gen2_active = Signal() # o: Gen 2 operation (10Gbps).
         self.sync += gen2_active.eq(self.gen2 & ~ltssm.ssp_polling)
+        # gen2_active in the PIPE/SerDes clock domain.
+        if pipe_cd is None:
+            self.gen2_active_pipe = gen2_active_pipe = gen2_active
+        else:
+            self.gen2_active_pipe = gen2_active_pipe = Signal()
+            self.specials += MultiReg(gen2_active, gen2_active_pipe, pipe_cd)
         self.comb += [
-            serdes.rate_10g.eq(gen2_active),
-            serdes.gen2_tx_enable.eq(gen2_active),
+            serdes.rate_10g.eq(gen2_active_pipe),
+            serdes.gen2_tx_enable.eq(gen2_active_pipe),
             serdes.gen2_tx_data.eq(gen2_pipe.tx_data),
             gen2_pipe.rx_data.eq(serdes.gen2_rx_data),
         ]
         # Gen 2 RX errors (Warm Reset LFPS detection at 10Gbps, see USB3SerDes.add_lfps): block
         # alignment lost.
         gen2_aligned = Signal()
-        self.specials += MultiReg(gen2_pipe.rx.aligner.aligned, gen2_aligned)
+        self.specials += MultiReg(gen2_pipe.rx.aligner.aligned, gen2_aligned,
+            "sys" if pipe_cd is None else pipe_cd)
         self.comb += serdes.gen2_rx_errors.eq(~gen2_aligned)
+        if pipe_cd is not None:
+            self.add_gen2_ltssm_cdc(ltssm, pipe, gen2_pipe, gen2_active, pipe_cd)
+            return
         # LTSSM <-> Gen 1 PIPE / Gen2PIPE. No comma alignment at Gen 2: the transceiver comma aligner
         # would slip bits on comma-like patterns of the raw 128b/132b words (block alignment by the
         # Gen 2 RX datapath).
@@ -569,6 +649,98 @@ class USB3PHY(LiteXModule):
             else:
                 self.comb += getattr(ltssm, name).eq(
                     Mux(gen2_active, getattr(gen2_pipe, name), getattr(pipe, name)))
+
+    def add_gen2_pipe_cdc(self, pipe, pipe_cd, layout, tx_packets, to_words, to_pairs):
+        """Gen 2 words pairs with pipe_cd (see add_pipe_cdc): TX packets to the Gen2PIPE or the Gen 1
+        words, RX words pairs from the Gen2PIPE or the Gen 1 words (returned), LGOOD_n/LCRD_x
+        Link Commands (source_lc) through their own AsyncFIFO."""
+        gen2_pipe = self.gen2_pipe
+        gen2      = self.gen2_active_pipe
+        gen2_sink   = stream.Endpoint(layout)
+        gen2_source = stream.Endpoint(layout)
+        gen2_lc     = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        if self.gen2_endianness_swap:
+            # Gen2PIPE words: Symbol 0 on data[0:8], PHY words: Symbol 0 on data[24:32].
+            self.submodules += EndiannessSwap(gen2_sink, gen2_pipe.sink, word_bytes=4)
+            self.submodules += EndiannessSwap(gen2_pipe.source, gen2_source, word_bytes=4)
+            self.submodules += EndiannessSwap(gen2_pipe.source_lc, gen2_lc)
+        else:
+            self.comb += [
+                gen2_sink.connect(gen2_pipe.sink),
+                gen2_pipe.source.connect(gen2_source),
+                gen2_pipe.source_lc.connect(gen2_lc),
+            ]
+
+        # TX: Gen 1 words through the packets buffer, Gen 2 words to the Gen2PIPE framing (sys,
+        # gen2_tx_sink, see add_pipe_cdc).
+        self.comb += [
+            tx_packets.drop.eq(~pipe.tx_ready),
+            tx_packets.source.connect(to_words.sink),
+        ]
+        self.gen2_tx_sink = gen2_sink
+
+        # LGOOD_n/LCRD_x Link Commands words (Gen 2, PHY words order), not behind the RX words, when
+        # enabled by the Link Layer (source_lc_enable, else in source).
+        self.source_lc        = source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source_lc_enable = Signal()
+
+        # Gen 2 RX words/Link Commands already in sys (framing at the Link Layer frequency, 32
+        # bytes per cycle): selected after the Gen 1 words CDC (add_pipe_cdc), RX throttling from the
+        # Gen 2 words buffer level.
+        if gen2_pipe.link_rx_cd != "sys":
+            self.gen2_rx_source = gen2_source
+            self.comb += [
+                gen2_pipe.source_lc_enable.eq(self.source_lc_enable),
+                gen2_lc.connect(source_lc, omit={"valid", "ready"}),
+                source_lc.valid.eq(gen2_lc.valid & self.gen2_active),
+                gen2_lc.ready.eq(source_lc.ready | ~self.gen2_active),
+            ]
+            return to_pairs.source
+
+        # RX (no back-pressure).
+        rx_source = stream.Endpoint(layout)
+        self.comb += [
+            gen2_source.ready.eq(1),
+            to_pairs.source.ready.eq(1),
+            If(gen2,
+                gen2_source.connect(rx_source, omit={"ready"}),
+            ).Else(
+                to_pairs.source.connect(rx_source, omit={"ready"}),
+            )
+        ]
+        self.specials += MultiReg(self.source_lc_enable, gen2_pipe.source_lc_enable, pipe_cd)
+        self.lc_cdc = lc_cdc = ClockDomainsRenamer({"write": pipe_cd, "read": "sys"})(
+            stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 8, buffered=True))
+        self.comb += [
+            gen2_lc.connect(lc_cdc.sink),
+            lc_cdc.source.connect(source_lc, omit={"valid", "ready"}),
+            source_lc.valid.eq(lc_cdc.source.valid & self.gen2_active),
+            lc_cdc.source.ready.eq(source_lc.ready | ~self.gen2_active),
+        ]
+        return rx_source
+
+    def add_gen2_ltssm_cdc(self, ltssm, pipe, gen2_pipe, gen2_active, pipe_cd):
+        """LTSSM (sys) <-> Gen 1 PIPE / Gen2PIPE (pipe_cd) wiring: GEN2_PIPE_INTERFACE controls gated
+        by gen2_active then resynchronized to each PIPE, status resynchronized from each PIPE then
+        selected by gen2_active (sys)."""
+        for name, width, direction in LTSSM_PIPE_INTERFACE:
+            ltssm_s = getattr(ltssm, name)
+            if name == "serdes_rx_align":
+                self.ltssm_to_pipe(ltssm_s & ~gen2_active, pipe.serdes_rx_align, pipe_cd)
+            elif name not in GEN2_PIPE_INTERFACE:
+                if direction == "o":
+                    self.ltssm_to_pipe(ltssm_s, getattr(pipe, name), pipe_cd)
+                else:
+                    self.pipe_to_ltssm(name, getattr(pipe, name), ltssm_s, pipe_cd)
+            elif direction == "o":
+                self.ltssm_to_pipe(ltssm_s & ~gen2_active, getattr(pipe,      name), pipe_cd)
+                self.ltssm_to_pipe(ltssm_s &  gen2_active, getattr(gen2_pipe, name), pipe_cd)
+            else:
+                gen1_s = Signal(width)
+                gen2_s = Signal(width)
+                self.pipe_to_ltssm(name, getattr(pipe,      name), gen1_s, pipe_cd)
+                self.pipe_to_ltssm(name, getattr(gen2_pipe, name), gen2_s, pipe_cd)
+                self.comb += ltssm_s.eq(Mux(gen2_active, gen2_s, gen1_s))
 
     def add_lanes_datapath(self, deskew_depth):
         """Gen 1x2 datapath: data striping (6.13.4): 64-bit/8-bit link words (Symbol 0 on

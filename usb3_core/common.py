@@ -156,10 +156,11 @@ class WordsWindow(LiteXModule):
         level = Signal(3)
         rem   = Signal(3)
         self.comb += [
-            self.n.eq(Mux(level >= 2, 2, level)),
             self.w0.eq(data[0]), self.c0.eq(ctrl[0]),
             self.w1.eq(data[1]), self.c1.eq(ctrl[1]),
-            rem.eq(level - self.consume),
+            # level - consume: candidates computed from the registered level, selected by consume
+            # (timings: consume late).
+            Case(self.consume, {c: rem.eq(level - c) for c in range(3)}),
             sink.ready.eq(rem <= 2),
         ]
         accept = Signal()
@@ -178,7 +179,13 @@ class WordsWindow(LiteXModule):
             ).Else(
                 data[i].eq(shifted_d), ctrl[i].eq(shifted_c)
             )
-        self.sync += level.eq(rem + Mux(accept, sink.words, 0))
+        level_next = Signal(3)
+        self.comb += level_next.eq(rem + Mux(accept, sink.words, 0))
+        self.sync += [
+            level.eq(level_next),
+            # Available words registered (timings).
+            self.n.eq(Mux(level_next >= 2, 2, level_next)),
+        ]
 
 def bytes_to_be_n(nbytes, n):
     """Valid bytes of the word (1-n, 0 = n) to be (n bits)."""

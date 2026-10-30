@@ -24,7 +24,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import K, COM, SKP, AsyncFIFO
+from usb3_pipe.common     import K, COM, SKP, AsyncFIFO, Buffer
 from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
 from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ, GEN2_IDLE
 from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
@@ -388,14 +388,14 @@ class TXDatapath(LiteXModule):
         # # #
 
         # Input register (registered ready: the PIPE TX logic isolated from the SKP insertion).
-        self.sink_buffer = sink_buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+        self.sink_buffer = sink_buffer = Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
 
         # Clock compensation
         self.skip_inserter = skip_inserter = TXSKPInserter()
         self.skp_enable    = skip_inserter.enable
 
         # Clock domain crossing (registered FIFO write and ready: timings).
-        buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+        buffer = Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
         self.buffer = buffer
         if with_cdc:
             cdc = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
@@ -461,7 +461,7 @@ class RXDatapath(LiteXModule):
 
         # Clock domain crossing (registered FIFO write and ready: timings).
         buffer = ClockDomainsRenamer(clock_domain)(
-            stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
+            Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
         cdc    = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc    = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.buffer = buffer
@@ -533,12 +533,17 @@ class Gen2TX(LiteXModule):
         self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed, per_byte_advance=False)
 
         # Block selection --------------------------------------------------------------------------
+        # SYNC/SKP selection conditions registered (sync_zero, skp_go: timings).
         tx_os        = Signal()
         sync_count   = Signal(max=max(sync_interval_ts, sync_interval_tseq))
+        sync_zero    = Signal(reset=1) # sync_count == 0.
         sync_period  = Signal.like(sync_count)
         y            = Signal(max=skp_interval)
         skp_pending  = Signal(2)
         skp_allowed  = Signal()
+        skp_next     = Signal(2) # skp_pending/skp_allowed after this cycle.
+        allowed_next = Signal()
+        skp_go       = Signal()  # (skp_pending != 0) & skp_allowed.
         sds_sent     = Signal()
         self.comb += [
             tx_os.eq(self.tx_tseq | self.tx_ts1 | self.tx_ts2),
@@ -552,9 +557,9 @@ class Gen2TX(LiteXModule):
         sel_ts   = Signal()
         self.comb += [
             If(self.enable,
-                If(tx_os & (sync_count == 0),
+                If(tx_os & sync_zero,
                     sel_sync.eq(1)
-                ).Elif((skp_pending != 0) & skp_allowed,
+                ).Elif(skp_go,
                     sel_skp.eq(1)
                 ).Elif(self.tx_data,
                     If(~sds_sent,
@@ -641,40 +646,60 @@ class Gen2TX(LiteXModule):
         ]
 
         # State ------------------------------------------------------------------------------------
+        # SKP scheduling.
+        self.comb += [
+            skp_next.eq(skp_pending),
+            allowed_next.eq(skp_allowed),
+            If(~self.enable,
+                skp_next.eq(0),
+                allowed_next.eq(0),
+            ).Elif(source.valid & source.ready,
+                If(~sel_skp,
+                    If(~(self.tx_tseq & ~self.tx_data) & (y == (skp_interval - 1)) &
+                        (skp_pending != 2),
+                        skp_next.eq(skp_pending + 1)
+                    ),
+                    allowed_next.eq(sel_sync | sel_sds | (sel_ts & ~self.tx_tseq) | idle |
+                        (sel_data & sink.last)),
+                ).Else(
+                    skp_next.eq(skp_pending - 1)
+                )
+            )
+        ]
+        self.sync += [
+            skp_pending.eq(skp_next),
+            skp_allowed.eq(allowed_next),
+            skp_go.eq((skp_next != 0) & allowed_next),
+        ]
         self.sync += [
             If(~self.enable,
                 sync_count.eq(0),
+                sync_zero.eq(1),
                 y.eq(0),
-                skp_pending.eq(0),
-                skp_allowed.eq(0),
                 sds_sent.eq(0),
             ).Elif(source.valid & source.ready,
                 # SYNC scheduling (TS Ordered Sets count).
                 If(sel_ts,
                     If(sync_count == sync_period,
-                        sync_count.eq(0)
+                        sync_count.eq(0),
+                        sync_zero.eq(1),
                     ).Else(
-                        sync_count.eq(sync_count + 1)
+                        sync_count.eq(sync_count + 1),
+                        sync_zero.eq(0),
                     )
                 ).Elif(sel_sync,
-                    sync_count.eq(1)
+                    sync_count.eq(1),
+                    sync_zero.eq(0),
                 ),
-                # SKP scheduling.
+                # SKP interval.
                 If(~sel_skp,
                     If(self.tx_tseq & ~self.tx_data,
                         y.eq(0)
                     ).Elif(y == (skp_interval - 1),
                         y.eq(0),
-                        If(skp_pending != 2,
-                            skp_pending.eq(skp_pending + 1)
-                        )
                     ).Else(
                         y.eq(y + 1)
                     ),
-                    skp_allowed.eq(sel_sync | sel_sds | (sel_ts & ~self.tx_tseq) | idle |
-                        (sel_data & sink.last)),
-                ).Else(
-                    skp_pending.eq(skp_pending - 1)
                 ),
                 # Data Stream.
                 If(sel_sds,
@@ -706,15 +731,21 @@ class Gen2TXDCBalance(LiteXModule):
 
     Pipelined over 3 cycles per block (popcounts, balance, output/update): the gearbox accepts a block
     every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
-    and saturation.
+    and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex: 80-bit at
+    125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then the
+    balance increments of the possible DC Balance Symbols precomputed, the running balance loop is
+    then two adders, a selection and the saturation.
     """
-    def __init__(self):
+    def __init__(self, one_per_cycle=False):
         self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
         self.source = source = stream.Endpoint(gen2_block_layout())
 
         # # #
 
         self.dc_balance = dc_balance = Signal((11, True))
+        if one_per_cycle:
+            self.add_one_per_cycle(dc_balance)
+            return
 
         # Stage 1: block and popcounts (Symbols 0-11 with the Block Header, 12-13, 14, 15).
         header   = Signal(4)
@@ -801,6 +832,161 @@ class Gen2TXDCBalance(LiteXModule):
                 NextState("CAPTURE")
             )
         )
+
+    def add_one_per_cycle(self, dc_balance):
+        sink   = self.sink
+        source = self.source
+        ones   = lambda v: bin(v).count("1")
+
+        # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 8 chunks, 12-13, 14,
+        # 15).
+        v0        = Signal()
+        header0   = Signal(4, reset_less=True)
+        data0     = Signal(192, reset_less=True)
+        skp0      = Signal(reset_less=True)
+        ts0       = Signal(reset_less=True)
+        dc_reset0 = Signal(reset_less=True)
+        ones_11   = [Signal(4, reset_less=True) for _ in range(8)]
+        ones_13   = Signal(5, reset_less=True)
+        ones_14   = Signal(4, reset_less=True)
+        ones_15   = Signal(4, reset_less=True)
+        ready1    = Signal()
+        self.comb += sink.ready.eq(~v0 | ready1)
+        bits_11 = Cat(sink.header, sink.data[0:96])
+        self.sync += If(sink.ready,
+            v0.eq(sink.valid),
+            header0.eq(sink.header),
+            data0.eq(sink.data),
+            skp0.eq(sink.skp),
+            ts0.eq(sink.ts),
+            dc_reset0.eq(sink.dc_reset),
+            [ones_11[i].eq(popcount(bits_11[13*i:min(13*(i+1), 100)])) for i in range(8)],
+            ones_13.eq(popcount(sink.data[96:112])),
+            ones_14.eq(popcount(sink.data[112:120])),
+            ones_15.eq(popcount(sink.data[120:128])),
+        )
+
+        # Stage 1: block, balance increment at the end of Symbol 11 and the balance increments of
+        # Symbols 12-15 for each DC Balance Symbols choice (none, Symbol 15, Symbols 14/15; reduce
+        # ones/zeros).
+        v1       = Signal()
+        header   = Signal(4, reset_less=True)
+        data     = Signal(192, reset_less=True)
+        skp      = Signal(reset_less=True)
+        ts       = Signal(reset_less=True)
+        dc_reset = Signal(reset_less=True)
+        inc_11   = Signal((9, True), reset_less=True)
+        inc      = {k: Signal((8, True), reset_less=True)
+            for k in ["none", "15p", "15n", "14p", "14n"]}
+        advance  = Signal()
+        self.comb += ready1.eq(~v1 | advance)
+        self.sync += If(ready1,
+            v1.eq(v0),
+            header.eq(header0),
+            data.eq(data0),
+            skp.eq(skp0),
+            ts.eq(ts0),
+            dc_reset.eq(dc_reset0),
+            inc_11.eq(2*(((ones_11[0] + ones_11[1]) + (ones_11[2] + ones_11[3])) +
+                         ((ones_11[4] + ones_11[5]) + (ones_11[6] + ones_11[7]))) - 100),
+            inc["none"].eq(2*(ones_13 + ones_14 + ones_15) - 32),
+            inc["15p"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ONES[1])) - 32),
+            inc["15n"].eq(2*(ones_13 + ones_14 + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
+            inc["14p"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ONES[0]) + ones(GEN2_DC_REDUCE_ONES[1])) - 32),
+            inc["14n"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ZEROS[0]) + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
+        )
+
+        # Stage 2: thresholds of the running balance (DC Balance Symbols choice, balance at the end of
+        # Symbol 11 = dc_balance + inc_11: > 0, > 15, < -15, > 31, < -31) and the update of each choice
+        # (inc_11 + inc[k]) with its saturation thresholds (+-511): the running balance loop is then
+        # comparisons/adders with registered values and a selection.
+        v2        = Signal()
+        header2   = Signal(4, reset_less=True)
+        data2     = Signal(192, reset_less=True)
+        skp2      = Signal(reset_less=True)
+        ts2       = Signal(reset_less=True)
+        dc_reset2 = Signal(reset_less=True)
+        th        = {k: Signal((12, True), reset_less=True)
+            for k in ["pos", "15p", "15n", "14p", "14n"]}
+        upd       = {k: Signal((12, True), reset_less=True) for k in inc}
+        sat_hi    = {k: Signal((12, True), reset_less=True) for k in inc}
+        sat_lo    = {k: Signal((12, True), reset_less=True) for k in inc}
+        ready2    = Signal()
+        self.comb += advance.eq(v1 & ready2)
+        self.sync += If(ready2,
+            v2.eq(v1),
+            header2.eq(header),
+            data2.eq(data),
+            skp2.eq(skp),
+            ts2.eq(ts),
+            dc_reset2.eq(dc_reset),
+            th["pos"].eq(  0 - inc_11),
+            th["15p"].eq( 15 - inc_11),
+            th["15n"].eq(-15 - inc_11),
+            th["14p"].eq( 31 - inc_11),
+            th["14n"].eq(-31 - inc_11),
+            [upd[k].eq(inc_11 + inc[k]) for k in inc],
+            [sat_hi[k].eq( 511 - (inc_11 + inc[k])) for k in inc],
+            [sat_lo[k].eq(-511 - (inc_11 + inc[k])) for k in inc],
+        )
+
+        # Stage 3: DC Balance Symbols, running balance update, output. Running balance copies for the
+        # thresholds and the updates (fanout).
+        dcb_th   = Signal((11, True), attr={("syn_preserve", 1)})
+        dcb_upd  = Signal((11, True), attr={("syn_preserve", 1)})
+        positive = Signal()
+        fix_14   = Signal()
+        fix_15   = Signal()
+        value    = {k: Signal((12, True)) for k in inc} # Saturated running balance of each choice.
+        updated  = Signal((12, True))
+        self.comb += [
+            positive.eq(dcb_th > th["pos"]),
+            fix_14.eq((dcb_th > th["14p"]) | (dcb_th < th["14n"])),
+            fix_15.eq((dcb_th > th["15p"]) | (dcb_th < th["15n"])),
+            [If(dcb_upd > sat_hi[k],
+                value[k].eq(511)
+            ).Elif(dcb_upd < sat_lo[k],
+                value[k].eq(-511)
+            ).Else(
+                value[k].eq(dcb_upd + upd[k])
+            ) for k in inc],
+            If(fix_14,
+                updated.eq(Mux(positive, value["14p"], value["14n"]))
+            ).Elif(fix_15,
+                updated.eq(Mux(positive, value["15p"], value["15n"]))
+            ).Else(
+                updated.eq(value["none"])
+            ),
+        ]
+        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
+        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
+        advance2 = Signal()
+        self.comb += [
+            ready2.eq(~v2 | advance2),
+            advance2.eq(v2 & (~source.valid | source.ready)),
+        ]
+        self.sync += [
+            If(source.ready, source.valid.eq(0)),
+            If(advance2,
+                source.valid.eq(1),
+                source.header.eq(header2),
+                source.skp.eq(skp2),
+                If(ts2,
+                    source.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
+                ).Else(
+                    source.data.eq(data2)
+                ),
+                If(ts2,
+                    dc_balance.eq(updated),
+                    dcb_th.eq(updated),
+                    dcb_upd.eq(updated),
+                ).Elif(dc_reset2,
+                    dc_balance.eq(0),
+                    dcb_th.eq(0),
+                    dcb_upd.eq(0),
+                ),
+            ),
+        ]
 
 # Gen 2 RX -----------------------------------------------------------------------------------------
 
@@ -945,17 +1131,34 @@ class Gen2TXDatapath(LiteXModule):
     on tx (Gen2TX)."""
     def __init__(self, data_width=GEN2_DATA_WIDTH, **kwargs):
         self.tx         = tx         = Gen2TX(**kwargs)
-        self.dc_balance = dc_balance = Gen2TXDCBalance()
+        # One block per cycle in the DC balance when the words need a block more often than every 3
+        # cycles (132-bit blocks, ex: 80-bit words).
+        self.dc_balance = dc_balance = Gen2TXDCBalance(one_per_cycle=(3*data_width > 132))
         self.gearbox    = gearbox    = Gen2BlockGearbox(data_width)
         self.sink    = tx.sink
         self.source  = gearbox.source
 
         # # #
 
-        self.comb += [
-            tx.source.connect(dc_balance.sink),
-            dc_balance.source.connect(gearbox.sink),
-        ]
+        if 3*data_width > 132:
+            # Registered valid/ready between Gen2TX and the DC balance and between the DC balance and
+            # the gearbox (timings: the Gen2TX block selection and the gearbox/DC balance readies at
+            # one block per cycle).
+            self.buffer      = buffer      = Buffer(gen2_tx_block_layout(), pipe_valid=True,
+                pipe_ready=True, ready_first=True) # Registered blocks to the DC balance popcounts.
+            self.gear_buffer = gear_buffer = Buffer(gen2_block_layout(), pipe_valid=True,
+                pipe_ready=True, ready_first=True) # Registered blocks to the gearbox placement.
+            self.comb += [
+                tx.source.connect(buffer.sink),
+                buffer.source.connect(dc_balance.sink),
+                dc_balance.source.connect(gear_buffer.sink),
+                gear_buffer.source.connect(gearbox.sink),
+            ]
+        else:
+            self.comb += [
+                tx.source.connect(dc_balance.sink),
+                dc_balance.source.connect(gearbox.sink),
+            ]
 
 GEN2_RX_COUNTERS = [
     # (name, description).

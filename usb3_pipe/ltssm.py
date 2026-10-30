@@ -1348,3 +1348,6 @@ class SSPPolling(LiteXModule):
             self.fail.eq(1),
             If(~self.start, NextState("IDLE"))
         )
+        states = ["IDLE", "POLLING-LFPS", "POLLING-LFPSPLUS", "SCD-END", "POLLING-PORTMATCH",
+            "POLLING-PORTCONFIG", "DONE", "SS-FALLBACK", "FAIL"]
+        self.comb += [If(fsm.ongoing(s), self.state.eq(i)) for i, s in enumerate(states)]

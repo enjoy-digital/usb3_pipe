@@ -30,6 +30,7 @@ from usb3_pipe.common import SHP as _SHP, SDP as _SDP, EDB as _EDB, END as _END,
 from usb3_pipe.common import EPF as _EPF
 from usb3_pipe.common import GEN2_IDLE, GEN2_SHP, GEN2_DPHP, GEN2_SDP, GEN2_EDB, GEN2_END
 from usb3_pipe.common import GEN2_SLC, GEN2_EPF
+from usb3_pipe.common import Buffer, PipeReady
 
 # Gen 1 K Symbols (Link Layer words).
 SHP, SDP, EDB, END, SLC, EPF = [s.value for s in [_SHP, _SDP, _EDB, _END, _SLC, _EPF]]
@@ -46,9 +47,40 @@ def byte_offset(n):
     8*n would be evaluated on max(width(8), width(n)) bits (truncated)."""
     return Cat(C(0, 3), n)
 
-def gen2_link_layout():
-    """Link words pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words."""
-    return [("data", 64), ("ctrl", 8), ("words", 2)]
+def gen2_link_layout(n=2):
+    """Link words pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words (n words: 1-n)."""
+    return [("data", 32*n), ("ctrl", 4*n), ("words", bits_for(n))]
+
+class WordsNarrower(LiteXModule):
+    """Link words entries (gen2_link_layout(n_in), 1-n_in words) -> entries of up to n_out words
+    (gen2_link_layout(n_out), or link words with n_out=1 and words=False)."""
+    def __init__(self, n_in, n_out, words=True):
+        assert n_in % n_out == 0
+        self.sink   = sink   = stream.Endpoint(gen2_link_layout(n_in))
+        self.source = source = stream.Endpoint(gen2_link_layout(n_out) if words else
+            [("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        steps = n_in//n_out
+        index = Signal(max=max(steps, 2))
+        rem   = Signal(bits_for(n_in))
+        done  = Signal()
+        self.comb += [
+            rem.eq(sink.words - index*n_out),
+            done.eq(rem <= n_out),
+            source.valid.eq(sink.valid),
+            Case(index, {i: [
+                source.data.eq(sink.data[32*n_out*i:32*n_out*(i+1)]),
+                source.ctrl.eq(sink.ctrl[4*n_out*i:4*n_out*(i+1)]),
+            ] for i in range(steps)}),
+            sink.ready.eq(source.ready & done),
+        ]
+        if words:
+            self.comb += source.words.eq(Mux(done, rem, n_out))
+        self.sync += If(source.valid & source.ready,
+            If(done, index.eq(0)).Else(index.eq(index + 1))
+        )
 
 class WordsToPairs(LiteXModule):
     """Link words -> words pairs (gen2_link_layout, one word per entry)."""
@@ -208,58 +240,81 @@ class PacketsBuffer(LiteXModule):
 
 class WordsWindow(LiteXModule):
     """Link words pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
-    w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n)."""
-    def __init__(self):
+    w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n).
+
+    decode: optional function (data, ctrl) -> nflags-bit flags of a word, computed on the incoming
+    words and stored with them (f0/f1: registered decodes for the window consumer, timings)."""
+    def __init__(self, decode=None, nflags=0):
         self.sink    = sink = stream.Endpoint(gen2_link_layout())
         self.n       = Signal(2)  # o
         self.w0      = Signal(32) # o
         self.c0      = Signal(4)  # o
         self.w1      = Signal(32) # o
         self.c1      = Signal(4)  # o
+        self.f0      = Signal(max(nflags, 1)) # o
+        self.f1      = Signal(max(nflags, 1)) # o
         self.consume = Signal(2)  # i
 
         # # #
 
+        cw    = 4 + nflags # ctrl + flags.
         data  = [Signal(32, reset_less=True) for _ in range(4)]
-        ctrl  = [Signal(4,  reset_less=True) for _ in range(4)]
+        ctrl  = [Signal(cw, reset_less=True) for _ in range(4)]
         level = Signal(3)
         rem   = Signal(3)
         self.comb += [
-            self.n.eq(Mux(level >= 2, 2, level)),
-            self.w0.eq(data[0]), self.c0.eq(ctrl[0]),
-            self.w1.eq(data[1]), self.c1.eq(ctrl[1]),
+            self.w0.eq(data[0]), self.c0.eq(ctrl[0][:4]),
+            self.w1.eq(data[1]), self.c1.eq(ctrl[1][:4]),
             rem.eq(level - self.consume),
             sink.ready.eq(rem <= 2),
         ]
+        if nflags:
+            self.comb += [
+                self.f0.eq(ctrl[0][4:]),
+                self.f1.eq(ctrl[1][4:]),
+            ]
+        in_ctrl = []
+        for w in range(2):
+            d, c = sink.data[32*w:32*(w+1)], sink.ctrl[4*w:4*(w+1)]
+            in_ctrl.append(Cat(c, decode(d, c)) if nflags else c)
         accept = Signal()
         self.comb += accept.eq(sink.valid & sink.ready)
         for i in range(4):
             shifted_d = Signal(32)
-            shifted_c = Signal(4)
+            shifted_c = Signal(cw)
             self.comb += Case(self.consume, {c: [
                 shifted_d.eq(data[i + c] if (i + c) < 4 else 0),
                 shifted_c.eq(ctrl[i + c] if (i + c) < 4 else 0)] for c in range(3)})
             second = (accept & (sink.words == 2) & (rem == (i - 1))) if i > 0 else 0
             self.sync += If(accept & (rem == i),
-                data[i].eq(sink.data[0:32]), ctrl[i].eq(sink.ctrl[0:4])
+                data[i].eq(sink.data[0:32]), ctrl[i].eq(in_ctrl[0])
             ).Elif(second,
-                data[i].eq(sink.data[32:64]), ctrl[i].eq(sink.ctrl[4:8])
+                data[i].eq(sink.data[32:64]), ctrl[i].eq(in_ctrl[1])
             ).Else(
                 data[i].eq(shifted_d), ctrl[i].eq(shifted_c)
             )
-        self.sync += level.eq(rem + Mux(accept, sink.words, 0))
+        level_next = Signal(3)
+        self.comb += level_next.eq(rem + Mux(accept, sink.words, 0))
+        self.sync += [
+            level.eq(level_next),
+            # Available words registered (timings).
+            self.n.eq(Mux(level_next >= 2, 2, level_next)),
+        ]
 
 # Gen 2 RX Framing ---------------------------------------------------------------------------------
 
 class Gen2RXFraming(LiteXModule):
-    """Data Blocks bytes (8 per cycle, descrambled, bytes in transmission order from data[0:8]) to
-    Link Layer words pairs: Idle Symbols between packets dropped, packets re-aligned on words, framing
+    """Data Blocks bytes (nbytes per cycle: 8 or 16, descrambled, bytes in transmission order from
+    data[0:8]) to Link Layer words entries (gen2_link_layout(nbytes//4): words pairs at 8 bytes per
+    cycle): Idle Symbols between packets dropped, packets re-aligned on words, framing
     Symbols as Gen 1 K Symbols (ctrl), DPHSTART as HPSTART and Length Field Replicas removed, DPP
     words with the CRC-32/DPPEND (padded to the word).
 
     A packet is identified by its first framing Symbol (in Idle) and its length (DPP: Length Field
-    Replica of the preceding DPH), a byte pointer re-aligns it in a 16-byte window: 8 bytes per
-    cycle in a packet, 1 cycle per packet start. Unknown packet starts are skipped (errors).
+    Replica of the preceding DPH), a byte pointer re-aligns it in a 2*nbytes window: nbytes per
+    cycle in a packet, 1 cycle per packet start. Unknown packet starts are skipped (errors). 16
+    bytes per cycle for wider transceiver words (ex: 80-bit at 125MHz, a Data Block every 1.65
+    cycles).
 
     With lc_enable, LGOOD_n/LCRD_x Link Commands (both copies identical) are output on source_lc
     (Link Command word, Symbol 0 on data[0:8]) instead of source: they only concern the transmitter
@@ -267,62 +322,122 @@ class Gen2RXFraming(LiteXModule):
     the received packets (RX buffering, 7.2.4.1: Header Packets held in the Tx Header Buffers until
     LGOOD_n).
     """
-    def __init__(self):
-        self.sink      = sink      = stream.Endpoint([("data", 64)])
-        self.source    = source    = stream.Endpoint(gen2_link_layout())
+    def __init__(self, nbytes=8):
+        assert nbytes in [8, 16, 32]
+        pw = log2_int(nbytes)
+        self.sink      = sink      = stream.Endpoint([("data", 8*nbytes)])
+        self.source    = source    = stream.Endpoint(gen2_link_layout(nbytes//4))
         self.source_lc = source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.errors    = Signal(16) # o: Unknown packet starts (skipped bytes).
         self.lc_enable = Signal()   # i: LGOOD_n/LCRD_x on source_lc.
 
         # # #
 
-        # Window: R (oldest 8 bytes) + incoming word -----------------------------------------------
-        r       = Signal(64)
+        # Input stage: words with their bytes start codes (packet kind + 1, 0: Idle, CODE_UNKNOWN) ---
+        CODE_UNKNOWN = 7
+        in_valid = Signal()
+        in_data  = Signal(8*nbytes, reset_less=True)
+        in_codes = Signal(3*nbytes, reset_less=True)
+        in_ready = Signal()
+        codes = Signal(3*nbytes)
+        for i in range(nbytes):
+            b = sink.data[8*i:8*(i+1)]
+            self.comb += Case(b, {
+                GEN2_IDLE : codes[3*i:3*(i+1)].eq(0),
+                GEN2_SHP  : codes[3*i:3*(i+1)].eq(KIND_HP  + 1),
+                GEN2_DPHP : codes[3*i:3*(i+1)].eq(KIND_DPH + 1),
+                GEN2_SLC  : codes[3*i:3*(i+1)].eq(KIND_LC  + 1),
+                GEN2_SDP  : codes[3*i:3*(i+1)].eq(KIND_DPP + 1),
+                GEN2_EDB  : codes[3*i:3*(i+1)].eq(KIND_EDB + 1),
+                "default" : codes[3*i:3*(i+1)].eq(CODE_UNKNOWN),
+            })
+        self.comb += sink.ready.eq(~in_valid | in_ready)
+        self.sync += If(sink.ready,
+            in_valid.eq(sink.valid),
+            in_data.eq(sink.data),
+            in_codes.eq(codes),
+        )
+
+        # Window: R (oldest nbytes) + incoming word ------------------------------------------------
+        # For each position i of R, the first non-Idle byte at/after i (found, index, start code) is
+        # computed on the incoming word and registered with R: the packet start search is then a
+        # selection by the byte pointer.
+        r       = Signal(8*nbytes, reset_less=True)
+        r_edb   = Signal(nbytes, reset_less=True) # EDB bytes (DPPABORT).
         r_valid = Signal()
         shift   = Signal() # Consume R (R <- incoming word).
-        win     = Signal(128)
+        win     = Signal(16*nbytes)
         avail   = Signal()
         self.comb += [
-            win.eq(Cat(r, sink.data)),
-            avail.eq(r_valid & sink.valid),
-            sink.ready.eq(~r_valid | shift),
+            win.eq(Cat(r, in_data)),
+            avail.eq(r_valid & in_valid),
+            in_ready.eq(~r_valid | shift),
         ]
-        self.sync += If(sink.valid & sink.ready,
-            r.eq(sink.data),
+        nxt_found = [Signal(name=f"nxt_found{i}") for i in range(nbytes)]
+        nxt_q     = [Signal(pw, name=f"nxt_q{i}") for i in range(nbytes)]
+        nxt_code  = [Signal(3, name=f"nxt_code{i}") for i in range(nbytes)]
+        r_found   = [Signal(name=f"r_found{i}", reset_less=True) for i in range(nbytes)]
+        r_q       = [Signal(pw, name=f"r_q{i}", reset_less=True) for i in range(nbytes)]
+        r_code    = [Signal(3, name=f"r_code{i}", reset_less=True) for i in range(nbytes)]
+        r_skip    = [Signal(name=f"r_skip{i}", reset_less=True) for i in range(nbytes)]
+        code = lambda j: in_codes[3*j:3*(j+1)]
+        in_edb = Signal(nbytes)
+        self.comb += [in_edb[j].eq(code(j) == (KIND_EDB + 1)) for j in range(nbytes)]
+        for i in range(nbytes):
+            self.comb += [
+                nxt_found[i].eq(Reduce("OR", [code(j) != 0 for j in range(i, nbytes)])),
+                nxt_q[i].eq(nbytes - 1),
+                nxt_code[i].eq(code(nbytes - 1)),
+            ]
+            for j in reversed(range(i, nbytes)):
+                self.comb += If(code(j) != 0, nxt_q[i].eq(j), nxt_code[i].eq(code(j)))
+        self.sync += If(in_valid & in_ready,
+            r.eq(in_data),
+            r_edb.eq(in_edb),
             r_valid.eq(1),
+            [r_found[i].eq(nxt_found[i]) for i in range(nbytes)],
+            [r_q[i].eq(nxt_q[i]) for i in range(nbytes)],
+            [r_code[i].eq(nxt_code[i]) for i in range(nbytes)],
+            # R consumed from position i in Idle (no packet start at/after i, or an unknown start on
+            # the last byte): registered (timings: window shift).
+            [r_skip[i].eq(~nxt_found[i] |
+                ((nxt_code[i] == CODE_UNKNOWN) & (nxt_q[i] == nbytes - 1))) for i in range(nbytes)],
         )
 
         # Packet start search (Idle) ---------------------------------------------------------------
-        p     = Signal(3) # Byte pointer in R.
-        q     = Signal(3) # First non-Idle byte at/after p.
+        p     = Signal(pw) # Byte pointer in R.
+        p_out = Signal(pw, attr={("syn_preserve", 1)}) # Copy for the output bytes (fanout).
+        q     = Signal(pw) # First non-Idle byte at/after p.
         found = Signal()
-        first = Signal(8)
-        nonidle = Signal(8)
-        for i in range(8):
-            self.comb += nonidle[i].eq((win[8*i:8*(i+1)] != GEN2_IDLE) & (i >= p))
+        first = Signal(3)  # Start code of the byte at q.
+        skip  = Signal()   # R consumed (Idle).
         self.comb += [
-            found.eq(nonidle != 0),
-            q.eq(7),
+            skip.eq(Array(r_skip)[p]),
+            found.eq(Array(r_found)[p]),
+            q.eq(Array(r_q)[p]),
+            first.eq(Array(r_code)[p]),
         ]
-        for i in reversed(range(8)):
-            self.comb += If(nonidle[i], q.eq(i))
-        self.comb += first.eq((win >> byte_offset(q))[0:8])
 
         # Packet -----------------------------------------------------------------------------------
-        kind    = Signal(3)
-        length  = Signal(11) # Packet length (bytes).
-        count   = Signal(11) # Packet bytes already output.
-        rem     = Signal(11)
-        last    = Signal()
-        dpp_len = Signal(16) # Last DPH Length Field Replica.
-        out     = Signal(64)
+        kind      = Signal(3)
+        rem       = Signal(11) # Packet bytes remaining (from the current chunk).
+        start     = Signal()   # First chunk of the packet.
+        last      = Signal()
+        dpp_len12 = Signal(11, reset=12) # Last DPH Length Field Replica + 12 (DPP length).
+        out       = Signal(8*nbytes)
+        out_edb   = Signal(nbytes)
         self.comb += [
-            out.eq((win >> byte_offset(p))[0:64]),
-            rem.eq(length - count),
-            last.eq(rem <= 8),
+            out.eq((win >> byte_offset(p_out))[0:8*nbytes]),
+            out_edb.eq((Cat(r_edb, in_edb) >> p_out)[0:nbytes]),
+            last.eq(rem <= nbytes),
         ]
 
-        # Output words: framing Symbols as K Symbols, bytes after the packet end padded (00h).
+        # Output words (registered with 16+ bytes per cycle, see the Link Commands): framing Symbols as
+        # K Symbols, bytes after the packet end padded (00h).
+        if nbytes >= 16:
+            output = stream.Endpoint(gen2_link_layout(nbytes//4) + [("lc", 1)])
+        else:
+            output = source
         start_k = Signal(8)
         self.comb += Case(kind, {
             KIND_HP  : start_k.eq(SHP),
@@ -331,101 +446,125 @@ class Gen2RXFraming(LiteXModule):
             KIND_DPP : start_k.eq(SDP),
             KIND_EDB : start_k.eq(EDB),
         })
-        for j in range(8):
-            i      = count + j
+        # Byte j of the chunk is packet byte i: i >= length <-> j >= rem (comparisons with constants).
+        for j in range(nbytes):
             byte   = out[8*j:8*(j+1)]
-            data   = source.data[8*j:8*(j+1)]
-            ctrl   = source.ctrl[j]
+            data   = output.data[8*j:8*(j+1)]
+            ctrl   = output.ctrl[j]
             is_end = Signal(name=f"is_end{j}") # DPPEND/DPPABORT.
-            self.comb += is_end.eq((kind == KIND_DPP) & (i >= (length - 4)))
-            self.comb += If(i >= length,
+            self.comb += is_end.eq((kind == KIND_DPP) & ((j + 4) >= rem))
+            self.comb += If(j >= rem,
                 data.eq(0x00),
-            ).Elif(i < 3,
+            ).Elif(start & (j < 3),
                 ctrl.eq(1), data.eq(start_k),
-            ).Elif(i == 3,
+            ).Elif(start & (j == 3),
                 ctrl.eq(1), data.eq(EPF),
-            ).Elif(is_end & (i == (length - 1)),
+            ).Elif(is_end & ((j + 1) == rem),
                 ctrl.eq(1), data.eq(EPF),
             ).Elif(is_end,
-                ctrl.eq(1), data.eq(Mux(byte == GEN2_EDB, EDB, END)),
+                ctrl.eq(1), data.eq(Mux(out_edb[j], EDB, END)),
             ).Else(
                 data.eq(byte),
             )
 
-        # LGOOD_n/LCRD_x Link Commands (Link Command Word copies identical, 7.2.2): source_lc.
-        lc_word = out[32:64]
-        lc_fast = Signal()
-        self.comb += [
-            lc_fast.eq(self.lc_enable & (kind == KIND_LC) & (lc_word[0:16] == lc_word[16:32]) & (
+        # LGOOD_n/LCRD_x Link Commands (Link Command Word copies identical, 7.2.2): source_lc. With
+        # 16+ bytes per cycle, decoded on the registered output (timings).
+        def is_fast_lc(lc_word):
+            return (lc_word[0:16] == lc_word[16:32]) & (
                 ((lc_word[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
-                ((lc_word[0:11] & 0x7f8) == 0x080))), # LCRD_x/LCRD1_x/LCRD2_x.
-            source_lc.data.eq(lc_word),
-        ]
+                ((lc_word[0:11] & 0x7f8) == 0x080))   # LCRD_x/LCRD1_x/LCRD2_x.
+        lc_fast   = Signal()
         out_ready = Signal()
-        self.comb += out_ready.eq(Mux(lc_fast, source_lc.ready, source.ready))
+        if nbytes >= 16:
+            # Registered valid/ready (PipeValid then PipeReady), the Link Command decode done on the
+            # PipeValid registers and stored with the payload (timings: not after the PipeReady
+            # output selection).
+            self.out_pipe_valid = out_pipe_valid = stream.PipeValid(gen2_link_layout(nbytes//4) +
+                [("lc", 1)])
+            self.out_buffer     = out_buffer     = PipeReady(gen2_link_layout(nbytes//4) +
+                [("lc", 1)])
+            fast = Signal()
+            self.comb += [
+                output.lc.eq(kind == KIND_LC),
+                output.connect(out_pipe_valid.sink),
+                out_pipe_valid.source.connect(out_buffer.sink, omit={"lc"}),
+                out_buffer.sink.lc.eq(out_pipe_valid.source.lc &
+                    is_fast_lc(out_pipe_valid.source.data[32:64])),
+                out_ready.eq(output.ready),
+                fast.eq(self.lc_enable & out_buffer.source.lc),
+                out_buffer.source.connect(source, omit={"valid", "ready", "lc"}),
+                source.valid.eq(out_buffer.source.valid & ~fast),
+                source_lc.valid.eq(out_buffer.source.valid & fast),
+                source_lc.data.eq(out_buffer.source.data[32:64]),
+                out_buffer.source.ready.eq(Mux(fast, source_lc.ready, source.ready)),
+            ]
+        else:
+            lc_word = out[32:64]
+            self.comb += [
+                lc_fast.eq(self.lc_enable & (kind == KIND_LC) & is_fast_lc(lc_word)),
+                source_lc.data.eq(lc_word),
+                # Both outputs ready (not depending on the Link Command decode: timings).
+                out_ready.eq(source_lc.ready & source.ready),
+            ]
 
         # FSM --------------------------------------------------------------------------------------
-        p_next = Signal(4)
+        p_next = Signal(pw + 1)
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
             If(avail,
                 If(found,
-                    NextValue(p, q),
-                    NextValue(count, 0),
-                    If((first == GEN2_SHP),
-                        NextValue(kind, KIND_HP),   NextValue(length, 20),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_DPHP,
-                        NextValue(kind, KIND_DPH),  NextValue(length, 24),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_SLC,
-                        NextValue(kind, KIND_LC),   NextValue(length, 8),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_SDP,
-                        NextValue(kind, KIND_DPP),  NextValue(length, dpp_len + 12),
-                        NextState("PACKET")
-                    ).Elif(first == GEN2_EDB,
-                        NextValue(kind, KIND_EDB),  NextValue(length, 4),
+                    NextValue(p, q), NextValue(p_out, q),
+                    NextValue(start, 1),
+                    NextValue(kind, first - 1),
+                    Case(first, {
+                        KIND_HP  + 1 : NextValue(rem, 20),
+                        KIND_DPH + 1 : NextValue(rem, 24),
+                        KIND_LC  + 1 : NextValue(rem, 8),
+                        KIND_DPP + 1 : NextValue(rem, dpp_len12),
+                        KIND_EDB + 1 : NextValue(rem, 4),
+                    }),
+                    If(first != CODE_UNKNOWN,
                         NextState("PACKET")
                     ).Else(
                         # Unknown start: skip the byte.
                         NextValue(self.errors, self.errors + 1),
-                        If(q == 7,
-                            shift.eq(1),
-                            NextValue(p, 0)
+                        If(q == (nbytes - 1),
+                            NextValue(p, 0), NextValue(p_out, 0)
                         ).Else(
-                            NextValue(p, q + 1)
+                            NextValue(p, q + 1), NextValue(p_out, q + 1)
                         )
                     )
                 ).Else(
-                    shift.eq(1),
-                    NextValue(p, 0)
-                )
+                    NextValue(p, 0), NextValue(p_out, 0)
+                ),
+                shift.eq(skip),
             )
         )
-        self.comb += p_next.eq(p + rem[0:4])
+        self.comb += p_next.eq(p + rem[0:pw + 1])
         fsm.act("PACKET",
             If(avail,
-                source.valid.eq(~lc_fast),
-                source_lc.valid.eq(lc_fast),
-                source.words.eq(Mux(rem > 4, 2, 1)),
+                output.valid.eq(~lc_fast),
+                source_lc.valid.eq(lc_fast) if nbytes == 8 else [],
+                # Valid words: rem bytes (up to nbytes) rounded up to words.
+                output.words.eq(Mux(last, (rem[0:pw + 1] + 3) >> 2, nbytes//4)),
                 If((kind == KIND_DPH) & last,
-                    source.words.eq(1), # Length Field Replicas removed.
+                    output.words.eq((20 % nbytes)//4), # Length Field Replicas removed.
                 ),
                 If(out_ready,
                     If((kind == KIND_DPH) & last,
-                        NextValue(dpp_len, out[32:48]),
+                        NextValue(dpp_len12, out[8*(20 % nbytes):8*(20 % nbytes) + 16] + 12),
                     ),
-                    NextValue(count, count + 8),
+                    NextValue(rem, rem - nbytes),
+                    NextValue(start, 0),
                     If(~last,
                         shift.eq(1)
                     ).Else(
                         NextState("IDLE"),
-                        If(p_next >= 8,
+                        If(p_next >= nbytes,
                             shift.eq(1),
-                            NextValue(p, p_next - 8)
+                            NextValue(p, p_next - nbytes), NextValue(p_out, p_next - nbytes)
                         ).Else(
-                            NextValue(p, p_next)
+                            NextValue(p, p_next), NextValue(p_out, p_next)
                         )
                     )
                 )
@@ -440,9 +579,51 @@ GEN2_FRAMING_BYTES = {SHP: GEN2_SHP, SDP: GEN2_SDP, EDB: GEN2_EDB, END: GEN2_END
 
 TYPE_DP = 0x08 # Data Packet Header Type (8.2).
 
-def gen2_tx_unit_layout():
-    """Transmission units bytes (8 per entry, bytes: 1-8 valid bytes, last: end of the unit)."""
-    return [("data", 64), ("bytes", 4)]
+def gen2_tx_unit_layout(nbytes=8):
+    """Transmission units bytes (nbytes per entry, bytes: 1-nbytes valid bytes, last: end of the
+    unit)."""
+    return [("data", 8*nbytes), ("bytes", bits_for(nbytes))]
+
+class Gen2TXUnitsWidener(LiteXModule):
+    """Transmission units entries: 8 bytes -> nbytes (16 or 32: entries of a unit grouped, the
+    entries before the last one of a unit are full: 8 bytes). The bytes after the last one of an
+    entry are Idle Symbols (Gen2TXBlocksPacker padding)."""
+    def __init__(self, nbytes=32):
+        assert nbytes in [16, 32]
+        n = nbytes//8
+        self.sink   = sink   = stream.Endpoint(gen2_tx_unit_layout(8))
+        self.source = source = stream.Endpoint(gen2_tx_unit_layout(nbytes))
+
+        # # #
+
+        count  = Signal(max=n)                             # Held entries.
+        held_d = [Signal(64, reset_less=True) for _ in range(n - 1)]
+        data   = Signal(64)
+        idle   = int.from_bytes(bytes([GEN2_IDLE])*8, "little")
+        self.comb += [data[8*j:8*(j+1)].eq(Mux(j >= sink.bytes, GEN2_IDLE, sink.data[8*j:8*(j+1)]))
+            for j in range(8)]
+        out = Case(count, {c: [
+            source.data.eq(Cat(*held_d[:c], data, *[Constant(idle, 64)]*(n - 1 - c))),
+            source.bytes.eq(8*c + sink.bytes)] for c in range(n)})
+        self.comb += [
+            If(sink.last | (count == (n - 1)),
+                # Last entry of a unit or entries completing the output entry.
+                source.valid.eq(sink.valid),
+                out,
+                source.last.eq(sink.last),
+                sink.ready.eq(source.ready),
+            ).Else(
+                sink.ready.eq(1),
+            )
+        ]
+        self.sync += If(sink.valid & sink.ready,
+            If(sink.last | (count == (n - 1)),
+                count.eq(0),
+            ).Else(
+                count.eq(count + 1),
+            ),
+            Case(count, {c: held_d[c].eq(sink.data) for c in range(n - 1)}),
+        )
 
 class Gen2TXFramer(LiteXModule):
     """Link Layer words pairs (gen2_link_layout: Symbol 0 on data[0:8], K Symbols with ctrl, framing
@@ -459,7 +640,17 @@ class Gen2TXFramer(LiteXModule):
         # # #
 
         # Words window -----------------------------------------------------------------------------
-        self.window = window = WordsWindow()
+        # Words decodes stored with the words (timings): HPSTART, LCSTART, EPF K Symbols, Symbol 0
+        # EDB, DP Type (DW0), data word.
+        def decode(data, ctrl):
+            return Cat(
+                (ctrl == 0b1111) & (data[0:8] == SHP),
+                (ctrl == 0b1111) & (data[0:8] == SLC),
+                *[ctrl[j] & (data[8*j:8*(j+1)] == EPF) for j in range(4)],
+                data[0:8] == EDB,
+                data[0:5] == TYPE_DP,
+                ctrl == 0)
+        self.window = window = WordsWindow(decode, nflags=9)
         self.comb += sink.connect(window.sink)
         valid0 = Signal()
         data0  = window.w0
@@ -493,16 +684,12 @@ class Gen2TXFramer(LiteXModule):
         n        = Signal(3) # Word index in the Header Packet.
         word0    = Signal(32)
         word0_c  = Signal(4)
-        hpstart  = Signal()
-        lcstart  = Signal()
-        self.comb += [
-            hpstart.eq((ctrl0 == 0b1111) & (data0[0:8] == SHP)),
-            lcstart.eq((ctrl0 == 0b1111) & (data0[0:8] == SLC)),
-        ]
+        hpstart  = window.f0[0]
+        lcstart  = window.f0[1]
         # DPPEND/DPPABORT end: EPF K Symbol after the DPPSTART word.
-        epf  = Signal(4)
-        for j in range(4):
-            self.comb += epf[j].eq(ctrl0[j] & (data0[8*j:8*(j+1)] == EPF))
+        epf      = window.f0[2:6]
+        edb0     = window.f0[6] # Symbol 0 EDB.
+        type_dp  = window.f0[7] # DW0 Type: DP.
         epf_bytes = Signal(3)
         self.comb += If(epf[0], epf_bytes.eq(1)).Elif(epf[1], epf_bytes.eq(2)).Elif(epf[2],
             epf_bytes.eq(3)).Else(epf_bytes.eq(4))
@@ -539,10 +726,10 @@ class Gen2TXFramer(LiteXModule):
         fsm.act("HP-START",
             If(valid0,
                 chunk.valid.eq(1),
-                chunk.data.eq(mapped(word0, word0_c, dphp=(data0[0:5] == TYPE_DP))),
+                chunk.data.eq(mapped(word0, word0_c, dphp=type_dp)),
                 chunk.bytes.eq(4),
                 If(chunk.ready,
-                    NextValue(is_dph, data0[0:5] == TYPE_DP),
+                    NextValue(is_dph, type_dp),
                     NextValue(n, 1),
                     NextState("HP")
                 )
@@ -578,10 +765,10 @@ class Gen2TXFramer(LiteXModule):
             chunk.data.eq(mapped(data0, ctrl0)),
             chunk.bytes.eq(4),
             # Nullified DPP: DPPABORT right after the DPH.
-            chunk.last.eq(data0[0:8] == EDB),
+            chunk.last.eq(edb0),
             ready0.eq(chunk.ready),
             If(valid0 & chunk.ready,
-                If(data0[0:8] == EDB,
+                If(edb0,
                     NextState("IDLE")
                 ).Else(
                     NextState("DPP")
@@ -589,7 +776,7 @@ class Gen2TXFramer(LiteXModule):
             )
         )
         dpp_two = Signal() # Two data words available (no K Symbols): 8-byte chunk.
-        self.comb += dpp_two.eq((window.n == 2) & (ctrl0 == 0) & (window.c1 == 0))
+        self.comb += dpp_two.eq((window.n == 2) & window.f0[8] & window.f1[8])
         fsm.act("DPP",
             chunk.valid.eq(valid0),
             If(dpp_two,
@@ -606,6 +793,11 @@ class Gen2TXFramer(LiteXModule):
         )
 
         # Chunks -> 8-byte entries (4-byte chunks paired, 8-byte chunks never last) ----------------
+        # Registered valid/ready (timings: window/FSM decisions to the pairing).
+        self.chunk_buffer = chunk_buffer = Buffer([("data", 64), ("bytes", 4)],
+            pipe_valid=True, pipe_ready=True)
+        self.comb += chunk.connect(chunk_buffer.sink)
+        chunk  = chunk_buffer.source
         held   = Signal(32)
         held_v = Signal()
         wide   = Signal()
@@ -642,15 +834,17 @@ class Gen2TXFramer(LiteXModule):
         )
 
 class Gen2TXPacker(LiteXModule):
-    """Transmission units bytes (8 per entry) to Data Blocks payloads (16 bytes, bytes in
+    """Transmission units bytes (nbytes per entry: 8 or 16) to Data Blocks payloads (16 bytes, bytes in
     transmission order from data[0:8]) for Gen2TX: units packed back to back, Idle Symbols (5Ah)
     after a unit when the next one is not available (last: Data Block ending a unit, SKP Ordered
     Sets allowed after it). A unit must be fully available when started (units_available: the
     Data Blocks of a unit are transmitted without Idle Symbols, 7.2.1.2.2).
 
-    Up to 8 bytes read per cycle, a Data Block every 3 cycles at most (Gen2TX at 40-bit)."""
-    def __init__(self):
-        self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout())
+    Up to nbytes read per cycle: a Data Block every 3 cycles at most with 8 (Gen2TX at 40-bit),
+    every cycle with 16 (Gen2TX at 80-bit: a Data Block every 1.65 cycles)."""
+    def __init__(self, nbytes=8):
+        assert nbytes in [8, 16]
+        self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout(nbytes))
         self.source          = source = stream.Endpoint([("data", 128)])
         self.units_available = Signal() # i: A complete unit is available on sink.
         self.unit_end        = Signal() # o: A unit is read (pulse, last entry).
@@ -661,8 +855,8 @@ class Gen2TXPacker(LiteXModule):
 
         # # #
 
-        buf     = Signal(8*24) # Bytes (oldest from buf[0:8]).
-        fill    = Signal(5)    # Bytes in buf (0-24).
+        buf     = Signal(8*(16 + nbytes)) # Bytes (oldest from buf[0:8]).
+        fill    = Signal(bits_for(16 + nbytes)) # Bytes in buf (0-(16 + nbytes)).
         in_unit = Signal()     # Reading a unit.
         ending  = Signal()     # Block with a unit end and Idle Symbols.
         hold    = Signal()     # Unit ended with a SKP Ordered Set pending: next unit after the block.
@@ -693,23 +887,38 @@ class Gen2TXPacker(LiteXModule):
         # block: else, a block requested before its next entry (Gen2TX, a block every 3 cycles or
         # more) would find no block and send a Logical Idle Data Block inside the unit. The padded
         # block (Idle Symbols) is sent first.
-        fill_eff = Signal(5)
+        # Both cases (output block taken this cycle or not) computed from the registered state, then
+        # selected with out_fire (timings: placement/read decisions not after the output handshake).
+        fill_eff = Signal(len(fill))
         start_ok = Signal()
         rd       = Signal()
+        fill_fire = Signal(len(fill)) # Fill level after an output block.
+        self.comb += fill_fire.eq(Mux(fill >= 16, fill - 16, 0))
+        def read_ok(f):
+            start = (f == 0) | ((f + sink.bytes) >= 16)
+            return sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold & start)) & (f <= 16)
+        rd_keep = Signal()
+        rd_fire = Signal()
         self.comb += [
-            fill_eff.eq(Mux(out_fire, Mux(fill >= 16, fill - 16, 0), fill)),
-            start_ok.eq((fill_eff == 0) | ((fill_eff + sink.bytes) >= 16)),
-            rd.eq(sink.valid & ~self.flush &
-                (in_unit | (self.units_available & ~hold & start_ok)) &
-                (fill_eff <= 16)),
+            rd_keep.eq(read_ok(fill)),
+            rd_fire.eq(read_ok(fill_fire)),
+            fill_eff.eq(Mux(out_fire, fill_fire, fill)),
+            rd.eq(Mux(out_fire, rd_fire, rd_keep)),
             sink.ready.eq(rd | self.flush),
             self.unit_end.eq(sink.valid & sink.ready & sink.last),
         ]
-        buf_shift = Signal(8*24)
+        buf_shift = Signal(len(buf))
         self.comb += buf_shift.eq(Mux(out_fire, buf >> 128, buf))
-        placed = Signal(8*24)
-        self.comb += Case(fill_eff, {f: placed.eq((buf_shift & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
-            for f in range(17)})
+        placed_keep = Signal(len(buf))
+        placed_fire = Signal(len(buf))
+        self.comb += [
+            Case(fill, {f: placed_keep.eq((buf & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
+                for f in range(17)}),
+            Case(fill_fire, {f: placed_fire.eq(((buf >> 128) & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
+                for f in range(17)}),
+        ]
+        placed = Signal(len(buf))
+        self.comb += placed.eq(Mux(out_fire, placed_fire, placed_keep))
         self.sync += [
             If(self.flush,
                 fill.eq(0),
@@ -739,25 +948,181 @@ class Gen2TXPacker(LiteXModule):
             ),
         ]
 
+def gen2_tx_blocks_layout(nblocks=2):
+    """Data Blocks payloads entries (nblocks blocks, blocks: 1-nblocks valid blocks, last: the last
+    valid block ends a units chain: Idle Symbols padding or unit end, SKP Ordered Sets allowed after
+    it)."""
+    return [("data", 128*nblocks), ("blocks", bits_for(nblocks))]
+
+class Gen2TXBlocksPacker(LiteXModule):
+    """Transmission units bytes (32 bytes entries: entries before the last one of a unit full, bytes
+    after the last one Idle Symbols, Gen2TXUnitsWidener) to Data Blocks payloads entries (up to 2
+    blocks per cycle) at the Link Layer frequency, for a blocks buffer read by Gen2TX
+    (Gen2TXBlocksReader).
+
+    Units are packed in chains: a unit is started in the partial block of the previous one (unit end
+    in the block) when available, else the partial block is output padded with Idle Symbols and ends
+    the chain (last). Chains also end at a unit end with a SKP Ordered Set pending (Gen2TX) or after
+    max_chain blocks (the reader waits for complete chains: bounded buffering). The fill level of the
+    partial block only changes at the units ends: blocks are a byte selection of the partial block
+    and the entry by the registered fill level. Registered output."""
+    def __init__(self, max_chain=32):
+        self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout(32))
+        self.source          = source = stream.Endpoint(gen2_tx_blocks_layout(2))
+        self.units_available = Signal() # i: A complete unit is available on sink.
+        self.unit_end        = Signal() # o: A unit is read (pulse, last entry).
+        self.flush           = Signal() # i: Discard the sink entries (link not in U0).
+        self.skp_pending     = Signal() # i: SKP Ordered Set pending: chain ended at a unit end.
+
+        # # #
+
+        acc     = Signal(128, reset_less=True) # Partial block (bytes acc[0:8*fill]).
+        fill    = Signal(4)  # Bytes in the partial block (0-15).
+        fill_b  = Signal(4, attr={("syn_preserve", 1)}) # Copy for the bytes selection (fanout).
+        in_unit = Signal()   # Reading a unit.
+        chain   = Signal(max=max_chain + 3) # Blocks of the current chain.
+
+        # Entry placed at the fill level: 2 blocks and remaining bytes, padded partial block.
+        byte   = lambda v, i: v[8*i:8*(i+1)]
+        total  = Signal(6) # Bytes in the partial block + entry bytes (1-47).
+        blocks = Signal(256)
+        rest   = Signal(128)
+        padded = Signal(128)
+        self.comb += total.eq(fill + sink.bytes)
+        for j in range(32):
+            self.comb += Case(fill_b, {f: byte(blocks, j).eq(byte(acc, j) if j < f else
+                byte(sink.data, j - f)) for f in range(16)})
+        for j in range(16):
+            self.comb += [
+                Case(fill_b, {f: byte(rest, j).eq(byte(sink.data, 32 + j - f) if j < f else 0)
+                    for f in range(16)}),
+                byte(padded, j).eq(Mux(j < fill_b, byte(acc, j), GEN2_IDLE)),
+            ]
+
+        # Decisions.
+        adv      = Signal() # Output register free (or taken).
+        pending  = Signal() # Partial block with a unit end.
+        can_pack = Signal() # Next unit packed in the partial block.
+        take     = Signal()
+        pad      = Signal()
+        nout     = Signal(2) # Blocks of the entry.
+        self.comb += [
+            adv.eq(~source.valid | source.ready),
+            pending.eq(~in_unit & (fill != 0)),
+            can_pack.eq(self.units_available & ~self.skp_pending & (chain < max_chain)),
+            take.eq(sink.valid & ~self.flush & (in_unit | (pending & can_pack) |
+                ((fill == 0) & self.units_available))),
+            pad.eq(pending & ~can_pack & ~self.flush & adv),
+            If(total >= 32,
+                nout.eq(2)
+            ).Elif(total >= 16,
+                nout.eq(1)
+            ),
+            sink.ready.eq(self.flush | (take & (adv | (nout == 0)))),
+            self.unit_end.eq(sink.valid & sink.ready & sink.last),
+        ]
+        last = Signal() # Unit ending exactly at the end of the output blocks.
+        self.comb += last.eq(sink.last & ((total == 16) | (total == 32)))
+        self.sync += [
+            If(source.ready, source.valid.eq(0)),
+            If(self.flush,
+                source.valid.eq(0),
+                fill.eq(0), fill_b.eq(0),
+                in_unit.eq(0),
+                chain.eq(0),
+            ).Elif(sink.valid & sink.ready,
+                in_unit.eq(~sink.last),
+                If(nout != 0,
+                    source.valid.eq(1),
+                    source.data.eq(blocks),
+                    source.blocks.eq(nout),
+                    source.last.eq(last),
+                    chain.eq(Mux(last, 0, chain + nout)),
+                ),
+                If(nout == 2,
+                    acc.eq(rest),
+                    fill.eq(total - 32), fill_b.eq(total - 32),
+                ).Elif(nout == 1,
+                    acc.eq(blocks[128:]),
+                    fill.eq(total - 16), fill_b.eq(total - 16),
+                ).Else(
+                    acc.eq(blocks[:128]),
+                    fill.eq(total), fill_b.eq(total),
+                )
+            ).Elif(pad,
+                source.valid.eq(1),
+                source.data.eq(padded),
+                source.blocks.eq(1),
+                source.last.eq(1),
+                chain.eq(0),
+                fill.eq(0), fill_b.eq(0),
+            ),
+        ]
+
+class Gen2TXBlocksReader(LiteXModule):
+    """Data Blocks payloads entries (Gen2TXBlocksPacker, through a blocks buffer) to blocks for
+    Gen2TX (last: SKP Ordered Sets allowed after the block). A chain is started once complete in
+    the buffer (chains_available: never a Logical Idle Data Block inside a unit)."""
+    def __init__(self):
+        self.sink             = sink   = stream.Endpoint(gen2_tx_blocks_layout(2))
+        self.source           = source = stream.Endpoint([("data", 128)])
+        self.chains_available = Signal() # i: A complete chain is available on sink.
+        self.chain_end        = Signal() # o: A chain is read (pulse).
+        self.flush            = Signal() # i: Discard the sink entries.
+
+        # # #
+
+        in_chain = Signal()
+        half     = Signal() # Second block of the entry.
+        final    = Signal() # Last block of the entry.
+        self.comb += [
+            final.eq(half | (sink.blocks == 1)),
+            source.valid.eq(sink.valid & ~self.flush & (in_chain | self.chains_available)),
+            source.data.eq(Mux(half, sink.data[128:], sink.data[:128])),
+            source.last.eq(sink.last & final),
+            sink.ready.eq(self.flush | (source.valid & source.ready & final)),
+            self.chain_end.eq(sink.valid & sink.ready & sink.last),
+        ]
+        self.sync += [
+            If(self.flush,
+                half.eq(0),
+                in_chain.eq(0),
+            ).Elif(source.valid & source.ready,
+                half.eq(~final),
+                If(final, in_chain.eq(~sink.last)),
+            )
+        ]
+
 # Gen 2 Link TX ------------------------------------------------------------------------------------
 
 class Gen2LinkTX(LiteXModule):
-    """Link Layer words (sys clock domain) -> Gen2TXFramer -> units buffer (sys -> tx) ->
-    Gen2TXPacker -> Data Blocks payloads (tx clock domain, to Gen2TX).
+    """Link Layer words (sys clock domain) -> Gen2TXFramer -> Data Blocks payloads (tx clock domain,
+    to Gen2TX).
 
-    Units are stored and forwarded: a unit is started once completely written in the buffer and
-    visible on its read side. Flushed while the link is not in U0 (stale units of a previous U0
-    period, units cut by a link state change). The units written count is moved to the tx clock domain (gray coded)
-    and delayed to cover the buffer CDC latency (else the packer could start a unit whose last
-    entries are not yet readable: Idle Symbols inside a packet).
+    nbytes=8: units buffer (sys -> tx) -> Gen2TXPacker (tx). Units are stored and forwarded: a unit
+    is started once completely written in the buffer and visible on its read side. The units
+    written count is moved to the tx clock domain (gray coded) and delayed to cover the buffer CDC
+    latency (else the packer could start a unit whose last entries are not yet readable: Idle
+    Symbols inside a packet).
+
+    nbytes=32 (wider transceiver words, ex: 80-bit at 125MHz: a Data Block every 1.65 cycles):
+    framer entries grouped by 32 bytes, units buffer -> Gen2TXBlocksPacker (sys, up to 2 blocks
+    per cycle) -> blocks buffer (sys -> tx) -> Gen2TXBlocksReader (tx): units stored and forwarded
+    in the sys clock domain, chains of blocks read once complete in the blocks buffer (chains
+    written count moved to the tx clock domain as above).
+
+    Flushed while the link is not in U0 (stale units of a previous U0 period, units cut by a link
+    state change).
     """
-    def __init__(self, buffer_depth=512, units_delay=8, link_words=1):
+    def __init__(self, buffer_depth=512, units_delay=8, link_words=1, nbytes=8):
         assert link_words in [1, 2]
+        assert nbytes in [8, 32]
         # Link Layer words (link_words=1) or words pairs (link_words=2, gen2_link_layout).
-        self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1 else
-            gen2_link_layout())
-        self.source = source = stream.Endpoint([("data", 128)])
-        self.flush  = Signal() # i: Flush (sys clock domain, link not in U0): framer reset, buffer drained.
+        self.sink        = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
+            else gen2_link_layout())
+        self.source      = source = stream.Endpoint([("data", 128)])
+        self.flush       = Signal() # i: Flush (sys, link not in U0): framer reset, buffers drained.
+        self.skp_pending = Signal() # i: SKP Ordered Set pending (Gen2TX, tx clock domain).
 
         # # #
 
@@ -765,43 +1130,135 @@ class Gen2LinkTX(LiteXModule):
         flush_tx = Signal()
         self.specials += MultiReg(self.flush, flush_tx, "tx")
         self.comb += framer.reset.eq(self.flush)
-        self.buffer = buffer = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
-            stream.AsyncFIFO(gen2_tx_unit_layout(), buffer_depth, buffered=True))
-        self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker())
+
+        def gray_count_cdc(ce_write, delay):
+            # Gray counter (sys), resynchronized and delayed (tx).
+            written    = GrayCounter(16)
+            written_tx = Signal(16)
+            written_d  = [Signal(16) for _ in range(delay)]
+            self.submodules += written
+            self.specials += MultiReg(written.q, written_tx, "tx")
+            self.sync.tx += [written_d[0].eq(written_tx)] + [
+                written_d[i].eq(written_d[i-1]) for i in range(1, delay)]
+            self.comb += written.ce.eq(ce_write)
+            return written_d[-1]
+
+        if nbytes == 8:
+            self.buffer = buffer = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
+                stream.AsyncFIFO(gen2_tx_unit_layout(8), buffer_depth, buffered=True))
+            self.packer = packer = ClockDomainsRenamer("tx")(Gen2TXPacker(8))
+            units_read = ClockDomainsRenamer("tx")(GrayCounter(16))
+            self.submodules += units_read
+            units_written = gray_count_cdc(buffer.sink.valid & buffer.sink.ready & buffer.sink.last,
+                units_delay)
+            self.comb += [
+                sink.connect(framer.sink, omit={"words"}),
+                framer.sink.words.eq(sink.words if link_words == 2 else 1),
+                framer.source.connect(buffer.sink),
+                buffer.source.connect(packer.sink),
+                packer.source.connect(source),
+                packer.flush.eq(flush_tx),
+                packer.skp_pending.eq(self.skp_pending),
+                units_read.ce.eq(packer.unit_end),
+                packer.units_available.eq(units_written != units_read.q),
+            ]
+            return
+
+        # 32 bytes: framing/packing (sys) ----------------------------------------------------------
+        # Registered valid/ready around the framer and the widener (timings).
+        framer_sink = stream.Endpoint(gen2_link_layout())
         self.comb += [
-            sink.connect(framer.sink, omit={"words"}),
-            framer.sink.words.eq(sink.words if link_words == 2 else 1),
-            framer.source.connect(buffer.sink),
-            buffer.source.connect(packer.sink),
-            packer.source.connect(source),
+            sink.connect(framer_sink, omit={"words"}),
+            framer_sink.words.eq(sink.words if link_words == 2 else 1),
+        ]
+        self.sink_buffer = sink_buffer = ResetInserter()(Buffer(gen2_link_layout(),
+            pipe_valid=True, pipe_ready=True))
+        self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener(32))
+        self.unit_buffer = unit_buffer = ResetInserter()(Buffer(gen2_tx_unit_layout(32),
+            pipe_valid=True, pipe_ready=True))
+        # Units buffer (store and forward, units bytes up to 1060: 34 entries).
+        self.units  = units  = stream.SyncFIFO(gen2_tx_unit_layout(32), 64, buffered=True)
+        self.packer = packer = Gen2TXBlocksPacker()
+        skp_pending = Signal()
+        self.specials += MultiReg(self.skp_pending, skp_pending)
+        self.comb += [
+            sink_buffer.reset.eq(self.flush),
+            widener.reset.eq(self.flush),
+            unit_buffer.reset.eq(self.flush),
+            framer_sink.connect(sink_buffer.sink),
+            sink_buffer.source.connect(framer.sink),
+            framer.source.connect(widener.sink),
+            widener.source.connect(unit_buffer.sink),
+            unit_buffer.source.connect(units.sink),
+            units.source.connect(packer.sink),
+            packer.flush.eq(self.flush),
+            packer.skp_pending.eq(skp_pending),
+        ]
+        # Complete units in the units buffer, registered (timings): not set on the 2 cycles after a
+        # unit is read (count not updated in the flag yet).
+        units_written = Signal(16)
+        units_read    = Signal(16)
+        unit_end_d    = Signal()
+        self.sync += [
+            If(units.sink.valid & units.sink.ready & units.sink.last,
+                units_written.eq(units_written + 1)),
+            unit_end_d.eq(packer.unit_end),
+            If(unit_end_d, units_read.eq(units_read + 1)),
+            packer.units_available.eq((units_written != units_read) & ~packer.unit_end &
+                ~unit_end_d),
         ]
 
-        # Complete units in the buffer: units written (sys) vs read (tx), units cut by a flush are not
-        # counted (no last entry).
-        units_written = GrayCounter(16)
-        units_read    = ClockDomainsRenamer("tx")(GrayCounter(16))
-        self.submodules += units_written, units_read
-        units_written_tx = Signal(16)
-        self.specials += MultiReg(units_written.q, units_written_tx, "tx")
-        units_written_d = [Signal(16) for _ in range(units_delay)]
-        self.sync.tx += [units_written_d[0].eq(units_written_tx)] + [
-            units_written_d[i].eq(units_written_d[i-1]) for i in range(1, units_delay)]
+        # Blocks buffer (sys -> tx), chains read once complete (tx) --------------------------------
+        self.blocks = blocks = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
+            stream.AsyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True))
+        self.reader = reader = ClockDomainsRenamer("tx")(Gen2TXBlocksReader())
+        # Registered valid/ready between the reader and Gen2TX (timings).
+        self.reader_buffer = reader_buffer = ClockDomainsRenamer("tx")(ResetInserter()(
+            Buffer([("data", 128)], pipe_valid=True, pipe_ready=True)))
+        chains_read = ClockDomainsRenamer("tx")(GrayCounter(16))
+        self.submodules += chains_read
+        chains_written = gray_count_cdc(blocks.sink.valid & blocks.sink.ready & blocks.sink.last,
+            units_delay)
+        # Registered valid/ready between the blocks buffer and the reader (timings: reader
+        # decisions to the buffer read side). Not reset: flushed entries drained by the reader
+        # (chains read count).
+        self.read_buffer = read_buffer = ClockDomainsRenamer("tx")(Buffer(gen2_tx_blocks_layout(2),
+            pipe_valid=True, pipe_ready=True, ready_first=True))
+        chain_end_d = Signal()
         self.comb += [
-            units_written.ce.eq(buffer.sink.valid & buffer.sink.ready & buffer.sink.last),
-            units_read.ce.eq(packer.unit_end),
-            packer.units_available.eq(units_written_d[-1] != units_read.q),
-            packer.flush.eq(flush_tx),
+            packer.source.connect(blocks.sink),
+            blocks.source.connect(read_buffer.sink),
+            read_buffer.source.connect(reader.sink),
+            reader.flush.eq(flush_tx),
+            reader_buffer.reset.eq(flush_tx),
+            reader.source.connect(reader_buffer.sink),
+            reader_buffer.source.connect(source),
+            chains_read.ce.eq(chain_end_d),
+        ]
+        self.sync.tx += [
+            chain_end_d.eq(reader.chain_end),
+            reader.chains_available.eq((chains_written != chains_read.q) & ~reader.chain_end &
+                ~chain_end_d),
         ]
 
 # Gen 2 Link RX ------------------------------------------------------------------------------------
 
 class Gen2LinkRX(LiteXModule):
-    """Data Blocks (rx clock domain, one every 3.3 cycles at 40-bit, not held) -> blocks buffer ->
-    8 bytes per cycle -> Gen2RXFraming (reset out of the Data Stream) -> words pairs buffer (rx ->
-    sys) -> Link Layer words (sys clock domain, gated by rx_ready: U0). LGOOD_n/LCRD_x Link Commands
-    on source_lc (Link Command words buffer, rx -> sys) with lc_enable."""
-    def __init__(self, buffer_depth=1024, link_words=1):
+    """Data Blocks (rx clock domain, one every 3.3 cycles at 40-bit, 1.65 at 80-bit, not held) ->
+    Gen2RXFraming -> Link Layer words or words pairs (sys clock domain, gated by rx_ready: U0).
+    LGOOD_n/LCRD_x Link Commands on source_lc with lc_enable.
+
+    nbytes=8: blocks buffer -> 8 bytes per cycle -> Gen2RXFraming (rx, reset out of the Data
+    Stream) -> words buffer (rx -> sys), Link Command words buffer (rx -> sys).
+
+    nbytes=32 (wider transceiver words): Data Stream blocks pairs buffer (rx -> sys, a pair per
+    Link Layer cycle: blocks rate up to 2x the Link Layer frequency, the pair starting the Data
+    Stream flagged) -> Gen2RXFraming (sys, 32 bytes per cycle, reset by the first pair) -> words
+    buffer (sys, level: RX throttling), Link Command words buffer.
+    """
+    def __init__(self, buffer_depth=1024, link_words=1, nbytes=8):
         assert link_words in [1, 2]
+        assert nbytes in [8, 32]
         self.sink        = sink   = stream.Endpoint([("data", 128)])         # rx clock domain.
         # Link Layer words (link_words=1) or words pairs (link_words=2, gen2_link_layout).
         self.source      = source = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
@@ -814,57 +1271,112 @@ class Gen2LinkRX(LiteXModule):
 
         # # #
 
-        fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8))
-        converter = ClockDomainsRenamer("rx")(stream.Converter(128, 64))
-        framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming()))
-        buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
-            stream.AsyncFIFO(gen2_link_layout(), buffer_depth, buffered=True))
-        self.submodules += fifo, converter, framing, buffer
+        self.comb += sink.ready.eq(1)
+        if nbytes == 8:
+            fifo      = ClockDomainsRenamer("rx")(stream.SyncFIFO([("data", 128)], 8))
+            converter = ClockDomainsRenamer("rx")(stream.Converter(128, 64))
+            framing   = ClockDomainsRenamer("rx")(ResetInserter()(Gen2RXFraming(8)))
+            buffer    = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
+                stream.AsyncFIFO(gen2_link_layout(2), buffer_depth, buffered=True))
+            self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
+                stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
+            self.submodules += fifo, converter, framing, buffer
+            self.specials += MultiReg(self.lc_enable, framing.lc_enable, "rx")
+            self.comb += [
+                fifo.sink.valid.eq(sink.valid),
+                fifo.sink.data.eq(sink.data),
+                framing.reset.eq(~self.data_stream),
+                fifo.source.connect(converter.sink),
+                converter.source.connect(framing.sink),
+                framing.source.connect(buffer.sink),
+                framing.source_lc.connect(lc_buffer.sink),
+            ]
+            self.sync.rx += If(fifo.sink.valid & ~fifo.sink.ready, self.overflow.eq(1))
+        else:
+            # Data Stream blocks pairs (32 bytes, rx -> sys: a pair per Link Layer cycle), the pair
+            # starting the Data Stream flagged.
+            pairs = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
+                stream.AsyncFIFO([("data", 256), ("start", 1)], 128, buffered=True))
+            held       = Signal(128, reset_less=True)
+            has        = Signal()
+            started    = Signal()
+            held_start = Signal()
+            self.sync.rx += [
+                If(~self.data_stream,
+                    has.eq(0),
+                    started.eq(0),
+                ).Elif(sink.valid,
+                    If(~has,
+                        held.eq(sink.data),
+                        held_start.eq(~started),
+                        started.eq(1),
+                    ),
+                    has.eq(~has),
+                ),
+                If(pairs.sink.valid & ~pairs.sink.ready, self.overflow.eq(1)),
+            ]
+            self.comb += [
+                pairs.sink.valid.eq(sink.valid & self.data_stream & has),
+                pairs.sink.data.eq(Cat(held, sink.data)),
+                pairs.sink.start.eq(held_start),
+            ]
+            # RX framing (and its input buffer) reset by the first pair (one cycle, pair then read).
+            in_buffer  = ResetInserter()(Buffer([("data", 256)], pipe_valid=True, pipe_ready=True,
+                ready_first=True))
+            framing    = ResetInserter()(Gen2RXFraming(32))
+            out_buffer = Buffer(gen2_link_layout(8), pipe_valid=True, pipe_ready=True)
+            buffer     = stream.SyncFIFO(gen2_link_layout(8), buffer_depth//2, buffered=True)
+            self.lc_buffer = lc_buffer = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 16,
+                buffered=True)
+            self.submodules += pairs, in_buffer, framing, out_buffer, buffer
+            self.pairs = pairs
+            self.level = buffer.level # o: Words buffer level (entries of up to 8 words).
+            reset      = Signal()
+            reset_done = Signal()
+            self.comb += [
+                reset.eq(pairs.source.valid & pairs.source.start & ~reset_done),
+                in_buffer.reset.eq(reset),
+                framing.reset.eq(reset),
+                in_buffer.sink.valid.eq(pairs.source.valid & ~reset),
+                in_buffer.sink.data.eq(pairs.source.data),
+                pairs.source.ready.eq(in_buffer.sink.ready & ~reset),
+                in_buffer.source.connect(framing.sink),
+                framing.lc_enable.eq(self.lc_enable),
+                framing.source.connect(out_buffer.sink),
+                out_buffer.source.connect(buffer.sink),
+                framing.source_lc.connect(lc_buffer.sink),
+            ]
+            self.sync += If(reset,
+                reset_done.eq(1)
+            ).Elif(pairs.source.valid & pairs.source.ready,
+                reset_done.eq(0)
+            )
         self.framing = framing
         self.buffer  = buffer
-        self.comb += [
-            fifo.sink.valid.eq(sink.valid),
-            fifo.sink.data.eq(sink.data),
-            sink.ready.eq(1),
-            fifo.source.connect(converter.sink),
-            converter.source.connect(framing.sink),
-            framing.reset.eq(~self.data_stream),
-            framing.source.connect(buffer.sink),
-        ]
-        self.sync.rx += If(fifo.sink.valid & ~fifo.sink.ready, self.overflow.eq(1))
 
-        # Link Commands words (rx -> sys), gated by rx_ready.
-        self.specials += MultiReg(self.lc_enable, framing.lc_enable, "rx")
-        self.lc_buffer = lc_buffer = ClockDomainsRenamer({"write": "rx", "read": "sys"})(
-            stream.AsyncFIFO([("data", 32), ("ctrl", 4)], 16, buffered=True))
+        # Link Commands words, gated by rx_ready.
         self.comb += [
-            framing.source_lc.connect(lc_buffer.sink),
             self.source_lc.valid.eq(lc_buffer.source.valid & self.rx_ready),
             self.source_lc.data.eq(lc_buffer.source.data),
             lc_buffer.source.ready.eq(~self.rx_ready | self.source_lc.ready),
         ]
 
-        # Words pairs, gated by rx_ready.
-        if link_words == 2:
+        # Words entries -> words pairs/words, gated by rx_ready.
+        words = buffer.source
+        if (nbytes//4) != link_words:
+            self.narrower = narrower = ResetInserter()(WordsNarrower(nbytes//4, link_words,
+                words=(link_words != 1)))
             self.comb += [
-                buffer.source.connect(source, omit={"valid", "ready"}),
-                source.valid.eq(buffer.source.valid & self.rx_ready),
-                buffer.source.ready.eq(~self.rx_ready | source.ready),
+                narrower.reset.eq(~self.rx_ready),
+                buffer.source.connect(narrower.sink, omit={"valid", "ready"}),
+                narrower.sink.valid.eq(buffer.source.valid & self.rx_ready),
+                buffer.source.ready.eq(~self.rx_ready | narrower.sink.ready),
             ]
-            return
-
-        # Words pairs -> words, gated by rx_ready.
-        second = Signal()
+            words = narrower.source
         self.comb += [
-            source.valid.eq(buffer.source.valid & self.rx_ready),
-            source.data.eq(Mux(second, buffer.source.data[32:64], buffer.source.data[0:32])),
-            source.ctrl.eq(Mux(second, buffer.source.ctrl[4:8],   buffer.source.ctrl[0:4])),
-            buffer.source.ready.eq(~self.rx_ready |
-                (source.ready & (second | (buffer.source.words == 1)))),
+            words.connect(source, omit={"valid", "ready", "words"}),
+            source.valid.eq(words.valid & self.rx_ready),
+            words.ready.eq(~self.rx_ready | source.ready),
         ]
-        self.sync += If(~self.rx_ready,
-            second.eq(0)
-        ).Elif(source.valid & source.ready,
-            second.eq(~second & (buffer.source.words == 2))
-        )
-
+        if link_words == 2:
+            self.comb += source.words.eq(words.words)

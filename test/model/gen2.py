@@ -78,8 +78,10 @@ class Gen2ReferenceDecoder:
             syms   = [bits_to_int(bits[pos+4+8*i:pos+12+8*i]) for i in range((len(bits) - pos - 4)//8)][:40]
             if header == BLOCK_HEADER_CONTROL and syms[0] in [GEN2_SKP, GEN2_SKPEND]:
                 n = 0
-                while syms[n] == GEN2_SKP:
+                while n < len(syms) and syms[n] == GEN2_SKP:
                     n += 1
+                if n + 4 > len(syms):
+                    break # SKP Ordered Set truncated (end of the bits).
                 self.test.assertEqual(syms[n], GEN2_SKPEND)
                 self.test.assertEqual(syms[n+1:n+4], gen2_skp_lfsr_symbols(self.model.lfsr))
                 length = 4 + 8*(n + 4)

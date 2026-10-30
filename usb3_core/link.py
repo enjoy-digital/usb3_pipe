@@ -249,18 +249,17 @@ class USB3LinkLayer(LiteXModule):
         rem_le4 = Signal(reset_less=True)
         rem_ne0 = Signal(reset_less=True)
         rem_pb  = Signal(3, reset_less=True)
-        def load_rem(v):
+        def rem_fields(v):
+            # dpp_rem value and comparisons of a candidate value (computed in parallel).
             v_s = Signal(17)
             self.comb += v_s.eq(v)
-            return [
-                NextValue(dpp_rem, v_s),
-                NextValue(rem_ge8, v_s >= 8),
-                NextValue(rem_gt4, v_s > 4),
-                NextValue(rem_eq8, v_s == 8),
-                NextValue(rem_le4, v_s <= 4),
-                NextValue(rem_ne0, v_s != 0),
-                NextValue(rem_pb,  Mux(v_s >= 4, 4, v_s)),
-            ]
+            return [v_s, v_s >= 8, v_s > 4, v_s == 8, v_s <= 4, v_s != 0, Mux(v_s >= 4, 4, v_s)]
+        def load_rem(sel, v1, v0):
+            # dpp_rem <- sel ? v1 : v0, with its comparisons: candidates comparisons from registered
+            # values, selected (timings: sel late).
+            f1, f0 = rem_fields(v1), rem_fields(v0)
+            regs = [dpp_rem, rem_ge8, rem_gt4, rem_eq8, rem_le4, rem_ne0, rem_pb]
+            return [NextValue(r, Mux(sel, a, b)) for r, a, b in zip(regs, f1, f0)]
         dpp_off   = Signal(2, reset_less=True)
         dpp_first = Signal(reset_less=True)
         dpp_prev  = Signal(32, reset_less=True)
@@ -317,7 +316,7 @@ class USB3LinkLayer(LiteXModule):
                     NextState("LC")
                 ).Elif(rx_sdp & expect_now,
                     crc32_rx.clear.eq(1),
-                    *load_rem(length_now),
+                    *load_rem(dpp_new, hp_w[1][16:32], dpp_length), # length_now.
                     NextValue(dpp_off,   length_now[0:2]),
                     NextValue(dpp_first, 1),
                     NextValue(dpp_held_v, 0),
@@ -355,7 +354,7 @@ class USB3LinkLayer(LiteXModule):
                     If(~dpp_hold, NextValue(dpp_first, 0)),
                     NextValue(dpp_held,   rx_data),
                     NextValue(dpp_held_v, dpp_hold),
-                    *load_rem(dpp_rem - Mux(dpp_two, 8, dpp_pb)),
+                    *load_rem(dpp_two, dpp_rem - 8, dpp_rem - dpp_pb),
                     NextValue(dpp_prev, Mux(dpp_two, rx_data1, rx_data)),
                 ).Else(
                     dpp_end.eq(1),
@@ -528,12 +527,37 @@ class USB3LinkLayer(LiteXModule):
         tx_in_buf = [Signal(name=f"tx_in_buf{i}") for i in range(tx_bufs)]
         self.comb += [
             tx_count.eq((tx_seq - ack_seq) & seq_mask),
-            [tx_in_buf[i].eq(((i - ack_seq[0:ib]) & (tx_bufs - 1)) < tx_count) for i in range(tx_bufs)],
-            tx_count2.eq(reduce(add, [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3)) for i in range(tx_bufs)])),
             tx_full.eq(tx_count >= LINK_HP_BUFFERS),
-            tx_full1.eq((tx_count - tx_count2) >= LINK_HP_BUFFERS),
-            tx_full2.eq(tx_count2 >= LINK_HP_BUFFERS),
         ]
+        # SuperSpeedPlus Type 1/Type 2 buffers full: with 64-bit words (slower fabrics, timings)
+        # buffers occupancy, Type 2 count and flags registered (3 stages), the pushes then spaced
+        # by 4 cycles (the flags include the previous push, acknowledgements only lower the
+        # counts). Else combinatorial.
+        tx_push_busy = Signal()
+        in_buf_t = lambda i: ((i - ack_seq[0:ib]) & (tx_bufs - 1)) < tx_count
+        if lw == 2:
+            tx_count_r  = Signal(4)
+            tx_count_rr = Signal(4)
+            tx_count2_r = Signal(4)
+            tx_push_hold = Signal(2)
+            self.sync += [
+                [tx_in_buf[i].eq(in_buf_t(i)) for i in range(tx_bufs)],
+                tx_count_r.eq(tx_count),
+                tx_count2_r.eq(reduce(add, [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3))
+                    for i in range(tx_bufs)])),
+                tx_count_rr.eq(tx_count_r),
+                tx_full1.eq((tx_count_rr - tx_count2_r) >= LINK_HP_BUFFERS),
+                tx_full2.eq(tx_count2_r >= LINK_HP_BUFFERS),
+            ]
+            self.comb += tx_push_busy.eq(tx_push_hold != 0)
+        else:
+            self.comb += [
+                [tx_in_buf[i].eq(in_buf_t(i)) for i in range(tx_bufs)],
+                tx_count2.eq(reduce(add, [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3))
+                    for i in range(tx_bufs)])),
+                tx_full1.eq((tx_count - tx_count2) >= LINK_HP_BUFFERS),
+                tx_full2.eq(tx_count2 >= LINK_HP_BUFFERS),
+            ]
 
         # Header Packets from the Link Layer (LMPs) or the Protocol Layer.
         lmp_push     = Signal()
@@ -546,9 +570,9 @@ class USB3LinkLayer(LiteXModule):
         tx_hp_full   = Signal() # No buffer for the Protocol Layer Header Packet.
         self.comb += [
             tx_hp_full.eq(Mux(ssp,
-                Mux(is_type2(self.tx_hp.dw0, tx_dw1), tx_full2, tx_full1),
+                Mux(is_type2(self.tx_hp.dw0, tx_dw1), tx_full2, tx_full1) | tx_push_busy,
                 tx_full)),
-            lmp_push.eq(adv_received & Mux(ssp, ~tx_full1, ~tx_full) &
+            lmp_push.eq(adv_received & Mux(ssp, ~tx_full1 & ~tx_push_busy, ~tx_full) &
                 (portcap_pending | portcfg_pending)),
             # SuperSpeedPlus operation: Link Speed and Num HP Buffers fields reserved (zero, 8.4.5).
             If(portcap_pending,
@@ -567,6 +591,12 @@ class USB3LinkLayer(LiteXModule):
                 tx_push_dpp.eq(self.tx_hp.dpp),
             ),
         ]
+        if lw == 2:
+            self.sync += If(tx_push,
+                tx_push_hold.eq(3)
+            ).Elif(tx_push_hold != 0,
+                tx_push_hold.eq(tx_push_hold - 1)
+            )
         # Transfer Type (TT) of the ACK TPs/DPHs in SuperSpeedPlus operation (8.2, 8.10.4).
         tx_tt = Signal(3)
         self.comb += Case(self.tx_hp.dw1[8:12], {**{ept: tx_tt.eq(tt) for ept, tt in ssp_tt.items()},
@@ -838,18 +868,13 @@ class USB3LinkLayer(LiteXModule):
             ((remote_credits != LINK_HP_BUFFERS) | (ssp & (remote_credits2 != LINK_HP_BUFFERS))))
 
         # Flow Control -----------------------------------------------------------------------------
-        # Credits of the Header Packets to retransmit on LBAD (sent, not acknowledged) per type.
-        lbad_t1 = Signal(3)
-        lbad_t2 = Signal(3)
-        lbad_n  = Signal(sw)
-        self.comb += lbad_n.eq((send_seq - ack_seq) & seq_mask)
-        in_range = [Signal(name=f"lbad_in_range{i}") for i in range(tx_bufs)]
-        for i in range(tx_bufs):
-            self.comb += in_range[i].eq(((i - ack_seq[0:ib]) & (tx_bufs - 1)) < lbad_n)
-        self.comb += [
-            lbad_t2.eq(reduce(add, [Cat(in_range[i] & tx_t2[i], C(0, 2)) for i in range(tx_bufs)])),
-            lbad_t1.eq(lbad_n - lbad_t2),
-        ]
+        # Credits of the Header Packets to retransmit on LBAD (sent, not acknowledged) per type:
+        # counters (+1 sent, -1 acknowledged, 0 when send_seq is set to ack_seq: LBAD, Advertisement,
+        # link reset).
+        lbad_t1 = Signal(4)
+        lbad_t2 = Signal(4)
+        ack_t2  = Signal()
+        self.comb += ack_t2.eq(tx_t2[ack_seq[0:ib]])
         lgood_ok  = Signal()
         lcrd_ok   = Signal()
         self.comb += [
@@ -964,6 +989,14 @@ class USB3LinkLayer(LiteXModule):
                 (tx_sent_hp & send_t2)),
             If(lc_lcrd & lcrd_ok & ~lc_info[2], remote_lcrd_idx.eq(remote_lcrd_idx + 1)),
             If(lc_lcrd & lcrd_ok &  lc_info[2], remote_lcrd2_idx.eq(remote_lcrd2_idx + 1)),
+
+            # Sent, not acknowledged Header Packets per type (LBAD credits).
+            lbad_t1.eq(lbad_t1 + (tx_sent_hp & ~send_t2) - (lc_lgood & adv_received & lgood_ok & ~ack_t2)),
+            lbad_t2.eq(lbad_t2 + (tx_sent_hp &  send_t2) - (lc_lgood & adv_received & lgood_ok &  ack_t2)),
+            If((lc_lgood & ~adv_received) | lc_lbad | self.reset,
+                lbad_t1.eq(0),
+                lbad_t2.eq(0),
+            ),
 
             # LGOOD_n received: Advertisement or acknowledge.
             If(lc_lgood,

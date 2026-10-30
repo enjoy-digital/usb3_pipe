@@ -280,20 +280,31 @@ needed a host port power cycle: capability changes between trainings are a test-
    and the LTSSM/Link Layer/Core at 62.5MHz on 64-bit words. Remaining for 10Gbps:
    - GTR12 rate switch: 5Gbps -> 10Gbps is 6 register writes (CDR divider, QPLL1 output divider, TX
      lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) with the same 5GHz VCO and 125MHz fabric clock
-     (40-bit -> 80-bit raw words), back to 5Gbps for the next SuperSpeedPlus Polling. Needs the GTR12
-     runtime register access (UPAR), whose accesses do not complete yet, or another rate control
-     (fabric rate input, reconfiguration).
+     (40-bit -> 80-bit raw words), back to 5Gbps for the next SuperSpeedPlus Polling. Done:
+     `GW5RateSequencer` writes them through the GTR12 runtime register access (UPAR, LiteICLink
+     `GTR12UPAR`) with the lane held in reset (`GW5USB3SerDes(gen2_capable=True)`).
    - 80-bit raw words in LiteICLink's GTR12 (8b/10b on 40 bits at 5Gbps, raw 80 bits at 10Gbps) and
      `GW5USB3SerDes` as a Gen 2 capable SerDes (`gen2_data_width = 80`).
    - Gen 2 with `pipe_cd` (follow-up branch `gw5/gen2`): done in simulation (`sim.py --gen2 --dev-pipe-cd`, Gen2PIPE in the PIPE
      clock domain, RX credits throttling sized for Gen 2), including 80-bit raw words for the
      gearbox/aligner and the TX DC balance (`Gen2TXDCBalance(one_per_cycle=True)`).
-   - Gen 2 framing at one Data Block per cycle: `Gen2LinkRX`/`Gen2RXFraming` and `Gen2TXPacker`
-     process 8 bytes per cycle (a Data Block every 2 cycles), enough with 40-bit words at 250MHz (a
-     block every 3.3 cycles) but not with 80-bit words at 125MHz (a block every 1.65 cycles): RX
-     blocks buffer overflow, Logical Idle Data Blocks inside the TX units (`sim.py --gen2
-     --dev-pipe-cd --gen2-data-width 80` reaches U0 then Recovery). Rework for 16 bytes per cycle.
+   - Gen 2 framing at 16 bytes per cycle (done in simulation): with raw words wider than 40 bits
+     (`Gen2PIPE`), `Gen2RXFraming` processes 16 bytes per cycle (4 words entries, narrowed to words
+     pairs after the RX buffer), the framer entries are paired before the TX units buffer and
+     `Gen2TXPacker` reads 16 bytes per cycle (80-bit words at 125MHz: a Data Block every 1.65
+     cycles). The block aligner consumes up to 4 SKP Dwords per cycle on words wider than 64 bits
+     (else the pointer falls behind in long SKP Ordered Sets, alignment lost). `sim.py --gen2
+     --dev-pipe-cd --gen2-data-width 80` (also with `--host-itp`/`--ssc`): host script done, no
+     Recovery.
    - Throughput: the 64-bit Link Layer at 62.5MHz is ~500MB/s (credit throttled at Gen 2, about half
      of the 10Gbps rate): 128-bit Link Layer words (or a faster Link Layer clock) for full rate.
-   - Timing: the 80-bit Gen 2 datapaths (aligner, gearbox, scrambler, framing) at 125MHz on the GW5A
-     fabric.
+   - Timing (in progress): the 80-bit Gen 2 datapaths at 125MHz on the GW5A fabric. Paths are
+     routing dominated (about 1.3ns per hop, 2/3 of the delays): restructured for few logic levels
+     and low fanout (one-hot block aligner pointer with per transition decodes registered and
+     shifted with the window, `Gen2TXPacker16`, gearbox and DC balance loops on registered values,
+     registered valid/ready buffers with `usb3_pipe.common.PipeReady`, data registers without
+     reset). Gen 2 capable Tang Mega 138K Pro build: tx/rx 41 -> 81-95MHz, sys 45 -> 55-57MHz
+     (125/62.5MHz needed, about +-15% between place and route runs, Gowin `route_option 0`: the
+     timing driven router leaves unrouted nets). Remaining: the loops of the 16 bytes framing (RX
+     framing byte pointer/window, packer fill level), gearbox and DC balance at 125MHz, and the
+     Link Layer at 62.5MHz; a framing at 32 bytes per cycle in the 62.5MHz domain could be needed.

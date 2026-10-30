@@ -260,7 +260,7 @@ class USB3PIPE(LiteXModule):
             self.comb += descrambler.source.connect(source)
         else:
             # Registered descrambler output and ready (timings).
-            self.framing_buffer  = framing_buffer  = stream.Buffer([("data", 32), ("ctrl", 4)],
+            self.framing_buffer  = framing_buffer  = Buffer([("data", 32), ("ctrl", 4)],
                 pipe_ready=True)
             self.framing_aligner = framing_aligner = RXWordAligner(markers=[SHP, SDP, SLC])
             self.comb += [
@@ -327,14 +327,24 @@ class Gen2PIPE(LiteXModule):
     Link Layer side (sys clock domain, U0): sink/source 32-bit words with K Symbols (Symbol 0 on
     data[0:8], framing Ordered Sets at word boundaries, as in Gen 1 operation), Gen 2 packet framing
     in the Data Blocks (Gen2TXFramer/Gen2TXPacker, Gen2RXFraming): TX units (Header Packet, Link
-    Command, DPH with its DPP) stored and forwarded (tx_buffer_depth 8-byte entries), RX packets
-    buffered (rx_buffer_depth words pairs, ~1.2GB/s peak on the line vs 500MB/s on the Link Layer
-    words at 125MHz).
+    Command, DPH with its DPP) stored and forwarded (tx_buffer_depth entries), RX packets
+    buffered (rx_buffer_depth entries, ~1.2GB/s peak on the line vs 500MB/s on the Link Layer
+    words at 125MHz). The framing processes 8 bytes per cycle up to 40-bit raw words (a Data Block
+    every 3.3 cycles), 16 bytes per cycle on wider words (ex: 80-bit, a Data Block every 1.65
+    cycles).
 
     Not implemented yet: Disable Scrambling, Gen 2 elastic buffer.
     """
     def __init__(self, data_width=GEN2_DATA_WIDTH, tseq_count=GEN2_TSEQ_COUNT, ts_count=16,
-        tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1):
+        tx_buffer_depth=512, rx_buffer_depth=1024, link_words=1, link_cd=None):
+        # link_cd: clock domain of the TX framing and sink (default: sys), ex: the Link Layer clock
+        # domain when this module runs at a higher PIPE frequency. Wider raw words (ex: 80-bit at
+        # 125MHz): framing/packing at 32 bytes per cycle in link_cd (TX sink, RX source/source_lc
+        # in link_cd).
+        framing_bytes = 8 if data_width <= 40 else 32
+        if (framing_bytes == 32) and (link_cd is None):
+            link_cd = "sys"
+        self.link_rx_cd = "sys" if framing_bytes == 8 else link_cd # RX source/source_lc domain.
         link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout()
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
@@ -434,31 +444,46 @@ class Gen2PIPE(LiteXModule):
         ]
 
         # Link Layer TX: framing (sys) -> units buffer (sys -> tx) -> blocks packer (tx) -----------
-        self.link_tx = link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words)
+        link_tx = Gen2LinkTX(tx_buffer_depth, link_words=link_words, nbytes=framing_bytes)
+        tx_ready = self.tx_ready
+        if link_cd is not None:
+            link_tx  = ClockDomainsRenamer({"sys": link_cd})(link_tx)
+            tx_ready = Signal()
+            self.specials += MultiReg(self.tx_ready, tx_ready, link_cd)
+        self.link_tx = link_tx
         self.comb += [
             self.sink.connect(link_tx.sink, omit={"valid", "ready"}),
-            link_tx.sink.valid.eq(self.sink.valid & self.tx_ready),
-            self.sink.ready.eq(link_tx.sink.ready & self.tx_ready),
+            link_tx.sink.valid.eq(self.sink.valid & tx_ready),
+            self.sink.ready.eq(link_tx.sink.ready & tx_ready),
             link_tx.source.connect(tx.sink),
-            link_tx.flush.eq(~self.tx_ready),
-            link_tx.packer.skp_pending.eq(tx.tx.skp_pending),
+            link_tx.flush.eq(~tx_ready),
+            link_tx.skp_pending.eq(tx.tx.skp_pending),
         ]
         self.tx_packer = link_tx.packer
+        self.tx_blocks = link_tx.source # Data Blocks payloads to Gen2TX (tx clock domain).
 
-        # Link Layer RX: blocks (rx) -> framing (rx) -> words buffer (rx -> sys) --------------------
-        self.link_rx = link_rx = Gen2LinkRX(rx_buffer_depth, link_words=link_words)
+        # Link Layer RX: blocks (rx) -> framing (rx or link_cd) -> words (sys or link_cd) ----------
+        link_rx  = Gen2LinkRX(rx_buffer_depth, link_words=link_words, nbytes=framing_bytes)
+        rx_ready = self.rx_ready
+        if framing_bytes == 32:
+            link_rx  = ClockDomainsRenamer({"sys": link_cd})(link_rx)
+            rx_ready = Signal()
+            self.specials += MultiReg(self.rx_ready, rx_ready, link_cd)
+        self.link_rx = link_rx
         self.comb += [
             # Data Blocks (after SDS), framing reset out of the Data Stream.
             link_rx.sink.valid.eq(rx.source.valid),
             link_rx.sink.data.eq(rx.source.data),
             link_rx.data_stream.eq(rx.data_stream),
-            link_rx.rx_ready.eq(self.rx_ready),
+            link_rx.rx_ready.eq(rx_ready),
             link_rx.source.connect(self.source),
             link_rx.source_lc.connect(self.source_lc),
             link_rx.lc_enable.eq(self.source_lc_enable),
             self.rx_overflow.eq(link_rx.overflow),
         ]
         self.rx_framing = link_rx.framing
+        if framing_bytes == 32:
+            self.rx_level = link_rx.level # RX words buffer level (link_cd, RX throttling).
 
         # Idle Symbol handshake (7.5.4.10.2) -------------------------------------------------------
         # RX: a Logical Idle Data Block (16 Idle Symbols) received while enabled. TX: a Logical Idle

@@ -169,9 +169,9 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     if hasattr(phy, "gen2_pipe"):
         soc.cd_tx_nr = ClockDomain(reset_less=True)
         soc.comb += soc.cd_tx_nr.clk.eq(ClockSignal("tx"))
-        packer = phy.gen2_pipe.tx_packer
+        blocks = phy.gen2_pipe.tx_blocks
         soc.usb3_gen2_tx_snapshot = RXRawSnapshot(phy.gen2_pipe.tx_data, clock_domain="tx_nr",
-            flags=Cat(packer.source.valid & packer.source.ready, packer.source.last))
+            flags=Cat(blocks.valid & blocks.ready, blocks.last))
     # PHY Gen2PIPE events (sys): TS1/TS2 (8 consecutive) pulses at the Gen2PIPE and LTSSM inputs, PHY
     # Gen 2 RX aligner status.
     if hasattr(phy, "gen2_pipe"):
@@ -275,7 +275,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets, with
         # the unscrambled sink data.
         g2tx = phy.gen2_pipe.tx.tx
-        pk   = phy.gen2_pipe.tx_packer.source
+        pk   = phy.gen2_pipe.tx_blocks
         soc.usb3_gen2_txblocks_snapshot = RXRawSnapshot(
             Cat(pk.data, pk.last, g2tx.tx_data_blk, g2tx.tx_idle, g2tx.tx_skp),
             flags=Cat(u0_exit_tx), depth=1024, clock_domain="tx_nr",
@@ -407,7 +407,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
     gen2_capable = getattr(serdes, "gen2_capable", False)
-    assert (phy_cd is None) or not (gen2_capable or with_debug or with_serdes_debug or with_profile)
+    assert (phy_cd is None) or not (with_debug or with_serdes_debug or with_profile)
     soc.usb3_phy = usb3_phy = USB3PHY(
         serdes        = serdes,
         sys_clk_freq  = sys_clk_freq,
@@ -445,9 +445,16 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     else:
         soc.comb += usb3_phy.source.ready.eq(1)
 
-    # Gen 2 bring-up debug (after the core: Link Layer probes).
-    if gen2_capable:
+    # Gen 2 bring-up debug (after the core: Link Layer probes). With phy_cd (slow fabrics): Gen 2
+    # capability/status only.
+    if gen2_capable and phy_cd is None:
         add_usb3_gen2_rx(soc, serdes, usb3_phy)
+    elif gen2_capable:
+        from litex.soc.interconnect.csr import CSRStorage, CSRStatus
+        soc.usb3_gen2_capable = CSRStorage(1, reset=1, description="Gen 2 capability advertised.")
+        soc.comb += usb3_phy.ssp.gen2_capable.eq(soc.usb3_gen2_capable.storage)
+        soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
+        soc.comb += soc.usb3_gen2_status.status.eq(Cat(usb3_phy.gen2, serdes.rate_10g))
 
     # Throughput profile (Bulk IN/Link Layer TX cycles).
     if with_core and with_profile and hasattr(soc, "usb3_bench"):

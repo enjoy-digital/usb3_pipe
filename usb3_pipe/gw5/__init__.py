@@ -34,12 +34,13 @@ def gw5_csr_overrides(csr_config, overrides):
     return csr_config
 
 def gw5_usb3_csr_config(lane, rate="5G", refclk="100M", position="Q1", pll=None):
-    """GTR12 register configuration of Q1 lane (0/1) at rate (5G) from the 100MHz REFCLK1 (100M) or
-    the 125MHz REFCLK0 (125M) of the quad (GW5AST-138B, QPLL1), or of Q0 lane 0 from the 125MHz
-    REFCLK0 (GW5AT-15: QPLL0, as Gowin's USB 3.0 PHY IP, GW5AT15_Q0_QPLL0_OVERRIDES applied; QPLL1: no
-    link on hardware). pll: QPLL0 on Q0, QPLL1 on Q1 by default."""
+    """GTR12 register configuration of Q1 lane (0/1) at rate (5G/10G) from the 100MHz REFCLK1 (100M)
+    or the 125MHz REFCLK0 (125M, 5G only) of the quad (GW5AST-138B, QPLL1), or of Q0 lane 0 at 5G
+    from the 125MHz REFCLK0 (GW5AT-15: QPLL0, as Gowin's USB 3.0 PHY IP, GW5AT15_Q0_QPLL0_OVERRIDES
+    applied; QPLL1: no link on hardware). pll: QPLL0 on Q0, QPLL1 on Q1 by default."""
     assert refclk in ["100M", "125M"]
     assert position in ["Q0", "Q1"]
+    assert (rate == "5G") or ((position, refclk) == ("Q1", "100M"))
     if pll is None:
         pll = "QPLL0" if position == "Q0" else "QPLL1"
     assert pll in ["QPLL0", "QPLL1"]
@@ -54,3 +55,26 @@ def gw5_usb3_csr_config(lane, rate="5G", refclk="100M", position="Q1", pll=None)
     if (position, pll) == ("Q0", "QPLL0"):
         csr_config = gw5_csr_overrides(csr_config, GW5AT15_Q0_QPLL0_OVERRIDES)
     return csr_config
+
+def gw5_usb3_rate_writes(lane, refclk="100M"):
+    """Register writes of the 5G <-> 10G rate change of a Q1 lane: [(addr, value_5g, value_10g)], the
+    writes of the 5G and 10G configurations that differ (same writes sequence)."""
+    def writes(rate):
+        csr = gw5_usb3_csr_config(lane, rate, refclk)
+        return [(int(a, 16), int(v, 16)) for a, v in
+            re.findall(r"upar_write_driver\((0x[0-9a-fA-F]+),(0x[0-9a-fA-F]+)\)", csr)]
+    w5, w10 = writes("5G"), writes("10G")
+    assert [a for a, v in w5] == [a for a, v in w10]
+    return [(a, v5, v10) for (a, v5), (_, v10) in zip(w5, w10) if v5 != v10]
+
+# TX Electrical Idle: lane TX driver control register, as written by the Gowin USB 3.2 PHY IP (Gowin
+# IDE SerDes IP library) on its TxElecIdle changes (measured on hardware): 0x1 driver in electrical
+# idle, 0x7 driver active. The Gowin IP generator also writes 0x1 at initialization.
+GW5_TX_IDLE_VALUE   = 0x1
+GW5_TX_ACTIVE_VALUE = 0x7
+
+def gw5_tx_idle_reg(lane, position="Q1"):
+    """Address of the TX driver control register of a lane (Q0: 0x8003a4, Q1: 0x9003a4, 0x200 per
+    lane, as listed by the Gowin IP generator)."""
+    assert position in ["Q0", "Q1"]
+    return {"Q0": 0x8003a4, "Q1": 0x9003a4}[position] + 0x200*lane
