@@ -260,7 +260,7 @@ class USB3PIPE(LiteXModule):
             self.comb += descrambler.source.connect(source)
         else:
             # Registered descrambler output and ready (timings).
-            self.framing_buffer  = framing_buffer  = stream.Buffer([("data", 32), ("ctrl", 4)],
+            self.framing_buffer  = framing_buffer  = Buffer([("data", 32), ("ctrl", 4)],
                 pipe_ready=True)
             self.framing_aligner = framing_aligner = RXWordAligner(markers=[SHP, SDP, SLC])
             self.comb += [

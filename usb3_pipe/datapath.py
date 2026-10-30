@@ -388,14 +388,14 @@ class TXDatapath(LiteXModule):
         # # #
 
         # Input register (registered ready: the PIPE TX logic isolated from the SKP insertion).
-        self.sink_buffer = sink_buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+        self.sink_buffer = sink_buffer = Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
 
         # Clock compensation
         self.skip_inserter = skip_inserter = TXSKPInserter()
         self.skp_enable    = skip_inserter.enable
 
         # Clock domain crossing (registered FIFO write and ready: timings).
-        buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+        buffer = Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
         self.buffer = buffer
         if with_cdc:
             cdc = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
@@ -461,7 +461,7 @@ class RXDatapath(LiteXModule):
 
         # Clock domain crossing (registered FIFO write and ready: timings).
         buffer = ClockDomainsRenamer(clock_domain)(
-            stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
+            Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
         cdc    = AsyncFIFO([("data", 32), ("ctrl", 4)], 8)
         cdc    = ClockDomainsRenamer({"write": clock_domain, "read": "sys"})(cdc)
         self.buffer = buffer
@@ -1145,7 +1145,7 @@ class Gen2TXDatapath(LiteXModule):
             # the gearbox (timings: the Gen2TX block selection and the gearbox/DC balance readies at
             # one block per cycle).
             self.buffer      = buffer      = Buffer(gen2_tx_block_layout(), pipe_valid=True,
-                pipe_ready=True)
+                pipe_ready=True, ready_first=True) # Registered blocks to the DC balance popcounts.
             self.gear_buffer = gear_buffer = Buffer(gen2_block_layout(), pipe_valid=True,
                 pipe_ready=True, ready_first=True) # Registered blocks to the gearbox placement.
             self.comb += [

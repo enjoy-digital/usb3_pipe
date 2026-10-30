@@ -16,7 +16,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE, EndiannessSwap, AsyncFIFO
+from usb3_pipe.common     import COM, LTSSM_PIPE_INTERFACE, EndiannessSwap, AsyncFIFO, Buffer
 from usb3_pipe.core       import USB3PIPE, Gen2PIPE, GEN2_PIPE_INTERFACE
 from usb3_pipe.datapath   import GEN2_DATA_WIDTH
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
@@ -417,13 +417,13 @@ class USB3PHY(LiteXModule):
             # Registered PIPE output (timings: framing aligner to the Logical Idle filter decoding).
             rx_pipe  = ClockDomainsRenamer(pipe_cd)(stream.Buffer([("data", 32), ("ctrl", 4)]))
             rx_idle  = ClockDomainsRenamer(pipe_cd)(LogicalIdleFilter())
-            rx_words = ClockDomainsRenamer(pipe_cd)(stream.Buffer([("data", 32), ("ctrl", 4)],
+            rx_words = ClockDomainsRenamer(pipe_cd)(Buffer([("data", 32), ("ctrl", 4)],
                 pipe_ready=True))
             to_pairs = ClockDomainsRenamer(pipe_cd)(WordsPacker())
             self.submodules += to_words, rx_pipe, rx_idle, rx_words, to_pairs
             # TX skid buffer (registered ready: PIPE TX ready logic isolated from the packets
             # buffer), emptied while the PIPE is not ready (no stale words).
-            tx_skid = ResetInserter()(stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
+            tx_skid = ResetInserter()(Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True))
             self.tx_skid = tx_skid = ClockDomainsRenamer(pipe_cd)(tx_skid)
             self.comb += [
                 to_words.source.connect(tx_skid.sink),
@@ -455,7 +455,7 @@ class USB3PHY(LiteXModule):
 
         # TX: sys -> pipe_cd (registered ready: the Link Layer TX path from a register). Gen 2:
         # words to the Gen2PIPE framing (sys) while gen2_active.
-        self.tx_cdc_buffer = tx_buffer = stream.Buffer(layout, pipe_ready=True)
+        self.tx_cdc_buffer = tx_buffer = Buffer(layout, pipe_ready=True)
         self.tx_cdc        = tx_cdc    = ClockDomainsRenamer({"write": "sys", "read": pipe_cd})(
             AsyncFIFO(layout, fifo_depth))
         if hasattr(self, "gen2_tx_sink"):
@@ -472,7 +472,7 @@ class USB3PHY(LiteXModule):
         ]
 
         # RX: pipe_cd -> sys.
-        self.rx_cdc_buffer = rx_buffer = ClockDomainsRenamer(pipe_cd)(stream.Buffer(layout,
+        self.rx_cdc_buffer = rx_buffer = ClockDomainsRenamer(pipe_cd)(Buffer(layout,
             pipe_ready=True))
         # Deep (block RAM, read side at the Link Layer frequency): with words pairs at half the PIPE
         # frequency, the Link Layer consumes the Header Packets/DPP tails one word per cycle and

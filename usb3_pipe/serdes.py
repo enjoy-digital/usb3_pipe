@@ -16,6 +16,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.common   import Buffer
 from usb3_pipe.datapath import RXErrorSubstitution, RXErrorMonitor, RXIdleFilter
 from usb3_pipe.datapath import TXDatapath, RXDatapath
 
@@ -109,7 +110,7 @@ class USB3SerDes(LiteXModule):
         self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx",
             with_disparity=rx_disparity_check)
         self.rx_buffer       = rx_buffer       = ClockDomainsRenamer("rx")(
-            stream.Buffer(rx_substitution.source.description, pipe_ready=True)) # Timings.
+            Buffer(rx_substitution.source.description, pipe_ready=True)) # Timings.
         self.rx_datapath     = rx_datapath     = RXDatapath("rx", phy_dw=phy_dw)
         self.comb += [
             xcvr.tx_enable.eq(self.enable & ~self.tx_reinit),

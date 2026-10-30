@@ -1219,10 +1219,16 @@ class Gen2LinkTX(LiteXModule):
         self.submodules += chains_read
         chains_written = gray_count_cdc(blocks.sink.valid & blocks.sink.ready & blocks.sink.last,
             units_delay)
+        # Registered valid/ready between the blocks buffer and the reader (timings: reader
+        # decisions to the buffer read side). Not reset: flushed entries drained by the reader
+        # (chains read count).
+        self.read_buffer = read_buffer = ClockDomainsRenamer("tx")(Buffer(gen2_tx_blocks_layout(2),
+            pipe_valid=True, pipe_ready=True, ready_first=True))
         chain_end_d = Signal()
         self.comb += [
             packer.source.connect(blocks.sink),
-            blocks.source.connect(reader.sink),
+            blocks.source.connect(read_buffer.sink),
+            read_buffer.source.connect(reader.sink),
             reader.flush.eq(flush_tx),
             reader_buffer.reset.eq(flush_tx),
             reader.source.connect(reader_buffer.sink),
@@ -1323,6 +1329,7 @@ class Gen2LinkRX(LiteXModule):
             self.lc_buffer = lc_buffer = stream.SyncFIFO([("data", 32), ("ctrl", 4)], 16,
                 buffered=True)
             self.submodules += pairs, in_buffer, framing, out_buffer, buffer
+            self.pairs = pairs
             self.level = buffer.level # o: Words buffer level (entries of up to 8 words).
             reset      = Signal()
             reset_done = Signal()
