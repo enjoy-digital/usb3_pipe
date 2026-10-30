@@ -20,7 +20,7 @@ parameters: each file has its Gen 1 part first, then its Gen 2/SuperSpeedPlus pa
 
 | Module | File | Role |
 |---|---|---|
-| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes`/`GW5USB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST GTR12) at 5Gbps (and 10Gbps on the GTY with `gen2_capable`: QPLL at 10Gbps, 40-bit raw words) with their USB3 settings (SSC tolerant CDR, LFPS/OOB): 8b/10b, polarity, electrical idle/LFPS patterns and the TX/RX datapaths below. `GW5USB3SerDes`: GTR12 Q1 lane 0/1, 40-bit words at 125MHz, register configuration generated from `usb3_pipe/gw5` TOML files with Gowin's `serdes_toml_to_csr` (100MHz REFCLK1 or 125MHz REFCLK0). |
+| `USB3SerDes`: `A7USB3SerDes`/`K7USB3SerDes`/`USPUSB3SerDes`/`GW5USB3SerDes` | `serdes.py` | Common SerDes on LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST/GW5AT GTR12) at 5Gbps (and 10Gbps on the GTY with `gen2_capable`: QPLL at 10Gbps, 40-bit raw words) with their USB3 settings (SSC tolerant CDR, LFPS/OOB): 8b/10b, polarity, electrical idle/LFPS patterns and the TX/RX datapaths below. `GW5USB3SerDes`: GTR12 Q1 lane 0/1 (GW5AST-138B) or Q0 lane 0 (GW5AT-15), 40-bit words at 125MHz, register configuration generated from `usb3_pipe/gw5` TOML files with Gowin's `serdes_toml_to_csr` (100MHz REFCLK1 or 125MHz REFCLK0). |
 | `TXDatapath`/`RXDatapath` (`TXSKPInserter`, `RXSKPRemover`, `RXWordAligner`, `RXErrorSubstitution`, `RXErrorMonitor`, `RXIdleFilter`), `Gen2TX`/`Gen2RX`, `Gen2TXDatapath`/`Gen2RXDatapath` | `datapath.py` | Gen 1: SKP insertion (TX, 6.4.3) and removal (RX), word alignment on COM, 8b/10b errors substitution (6.3.1.4)/monitoring, electrical idle filtering, CDC/data-width. Gen 2: block transmitter/receiver (TSEQ/TS1/TS2/SYNC/SDS/SKP Ordered Sets, Data Blocks, 6.3.2.3 scrambling rules), 40-bit transceiver words <-> blocks datapaths (250MHz) with RX counters. |
 | `RX8b10bChecker`, `Gen2BlockGearbox`/`Gen2BlockAligner` | `coding.py` | 8b/10b Python model/code tables and RX checker (6.3.1), 128b/132b blocks gearbox/aligner and DC balance helpers (6.3.2, 6.4.1.2). |
 | Symbols/Ordered Sets | `common.py` | Gen 1 Symbols and TS1/TS2/TSEQ, Link Configuration, Gen 2 Block Headers, Symbols/Ordered Sets identifiers and payloads. |
@@ -145,11 +145,12 @@ $ pytest test -m slow            # Long simulations (Verilator), not run by defa
 
 ## Limitations
 
-- Gen 1x1 and Gen 2x1 on hardware (Gen 2x1 on UltraScale+ GTY only, Gen 1x1 on Gowin GW5AST), Gen
+- Gen 1x1 and Gen 2x1 on hardware (Gen 2x1 on UltraScale+ GTY only, Gen 1x1 on Gowin GW5AST/GW5AT-15), Gen
   1x2: simulation only, Gen 2x2: not started ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
-- `pipe_cd` (Gowin GW5AST): Gen 1 only; 64-bit Link Layer at 62.5MHz (~430MB/s Bulk OUT, ~370MB/s
-  IN); the GTR12 runtime register access (UPAR) does not complete yet; Gowin: no `--load` in the
-  target (openFPGALoader).
+- `pipe_cd` (Gowin GW5AST/GW5AT): Gen 1 only; 64-bit Link Layer at 62.5MHz (~430MB/s Bulk OUT, Bulk IN
+  ~370MB/s with `max_burst=8`, ~400MB/s with 16: hosts opening windows of max_burst packets, ex: AMD
+  xHCI ACK TPs with NumP counted down, leave the device waiting for a new window at the end of each
+  burst); Gowin: no `--load` in the target (openFPGALoader).
 - Gen 2: no elastic buffer (the Gen 2 RX path runs in the recovered clock domain), no Disable
   Scrambling.
 - U1/U2 are rejected by the USB3 Device Core by default (LXU), accepted with `with_lpm` (simulation

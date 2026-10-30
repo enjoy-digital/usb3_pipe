@@ -170,8 +170,10 @@ class DPPRXAdapter(LiteXModule):
 
         # # #
 
+        # Buffered: synchronous RAM read (block RAMs; asynchronous reads are silently mis-implemented in
+        # block RAMs by the Gowin toolchain, the DPP words then read back as zeros on hardware).
         layout = dpp_layout(64) + [("setup", 1), ("done", 1), ("ok", 1)]
-        self.fifo = fifo = stream.SyncFIFO(layout, depth)
+        self.fifo = fifo = stream.SyncFIFO(layout, depth, buffered=True)
         self.comb += [
             fifo.sink.valid.eq(sink.valid | self.done),
             fifo.sink.data.eq(sink.data),
