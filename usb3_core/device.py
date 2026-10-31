@@ -23,6 +23,9 @@ with_lpm: U1/U2 Link Power Management (USB 3.2 7.2.4.2): non-zero U1/U2 exit lat
 the BOS, LGO_U1/LGO_U2 accepted by the Link Layer when idle (else rejected with LXU), U1/U2 exited
 when packets are to be transmitted. Device initiated U1/U2 entry is not supported (U1/U2 Enable only
 tracked/reported). Without, LGO_U1/LGO_U2 are rejected (U1/U2 not used by the host).
+
+crc32_cascade: Link Layer CRC-32s with the 1 to 4 bytes results from chained 1-byte stages (less logic,
+deeper paths, see usb3_core.crc.CRC32): for small FPGAs.
 """
 
 from migen import *
@@ -42,7 +45,7 @@ from usb3_core.trace     import USB3CoreTrace, USB3LinkTrace
 
 class USB3DeviceCore(LiteXModule):
     def __init__(self, phy, sys_clk_freq, descriptors, endpoints=None, timer_scale=1,
-        with_ep0_handler=False, with_lpm=False):
+        with_ep0_handler=False, with_lpm=False, crc32_cascade=False):
         endpoints      = [] if endpoints is None else endpoints
         self.endpoints = endpoints
 
@@ -60,7 +63,7 @@ class USB3DeviceCore(LiteXModule):
         for ep in endpoints:
             ssp_tt[ep.ept] = TT_ISOCHRONOUS if isinstance(ep, USB3IsoIN) else TT_BULK
         self.link = link = USB3LinkLayer(phy, sys_clk_freq=sys_clk_freq, timer_scale=timer_scale,
-            ssp_tt=ssp_tt)
+            ssp_tt=ssp_tt, crc32_cascade=crc32_cascade)
         self.comb += link.lpm_enable.eq(with_lpm)
 
         # Control Endpoint.
