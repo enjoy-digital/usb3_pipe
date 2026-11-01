@@ -380,8 +380,12 @@ class TXDatapath(LiteXModule):
 
     with_cdc=False: sys and clock_domain are the same clock (ex: SerDes logic renamed to the
     transceiver's TX clock domain), no clock domain crossing.
+
+    with_input_register: extra input register (PipeValid) before the input buffer: the PIPE TX
+    multiplexers (Training Sequences, scrambler, Logical Idle) cut from the TX datapath logic
+    (timings, +1 cycle of TX latency).
     """
-    def __init__(self, clock_domain="sys", phy_dw=16, with_cdc=True):
+    def __init__(self, clock_domain="sys", phy_dw=16, with_cdc=True, with_input_register=False):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", phy_dw), ("ctrl", phy_dw//8)])
 
@@ -389,6 +393,11 @@ class TXDatapath(LiteXModule):
 
         # Input register (registered ready: the PIPE TX logic isolated from the SKP insertion).
         self.sink_buffer = sink_buffer = stream.Buffer([("data", 32), ("ctrl", 4)], pipe_ready=True)
+        sink_input = sink_buffer.sink
+        if with_input_register:
+            self.sink_register = sink_register = stream.PipeValid([("data", 32), ("ctrl", 4)])
+            self.comb += sink_register.source.connect(sink_buffer.sink)
+            sink_input = sink_register.sink
 
         # Clock compensation
         self.skip_inserter = skip_inserter = TXSKPInserter()
@@ -413,7 +422,7 @@ class TXDatapath(LiteXModule):
 
         # Flow
         self.comb += [
-            self.sink.connect(sink_buffer.sink),
+            self.sink.connect(sink_input),
             sink_buffer.source.connect(skip_inserter.sink),
             skip_inserter.source.connect(buffer.sink),
             converter.source.connect(self.source)

@@ -97,14 +97,16 @@ class USB3SerDes(LiteXModule):
         getattr(xcvr, name + "_params").update(p_ALIGN_COMMA_WORD=1)
         return self.add_xcvr_datapath(name, xcvr, data_width)
 
-    def add_xcvr_datapath(self, name, xcvr, data_width, rx_disparity_check=True, tx_cdc=True):
+    def add_xcvr_datapath(self, name, xcvr, data_width, rx_disparity_check=True, tx_cdc=True,
+        tx_input_register=False):
         """TX/RX datapaths of a LiteICLink transceiver (added as name): 8b/10b stream endpoints,
         SKP insertion/removal, CDC, word alignment, RX errors substitution."""
         self.add_module(name=name, module=xcvr)
         self.xcvr_name = name
         xcvr.add_stream_endpoints()
         phy_dw = 8*(data_width//10)
-        self.tx_datapath     = tx_datapath     = TXDatapath("tx", phy_dw=phy_dw, with_cdc=tx_cdc)
+        self.tx_datapath     = tx_datapath     = TXDatapath("tx", phy_dw=phy_dw, with_cdc=tx_cdc,
+            with_input_register=tx_input_register)
         self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx",
             with_disparity=rx_disparity_check)
         self.rx_buffer       = rx_buffer       = ClockDomainsRenamer("rx")(
@@ -450,9 +452,10 @@ class GW5USB3SerDes(USB3SerDes):
         # clock domain when this SerDes "sys" clock domain is renamed to the GTR12 TX clock.
         if xcvr_cd != "sys":
             gtr12 = ClockDomainsRenamer({"sys": xcvr_cd})(gtr12)
-        # No RX running disparity check (RX paths at 125MHz on the GW5A fabric).
+        # No RX running disparity check (RX paths at 125MHz on the GW5A fabric), TX datapath input
+        # register (PIPE TX multiplexers at 125MHz on the GW5A fabric).
         self.add_xcvr_datapath("gtr12", gtr12, data_width=40, rx_disparity_check=False,
-            tx_cdc=tx_cdc)
+            tx_cdc=tx_cdc, tx_input_register=True)
 
         # LFPS -------------------------------------------------------------------------------------
         rx_idle = Signal()

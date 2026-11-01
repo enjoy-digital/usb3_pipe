@@ -54,8 +54,8 @@ class TSChecker(LiteXModule):
     This module detects a specific Training Sequence Ordered Set by analyzing the RX stream. When N
     consecutive Ordered Sets have been detected without errors (N configured by n_ordered_sets), a
     detection is reported on detected signals for one cycle. Training config is also reported for
-    TS1/TS2 Ordered Sets. The input words and the detection are registered (timings, 2 cycles of
-    latency).
+    TS1/TS2 Ordered Sets. The input words, the words comparisons and the detection are registered
+    (timings, 3 cycles of latency).
     """
     def __init__(self, ordered_set, n_ordered_sets=1):
         self.sink     = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -98,15 +98,24 @@ class TSChecker(LiteXModule):
         mask_init = [0xffffffff]*mem_depth
         if has_link_config:
             mask_init[1] = 0xffff00ff
-        # Received word compared to each Ordered Set word (constants) and the comparison of the
-        # expected word selected (shorter than comparing to the selected word: timings).
-        matches = Signal(mem_depth)
+        # Received word compared to each Ordered Set word (constants), registered (timings: the
+        # compares off the address/count logic, +1 cycle of latency), the comparison of the expected
+        # word selected (shorter than comparing to the selected word: timings).
+        matches   = Signal(mem_depth)
+        matches_r = Signal(mem_depth, reset_less=True)
         for i in range(mem_depth):
             self.comb += matches[i].eq((sink.ctrl == ctrl_init[i]) &
                 ((sink.data & mask_init[i]) == (mem_init[i] & mask_init[i])))
+        sink_r = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.sync += [
+            sink_r.valid.eq(sink.valid),
+            sink_r.data[8:16].eq(sink.data[8:16]), # Link Functionality (Symbol 5).
+            matches_r.eq(matches),
+        ]
+        sink  = sink_r
         error = Signal()
         self.comb += [
-            error.eq(sink.valid & ~Array(matches)[port.adr]),
+            error.eq(sink.valid & ~Array(matches_r)[port.adr]),
             self.error.eq(error)
         ]
 
@@ -218,7 +227,8 @@ class TSGenerator(LiteXModule):
             )
         ]
 
-        self.comb += self.busy.eq(port.adr != 0)
+        # Registered (from adr_next: same value as adr != 0), the TX selection behind (timings).
+        self.sync += self.busy.eq(port.adr_next != 0)
 
         # Link Config ------------------------------------------------------------------------------
         link_config = Signal(8)
