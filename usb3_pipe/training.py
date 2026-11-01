@@ -29,11 +29,22 @@ TSEQ_COUNT = 65536
 
 class OrderedSetROM:
     """Ordered Set words ROM (adr/dat_r, asynchronous read) as constants lookup: no Memory with
-    init contents and asynchronous read (not kept by some toolchains, ex: GowinSynthesis)."""
-    def __init__(self, module, init):
+    init contents and asynchronous read (not kept by some toolchains, ex: GowinSynthesis).
+
+    registered: dat_r registered from the next address (adr_next, adr = adr_next registered by the
+    user): dat_r is still the word at adr, from a register (timings)."""
+    def __init__(self, module, init, registered=False):
         self.adr   = Signal(max=max(len(init), 2))
-        self.dat_r = Signal(32)
-        module.comb += self.dat_r.eq(Array(Constant(v, 32) for v in init)[self.adr])
+        self.dat_r = Signal(32, reset=init[0] if registered else 0)
+        rom = Array(Constant(v, 32) for v in init)
+        if registered:
+            self.adr_next = Signal(max=max(len(init), 2))
+            module.sync += [
+                self.adr.eq(self.adr_next),
+                self.dat_r.eq(rom[self.adr_next]),
+            ]
+        else:
+            module.comb += self.dat_r.eq(rom[self.adr])
 
 class TSChecker(LiteXModule):
     """Training Sequence Checker
@@ -189,20 +200,21 @@ class TSGenerator(LiteXModule):
         # Memory -----------------------------------------------------------------------------------
         mem_init  = ordered_set_words(ordered_set)
         mem_depth = len(mem_init)
-        port      = OrderedSetROM(self, mem_init)
+        port      = OrderedSetROM(self, mem_init, registered=True) # Words from a register (timings).
 
         # Memory address generation ----------------------------------------------------------------
-        self.sync += [
+        self.comb += [
+            port.adr_next.eq(port.adr),
             If(self.source.valid,
                 If(self.source.ready,
                     If(port.adr == (mem_depth - 1),
-                        port.adr.eq(0)
+                        port.adr_next.eq(0)
                     ).Else(
-                        port.adr.eq(port.adr + 1)
+                        port.adr_next.eq(port.adr + 1)
                     )
                 )
             ).Else(
-                port.adr.eq(0)
+                port.adr_next.eq(0)
             )
         ]
 
