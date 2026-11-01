@@ -13,6 +13,8 @@ from migen import *
 
 from litex.gen import *
 
+from litex.soc.interconnect import stream
+
 # Helpers ------------------------------------------------------------------------------------------
 
 def K(x, y):
@@ -195,6 +197,28 @@ class AsyncFIFO(LiteXModule):
         self.wrapper = _FIFOWrapper(_AsyncFIFORegisteredRead, layout, depth)
         self.sink    = self.wrapper.sink
         self.source  = self.wrapper.source
+
+# Stream Buffer ------------------------------------------------------------------------------------
+
+class Buffer(LiteXModule):
+    """stream.Buffer equivalent, ready_first: PipeReady then PipeValid (registered source
+    payload/valid: no skid multiplexer between the registers and the downstream logic)."""
+    def __init__(self, layout, pipe_valid=True, pipe_ready=False, ready_first=False):
+        self.sink   = sink   = stream.Endpoint(layout)
+        self.source = source = stream.Endpoint(layout)
+
+        # # #
+
+        pipeline = []
+        if pipe_valid:
+            self.pipe_valid = stream.PipeValid(layout)
+            pipeline.append(self.pipe_valid)
+        if pipe_ready:
+            self.pipe_ready = stream.PipeReady(layout)
+            pipeline.append(self.pipe_ready)
+        if ready_first:
+            pipeline.reverse()
+        self.pipeline = stream.Pipeline(sink, *pipeline, source)
 
 # Endianness Swap ----------------------------------------------------------------------------------
 

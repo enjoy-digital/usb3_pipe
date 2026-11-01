@@ -669,15 +669,19 @@ class USB3LinkLayer(LiteXModule):
         if lw == 1:
             tx_dpp = self.tx_dpp
         else:
-            # Registered splitter output: CRC-32/END tail logic from registers (timings).
-            self.tx_dpp_splitter = tx_dpp_splitter = DPPSplitter()
-            self.tx_dpp_buffer   = tx_dpp_buffer   = stream.Buffer(tx_dpp_splitter.source.description,
-                pipe_ready=True) # Registered ready: endpoints DPP read path isolated from the TX.
+            # Registered splitter output: CRC-32/END tail logic from registers (timings: PipeReady then
+            # PipeValid, no skid multiplexer before the CRC-32), registered ready: endpoints DPP read
+            # path isolated from the TX.
+            self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter()
+            layout = tx_dpp_splitter.source.description
+            self.tx_dpp_pipe_ready = tx_dpp_pipe_ready = stream.PipeReady(layout)
+            self.tx_dpp_pipe_valid = tx_dpp_pipe_valid = stream.PipeValid(layout)
             self.comb += [
                 self.tx_dpp.connect(tx_dpp_splitter.sink),
-                tx_dpp_splitter.source.connect(tx_dpp_buffer.sink),
+                tx_dpp_splitter.source.connect(tx_dpp_pipe_ready.sink),
+                tx_dpp_pipe_ready.source.connect(tx_dpp_pipe_valid.sink),
             ]
-            tx_dpp = tx_dpp_buffer.source
+            tx_dpp = tx_dpp_pipe_valid.source
             self.comb += tx_word2.eq(tx_dpp.data[32:64])
         self.crc32_tx = crc32_tx = CRC32(data_width=dw, cascade=crc32_cascade)
         self.comb += [
