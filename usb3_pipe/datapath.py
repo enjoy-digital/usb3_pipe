@@ -518,9 +518,12 @@ class Gen2TX(LiteXModule):
     Polling.Active entry), Z = Y/skp_interval accumulated (2 max) and inserted after SYNC, TS1, TS2,
     SDS, Logical Idle and the last Data Block of a packet (sink.last), never inside a packet. SYNC has
     priority over SKP.
+
+    registered: blocks selection/payloads registered before the scrambling (timings: the selection
+    logic not on the scrambler/output paths, +1 cycle of latency).
     """
     def __init__(self, seed=GEN2_LFSR_SEED, skp_interval=GEN2_SKP_INTERVAL, sync_interval_ts=32,
-        sync_interval_tseq=16384):
+        sync_interval_tseq=16384, registered=False):
         self.enable      = Signal()  # i
         self.tx_tseq     = Signal()  # i
         self.tx_ts1      = Signal()  # i
@@ -540,6 +543,10 @@ class Gen2TX(LiteXModule):
         # # #
 
         self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed, per_byte_advance=False)
+
+        # Selected blocks (before scrambling): payload, scrambled Symbols, LFSR advance/init (SYNC).
+        blk = stream.Endpoint([("header", 4), ("data", 128), ("scramble", 16), ("advance", 1),
+            ("sync", 1), ("skp", 1), ("ts", 1), ("dc_reset", 1)])
 
         # Block selection --------------------------------------------------------------------------
         # SYNC/SKP selection conditions registered (sync_zero, skp_go: timings).
@@ -601,57 +608,74 @@ class Gen2TX(LiteXModule):
             Replicate(ts_identifier, 10),
         ))
         idle = Signal()
-        self.comb += idle.eq(sel_data & ~sink.valid)
         self.comb += [
-            source.valid.eq(sel_sync | sel_skp | sel_sds | sel_data | sel_ts),
-            scrambler.ce.eq(source.valid & source.ready),
+            idle.eq(sel_data & ~sink.valid),
+            blk.valid.eq(sel_sync | sel_skp | sel_sds | sel_data | sel_ts),
             If(sel_sync,
                 # All Symbols bypass, LFSR re-initialized after the SYNC Ordered Set.
-                source.header.eq(BLOCK_HEADER_CONTROL),
-                scrambler.i.eq(_symbols(gen2_sync_payload())),
-                scrambler.init.eq(source.ready),
+                blk.header.eq(BLOCK_HEADER_CONTROL),
+                blk.data.eq(_symbols(gen2_sync_payload())),
+                blk.sync.eq(1),
             ).Elif(sel_skp,
                 # Bypass, no advance.
-                source.header.eq(BLOCK_HEADER_CONTROL),
-                source.skp.eq(1),
+                blk.header.eq(BLOCK_HEADER_CONTROL),
+                blk.skp.eq(1),
             ).Elif(sel_sds,
                 # Bypass, advance.
-                source.header.eq(BLOCK_HEADER_CONTROL),
-                scrambler.i.eq(_symbols(gen2_sds_payload())),
-                scrambler.advance.eq(1),
+                blk.header.eq(BLOCK_HEADER_CONTROL),
+                blk.data.eq(_symbols(gen2_sds_payload())),
+                blk.advance.eq(1),
             ).Elif(sel_data,
                 # Scrambled, advance (Logical Idle: 5Ah Idle Symbols in Gen 2 operation, 7.2.3).
-                source.header.eq(BLOCK_HEADER_DATA),
-                scrambler.i.eq(Mux(idle, GEN2_IDLE_BLOCK, sink.data)),
-                scrambler.advance.eq(1),
-                scrambler.scramble.eq(0xffff),
-                sink.ready.eq(source.ready),
+                blk.header.eq(BLOCK_HEADER_DATA),
+                blk.data.eq(Mux(idle, GEN2_IDLE_BLOCK, sink.data)),
+                blk.advance.eq(1),
+                blk.scramble.eq(0xffff),
+                sink.ready.eq(blk.ready),
             ).Elif(sel_ts,
                 # Symbol 0 bypass/advance, Symbols 1-15 scrambled (14/15 DC Balance override below).
-                source.header.eq(BLOCK_HEADER_CONTROL),
-                scrambler.i.eq(ts_payload),
-                scrambler.advance.eq(1),
-                scrambler.scramble.eq(0xfffe),
-            )
+                blk.header.eq(BLOCK_HEADER_CONTROL),
+                blk.data.eq(ts_payload),
+                blk.advance.eq(1),
+                blk.scramble.eq(0xfffe),
+            ),
+            blk.ts.eq(sel_ts),
+            blk.dc_reset.eq(sel_sds | sel_data),
+            self.tx_os.eq(sel_ts & blk.ready),
+            self.tx_idle.eq(idle & blk.ready),
+            self.skp_pending.eq(skp_pending != 0),
+            self.tx_skp.eq(sel_skp & blk.ready),
+            self.tx_data_blk.eq(sel_data & ~idle & blk.ready),
         ]
 
-        # Output -----------------------------------------------------------------------------------
+        blk_valid = blk.valid # Selected block accepted: state updates below.
+        blk_ready = blk.ready
+
+        # Scrambling/Output ------------------------------------------------------------------------
+        if registered:
+            self.blk_buffer = blk_buffer = stream.PipeValid(blk.description)
+            self.comb += blk.connect(blk_buffer.sink)
+            blk = blk_buffer.source
         lfsr = scrambler.state
         self.comb += [
-            If(sel_skp,
+            source.valid.eq(blk.valid),
+            blk.ready.eq(source.ready),
+            scrambler.ce.eq(blk.valid & source.ready),
+            scrambler.init.eq(blk.valid & blk.sync & source.ready),
+            scrambler.i.eq(blk.data),
+            scrambler.advance.eq(blk.advance),
+            scrambler.scramble.eq(blk.scramble),
+            source.header.eq(blk.header),
+            source.skp.eq(blk.skp),
+            If(blk.skp,
                 source.data.eq(Cat(
                     _symbols([GEN2_SKP]*GEN2_SKP_TX_SYMBOLS + [GEN2_SKPEND]),
                     lfsr[16:23], ~lfsr[22], lfsr[8:16], lfsr[0:8]))
             ).Else(
                 source.data.eq(scrambler.o)
             ),
-            source.ts.eq(sel_ts),
-            source.dc_reset.eq(sel_sds | sel_data),
-            self.tx_os.eq(sel_ts & source.ready),
-            self.tx_idle.eq(idle & source.ready),
-            self.skp_pending.eq(skp_pending != 0),
-            self.tx_skp.eq(sel_skp & source.ready),
-            self.tx_data_blk.eq(sel_data & ~idle & source.ready),
+            source.ts.eq(blk.ts),
+            source.dc_reset.eq(blk.dc_reset),
         ]
 
         # State ------------------------------------------------------------------------------------
@@ -662,7 +686,7 @@ class Gen2TX(LiteXModule):
             If(~self.enable,
                 skp_next.eq(0),
                 allowed_next.eq(0),
-            ).Elif(source.valid & source.ready,
+            ).Elif(blk_valid & blk_ready,
                 If(~sel_skp,
                     If(~(self.tx_tseq & ~self.tx_data) & (y == (skp_interval - 1)) &
                         (skp_pending != 2),
@@ -686,7 +710,7 @@ class Gen2TX(LiteXModule):
                 sync_zero.eq(1),
                 y.eq(0),
                 sds_sent.eq(0),
-            ).Elif(source.valid & source.ready,
+            ).Elif(blk_valid & blk_ready,
                 # SYNC scheduling (TS Ordered Sets count).
                 If(sel_ts,
                     If(sync_count == sync_period,
@@ -1139,7 +1163,7 @@ class Gen2TXDatapath(LiteXModule):
     transceiver words (bit 0 transmitted first), in the transceiver TX clock domain. Controls/sink
     on tx (Gen2TX)."""
     def __init__(self, data_width=GEN2_DATA_WIDTH, **kwargs):
-        self.tx         = tx         = Gen2TX(**kwargs)
+        self.tx         = tx         = Gen2TX(registered=(3*data_width > 132), **kwargs)
         # One block per cycle in the DC balance when the words need a block more often than every 3
         # cycles (132-bit blocks, ex: 80-bit words).
         self.dc_balance = dc_balance = Gen2TXDCBalance(one_per_cycle=(3*data_width > 132))

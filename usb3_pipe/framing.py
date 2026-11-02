@@ -1212,18 +1212,19 @@ class Gen2LinkTX(LiteXModule):
         self.blocks = blocks = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
             stream.AsyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True))
         self.reader = reader = ClockDomainsRenamer("tx")(Gen2TXBlocksReader())
-        # Registered valid/ready between the reader and Gen2TX (timings).
+        # Registered valid/ready between the reader and Gen2TX (timings), registers to Gen2TX
+        # (ready_first: Gen2TX block selection/payload from the registers).
         self.reader_buffer = reader_buffer = ClockDomainsRenamer("tx")(ResetInserter()(
-            Buffer([("data", 128)], pipe_valid=True, pipe_ready=True)))
+            Buffer([("data", 128)], pipe_valid=True, pipe_ready=True, ready_first=True)))
         chains_read = ClockDomainsRenamer("tx")(GrayCounter(16))
         self.submodules += chains_read
         chains_written = gray_count_cdc(blocks.sink.valid & blocks.sink.ready & blocks.sink.last,
             units_delay)
         # Registered valid/ready between the blocks buffer and the reader (timings: reader
-        # decisions to the buffer read side). Not reset: flushed entries drained by the reader
-        # (chains read count).
+        # decisions to the buffer read side only on the PipeReady valid, not on the enable of the
+        # payload registers). Not reset: flushed entries drained by the reader (chains read count).
         self.read_buffer = read_buffer = ClockDomainsRenamer("tx")(Buffer(gen2_tx_blocks_layout(2),
-            pipe_valid=True, pipe_ready=True, ready_first=True))
+            pipe_valid=True, pipe_ready=True))
         chain_end_d = Signal()
         self.comb += [
             packer.source.connect(blocks.sink),
