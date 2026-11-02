@@ -404,9 +404,11 @@ class USPUSB3SerDes(USB3SerDes):
 class GW5RateSequencer(LiteXModule):
     """GTR12 lane rate change (5Gbps <-> 10Gbps): on a rate_10g change, the lane is held in reset
     (busy), the rate dependent registers are written through UPAR (writes: [(addr, value_5g,
-    value_10g)]), then the lane is released after a settling delay. rate_10g is resynchronized
+    value_10g)] or [(addr, value_5g, value_10g, wait_cycles)]: wait after the write, ex: PLL
+    recalibration), then the lane is released after a settling delay. rate_10g is resynchronized
     (asynchronous input)."""
     def __init__(self, upar, writes, settle_cycles=256):
+        writes = [tuple(w) + (0,)*(4 - len(w)) for w in writes]
         self.rate_10g = Signal() # i: Asynchronous.
         self.busy     = Signal() # o: Lane held in reset.
 
@@ -417,13 +419,14 @@ class GW5RateSequencer(LiteXModule):
         self.specials += MultiReg(self.rate_10g, rate_10g)
 
         index = Signal(max=max(len(writes), 2))
-        timer = Signal(max=settle_cycles + 1)
+        timer = Signal(max=max([settle_cycles] + [w for a, v5, v10, w in writes]) + 1)
         self.comb += [
-            upar.addr.eq(Array([C(a, 24) for a, v5, v10 in writes])[index]),
+            upar.addr.eq(Array([C(a, 24) for a, v5, v10, w in writes])[index]),
             upar.wrdata.eq(Mux(current,
-                Array([C(v10, 32) for a, v5, v10 in writes])[index],
-                Array([C(v5,  32) for a, v5, v10 in writes])[index])),
+                Array([C(v10, 32) for a, v5, v10, w in writes])[index],
+                Array([C(v5,  32) for a, v5, v10, w in writes])[index])),
         ]
+        waits = [w for a, v5, v10, w in writes]
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
             If(rate_10g != current,
@@ -447,8 +450,16 @@ class GW5RateSequencer(LiteXModule):
                 If(index == (len(writes) - 1),
                     NextValue(timer, settle_cycles),
                     NextState("SETTLE")
+                ).Elif(Array([C(w > 0) for w in waits])[index],
+                    NextValue(timer, Array([C(max(w - 1, 0), len(timer)) for w in waits])[index]),
+                    NextState("WAIT")
                 )
             )
+        )
+        fsm.act("WAIT",
+            self.busy.eq(1),
+            NextValue(timer, timer - 1),
+            If(timer == 0, NextState("WRITE"))
         )
         fsm.act("SETTLE",
             self.busy.eq(1),
@@ -467,9 +478,11 @@ class GW5UPARPort:
 class GW5TXElectricalIdle(LiteXModule):
     """GTR12 lane TX Electrical Idle: the TX driver control register (addr) is written with
     idle_value/active_value through UPAR on each change of idle (asynchronous input), the last
-    requested value written again when changed during a write."""
+    requested value written again when changed during a write, and on refresh (ex: after a lane
+    reconfiguration that reset the register)."""
     def __init__(self, upar, addr, idle_value, active_value):
-        self.idle = Signal() # i: Asynchronous.
+        self.idle    = Signal() # i: Asynchronous.
+        self.refresh = Signal() # i: Write the current value again (pulse).
 
         # # #
 
@@ -483,8 +496,10 @@ class GW5TXElectricalIdle(LiteXModule):
         ]
         # The register is written at start (written != idle at reset).
         self.fsm = fsm = FSM(reset_state="IDLE")
+        refresh = Signal()
+        self.sync += If(self.refresh, refresh.eq(1)).Elif(fsm.ongoing("WRITE"), refresh.eq(0))
         fsm.act("IDLE",
-            If(idle != written,
+            If((idle != written) | refresh,
                 NextValue(current, idle),
                 NextState("WRITE")
             )
@@ -584,7 +599,12 @@ class GW5USB3SerDes(USB3SerDes):
         if gen2_capable:
             rate_port = GW5UPARPort()
             self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(
-                GW5RateSequencer(rate_port, gw5_usb3_rate_writes(lane, refclk)))
+                GW5RateSequencer(rate_port, gw5_usb3_rate_writes(lane, refclk, pll=pll, clk_freq=sys_clk_freq)))
+            # TX driver control register reset by the lane reconfiguration: written again after.
+            busy_d = Signal()
+            sync   = getattr(self.sync, xcvr_cd)
+            sync  += busy_d.eq(rate_sequencer.busy)
+            self.comb += tx_electrical_idle.refresh.eq(busy_d & ~rate_sequencer.busy)
             self.comb += [
                 rate_sequencer.rate_10g.eq(self.rate_10g),
                 self.tx_reinit.eq(rate_sequencer.busy),

@@ -55,7 +55,7 @@ class _CRG(LiteXModule):
 
 
 class USB3SoC(USB3BaseSoC):
-    def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
+    def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", pll=None, serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
         with_gtr12_debug=False, with_gtr12_analyzer=False, with_analyzer=False, analyzer_group="link",
         gen2_capable=False, with_gen2_debug=False,
         analyzer_csv="analyzer.csv", usb3_kwargs={}, **kwargs):
@@ -87,6 +87,7 @@ class USB3SoC(USB3BaseSoC):
             xcvr_cd        = "sys" if phy_cd is None else "gtr12",
             tx_cdc         = phy_cd != "tx", # SerDes logic on the GTR12 TX clock: no TX CDC.
             refclk         = refclk,
+            pll            = pll,
             csr_config     = None if serdes_csr is None else open(serdes_csr).read(),
             gen2_capable   = gen2_capable)
         if phy_cd is not None:
@@ -362,6 +363,7 @@ def main():
     parser.add_argument("--sys-clk-freq",   default=62.5e6, type=float, help="System clock frequency (125MHz: PHY/Core/SoC in sys).")
     parser.add_argument("--sfp",            default=0, type=int, help="SFP cage (SFP2USB adapter).", choices=[0, 1])
     parser.add_argument("--refclk",         default="100M", help="GTR12 reference clock: 100MHz REFCLK1 or 125MHz REFCLK0 (dock PLLs).", choices=["100M", "125M"])
+    parser.add_argument("--pll",            default=None, help="GTR12 lane PLL (default: QPLL1, CPLL: 125MHz REFCLK0, required for 10G).", choices=["QPLL1", "CPLL"])
     parser.add_argument("--serdes-csr",     default=None, help="GTR12 register configuration file override (bring-up: serdes_toml_to_csr output).")
     parser.add_argument("--rx-idle-source", default="~astat5", help="RX Electrical Idle indicator (~astat5, elecidle, [~]astat<n>).")
     parser.add_argument("--gen2-capable",        action="store_true", help="Gen 2 (10Gbps) capable SerDes/PHY (GTR12 rate change through UPAR, 80-bit raw words).")
@@ -382,6 +384,7 @@ def main():
         sys_clk_freq   = args.sys_clk_freq,
         sfp            = args.sfp,
         refclk         = args.refclk,
+        pll            = args.pll,
         serdes_csr     = args.serdes_csr,
         rx_idle_source = args.rx_idle_source,
         with_gtr12_debug    = args.with_gtr12_debug,
