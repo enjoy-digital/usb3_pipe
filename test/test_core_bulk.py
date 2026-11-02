@@ -29,10 +29,11 @@ def payload(i, n=1024):
 # Tests --------------------------------------------------------------------------------------------
 
 class TestCoreBulk(unittest.TestCase):
-    link_words = 1 # PHY words (1) or words pairs (2: 64-bit Link Layer/endpoints).
+    link_words    = 1     # PHY words (1) or words pairs (2: 64-bit Link Layer/endpoints).
+    crc32_cascade = False # Link Layer CRC-32s from chained 1-byte stages.
 
     def dut(self, **kwargs):
-        return DUT(link_words=self.link_words, **kwargs)
+        return DUT(link_words=self.link_words, crc32_cascade=self.crc32_cascade, **kwargs)
 
     def out_burst(self, host, start, n, seq0=0, corrupt=None):
         for i in range(n):

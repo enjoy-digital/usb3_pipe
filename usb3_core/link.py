@@ -56,7 +56,7 @@ PORT_CFG_RESP_DW0 = TYPE_LMP | (LMP_SUB_PORT_CFG_RESP << 5) | (1 << 9)
 # USB3 Link Layer ----------------------------------------------------------------------------------
 
 class USB3LinkLayer(LiteXModule):
-    def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}):
+    def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}, crc32_cascade=False):
         # PHY Link Layer words (32-bit) or words pairs (64-bit, USB3PHY link_words=2): DPP words of
         # 32 or 64 bits (8 bytes per cycle in the DPPs).
         lw = 2 if len(phy.sink.data) == 64 else 1
@@ -267,7 +267,7 @@ class USB3LinkLayer(LiteXModule):
         dpp_pb    = Signal(3)
         dpp_crc   = Signal(32)
         dpp_end   = Signal() # DPP CRC word received (pulse).
-        self.crc32_rx = crc32_rx = CRC32(data_width=dw)
+        self.crc32_rx = crc32_rx = CRC32(data_width=dw, cascade=crc32_cascade)
         # Words pairs: DPP words of 8 bytes (two words: dpp_two, or a held word and the next one),
         # the last one 1-8 bytes; CRC-32 on the words as consumed.
         dpp_two    = Signal() # Two DPP data words consumed (8 bytes, not the last ones).
@@ -669,17 +669,21 @@ class USB3LinkLayer(LiteXModule):
         if lw == 1:
             tx_dpp = self.tx_dpp
         else:
-            # Registered splitter output: CRC-32/END tail logic from registers (timings).
-            self.tx_dpp_splitter = tx_dpp_splitter = DPPSplitter()
-            self.tx_dpp_buffer   = tx_dpp_buffer   = stream.Buffer(tx_dpp_splitter.source.description,
-                pipe_ready=True) # Registered ready: endpoints DPP read path isolated from the TX.
+            # Registered splitter output: CRC-32/END tail logic from registers (timings: PipeReady then
+            # PipeValid, no skid multiplexer before the CRC-32), registered ready: endpoints DPP read
+            # path isolated from the TX.
+            self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter()
+            layout = tx_dpp_splitter.source.description
+            self.tx_dpp_pipe_ready = tx_dpp_pipe_ready = stream.PipeReady(layout)
+            self.tx_dpp_pipe_valid = tx_dpp_pipe_valid = stream.PipeValid(layout)
             self.comb += [
                 self.tx_dpp.connect(tx_dpp_splitter.sink),
-                tx_dpp_splitter.source.connect(tx_dpp_buffer.sink),
+                tx_dpp_splitter.source.connect(tx_dpp_pipe_ready.sink),
+                tx_dpp_pipe_ready.source.connect(tx_dpp_pipe_valid.sink),
             ]
-            tx_dpp = tx_dpp_buffer.source
+            tx_dpp = tx_dpp_pipe_valid.source
             self.comb += tx_word2.eq(tx_dpp.data[32:64])
-        self.crc32_tx = crc32_tx = CRC32(data_width=dw)
+        self.crc32_tx = crc32_tx = CRC32(data_width=dw, cascade=crc32_cascade)
         self.comb += [
             crc32_tx.data.eq(tx_dpp.data),
             crc32_tx.bytes.eq(tx_dpp.bytes),
