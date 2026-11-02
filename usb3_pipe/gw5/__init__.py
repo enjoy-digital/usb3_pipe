@@ -69,9 +69,12 @@ def gw5_usb3_csr_config(lane, rate="5G", refclk="100M", position="Q1", pll=None)
 def gw5_usb3_rate_writes(lane, refclk="100M", pll="QPLL1", clk_freq=62.5e6):
     """Register writes of the 5G <-> 10G rate change of a Q1 lane: [(addr, value_5g, value_10g)], the
     writes of the 5G and 10G configurations that differ (same writes sequence). CPLL: the writes done
-    with the CPLL in reset and the CDR signal detect toggled, the CPLL released after 1ms, then 1ms
-    for its lock (as the PLL recalibration of Gowin's USB 3.2 PHY IP on its rate changes, measured):
-    [(addr, value_5g, value_10g, wait_cycles)], clk_freq: rate sequencer clock frequency."""
+    with the CPLL in reset and the CDR signal detect toggled, the CPLL released after 50us, then
+    200us for its lock: [(addr, value_5g, value_10g, wait_cycles)], clk_freq: rate sequencer clock
+    frequency. The rate change has to be short: the link partner trains its receiver equalizer on
+    the TSEQ Ordered Sets right after the SuperSpeedPlus Polling (Polling.RxEQ, ~7ms at 10Gbps).
+    Measured on hardware: with 1ms waits (~4ms rate change) the host does not receive the Gen 2
+    Training Sequences, with these waits it does."""
     def writes(rate):
         csr = gw5_usb3_csr_config(lane, rate, refclk, pll=pll)
         return [(int(a, 16), int(v, 16)) for a, v in
@@ -87,16 +90,18 @@ def gw5_usb3_rate_writes(lane, refclk="100M", pll="QPLL1", clk_freq=62.5e6):
         return diff
     cpll_reset = 0x90a004 + 0x200*lane
     toggle_rxsd = 0x90033e + 0x200*lane
-    wait = int(1e-3*clk_freq)
+    reset_wait = int(50e-6*clk_freq)
+    lock_wait  = int(200e-6*clk_freq)
     return ([(cpll_reset, 0x22322, 0x22322)] + diff + [
-        # RX equalizer: manual at 10G (boost 12, attenuation 7), automatic at 5G.
+        # RX equalizer: manual at 10G (boost 12, attenuation 7), automatic at 5G (registers at 0, as
+        # after the 5G configuration, read on hardware).
         (0x9003a7, 0x60000000, 0x60000000),
-        (0x9082d4, 0x00077771, 0x00077771),
-        (0x9082d0, 0x000cccc1, 0x000cccc1),
+        (0x9082d4, 0x00000000, 0x00077771),
+        (0x9082d0, 0x00000000, 0x000cccc1),
         (0x9003a2, 0x00000000, 0x00010000),
         (0x9003a7, 0x00000000, 0x60000000),
-        (toggle_rxsd, 0x10000, 0x10000, wait),
-        (cpll_reset,  0x22233, 0x22233, wait),
+        (toggle_rxsd, 0x10000, 0x10000, reset_wait),
+        (cpll_reset,  0x22233, 0x22233, lock_wait),
         (toggle_rxsd, 0x00000, 0x00000),
     ])
 

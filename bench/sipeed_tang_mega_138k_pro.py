@@ -88,6 +88,7 @@ class USB3SoC(USB3BaseSoC):
             tx_cdc         = phy_cd != "tx", # SerDes logic on the GTR12 TX clock: no TX CDC.
             refclk         = refclk,
             pll            = pll,
+            xcvr_clk_freq  = sys_clk_freq if phy_cd is not None else None, # gtr12 = sys.
             csr_config     = None if serdes_csr is None else open(serdes_csr).read(),
             gen2_capable   = gen2_capable)
         if phy_cd is not None:

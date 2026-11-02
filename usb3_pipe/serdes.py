@@ -532,13 +532,14 @@ class GW5USB3SerDes(USB3SerDes):
     inverted, set while a signal is detected (LFPS bursts toggle it, measured on hardware),
     "elecidle": RXELECIDLE, "[~]astat<n>"), with_upar: SerDes registers runtime access (required),
     upar_clk: UPAR (and quad AHB) clock, xcvr_cd: clock domain of the GTR12 control logic
+    (xcvr_clk_freq: its frequency, default sys_clk_freq)
     (free-running, see the Tang Mega 138K Pro target: SerDes datapath on the GTR12 TX clock), pll:
     lane PLL of the register configuration (default: QPLL1 on the GW5AST-138B, QPLL0 on the GW5AT-15
     as Gowin's USB 3.0 PHY IP).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
         with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
-        position=None, pll=None, gen2_capable=False):
+        position=None, pll=None, gen2_capable=False, xcvr_clk_freq=None):
         USB3SerDes.__init__(self)
         assert with_upar # TX Electrical Idle through UPAR.
         self.gen2_capable = gen2_capable
@@ -599,7 +600,8 @@ class GW5USB3SerDes(USB3SerDes):
         if gen2_capable:
             rate_port = GW5UPARPort()
             self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(
-                GW5RateSequencer(rate_port, gw5_usb3_rate_writes(lane, refclk, pll=pll, clk_freq=sys_clk_freq)))
+                GW5RateSequencer(rate_port, gw5_usb3_rate_writes(lane, refclk, pll=pll,
+                    clk_freq=sys_clk_freq if xcvr_clk_freq is None else xcvr_clk_freq)))
             # TX driver control register reset by the lane reconfiguration: written again after.
             busy_d = Signal()
             sync   = getattr(self.sync, xcvr_cd)
