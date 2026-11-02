@@ -506,8 +506,9 @@ def _symbols(symbols):
 class Gen2TX(LiteXModule):
     """Gen 2 block transmitter (one block per cycle on source).
 
-    Controls (levels, one at a time): tx_tseq/tx_ts1/tx_ts2 (Ordered Sets, a SYNC Ordered Set first
-    and then every sync_interval_ts TS1/TS2 or sync_interval_tseq TSEQ, 6.4.1.2.1) or tx_data (SDS
+    Controls (levels, one at a time): tx_tseq/tx_ts1/tx_ts2 (Ordered Sets, a SYNC Ordered Set first,
+    also on a TSEQ <-> TS1/TS2 change, and then every sync_interval_ts TS1/TS2 or sync_interval_tseq
+    TSEQ, 6.4.1.2.1) or tx_data (SDS
     Ordered Set then Data Blocks from sink, Logical Idle Data Blocks (5Ah Idle Symbols, 7.2.3) when
     sink has no data).
 
@@ -524,7 +525,7 @@ class Gen2TX(LiteXModule):
     logic not on the scrambler/output paths, +2 cycles of latency, controls applied one cycle later).
     """
     def __init__(self, seed=GEN2_LFSR_SEED, skp_interval=GEN2_SKP_INTERVAL, sync_interval_ts=32,
-        sync_interval_tseq=16384, registered=False):
+        sync_interval_tseq=16384, registered=False, sync_on_tseq_change=True):
         self.enable      = Signal()  # i
         self.tx_tseq     = Signal()  # i
         self.tx_ts1      = Signal()  # i
@@ -760,6 +761,19 @@ class Gen2TX(LiteXModule):
                 ),
             ),
             If(~tx_data & ~tx_os, sds_sent.eq(0)),
+        ]
+        # SYNC Ordered Set first on a TSEQ <-> TS1/TS2 change (the SYNC periods differ, the count of
+        # the TSEQ period would otherwise delay the first SYNC: the partner descrambler is seeded by
+        # the SYNC Ordered Sets).
+        tseq_d   = Signal()
+        enable_d = Signal()
+        self.sync += [
+            tseq_d.eq(tx_tseq),
+            enable_d.eq(enable),
+            If(enable & enable_d & (tx_tseq != tseq_d) & sync_on_tseq_change,
+                sync_count.eq(0),
+                sync_zero.eq(1),
+            )
         ]
 
 # Logical Idle Data Block payload (16 Idle Symbols).

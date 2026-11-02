@@ -621,6 +621,15 @@ class TestGen2Datapath(unittest.TestCase):
         # Hardware width (40-bit words at 250MHz).
         self.tx_vs_reference_test(data_width=GEN2_DATA_WIDTH, **RUN_TX_SHORT)
 
+    def test_tx_sync_on_tseq_end(self):
+        # SYNC Ordered Set before the first TS1 when the TSEQ SYNC period is not reached (Polling.RxEQ
+        # -> Polling.Active: the partner descrambler is seeded by the SYNC), single SYNC at start.
+        words, _ = run_tx(n_tseq=20, n_ts1=8, n_ts2=8, n_packets=1, sync_interval_tseq=64)
+        kinds = [b[0] for b in Gen2ReferenceDecoder(self).decode(bits_from_words(words, 32))]
+        first_ts1 = kinds.index("TS1")
+        self.assertEqual(kinds[first_ts1 - 1], "SYNC")
+        self.assertEqual(kinds[:2], ["SYNC", "TSEQ"])
+
     def test_tx_vs_reference_80(self):
         # 80-bit words (Gowin GTR12 1:4 gear at 125MHz): DC balance at one block per cycle.
         self.tx_vs_reference_test(data_width=80, **RUN_TX_SHORT)
@@ -750,8 +759,10 @@ class TestGen2Datapath(unittest.TestCase):
     def test_loopback_80(self):
         # 80-bit words (Gowin GTR12 1:4 gear at 125MHz): bit slips in TSEQ/TS1, Block Header bit
         # error, SKP Ordered Sets edits.
+        # 64 TS1: the TS1 SYNC period restarts on the TSEQ -> TS1 change (SYNC first), the
+        # realignment after the TS1 bit slip is on the SYNC 32 TS1 later.
         self.loopback_test(edits={0: -4, 1: +8}, data_width=80, tseq_slip=True, n_tseq=32,
-            **RUN_TX_SHORT)
+            **dict(RUN_TX_SHORT, n_ts1=64))
 
     @pytest.mark.slow
     def test_loopback_long(self):
