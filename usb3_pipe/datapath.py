@@ -519,8 +519,9 @@ class Gen2TX(LiteXModule):
     SDS, Logical Idle and the last Data Block of a packet (sink.last), never inside a packet. SYNC has
     priority over SKP.
 
-    registered: blocks selection/payloads registered before the scrambling (timings: the selection
-    logic not on the scrambler/output paths, +1 cycle of latency).
+    registered: controls (enable, tx_tseq/tx_ts1/tx_ts2/tx_data, link_config) and their decodes
+    registered, blocks selection/payloads registered before the scrambling (timings: the selection
+    logic not on the scrambler/output paths, +2 cycles of latency, controls applied one cycle later).
     """
     def __init__(self, seed=GEN2_LFSR_SEED, skp_interval=GEN2_SKP_INTERVAL, sync_interval_ts=32,
         sync_interval_tseq=16384, registered=False):
@@ -544,6 +545,23 @@ class Gen2TX(LiteXModule):
 
         self.scrambler = scrambler = Gen2Scrambler(nbytes=16, seed=seed, per_byte_advance=False)
 
+        # Controls and their decodes (registered mode: registered together, one cycle of latency).
+        enable      = Signal()
+        tx_tseq     = Signal()
+        tx_ts1      = Signal()
+        tx_ts2      = Signal()
+        tx_data     = Signal()
+        link_config = Signal(8)
+        decode      = self.sync if registered else self.comb
+        decode += [
+            enable.eq(self.enable),
+            tx_tseq.eq(self.tx_tseq),
+            tx_ts1.eq(self.tx_ts1),
+            tx_ts2.eq(self.tx_ts2),
+            tx_data.eq(self.tx_data),
+            link_config.eq(self.link_config),
+        ]
+
         # Selected blocks (before scrambling): payload, scrambled Symbols, LFSR advance/init (SYNC).
         blk = stream.Endpoint([("header", 4), ("data", 128), ("scramble", 16), ("advance", 1),
             ("sync", 1), ("skp", 1), ("ts", 1), ("dc_reset", 1)])
@@ -561,7 +579,7 @@ class Gen2TX(LiteXModule):
         allowed_next = Signal()
         skp_go       = Signal()  # (skp_pending != 0) & skp_allowed.
         sds_sent     = Signal()
-        self.comb += [
+        decode += [
             tx_os.eq(self.tx_tseq | self.tx_ts1 | self.tx_ts2),
             sync_period.eq(Mux(self.tx_tseq, sync_interval_tseq - 1, sync_interval_ts - 1)),
         ]
@@ -572,12 +590,12 @@ class Gen2TX(LiteXModule):
         sel_data = Signal()
         sel_ts   = Signal()
         self.comb += [
-            If(self.enable,
+            If(enable,
                 If(tx_os & sync_zero,
                     sel_sync.eq(1)
                 ).Elif(skp_go,
                     sel_skp.eq(1)
-                ).Elif(self.tx_data,
+                ).Elif(tx_data,
                     If(~sds_sent,
                         sel_sds.eq(1)
                     ).Else(
@@ -601,7 +619,7 @@ class Gen2TX(LiteXModule):
             )
         ]
         ts_payload = Signal(128)
-        self.comb += ts_payload.eq(Cat(
+        decode += ts_payload.eq(Cat(
             Replicate(ts_identifier, 4),
             Constant(0, 8),
             Mux(self.tx_tseq, 0, self.link_config),
@@ -683,16 +701,16 @@ class Gen2TX(LiteXModule):
         self.comb += [
             skp_next.eq(skp_pending),
             allowed_next.eq(skp_allowed),
-            If(~self.enable,
+            If(~enable,
                 skp_next.eq(0),
                 allowed_next.eq(0),
             ).Elif(blk_valid & blk_ready,
                 If(~sel_skp,
-                    If(~(self.tx_tseq & ~self.tx_data) & (y == (skp_interval - 1)) &
+                    If(~(tx_tseq & ~tx_data) & (y == (skp_interval - 1)) &
                         (skp_pending != 2),
                         skp_next.eq(skp_pending + 1)
                     ),
-                    allowed_next.eq(sel_sync | sel_sds | (sel_ts & ~self.tx_tseq) | idle |
+                    allowed_next.eq(sel_sync | sel_sds | (sel_ts & ~tx_tseq) | idle |
                         (sel_data & sink.last)),
                 ).Else(
                     skp_next.eq(skp_pending - 1)
@@ -705,7 +723,7 @@ class Gen2TX(LiteXModule):
             skp_go.eq((skp_next != 0) & allowed_next),
         ]
         self.sync += [
-            If(~self.enable,
+            If(~enable,
                 sync_count.eq(0),
                 sync_zero.eq(1),
                 y.eq(0),
@@ -726,7 +744,7 @@ class Gen2TX(LiteXModule):
                 ),
                 # SKP interval.
                 If(~sel_skp,
-                    If(self.tx_tseq & ~self.tx_data,
+                    If(tx_tseq & ~tx_data,
                         y.eq(0)
                     ).Elif(y == (skp_interval - 1),
                         y.eq(0),
@@ -741,7 +759,7 @@ class Gen2TX(LiteXModule):
                     sds_sent.eq(0)
                 ),
             ),
-            If(~self.tx_data & ~tx_os, sds_sent.eq(0)),
+            If(~tx_data & ~tx_os, sds_sent.eq(0)),
         ]
 
 # Logical Idle Data Block payload (16 Idle Symbols).
@@ -1163,7 +1181,8 @@ class Gen2TXDatapath(LiteXModule):
     transceiver words (bit 0 transmitted first), in the transceiver TX clock domain. Controls/sink
     on tx (Gen2TX)."""
     def __init__(self, data_width=GEN2_DATA_WIDTH, **kwargs):
-        self.tx         = tx         = Gen2TX(registered=(3*data_width > 132), **kwargs)
+        self.tx_registered = 3*data_width > 132
+        self.tx         = tx         = Gen2TX(registered=self.tx_registered, **kwargs)
         # One block per cycle in the DC balance when the words need a block more often than every 3
         # cycles (132-bit blocks, ex: 80-bit words).
         self.dc_balance = dc_balance = Gen2TXDCBalance(one_per_cycle=(3*data_width > 132))

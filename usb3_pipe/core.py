@@ -396,17 +396,22 @@ class Gen2PIPE(LiteXModule):
         ]
 
         # TSEQ/TS1/TS2 bursts (tx_done every tseq_count TSEQ/ts_count TS1/TS2 transmitted, the count
-        # restarts when the command changes).
-        tx_count = Signal(max=max(tseq_count, ts_count))
-        tx_done  = Signal()
+        # restarts when the command changes, as seen by Gen2TX: one cycle later with its registered
+        # controls).
+        tx_count  = Signal(max=max(tseq_count, ts_count))
+        tx_done   = Signal()
         cmd_cur_d = Signal(7)
+        cmd_tx2   = Signal(7) # Command as applied by Gen2TX.
+        cmd_tx2_d = Signal(7)
+        self.comb += cmd_tx2.eq(cmd_cur_d if tx.tx_registered else cmd_cur)
         self.sync.tx += [
             cmd_cur_d.eq(cmd_cur),
+            cmd_tx2_d.eq(cmd_tx2),
             tx_done.eq(0),
-            If(cmd_cur != cmd_cur_d,
+            If(cmd_tx2 != cmd_tx2_d,
                 tx_count.eq(0)
             ).Elif(tx.tx.tx_os,
-                If(tx_count == Mux(cmd_cur[1], tseq_count - 1, ts_count - 1),
+                If(tx_count == Mux(cmd_tx2[1], tseq_count - 1, ts_count - 1),
                     tx_count.eq(0),
                     tx_done.eq(1)
                 ).Else(
