@@ -42,8 +42,9 @@ class PairsPHY:
 
 class BulkLoopbackDUT(LiteXModule):
     """USB3 Device Core (PHY stand-in) with Bulk IN/OUT endpoints (bulk_descriptors), EP2 OUT looped
-    to EP1 IN. link_words=2: core on PHY words pairs, 64-bit Bulk endpoints."""
-    def __init__(self, max_burst=8, link_words=1):
+    to EP1 IN. link_words=2: core on PHY words pairs, 64-bit Bulk endpoints. crc32_cascade: see
+    USB3DeviceCore."""
+    def __init__(self, max_burst=8, link_words=1, crc32_cascade=False):
         self.phy = phy = PHYStandIn()
         dw = 32*link_words
         self.core = core = USB3DeviceCore(phy if link_words == 1 else PairsPHY(phy, self),
@@ -51,7 +52,8 @@ class BulkLoopbackDUT(LiteXModule):
             descriptors  = bulk_descriptors(max_burst=max_burst),
             endpoints    = [
                 USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw),
-                USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw)])
+                USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw)],
+            crc32_cascade = crc32_cascade)
         # Bulk loopback: EP2 OUT -> EP1 IN.
         self.loopback = loopback = stream.SyncFIFO(endpoint_layout(dw), 2*256, buffered=True)
         self.comb += [

@@ -287,8 +287,9 @@ class TestTSUnitRX(unittest.TestCase):
     def test_detection_on_last_word_of_8th_ordered_set(self):
         result = rx_detections(spec_words("TS1")*8)
         self.assertEqual(len(result["ts1"]), 1)
-        # Pulse on the 32th word (driver/monitor offset of 1 cycle) + TSChecker latency (2 cycles).
-        self.assertEqual(result["ts1"][0], 8*4 + 2)
+        # Pulse on the 32th word (driver/monitor offset of 1 cycle) + TSChecker latency (3 cycles:
+        # registered word comparisons).
+        self.assertEqual(result["ts1"][0], 8*4 + 3)
 
     def test_8_consecutive_required(self):
         # Sequences broken before 8 consecutive Ordered Sets are not detected.

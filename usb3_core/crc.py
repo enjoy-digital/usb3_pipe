@@ -103,8 +103,12 @@ class CRC32(LiteXModule):
     clear: initialize the CRC (before the first word), ce: process data (bytes valid bytes:
     data[0:8] first, 0: no data). value: CRC of the processed data (registered state), next_value:
     CRC including the current data.
+
+    cascade: the 1 to 4 bytes results from 4 chained 1-byte stages (taps) instead of 4 parallel
+    equation sets (less logic: ~-27% with data_width=64, deeper: ~+3 LUT levels), the 8 bytes
+    equations unchanged.
     """
-    def __init__(self, data_width=32):
+    def __init__(self, data_width=32, cascade=False):
         assert data_width in [32, 64]
         self.clear      = Signal()           # i
         self.ce         = Signal()           # i
@@ -118,8 +122,18 @@ class CRC32(LiteXModule):
         state = Signal(32, reset=0xffffffff)
         new   = Signal(32)
         sizes = [1, 2, 3, 4] + ([8] if data_width == 64 else [])
-        cases = {n: new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:8*n])))
-            for n in sizes}
+        if cascade:
+            taps = [state]
+            for i in range(4):
+                tap = Signal(32)
+                self.comb += tap.eq(Cat(*crc_next(32, 0x04c11db7, taps[-1], self.data[8*i:8*(i + 1)])))
+                taps.append(tap)
+            cases = {n: new.eq(taps[n]) for n in [1, 2, 3, 4]}
+            if data_width == 64:
+                cases[8] = new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:64])))
+        else:
+            cases = {n: new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:8*n])))
+                for n in sizes}
         cases["default"] = new.eq(state)
         self.comb += Case(self.bytes, cases)
         self.sync += [

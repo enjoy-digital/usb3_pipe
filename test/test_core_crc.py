@@ -51,9 +51,9 @@ class TestCoreCRC(unittest.TestCase):
                 self.assertEqual((yield dut.value), crc16(data))
         run_simulation(dut, generator(dut))
 
-    def test_crc32(self):
+    def test_crc32(self, cascade=False):
         rng = random.Random(32)
-        dut = CRC32()
+        dut = CRC32(cascade=cascade)
         def generator(dut):
             for length in [1, 2, 3, 4, 5, 18, 64, 255, 1024]:
                 data = [rng.randrange(256) for _ in range(length)]
@@ -71,10 +71,10 @@ class TestCoreCRC(unittest.TestCase):
                 self.assertEqual((yield dut.value), crc32(data), f"length {length}")
         run_simulation(dut, generator(dut))
 
-    def test_crc32_64(self):
+    def test_crc32_64(self, cascade=False):
         # 64-bit words: 8 bytes per word, the last 1-4 bytes in 32-bit words (data[0:32]).
         rng = random.Random(64)
-        dut = CRC32(data_width=64)
+        dut = CRC32(data_width=64, cascade=cascade)
         def generator(dut):
             for length in [1, 4, 5, 8, 9, 12, 13, 18, 64, 255, 1024]:
                 data = [rng.randrange(256) for _ in range(length)]
@@ -94,6 +94,31 @@ class TestCoreCRC(unittest.TestCase):
                 yield
                 self.assertEqual((yield dut.value), crc32(data), f"length {length}")
         run_simulation(dut, generator(dut))
+
+    def test_crc32_cascade(self):
+        self.test_crc32(cascade=True)
+
+    def test_crc32_64_cascade(self):
+        self.test_crc32_64(cascade=True)
+
+    def test_crc32_cascade_equivalence(self):
+        # Cascade and parallel equations: same next_value for random states/data/byte counts.
+        rng = random.Random(3264)
+        dut = Module()
+        dut.submodules.par = par = CRC32(data_width=64)
+        dut.submodules.cas = cas = CRC32(data_width=64, cascade=True)
+        def generator():
+            for _ in range(200):
+                n    = rng.choice([0, 1, 2, 3, 4, 8])
+                data = rng.randrange(2**64)
+                for c in [par, cas]:
+                    yield c.data.eq(data)
+                    yield c.bytes.eq(n)
+                    yield c.ce.eq(1)
+                yield
+                self.assertEqual((yield par.next_value), (yield cas.next_value), f"bytes {n}")
+                self.assertEqual((yield par.value), (yield cas.value))
+        run_simulation(dut, generator())
 
 if __name__ == "__main__":
     unittest.main()
