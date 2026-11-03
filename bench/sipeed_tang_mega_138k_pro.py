@@ -57,7 +57,8 @@ class _CRG(LiteXModule):
 class USB3SoC(USB3BaseSoC):
     def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", pll=None, serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
         with_gtr12_debug=False, with_gtr12_analyzer=False, with_analyzer=False, analyzer_group="link",
-        gen2_capable=False, with_gen2_debug=False, with_trace=False,
+        gen2_capable=False, with_gen2_debug=False, with_trace=False, with_tx_check=False,
+        with_ltssm_history=False,
         analyzer_csv="analyzer.csv", usb3_kwargs={}, **kwargs):
         # USB3 PIPE/SerDes at 125MHz (Gen 1 32-bit words); with a lower sys_clk_freq, the PIPE runs on
         # the GTR12 TX fabric clock ("tx" clock domain: frequency-locked to the transmitted words, no
@@ -124,6 +125,11 @@ class USB3SoC(USB3BaseSoC):
             self.add_pipe_counters(self.usb3_phy.pipe, usb3_serdes, phy_cd)
             self.add_rx_snapshots(gtr12, usb3_serdes, phy_cd, self.usb3_phy.pipe)
             self.add_ltssm_history(self.usb3_phy, sys_clk_freq)
+        elif with_ltssm_history:
+            self.add_ltssm_history(self.usb3_phy, sys_clk_freq)
+            self.add_lgood_latency()
+            self.add_gen2_rx_probes(self.usb3_phy)
+        if with_gtr12_debug and phy_cd is not None and hasattr(self, "usb3_phy"):
             if hasattr(self.usb3_phy, "ssp"):
                 self.add_ssp_status(self.usb3_phy.ssp, usb3_serdes, phy_cd)
 
@@ -140,6 +146,28 @@ class USB3SoC(USB3BaseSoC):
                 phy.rx_t2_credits.eq(self.usb3_rx_flow.fields.t2_credits),
                 phy.gen2_rx_throttle_level.eq(self.usb3_rx_flow.fields.throttle_level),
             ]
+
+        # Gen 2 TX FFE (runtime, applied at the next 10Gbps rate change) and PHY reset (retraining).
+        if with_ltssm_history and hasattr(usb3_serdes, "tx_ffe_manual"):
+            from litex.soc.interconnect.csr import CSRStorage, CSRField
+            self.usb3_tx_ffe = CSRStorage(fields=[
+                CSRField("txlev",  size=4, offset=0,  reset=14, description="TX amplitude."),
+                CSRField("c1",     size=4, offset=4,  reset=11, description="TX post-cursor."),
+                CSRField("cm",     size=4, offset=8,  reset=0,  description="TX pre-cursor."),
+                CSRField("manual", size=1, offset=12, reset=0,  description="Manual TX FFE (else defaults)."),
+            ])
+            self.usb3_phy_reset = CSRStorage(description="USB3 PHY reset (level: retraining).")
+            self.comb += [
+                usb3_serdes.tx_ffe_txlev.eq(self.usb3_tx_ffe.fields.txlev),
+                usb3_serdes.tx_ffe_c1.eq(self.usb3_tx_ffe.fields.c1),
+                usb3_serdes.tx_ffe_cm.eq(self.usb3_tx_ffe.fields.cm),
+                usb3_serdes.tx_ffe_manual.eq(self.usb3_tx_ffe.fields.manual),
+                self.usb3_phy.reset.eq(self.usb3_phy_reset.storage),
+            ]
+
+        # Gen 2 TX self-check: transmitted Header Packets/Link Commands CRCs.
+        if with_tx_check:
+            self.add_gen2_tx_check(self.usb3_phy)
 
         # Gen 2 bring-up debug: RX monitor counters/status.
         if with_gen2_debug:
@@ -201,25 +229,176 @@ class USB3SoC(USB3BaseSoC):
         # PIPE counters: COM words, K28.4 words, TS1/TS1 inverted/TS2 detections (16-bit each).
         self.add_indexed_status("pipe_counters", Cat(*counts))
 
-    def add_ltssm_history(self, phy, sys_clk_freq, n=32):
-        """LTSSM states history (bring-up): last n states (8-bit) with their entry time (24-bit, us),
-        frozen while ltssm_history_freeze is set."""
-        from litex.soc.interconnect.csr import CSRStorage, CSRStatus
+    def add_gen2_tx_check(self, phy):
+        """Gen 2 TX self-check: the transmitted Data Blocks payloads (Gen2TX input, tx clock domain,
+        before the SKP Ordered Sets/scrambling) decoded by a second Gen 2 RX framing, the Header
+        Packets CRC-16/CRC-5 and Link Commands CRC-5 checked (bad packets from the TX logic vs
+        corrupted on the line: host LBADs)."""
+        from migen.genlib.cdc import MultiReg
+        from litex.soc.interconnect.csr import CSRStatus
+        from usb3_pipe.framing import Gen2LinkRX, SHP, SLC
+        from usb3_core.crc import CRC16Words, CRC5
+        gp = phy.gen2_pipe
+        checker = ClockDomainsRenamer({"rx": "tx"})(Gen2LinkRX(buffer_depth=1024, link_words=1,
+            nbytes=32))
+        self.submodules.usb3_tx_checker = checker
+        blocks = gp.tx_blocks
+        stream_on = Signal()
+        self.sync.tx += stream_on.eq(gp.tx_ready & phy.gen2_active_pipe)
+        self.comb += [
+            checker.sink.valid.eq(blocks.valid & blocks.ready),
+            checker.sink.data.eq(blocks.data),
+            checker.data_stream.eq(stream_on),
+            checker.rx_ready.eq(1),
+            checker.lc_enable.eq(0),
+            checker.source.ready.eq(1),
+            checker.source_lc.ready.eq(1),
+        ]
+        words = checker.source
+        crc16 = CRC16Words()
+        crc5a = CRC5()
+        crc5b = CRC5()
+        self.submodules += crc16, crc5a, crc5b
+        hp, hp_bad, lc, lc_bad, cut = [Signal(16) for _ in range(5)]
+        n     = Signal(2)
+        ok16  = Signal()
+        self.comb += [
+            crc16.data.eq(words.data),
+            crc5a.data.eq(words.data[16:27]),
+            crc5b.data.eq(words.data[0:11]),
+            ok16.eq((crc16.value == words.data[0:16]) & (crc5a.value == words.data[27:32])),
+        ]
+        start_hp = words.valid & (words.ctrl == 0b1111) & (words.data[0:8] == SHP)
+        start_lc = words.valid & (words.ctrl == 0b1111) & (words.data[0:8] == SLC)
+        fsm = FSM(reset_state="IDLE")
+        self.submodules.usb3_tx_check_fsm = fsm
+        fsm.act("IDLE",
+            crc16.clear.eq(1),
+            If(start_hp, NextValue(n, 0), NextState("HP")).Elif(start_lc, NextState("LC"))
+        )
+        fsm.act("HP",
+            If(words.valid,
+                If(words.ctrl != 0,
+                    NextValue(cut, cut + 1),
+                    NextState("IDLE")
+                ).Elif(n != 3,
+                    crc16.ce.eq(1),
+                    NextValue(n, n + 1)
+                ).Else(
+                    NextValue(hp, hp + 1),
+                    If(~ok16, NextValue(hp_bad, hp_bad + 1)),
+                    NextState("IDLE")
+                )
+            )
+        )
+        fsm.act("LC",
+            If(words.valid,
+                If(words.ctrl != 0,
+                    NextValue(cut, cut + 1),
+                ).Else(
+                    NextValue(lc, lc + 1),
+                    If((crc5b.value != words.data[11:16]) | (crc5a.value != words.data[27:32]),
+                        NextValue(lc_bad, lc_bad + 1)),
+                ),
+                NextState("IDLE")
+            )
+        )
+        overflow = Signal()
+        self.specials += MultiReg(checker.overflow, overflow)
+        self.usb3_tx_check_hp = CSRStatus(32, description="TX check: Header Packets [15:0], CRC errors [31:16].")
+        self.usb3_tx_check_lc = CSRStatus(32, description="TX check: Link Commands [15:0], CRC errors [31:16].")
+        self.usb3_tx_check_status = CSRStatus(32, description="TX check: packets cut by framing [15:0], blocks buffer overflow [16].")
+        self.comb += [
+            self.usb3_tx_check_hp.status.eq(Cat(hp, hp_bad)),
+            self.usb3_tx_check_lc.status.eq(Cat(lc, lc_bad)),
+            self.usb3_tx_check_status.status.eq(Cat(cut, overflow)),
+        ]
+
+    def add_gen2_rx_probes(self, phy):
+        """Gen 2 RX backlog probes (bring-up): words buffer max level (32-byte entries), cycles with
+        the RX framing output stalled (words buffer full), blocks pairs buffer overflow (sticky),
+        cleared by gen2_rx_probes_clear."""
+        from migen.genlib.cdc import MultiReg
+        from litex.soc.interconnect.csr import CSR
+        lrx = phy.gen2_pipe.link_rx
+        self._gen2_rx_probes_clear = clear = CSR()
+        max_level = Signal(16)
+        stalls    = Signal(32)
+        overflow  = Signal()
+        out = lrx.framing.source
+        self.specials += MultiReg(lrx.overflow, overflow)
+        self.sync += [
+            If(lrx.level > max_level, max_level.eq(lrx.level)),
+            If(out.valid & ~out.ready & (stalls != 2**32 - 1), stalls.eq(stalls + 1)),
+            If(clear.re, max_level.eq(0), stalls.eq(0)),
+        ]
+        self.add_indexed_status("gen2_rx_probes", Cat(max_level, C(0, 15), overflow, stalls))
+
+    def add_lgood_latency(self):
+        """Header Packets acknowledgement latency (bring-up): durations of the PENDING_HP_TIMER runs
+        (Header Packets sent, no LGOOD_n received), max and histogram (16 bins of 64 cycles, last:
+        960+ cycles), 16-bit saturating, cleared by lgood_latency_clear."""
+        from litex.soc.interconnect.csr import CSR
+        link = self.usb3_core.link
+        self._lgood_latency_clear = clear = CSR()
+        wait = link.t_pending_hp.wait
+        cnt  = Signal(16)
+        maxv = Signal(16)
+        hist = [Signal(16) for _ in range(16)]
+        bin_ = Signal(4)
+        self.comb += bin_.eq(Mux(cnt >= 960, 15, cnt[6:10]))
+        self.sync += [
+            If(wait,
+                If(cnt != 2**16 - 1, cnt.eq(cnt + 1))
+            ).Elif(cnt != 0,
+                cnt.eq(0),
+                If(cnt > maxv, maxv.eq(cnt)),
+                Case(bin_, {i: If(hist[i] != 2**16 - 1, hist[i].eq(hist[i] + 1)) for i in range(16)}),
+            ),
+            If(clear.re, maxv.eq(0), *[h.eq(0) for h in hist]),
+        ]
+        self.add_indexed_status("lgood_latency", Cat(maxv, C(0, 16), *hist))
+
+    def add_ltssm_history(self, phy, sys_clk_freq, n=32, after=24):
+        """LTSSM states history (bring-up): last n states (5-bit encoding) with their entry time
+        (us), frozen while ltssm_history_freeze is set, and automatically after `after` changes
+        following the first U0 exit (states before/after it kept, ltssm_history_rearm: re-armed)."""
+        from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
         self._ltssm_history_freeze = CSRStorage()
-        us      = Signal(24)
+        self._ltssm_history_rearm  = CSR()
+        sw      = len(phy.ltssm_state)
+        u0      = phy.ltssm_states["U0"]
+        us      = Signal(32 - sw)
         tick    = Signal(max=int(sys_clk_freq/1e6))
-        state_d = Signal(8)
+        state_d = Signal(sw)
         hist    = [Signal(32) for _ in range(n)]
+        armed   = Signal(reset=1)
+        count   = Signal(max=after + 1)
+        frozen  = Signal()
+        change  = Signal()
+        self.comb += change.eq((phy.ltssm_state != state_d) & ~self._ltssm_history_freeze.storage & ~frozen)
         self.sync += [
             tick.eq(tick + 1),
             If(tick == int(sys_clk_freq/1e6) - 1, tick.eq(0), us.eq(us + 1)),
             state_d.eq(phy.ltssm_state),
-            If((phy.ltssm_state != state_d) & ~self._ltssm_history_freeze.storage,
+            If(change,
                 hist[0].eq(Cat(phy.ltssm_state, us)),
-                *[hist[i].eq(hist[i-1]) for i in range(1, n)]
+                *[hist[i].eq(hist[i-1]) for i in range(1, n)],
+                If(armed & (state_d == u0),
+                    armed.eq(0),
+                    count.eq(after),
+                ).Elif(~armed & (count != 0),
+                    count.eq(count - 1),
+                    If(count == 1, frozen.eq(1)),
+                ),
+            ),
+            If(self._ltssm_history_rearm.re,
+                armed.eq(1),
+                frozen.eq(0),
+                count.eq(0),
             ),
         ]
-        # n x (state[8], time_us[24]), newest first.
+        # n x (state[sw], time_us[32-sw]), newest first.
         self.add_indexed_status("ltssm_history", Cat(*hist))
 
     def add_rx_snapshots(self, gtr12, serdes, cd, pipe=None):
@@ -385,6 +564,8 @@ def main():
     parser.add_argument("--serdes-csr",     default=None, help="GTR12 register configuration file override (bring-up: serdes_toml_to_csr output).")
     parser.add_argument("--rx-idle-source", default="~astat5", help="RX Electrical Idle indicator (~astat5, elecidle, [~]astat<n>).")
     parser.add_argument("--gen2-capable",        action="store_true", help="Gen 2 (10Gbps) capable SerDes/PHY (GTR12 rate change through UPAR, 80-bit raw words).")
+    parser.add_argument("--with-ltssm-history",  action="store_true", help="LTSSM states history (states with their entry time).")
+    parser.add_argument("--with-tx-check",       action="store_true", help="Gen 2 TX self-check (transmitted Header Packets/Link Commands CRCs).")
     parser.add_argument("--with-trace",          action="store_true", help="USB3 Device Core Header Packets trace (bench/usb3_trace.py).")
     parser.add_argument("--with-gen2-debug",     action="store_true", help="Gen 2 bring-up debug (RX monitor on the raw RX words: alignment, blocks/Ordered Sets counters).")
     parser.add_argument("--with-gtr12-debug",    action="store_true", help="GTR12/PIPE bring-up debug (transitions/PIPE counters, RX snapshots, LTSSM history).")
@@ -410,6 +591,8 @@ def main():
         gen2_capable        = args.gen2_capable,
         with_gen2_debug     = args.with_gen2_debug,
         with_trace          = args.with_trace,
+        with_tx_check       = args.with_tx_check,
+        with_ltssm_history  = args.with_ltssm_history,
         with_gtr12_analyzer = args.with_gtr12_analyzer,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)
