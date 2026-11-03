@@ -539,9 +539,14 @@ class USB3PHY(LiteXModule):
             ]
             self.comb += self.rx_throttle.eq(throttle)
             if hasattr(self, "gen2_rx_source"):
-                # Gen 2: words buffer level (entries of up to 8 words, 2048 bytes as above).
+                # Gen 2: words buffer level (entries of up to 8 words: 512 bytes by default), Type 2
+                # credits held by the partner (rx_t2_credits, 4: no limit; limiting them bounds the
+                # DPPs buffered before a DPH but an xHCI host rejected the Header Packets with it).
+                # Runtime-adjustable (bring-up).
                 gen2_throttle = Signal()
-                self.sync += gen2_throttle.eq(self.gen2_pipe.rx_level >= 64)
+                self.gen2_rx_throttle_level = Signal(8, reset=16)
+                self.rx_t2_credits          = Signal(3, reset=4)
+                self.sync += gen2_throttle.eq(self.gen2_pipe.rx_level >= self.gen2_rx_throttle_level)
                 self.comb += If(self.gen2_active, self.rx_throttle.eq(gen2_throttle))
         return sink, source
 

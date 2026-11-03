@@ -657,6 +657,24 @@ class USB3LinkLayer(LiteXModule):
         # rate): Rx Header Buffer credits (LCRD_x) held, the partner stops sending Header Packets (and
         # their DPPs) once its credits are used (Link Layer flow control, 7.2.4.1).
         rx_throttle = getattr(phy, "rx_throttle", Constant(0, 1))
+        # Type 2 credits held by the partner limited to rx_t2_credits (PHY rx_t2_credits, ex: Link
+        # Layer slower than the line rate: the received DPPs are buffered and a DPH is checked, its
+        # LGOOD_n sent, once the DPPs before it are consumed: the DPPs the partner can send ahead are
+        # limited to bound this latency, PENDING_HP_TIMER of the partner).
+        # The Advertisement (U0 entry: all the credits, 7.2.4.1.1) is not limited.
+        rx_t2_credits = getattr(phy, "rx_t2_credits", LINK_HP_BUFFERS) # int or Signal (runtime).
+        lcrd2_allowed = Signal()
+        if isinstance(rx_t2_credits, Signal) or (rx_t2_credits < LINK_HP_BUFFERS):
+            lcrd2_adv = Signal() # Type 2 credits Advertisement in progress.
+            self.sync += If(u0_rise,
+                lcrd2_adv.eq(1)
+            ).Elif(lcrd2_pending == 0,
+                lcrd2_adv.eq(0)
+            )
+            self.sync += lcrd2_allowed.eq(lcrd2_adv |
+                ((lcrd2_pending + rx_t2_level + rx_t2_credits) > LINK_HP_BUFFERS)) # Registered (timings).
+        else:
+            self.comb += lcrd2_allowed.eq(1)
         start_hp = Signal()
         sel_lrty = Signal()
         sel_lbad = Signal()
@@ -676,7 +694,7 @@ class USB3LinkLayer(LiteXModule):
                     sel_lgood.eq(1), lc_sel.eq(LCMD_LGOOD | lgood_seq)
                 ).Elif((lcrd_pending != 0) & ~rx_throttle,
                     sel_lcrd.eq(1), lc_sel.eq(LCMD_LCRD | lcrd_idx)
-                ).Elif((lcrd2_pending != 0) & ~rx_throttle,
+                ).Elif((lcrd2_pending != 0) & ~rx_throttle & lcrd2_allowed,
                     sel_lcrd2.eq(1), lc_sel.eq(LCMD_LCRD | 0b100 | lcrd2_idx)
                 ).Elif(lau_pending,
                     sel_lau.eq(1), lc_sel.eq(LCMD_LAU)
