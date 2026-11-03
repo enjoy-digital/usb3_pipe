@@ -582,14 +582,32 @@ class TestGen2RXFraming(unittest.TestCase):
         for lc_enable in [0, 1]:
             self.rx_framing_idle_gaps(lc_enable, nbytes=32)
 
-    def rx_framing_idle_gaps(self, lc_enable, nbytes=8):
+    def test_rx_framing_symbol_errors(self):
+        # Bit errors on framing Symbol 0 (HPSTART/DPHSTART/LCSTART/DPPSTART: 3 of 4 Symbols valid)
+        # and on one Length Field Replica of the DPHs: packets still received, starts corrected.
+        for nbytes in [8, 16, 32]:
+            self.rx_framing_idle_gaps(1, nbytes=nbytes, errors=True)
+
+    def rx_framing_idle_gaps(self, lc_enable, nbytes=8, errors=False):
+        from usb3_pipe.framing import GEN2_DPHP
         rng   = random.Random(3)
         units = random_units(rng, 40)
         stream_bytes = []
         expected     = []
+        n_errors     = 0
         for u in units:
             stream_bytes += [GEN2_IDLE]*rng.choice([0, 0, 1, 2, 3, 5, 7, 8, 13, 16, 17])
-            stream_bytes += gen2_unit_bytes(u)
+            ub = gen2_unit_bytes(u)
+            if errors:
+                is_dph = ub[0] == GEN2_DPHP
+                starts = [0] + ([24] if is_dph and len(ub) > 28 else [])
+                for i in starts:
+                    if rng.random() < 0.5:
+                        ub[i] ^= 1 << rng.randrange(8)
+                        n_errors += 1
+                if is_dph and rng.random() < 0.5:
+                    ub[rng.choice([20, 21, 22, 23])] ^= 1 << rng.randrange(8)
+            stream_bytes += ub
             # Expected words: unit words with the bytes after the DPP end zeroed (DPHs: 20 bytes).
             expected += u
         stream_bytes += [GEN2_IDLE]*64
@@ -625,8 +643,15 @@ class TestGen2RXFraming(unittest.TestCase):
                 if (yield dut.source_lc.valid):
                     lcs.append((yield dut.source_lc.data))
                 yield
-        run_simulation(dut, [generator(dut), checker(dut)])
+        corrected = []
+        def final(dut):
+            for _ in range(len(words8)*2 + 64):
+                yield
+            corrected.append((yield dut.corrected))
+        run_simulation(dut, [generator(dut), checker(dut), final(dut)])
         self.assertEqual((out, lcs), split_units(units, lc_enable))
+        if errors:
+            self.assertEqual(corrected[0], n_errors)
 
 # WordsNarrower ------------------------------------------------------------------------------------
 

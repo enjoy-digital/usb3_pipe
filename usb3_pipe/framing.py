@@ -329,6 +329,7 @@ class Gen2RXFraming(LiteXModule):
         self.source    = source    = stream.Endpoint(gen2_link_layout(nbytes//4))
         self.source_lc = source_lc = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.errors    = Signal(16) # o: Unknown packet starts (skipped bytes).
+        self.corrected = Signal(16) # o: Packet starts with a framing Symbol 0 error (3/4 valid).
         self.lc_enable = Signal()   # i: LGOOD_n/LCRD_x on source_lc.
 
         # # #
@@ -398,10 +399,9 @@ class Gen2RXFraming(LiteXModule):
             [r_found[i].eq(nxt_found[i]) for i in range(nbytes)],
             [r_q[i].eq(nxt_q[i]) for i in range(nbytes)],
             [r_code[i].eq(nxt_code[i]) for i in range(nbytes)],
-            # R consumed from position i in Idle (no packet start at/after i, or an unknown start on
-            # the last byte): registered (timings: window shift).
-            [r_skip[i].eq(~nxt_found[i] |
-                ((nxt_code[i] == CODE_UNKNOWN) & (nxt_q[i] == nbytes - 1))) for i in range(nbytes)],
+            # R consumed from position i in Idle (no packet start at/after i): registered (timings:
+            # window shift). An unknown start is checked in RESYNC (R kept).
+            [r_skip[i].eq(~nxt_found[i]) for i in range(nbytes)],
         )
 
         # Packet start search (Idle) ---------------------------------------------------------------
@@ -508,31 +508,75 @@ class Gen2RXFraming(LiteXModule):
             ]
 
         # FSM --------------------------------------------------------------------------------------
-        p_next = Signal(pw + 1)
         self.fsm = fsm = FSM(reset_state="IDLE")
+        def set_rem(code):
+            return Case(code, {
+                KIND_HP  + 1 : NextValue(rem, 20),
+                KIND_DPH + 1 : NextValue(rem, 24),
+                KIND_LC  + 1 : NextValue(rem, 8),
+                KIND_DPP + 1 : NextValue(rem, dpp_len12),
+                KIND_EDB + 1 : NextValue(rem, 4),
+            })
+        # Unknown packet start at p (Symbol 0 of a framing Ordered Set with a bit error?): Symbols 1/2
+        # identical start Symbols and Symbol 3 EPF (3 of the 4 framing Symbols valid) -> packet start
+        # at p, else the byte is skipped (error).
+        resync_code = Signal(3)
+        self.comb += Case(out[8:16], {
+            GEN2_SHP  : resync_code.eq(KIND_HP  + 1),
+            GEN2_DPHP : resync_code.eq(KIND_DPH + 1),
+            GEN2_SLC  : resync_code.eq(KIND_LC  + 1),
+            GEN2_SDP  : resync_code.eq(KIND_DPP + 1),
+            GEN2_EDB  : resync_code.eq(KIND_EDB + 1),
+            "default" : resync_code.eq(CODE_UNKNOWN),
+        })
+        resync_ok = Signal()
+        self.comb += resync_ok.eq((resync_code != CODE_UNKNOWN) & (out[16:24] == out[8:16]) &
+            (out[24:32] == GEN2_EPF))
+        fsm.act("RESYNC",
+            If(avail,
+                If(resync_ok,
+                    NextValue(self.corrected, self.corrected + 1),
+                    NextValue(kind, resync_code - 1),
+                    set_rem(resync_code),
+                    NextState("PACKET")
+                ).Else(
+                    NextValue(self.errors, self.errors + 1),
+                    NextState("IDLE"),
+                    If(p == (nbytes - 1),
+                        shift.eq(1),
+                        NextValue(p, 0), NextValue(p_out, 0)
+                    ).Else(
+                        NextValue(p, p + 1), NextValue(p_out, p + 1)
+                    )
+                )
+            )
+        )
+        # DPP length: the DPH Length Field Replicas (packet bytes 20-21 and 22-23) when identical, else
+        # the DPH Data Length field (packet bytes 10-11, checked later by the Header Packet CRC-16):
+        # a bit error in a replica does not lose the DPP framing.
+        hlen_rem   = 24 - nbytes*(10//nbytes)  # rem of the chunk with the DPH bytes 10-11.
+        hlen_now   = out[8*(10 % nbytes):8*(10 % nbytes) + 16]
+        hlen       = Signal(16, reset_less=True)
+        replica0   = out[8*(20 % nbytes):8*(20 % nbytes) + 16]
+        replica1   = out[8*(20 % nbytes) + 16:8*(20 % nbytes) + 32]
+        dph_length = Signal(16)
+        self.sync += If(fsm.ongoing("PACKET") & avail & out_ready & (kind == KIND_DPH) &
+            (rem == hlen_rem), hlen.eq(hlen_now))
+        self.comb += dph_length.eq(Mux(replica0 == replica1, replica0,
+            hlen_now if hlen_rem <= nbytes else hlen))
+        p_next = Signal(pw + 1)
         fsm.act("IDLE",
             If(avail,
                 If(found,
                     NextValue(p, q), NextValue(p_out, q),
                     NextValue(start, 1),
                     NextValue(kind, first - 1),
-                    Case(first, {
-                        KIND_HP  + 1 : NextValue(rem, 20),
-                        KIND_DPH + 1 : NextValue(rem, 24),
-                        KIND_LC  + 1 : NextValue(rem, 8),
-                        KIND_DPP + 1 : NextValue(rem, dpp_len12),
-                        KIND_EDB + 1 : NextValue(rem, 4),
-                    }),
+                    set_rem(first),
                     If(first != CODE_UNKNOWN,
                         NextState("PACKET")
                     ).Else(
-                        # Unknown start: skip the byte.
-                        NextValue(self.errors, self.errors + 1),
-                        If(q == (nbytes - 1),
-                            NextValue(p, 0), NextValue(p_out, 0)
-                        ).Else(
-                            NextValue(p, q + 1), NextValue(p_out, q + 1)
-                        )
+                        # Unknown start: framing Symbol 0 error? (RESYNC).
+                        NextState("RESYNC")
                     )
                 ).Else(
                     NextValue(p, 0), NextValue(p_out, 0)
@@ -552,7 +596,7 @@ class Gen2RXFraming(LiteXModule):
                 ),
                 If(out_ready,
                     If((kind == KIND_DPH) & last,
-                        NextValue(dpp_len12, out[8*(20 % nbytes):8*(20 % nbytes) + 16] + 12),
+                        NextValue(dpp_len12, dph_length + 12),
                     ),
                     NextValue(rem, rem - nbytes),
                     NextValue(start, 0),
