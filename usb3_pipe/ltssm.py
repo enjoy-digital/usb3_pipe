@@ -63,6 +63,9 @@ class USB3LTSSM(LiteXModule):
         self.hot_reset          = Signal()
         self.ess_inactive       = Signal()
         self.polling_idle       = Signal()
+        # RX words kept for the Link Layer until U0 (Recovery.Idle: the partner can be in U0 and
+        # send its Advertisement before the Idle handshake ends on this side).
+        self.rx_keep            = Signal()
 
         # PIPE interface (LTSSM_PIPE_INTERFACE, connected by USB3PHY) ------------------------------
         # idle_handshake_done reset=1: short path for a standalone LTSSM.
@@ -935,6 +938,7 @@ class USB3LTSSM(LiteXModule):
 
         # Recovery Idle State (7.5.10.3) -----------------------------------------------------------
         fsm.act("Recovery.Idle",
+            self.rx_keep.eq(1),
             self.ts2_decode.eq(1), # Disable Scrambling bit of the received TS2 (7.5.10.5.1).
             self.idle_handshake.eq(1), # Idle Symbols + handshake (7.5.4.10).
             t_ux_exit.wait.eq(ux_armed),

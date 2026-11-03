@@ -108,6 +108,7 @@ class USB3LinkLayer(LiteXModule):
         u0      = Signal()
         u0_d    = Signal()
         u0_rise = Signal()
+        rx_keep = getattr(phy, "rx_keep", Constant(0, 1)) # RX words kept until U0 (Recovery.Idle).
         self.comb += [
             u0.eq(phy.u0),
             u0_rise.eq(u0 & ~u0_d),
@@ -149,7 +150,7 @@ class USB3LinkLayer(LiteXModule):
                 rx_ctrl.eq(swap_ctrl(rx_window.c0)),
                 rx_data1.eq(swap_data(rx_window.w1)),
                 rx_window.consume.eq(Mux(u0, Mux(rx_two | rx_skip2, 2, Mux(rx_hold, 0, rx_valid)),
-                    rx_window.n)),
+                    Mux(rx_keep, 0, rx_window.n))),
             ]
         else:
             # Words window (registered): one word per cycle, up to four in the DPPs, words dropped
@@ -162,7 +163,7 @@ class USB3LinkLayer(LiteXModule):
                 rx_ctrl.eq(swap_ctrl(rx_window.c0)),
                 rx_data1.eq(swap_data(rx_window.w1)),
                 rx_window.consume.eq(Mux(u0, Mux(rx_take, rx_k, Mux(rx_hold, 0, rx_valid)),
-                    rx_window.n)),
+                    Mux(rx_keep, 0, rx_window.n))),
             ]
         rx_words = [rx_data, rx_data1] + ([swap_data(rx_window.w[i]) for i in [2, 3]] if lw == 4 else [])
         rx_shp = Signal()
@@ -219,7 +220,7 @@ class USB3LinkLayer(LiteXModule):
         if hasattr(phy, "source_lc"):
             self.comb += [
                 lc_fast.eq(phy.source_lc.valid & ~lc_main),
-                phy.source_lc.ready.eq(lc_fast | ~u0),
+                phy.source_lc.ready.eq((lc_fast & u0) | (~u0 & ~rx_keep)),
                 phy.source_lc_enable.eq(1),
                 lc_data.eq(Mux(lc_fast, swap_data(phy.source_lc.data), rx_data)),
             ]

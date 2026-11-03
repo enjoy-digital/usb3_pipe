@@ -68,7 +68,7 @@ class LanesEvent(LiteXModule):
 # LTSSM status outputs exposed by USB3PHY.
 USB3PHY_STATUS = [
     "u0", "recovery", "rx_ready", "tx_ready", "u1", "u2", "u3", "compliance", "loopback",
-    "hot_reset", "ess_inactive", "polling_idle",
+    "hot_reset", "ess_inactive", "polling_idle", "rx_keep",
 ]
 
 # LTSSM Link-Layer control interface (PM handshake, directed requests): (name, direction).
@@ -660,9 +660,13 @@ class USB3PHY(LiteXModule):
             elif name not in GEN2_PIPE_INTERFACE:
                 self.comb += connect_ltssm_pipe_signal(ltssm, pipe, name, direction)
             elif direction == "o":
+                # Gen 2 RX words kept from Recovery.Idle (rx_keep, Link Layer: processed in U0).
+                gen2_s = getattr(ltssm, name)
+                if name == "rx_ready":
+                    gen2_s = gen2_s | ltssm.rx_keep
                 self.comb += [
                     getattr(pipe,      name).eq(getattr(ltssm, name) & ~gen2_active),
-                    getattr(gen2_pipe, name).eq(getattr(ltssm, name) &  gen2_active),
+                    getattr(gen2_pipe, name).eq(gen2_s &  gen2_active),
                 ]
             else:
                 self.comb += getattr(ltssm, name).eq(
@@ -752,8 +756,10 @@ class USB3PHY(LiteXModule):
                 else:
                     self.pipe_to_ltssm(name, getattr(pipe, name), ltssm_s, pipe_cd)
             elif direction == "o":
+                # Gen 2 RX words kept from Recovery.Idle (rx_keep, Link Layer: processed in U0).
+                gen2_s = (ltssm_s | ltssm.rx_keep) if name == "rx_ready" else ltssm_s
                 self.ltssm_to_pipe(ltssm_s & ~gen2_active, getattr(pipe,      name), pipe_cd)
-                self.ltssm_to_pipe(ltssm_s &  gen2_active, getattr(gen2_pipe, name), pipe_cd)
+                self.ltssm_to_pipe(gen2_s  &  gen2_active, getattr(gen2_pipe, name), pipe_cd)
             else:
                 gen1_s = Signal(width)
                 gen2_s = Signal(width)
