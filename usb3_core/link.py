@@ -988,7 +988,11 @@ class USB3LinkLayer(LiteXModule):
         self.submodules += t_pending_hp_ss
         pending_hp_done = Signal()
         self.comb += [
-            t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood & (~adv_received | (ack_seq != send_seq))),
+            # Restarted on LGOOD_n and on LBAD (Header Packets answered: retransmission from the LRTY,
+            # else a Header Packet with errors at the partner costs a Recovery on top of its
+            # retransmission).
+            t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood & ~lc_lbad &
+                (~adv_received | (ack_seq != send_seq))),
             t_pending_hp_ss.wait.eq(t_pending_hp.wait),
             pending_hp_done.eq(Mux(ssp, t_pending_hp.done, t_pending_hp_ss.done)),
         ]
