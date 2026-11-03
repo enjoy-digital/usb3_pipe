@@ -841,7 +841,8 @@ class USB3LinkLayer(LiteXModule):
             crc32_tx.data.eq(tx_dpp.data),
             crc32_tx.bytes.eq(tx_dpp.bytes),
         ]
-        crc_next = crc32_tx.next_value
+        # Words quads: last words of 1-4 bytes on data[0:32] (DPPQuadSplitter).
+        crc_next = crc32_tx.next_value32 if lw == 4 else crc32_tx.next_value
         end_bytes = [(FRAMING_END >> 8*i) & 0xff for i in range(4)]
         def end_slice(i, j):
             return Cat(*[C(end_bytes[k], 8) for k in range(i, j)])

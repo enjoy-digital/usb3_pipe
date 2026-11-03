@@ -112,7 +112,8 @@ class CRC32(LiteXModule):
     data_width=128: the full 4-byte words of the data (4, 8, 12 or 16 bytes) processed with the
     data, the last 1-3 bytes (a word not a multiple of 4 bytes: the last word of a DPP) registered
     and processed in value/next_value (state loop on the full words only, timings): the next data
-    is then processed after a clear.
+    is then processed after a clear. next_value32: CRC including 1-4 bytes (bytes) of data[0:32] (a
+    last word on 32 bits: shallower than next_value).
     """
     def __init__(self, data_width=32, cascade=False):
         assert data_width in [32, 64, 128]
@@ -122,12 +123,19 @@ class CRC32(LiteXModule):
         self.bytes      = Signal(bits_for(data_width//8)) # i: Valid bytes (0-4, 8 with data_width=64, 0-16 with data_width=128).
         self.value      = Signal(32)                 # o
         self.next_value = Signal(32)                 # o
+        self.next_value32 = Signal(32)               # o
 
         # # #
 
         poly  = 0x04c11db7
         state = Signal(32, reset=0xffffffff)
         new   = Signal(32)
+        new32 = Signal(32)
+        self.comb += [
+            Case(self.bytes, {**{n: new32.eq(Cat(*crc_next(32, poly, state, self.data[:8*n])))
+                for n in [1, 2, 3, 4]}, "default": new32.eq(state)}),
+            self.next_value32.eq(crc_value(32, new32)),
+        ]
         if data_width == 128:
             self.add_words_tail(state, new, poly)
             return
