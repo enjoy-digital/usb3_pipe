@@ -706,11 +706,14 @@ def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
-    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False):
+    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False, burst_duplex=0):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
     itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers.
     burst_out: rounds of 4 Bulk OUT DPs sent back to back (as an xHCI host with queued transfers),
-    then their 4 ACK TPs: the device transmits ACK TPs and LGOOD_n/LCRD_x back to back."""
+    then their 4 ACK TPs: the device transmits ACK TPs and LGOOD_n/LCRD_x back to back.
+    burst_duplex: rounds of 4 Bulk OUT DPs streamed (device Type 2 credits) while the device sends 4
+    Bulk IN DPs (EP1 requests with NumP=4: the data looped back from the previous round), as a full
+    duplex benchmark."""
     s = HostScript(ssp=ssp)
     def send_itp():
         if itp:
@@ -795,6 +798,34 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
             s.tx_seq = (s.tx_seq + 1) % s.seq_mod
         for i in range(burst_stream):
             s.wait_hp()
+    if bulk and burst_duplex:
+        payload = [(13*i + 9) & 0xff for i in range(burst_len)]
+        seq     = len(bulk_payloads()) + 4*burst_out
+        in_seq  = len(bulk_payloads()) # EP1 IN Sequence Number (after the bulk_in transfers).
+        blk     = s.tt(TT_BULK)
+        if not getattr(s, "auto", False):
+            s.auto_ack()
+        def out_dps(n):
+            nonlocal seq
+            for i in range(n):
+                s.wait_credit()
+                s.send(dph(length=len(payload), ept=2, dp_seq=seq % 32, tt=blk, seq=s.tx_seq) +
+                    data_packet_payload(payload))
+                s.tx_seq = (s.tx_seq + 1) % s.seq_mod
+                seq += 1
+        s.mark("burst_duplex")
+        out_dps(4) # Looped back, sent in the first round.
+        for i in range(4):
+            s.wait_hp()                                               # ACK TPs.
+        for r in range(burst_duplex):
+            # IN request (acknowledging the previous round DPs), OUT DPs during the IN DPs.
+            s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=4, tp_seq=in_seq % 32, pp=1, tt=blk)
+            out_dps(4)
+            for i in range(8):
+                s.wait_hp()                                           # IN DPHs + OUT ACK TPs.
+            in_seq += 4
+        s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=in_seq % 32, tt=blk)
+        s.idle(4096)
     if pm:
         # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
         s.lgo(1, LXU(), "lgo_u1")

@@ -427,7 +427,8 @@ class USB3PIPESim(SoCMini):
 
     dev_pipe_cd (lanes=1, Gen 1/Gen 2): Device USB3PHY with its USB3PIPE/SerDes model in the sys clock domain
     and its LTSSM/Link interface/Core at half the frequency (USB3PHY pipe_cd, as on FPGAs where the
-    Core can't run at 125MHz), with 64-bit Link Layer words (link_words=2).
+    Core can't run at 125MHz), with 64-bit Link Layer words (link_words=2, or 128-bit: link_words=4 at Gen 2
+    with wide raw words).
 
     gen2 (lanes=1, gen2_capable): SerDes models with Gen 2 raw words, the training continues at Gen 2
     (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0, Link Layer packets with the
@@ -439,7 +440,7 @@ class USB3PIPESim(SoCMini):
         host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
         gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
         gen2_data_width=None, host_recovery=False, host_burst_out=0, host_burst_len=64,
-        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False):
+        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False, host_burst_duplex=0):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -479,7 +480,7 @@ class USB3PIPESim(SoCMini):
                 self.cd_dev_link.rst.eq(ResetSignal("sys")),
             ]
             ltssm_cds["dev"] = "dev_link"
-            link_words = 2
+            link_words = max(link_words, 2) # Words pairs (or quads: --link-words 4, Gen 2 wide words).
 
         # USB3 Host (Host = Downstream Port) / Device (Device = Upstream Port).
         phys     = {}
@@ -531,7 +532,8 @@ class USB3PIPESim(SoCMini):
                 host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp and not gen2, latency=host_latency,
                     status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2, itp=host_itp,
                     burst_out=host_burst_out, burst_len=host_burst_len,
-                    burst_stream=host_burst_stream, lbad_test=host_lbad_test).steps))
+                    burst_stream=host_burst_stream, lbad_test=host_lbad_test,
+                    burst_duplex=host_burst_duplex).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
@@ -782,9 +784,10 @@ def main():
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
-    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs).", choices=["1", "2"])
+    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs), 4 (128-bit words quads: --dev-pipe-cd --gen2 --gen2-data-width 80).", choices=["1", "2", "4"])
     parser.add_argument("--host-burst-out", default=0, help="Host model rounds of 4 Bulk OUT DPs sent back to back after the script bulk transfers.")
     parser.add_argument("--host-burst-len", default=64, help="Host model burst DPs payload length (bytes).")
+    parser.add_argument("--host-burst-duplex", default=0, help="Host model rounds of 4 Bulk OUT DPs streamed during 4 Bulk IN DPs (full duplex).")
     parser.add_argument("--host-burst-stream", default=0, help="Host model Bulk OUT DPs streamed as the device Type 2 credits allow (after the bursts).")
     parser.add_argument("--dev-loopback-depth", default=512, help="Device Bulk loopback FIFO depth (endpoint words).")
     parser.add_argument("--host-lbad-test", action="store_true", help="Host model Bulk OUT burst with a DPH CRC error: device LBAD, LRTY and retransmission.")
@@ -830,6 +833,7 @@ def main():
         host_burst_out   = int(args.host_burst_out),
         host_burst_len   = int(args.host_burst_len),
         host_burst_stream  = int(args.host_burst_stream),
+        host_burst_duplex  = int(args.host_burst_duplex),
         dev_loopback_depth = int(args.dev_loopback_depth),
         host_lbad_test     = args.host_lbad_test)
     builder = Builder(soc, output_dir=args.output_dir)

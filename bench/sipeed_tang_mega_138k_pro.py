@@ -99,7 +99,10 @@ class USB3SoC(USB3BaseSoC):
                 self.cd_gtr12.rst.eq(self.crg.cd_sys.rst),
             ]
             usb3_serdes = ClockDomainsRenamer({"sys": phy_cd})(usb3_serdes)
-            usb3_kwargs = dict(usb3_kwargs, phy_cd=phy_cd, phy_clk_freq=usb3_clk_freq, link_words=2,
+            # Link Layer words: pairs (64-bit, default) or quads (128-bit, --link-words 4: Gen 2 RX at
+            # 16 bytes per cycle).
+            link_words  = max(usb3_kwargs.get("link_words", 1), 2)
+            usb3_kwargs = dict(usb3_kwargs, phy_cd=phy_cd, phy_clk_freq=usb3_clk_freq, link_words=link_words,
                 with_debug=False, with_profile=False, with_trace=with_gtr12_debug or with_trace)
 
         # USB3 (PHY, Debug, Core, Leds) ------------------------------------------------------------
