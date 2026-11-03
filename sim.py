@@ -438,7 +438,7 @@ class USB3PIPESim(SoCMini):
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
         host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
         gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
-        gen2_data_width=None):
+        gen2_data_width=None, host_recovery=False):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -537,7 +537,8 @@ class USB3PIPESim(SoCMini):
                 self.comb += [
                     phy.source.connect(host_model.sink),
                     host_model.source.connect(phy.sink),
-                    host_model.enable.eq(ltssm.u0 | ltssm.u1 | ltssm.u2 | host_ux),
+                    host_model.enable.eq(ltssm.u0 | ltssm.u1 | ltssm.u2 | host_ux |
+                        (host_model.done & host_recovery)), # Script done: not restarted by the Recovery.
                     host_model.u0.eq(ltssm.u0),
                     ltssm.req_u1.eq(host_model.pm[0]),
                     ltssm.req_u2.eq(host_model.pm[1]),
@@ -622,10 +623,44 @@ class USB3PIPESim(SoCMini):
             # Host script done (or error), then 2^10 cycles.
             end_timer = WaitTimer(2**10)
             self.submodules += end_timer
+            script_end = Signal()
             self.comb += [
-                end_timer.wait.eq(host_model.done | host_model.error),
+                script_end.eq(host_model.done | host_model.error),
+                end_timer.wait.eq(script_end),
                 done.eq(end_timer.done),
             ]
+            if host_recovery:
+                # Host directed to Recovery from U0 once the script is done, end once both sides are
+                # back in U0.
+                host_ltssm = phys["host"].ltssm
+                dev_u0     = Signal()
+                recovered  = Signal()
+                requested  = Signal()
+                self.specials += MultiReg(phys["dev"].ltssm.u0, dev_u0)
+                self.sync += [
+                    host_ltssm.directed_recovery.eq(0),
+                    If(host_model.done & ~requested & host_ltssm.u0,
+                        Display("HOST directed to Recovery"),
+                        host_ltssm.directed_recovery.eq(1),
+                        requested.eq(1),
+                    ),
+                    If(requested & host_ltssm.recovery, recovered.eq(1)),
+                ]
+                self.comb += end_timer.wait.eq(host_model.error |
+                    (recovered & host_ltssm.u0 & dev_u0))
+                # Device Recovery triggers in U0: TS1 received (LTSSM), Link Layer request (cause).
+                dev_ltssm = phys["dev"].ltssm
+                dev_link  = self.dev_usb3_core.link
+                dev_sync  = getattr(self.sync, ltssm_cds["dev"])
+                dev_cause = Signal(len(dev_link.dbg_recovery_cause))
+                self.comb += dev_cause.eq(dev_link.dbg_recovery_cause)
+                dev_sync += [
+                    If(dev_ltssm.u0 & dev_ltssm.ts_rx_ts1,
+                        Display("[%08d] DEV  TS1 received in U0", timer)),
+                    If(dev_link.dbg_recovery,
+                        Display("[%08d] DEV  Link Layer Recovery request (cause %x)", timer,
+                            dev_cause)),
+                ]
             self.sync += If(done & ~report,
                 If(host_model.error,
                     Display("HOST script error")
@@ -745,6 +780,7 @@ def main():
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
     parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs).", choices=["1", "2"])
+    parser.add_argument("--host-recovery", action="store_true", help="Host directed to Recovery from U0 after the script (back to U0 on both sides).")
     parser.add_argument("--host-itp",      action="store_true", help="Host model Isochronous Timestamp Packets between the transfers.")
     parser.add_argument("--dev-pipe-cd",   action="store_true", help="Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, 64-bit Link Layer words).")
     parser.add_argument("--gen2-data-width", default=None, type=int, help="Gen 2 raw words width of the SerDes models (default: 40, ex: 80 as GW5 GTR12 1:4 at 125MHz).")
@@ -781,7 +817,8 @@ def main():
         link_words       = int(args.link_words),
         dev_pipe_cd      = args.dev_pipe_cd,
         dev_u1u2         = not args.dev_no_u1u2,
-        gen2_data_width  = args.gen2_data_width)
+        gen2_data_width  = args.gen2_data_width,
+        host_recovery    = args.host_recovery)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

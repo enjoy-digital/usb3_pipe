@@ -102,9 +102,9 @@ class TestPHY(unittest.TestCase):
                 self.assertRegex(out, side + r"\s*entering " + state.replace(".", r"\.") + " state", tail)
         self.assertIn("HOST script done", out, tail)
 
-    def run_link_words2(self, args):
+    def run_link_words2(self, args, recovery=False):
         # Device core on PHY words pairs (64-bit Link Layer/Bulk endpoints, sim.py --link-words 2):
-        # enumeration and Bulk loopback with the host script, no Recovery.
+        # enumeration and Bulk loopback with the host script, no Recovery (unless recovery).
         cmd = [sys.executable, str(ROOT / "sim.py"), "--link-words", "2", *args,
             "--output-dir", str(get_output_dir(self))]
         try:
@@ -116,7 +116,9 @@ class TestPHY(unittest.TestCase):
         tail = "\n---- tail ----\n" + out[-4000:]
         self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
         self.assertIn("HOST script done", out, tail)
-        self.assertNotRegex(out, r"entering Recovery\.Active state", tail)
+        if not recovery:
+            self.assertNotRegex(out, r"entering Recovery\.Active state", tail)
+        return out, tail
 
     def test_phy_link_words2(self):
         # Gen 1: words pairs <-> Gen 1 PIPE words adapters.
@@ -148,6 +150,16 @@ class TestPHY(unittest.TestCase):
         # Same with the Host SSC and ITPs (SKP Ordered Sets between the packets, long SKP OS).
         self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80", "--ssc",
             "--host-itp"])
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_recovery(self):
+        # Same with the Host directed to Recovery from U0 after the script: Recovery at Gen 2 on
+        # 80-bit raw words (Data Blocks -> TS1/TS2 -> SDS/Logical Idle), back to U0 on both sides.
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--host-recovery"], recovery=True)
+        for side in ["HOST", r"DEV\s"]:
+            self.assertRegex(out, side + r"\s*entering Recovery\.Idle state", tail)
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
 
     def test_phy_dev_pipe_cd_no_u1u2(self):
         # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE
