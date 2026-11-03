@@ -234,6 +234,37 @@ class TestCoreLinkWide(unittest.TestCase):
         self.assertEqual(len(lcs(throttled, 0x080)), 0)     # No LCRD_x while throttled.
         self.assertGreaterEqual(len(lcs(released, 0x080)), 2)
 
+    def test_rx_link_command_copies(self):
+        # Link Command words: accepted with a bit error in one copy, rejected with one correct copy
+        # and the other one far from it (corrupted/misframed word passing a single CRC-5).
+        rng  = random.Random(5)
+        dut  = LinkDUT(link_words=1)
+        link = dut.link
+        phy  = dut.phy
+        def lc(info, flip):
+            words = link_command(info)
+            d, c  = words[1]
+            return [words[0], (d ^ flip, c)]
+        words  = advertisement()
+        words += lc(LCRD(0), 0x00000001) # 1 bit in a copy: accepted.
+        words += lc(LCRD(1), 0x00010000) # 1 bit in the other copy: accepted.
+        words += lc(LCRD(2), 0x0000ffff) # Copy far from the correct one: rejected.
+        words += lc(LCRD(3), 0x00000700) # 3 bits: accepted.
+        received = []
+        def host():
+            yield from start(phy)
+            yield from send_words(phy, words, 1, rng)
+            for _ in range(64):
+                yield
+        @passive
+        def monitor():
+            while True:
+                if (yield link.dbg_rx_lc):
+                    received.append((yield link.dbg_rx_lc_info))
+                yield
+        run_simulation(dut, [host(), monitor()])
+        self.assertEqual(received[-3:], [LCRD(0), LCRD(1), LCRD(3)])
+
     def test_rx_words(self):
         self.rx_test(link_words=1)
 

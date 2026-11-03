@@ -214,6 +214,8 @@ class USB3LinkLayer(LiteXModule):
         self.crc5_lc1 = crc5_lc1 = CRC5()
         lc_ok0 = Signal()
         lc_ok1 = Signal()
+        lc_diff  = Signal(16)
+        lc_close = Signal() # Copies differing by 3 bits at most.
         if hasattr(phy, "source_lc"):
             self.comb += [
                 lc_fast.eq(phy.source_lc.valid & ~lc_main),
@@ -226,9 +228,15 @@ class USB3LinkLayer(LiteXModule):
         self.comb += [
             crc5_lc0.data.eq(lc_data[0:11]),
             crc5_lc1.data.eq(lc_data[16:27]),
+            lc_diff.eq(lc_data[0:16] ^ lc_data[16:32]),
+            lc_close.eq(Reduce("ADD", [Cat(lc_diff[i], C(0, 4)) for i in range(16)]) <= 3),
             lc_ok0.eq(crc5_lc0.value == lc_data[11:16]),
             lc_ok1.eq(crc5_lc1.value == lc_data[27:32]),
-            lc_valid.eq((lc_main | (lc_fast & u0)) & (lc_ok0 | lc_ok1)),
+            # A copy with a correct CRC-5 and the two copies close (<= 3 bits differing): a Link
+            # Command with an error in one copy is accepted, a corrupted/misframed word passes a
+            # single CRC-5 once in 16 (seen on hardware with a degraded receiver: LBAD/LGOOD_n/
+            # LCRD_x decoded from noise, spurious retransmissions and Recoveries).
+            lc_valid.eq((lc_main | (lc_fast & u0)) & (lc_ok0 | lc_ok1) & lc_close),
         ]
         self.sync += [
             lc_check.eq(lc_valid),
