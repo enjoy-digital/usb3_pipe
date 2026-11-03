@@ -128,9 +128,9 @@ def tx_header_layout():
     return header_layout() + [("dpp", 1)]
 
 def dpp_layout(data_width=32):
-    """Data Packet Payload words (bytes: valid bytes of the word, 1-4 or 1-8 with 64-bit words, 0 for
-    a zero-length DPP)."""
-    return [("data", data_width), ("bytes", 3 if data_width == 32 else 4)]
+    """Data Packet Payload words (bytes: valid bytes of the word, 1-4, 1-8 or 1-16 with 32, 64 or
+    128-bit words, 0 for a zero-length DPP)."""
+    return [("data", data_width), ("bytes", bits_for(data_width//8))]
 
 def link_pairs_layout():
     """PHY Link Layer words pairs (USB3PHY link_words=2): words: 1 or 2 valid words, word 0 first
