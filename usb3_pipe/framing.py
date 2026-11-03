@@ -541,12 +541,23 @@ class Gen2RXFraming(LiteXModule):
         resync_ok = Signal()
         self.comb += resync_ok.eq((resync_code != CODE_UNKNOWN) & (out[16:24] == out[8:16]) &
             (out[24:32] == GEN2_EPF))
+        # Checks registered (timings: the window shift to the decision), the window is held in
+        # RESYNC (no shift).
+        resync_ok_r   = Signal()
+        resync_code_r = Signal(3)
         fsm.act("RESYNC",
             If(avail,
-                If(resync_ok,
+                NextValue(resync_ok_r,   resync_ok),
+                NextValue(resync_code_r, resync_code),
+                NextState("RESYNC-CHECK")
+            )
+        )
+        fsm.act("RESYNC-CHECK",
+            If(avail,
+                If(resync_ok_r,
                     NextValue(self.corrected, self.corrected + 1),
-                    NextValue(kind, resync_code - 1),
-                    set_rem(resync_code),
+                    NextValue(kind, resync_code_r - 1),
+                    set_rem(resync_code_r),
                     NextState("PACKET")
                 ).Else(
                     NextValue(self.errors, self.errors + 1),
@@ -568,11 +579,11 @@ class Gen2RXFraming(LiteXModule):
         hlen       = Signal(16, reset_less=True)
         replica0   = out[8*(20 % nbytes):8*(20 % nbytes) + 16]
         replica1   = out[8*(20 % nbytes) + 16:8*(20 % nbytes) + 32]
-        dph_length = Signal(16)
+        dph_len12  = Signal(11) # DPP length + 12: candidates +12, selected (timings).
         self.sync += If(fsm.ongoing("PACKET") & avail & out_ready & (kind == KIND_DPH) &
             (rem == hlen_rem), hlen.eq(hlen_now))
-        self.comb += dph_length.eq(Mux(replica0 == replica1, replica0,
-            hlen_now if hlen_rem <= nbytes else hlen))
+        hlen_sel = hlen_now if hlen_rem <= nbytes else hlen
+        self.comb += dph_len12.eq(Mux(replica0 == replica1, replica0[0:11] + 12, hlen_sel[0:11] + 12))
         p_next = Signal(pw + 1)
         fsm.act("IDLE",
             If(avail,
@@ -605,7 +616,7 @@ class Gen2RXFraming(LiteXModule):
                 ),
                 If(out_ready,
                     If((kind == KIND_DPH) & last,
-                        NextValue(dpp_len12, dph_length + 12),
+                        NextValue(dpp_len12, dph_len12),
                     ),
                     NextValue(rem, rem - nbytes),
                     NextValue(start, 0),
