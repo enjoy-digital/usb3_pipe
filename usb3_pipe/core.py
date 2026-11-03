@@ -345,7 +345,7 @@ class Gen2PIPE(LiteXModule):
         if (framing_bytes == 32) and (link_cd is None):
             link_cd = "sys"
         self.link_rx_cd = "sys" if framing_bytes == 8 else link_cd # RX source/source_lc domain.
-        link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout()
+        link_layout = [("data", 32), ("ctrl", 4)] if link_words == 1 else gen2_link_layout(link_words)
         for name in GEN2_PIPE_INTERFACE:
             setattr(self, name, Signal(name=name))
         self.tx_data = Signal(data_width) # o: TX words (tx clock domain).

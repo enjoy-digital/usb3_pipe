@@ -48,12 +48,14 @@ def byte_offset(n):
     return Cat(C(0, 3), n)
 
 def gen2_link_layout(n=2):
-    """Link words pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words (n words: 1-n)."""
+    """Link words pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words (n words: 1-n, ex: quads
+    with n=4)."""
     return [("data", 32*n), ("ctrl", 4*n), ("words", bits_for(n))]
 
 class WordsNarrower(LiteXModule):
     """Link words entries (gen2_link_layout(n_in), 1-n_in words) -> entries of up to n_out words
-    (gen2_link_layout(n_out), or link words with n_out=1 and words=False)."""
+    (gen2_link_layout(n_out), or link words with n_out=1 and words=False), packets first/last on
+    their first/last entries."""
     def __init__(self, n_in, n_out, words=True):
         assert n_in % n_out == 0
         self.sink   = sink   = stream.Endpoint(gen2_link_layout(n_in))
@@ -75,6 +77,8 @@ class WordsNarrower(LiteXModule):
                 source.ctrl.eq(sink.ctrl[4*n_out*i:4*n_out*(i+1)]),
             ] for i in range(steps)}),
             sink.ready.eq(source.ready & done),
+            source.first.eq(sink.first & (index == 0)),
+            source.last.eq(sink.last & done),
         ]
         if words:
             self.comb += source.words.eq(Mux(done, rem, n_out))
@@ -83,10 +87,10 @@ class WordsNarrower(LiteXModule):
         )
 
 class WordsToPairs(LiteXModule):
-    """Link words -> words pairs (gen2_link_layout, one word per entry)."""
-    def __init__(self):
+    """Link words -> words pairs (gen2_link_layout, one word per entry; n: words entries of n words)."""
+    def __init__(self, n=2):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = source = stream.Endpoint(gen2_link_layout())
+        self.source = source = stream.Endpoint(gen2_link_layout(n))
 
         # # #
 
@@ -98,25 +102,29 @@ class WordsToPairs(LiteXModule):
         ]
 
 class PairsToWords(LiteXModule):
-    """Words pairs (gen2_link_layout, 1 or 2 words per entry) -> link words (packets first/last on
-    their first/last words)."""
-    def __init__(self):
-        self.sink   = sink   = stream.Endpoint(gen2_link_layout())
+    """Words pairs (gen2_link_layout, 1 or 2 words per entry; n: entries of 1-n words) -> link words
+    (packets first/last on their first/last words)."""
+    def __init__(self, n=2):
+        self.sink   = sink   = stream.Endpoint(gen2_link_layout(n))
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
 
         # # #
 
-        second = Signal()
+        index = Signal(max=n) # Word of the entry.
+        done  = Signal()      # Last word of the entry.
         self.comb += [
+            done.eq(sink.words <= (index + 1)),
             source.valid.eq(sink.valid),
-            source.first.eq(sink.first & ~second),
-            source.last.eq(sink.last & (second | (sink.words == 1))),
-            source.data.eq(Mux(second, sink.data[32:64], sink.data[0:32])),
-            source.ctrl.eq(Mux(second, sink.ctrl[4:8],   sink.ctrl[0:4])),
-            sink.ready.eq(source.ready & (second | (sink.words == 1))),
+            source.first.eq(sink.first & (index == 0)),
+            source.last.eq(sink.last & done),
+            Case(index, {i: [
+                source.data.eq(sink.data[32*i:32*(i + 1)]),
+                source.ctrl.eq(sink.ctrl[4*i:4*(i + 1)]),
+            ] for i in range(n)}),
+            sink.ready.eq(source.ready & done),
         ]
         self.sync += If(source.valid & source.ready,
-            second.eq(~second & (sink.words == 2))
+            If(done, index.eq(0)).Else(index.eq(index + 1))
         )
 
 class WordsPacker(LiteXModule):
@@ -1162,11 +1170,13 @@ class Gen2LinkTX(LiteXModule):
     state change).
     """
     def __init__(self, buffer_depth=512, units_delay=8, link_words=1, nbytes=8):
-        assert link_words in [1, 2]
+        assert link_words in [1, 2, 4]
         assert nbytes in [8, 32]
-        # Link Layer words (link_words=1) or words pairs (link_words=2, gen2_link_layout).
+        assert (link_words != 4) or (nbytes == 32)
+        # Link Layer words (link_words=1), words pairs (link_words=2, gen2_link_layout) or quads
+        # (link_words=4: narrowed to pairs, 8 bytes per cycle).
         self.sink        = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
-            else gen2_link_layout())
+            else gen2_link_layout(link_words))
         self.source      = source = stream.Endpoint([("data", 128)])
         self.flush       = Signal() # i: Flush (sys, link not in U0): framer reset, buffers drained.
         self.skp_pending = Signal() # i: SKP Ordered Set pending (Gen2TX, tx clock domain).
@@ -1214,10 +1224,18 @@ class Gen2LinkTX(LiteXModule):
         # 32 bytes: framing/packing (sys) ----------------------------------------------------------
         # Registered valid/ready around the framer and the widener (timings).
         framer_sink = stream.Endpoint(gen2_link_layout())
-        self.comb += [
-            sink.connect(framer_sink, omit={"words"}),
-            framer_sink.words.eq(sink.words if link_words == 2 else 1),
-        ]
+        if link_words == 4:
+            self.sink_narrower = sink_narrower = ResetInserter()(WordsNarrower(4, 2))
+            self.comb += [
+                sink_narrower.reset.eq(self.flush),
+                sink.connect(sink_narrower.sink),
+                sink_narrower.source.connect(framer_sink),
+            ]
+        else:
+            self.comb += [
+                sink.connect(framer_sink, omit={"words"}),
+                framer_sink.words.eq(sink.words if link_words == 2 else 1),
+            ]
         self.sink_buffer = sink_buffer = ResetInserter()(Buffer(gen2_link_layout(),
             pipe_valid=True, pipe_ready=True))
         self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener(32))
@@ -1305,12 +1323,14 @@ class Gen2LinkRX(LiteXModule):
     buffer (sys, level: RX throttling), Link Command words buffer.
     """
     def __init__(self, buffer_depth=1024, link_words=1, nbytes=8):
-        assert link_words in [1, 2]
+        assert link_words in [1, 2, 4]
         assert nbytes in [8, 32]
+        assert (link_words != 4) or (nbytes == 32)
         self.sink        = sink   = stream.Endpoint([("data", 128)])         # rx clock domain.
-        # Link Layer words (link_words=1) or words pairs (link_words=2, gen2_link_layout).
+        # Link Layer words (link_words=1), words pairs (link_words=2, gen2_link_layout) or quads
+        # (link_words=4).
         self.source      = source = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
-            else gen2_link_layout())
+            else gen2_link_layout(link_words))
         self.source_lc   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.lc_enable   = Signal() # i: LGOOD_n/LCRD_x on source_lc (sys clock domain, static).
         self.data_stream = Signal() # i: Receiving the Data Stream (rx clock domain).
@@ -1426,5 +1446,5 @@ class Gen2LinkRX(LiteXModule):
             source.valid.eq(words.valid & self.rx_ready),
             words.ready.eq(~self.rx_ready | source.ready),
         ]
-        if link_words == 2:
+        if link_words >= 2:
             self.comb += source.words.eq(words.words)

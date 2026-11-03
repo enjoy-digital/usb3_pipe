@@ -110,6 +110,9 @@ class USB3PHY(LiteXModule):
       pipe_clk_freq (>= 125MHz), LTSSM and Link interface in sys (add_pipe_cdc): ex. sys at 62.5MHz
       with link_words=2 on FPGAs where the LTSSM/Link Layer can't reach 125MHz. pipe_rx_depth: RX CDC
       FIFO depth override (default: 256 words pairs with link_words=2, for Bulk OUT bursts).
+      link_words=4 (pipe_cd, Gen 2 capable SerDes with raw words wider than 40 bits): Link Layer
+      words quads (128-bit, Gen 2 RX words up to 16 bytes per cycle), Gen 1 words and the TX words
+      in up to two words per entry.
 
     Link interface (what a USB3 Link Layer needs from the PHY, the Link Layer does not have to know
     the PHY internals):
@@ -127,11 +130,12 @@ class USB3PHY(LiteXModule):
         serdes = [serdes] if lanes == 1 else serdes
         assert len(serdes) == lanes
         assert (lanes == 1) or (not with_endianness_swap)
-        assert link_words in [1, 2]
+        assert link_words in [1, 2, 4]
         assert (lanes == 1) or (link_words == 1)
         assert (pipe_cd is None) or (lanes == 1)
-        assert (pipe_cd is None) or (not gen2_capable) or (link_words == 2)
-        self.link_words = link_words # Link Layer words (1: 32-bit) or words pairs (2: 64-bit).
+        assert (pipe_cd is None) or (not gen2_capable) or (link_words in [2, 4])
+        assert (link_words != 4) or ((pipe_cd is not None) and gen2_capable)
+        self.link_words = link_words # Link Layer words (1: 32-bit), pairs (2: 64-bit) or quads (4: 128-bit).
         self.pipe_cd    = pipe_cd
         self.with_u1u2  = with_u1u2 # U1/U2 Link Power Management (USB3LTSSM with_u1u2).
         assert with_u1u2 or (lanes == 1)
@@ -387,7 +391,8 @@ class USB3PHY(LiteXModule):
             self.specials += MultiReg(pipe_s, ltssm_s)
 
     def add_pipe_cdc(self, pipe, pipe_cd, fifo_depth=32, rx_depth=None):
-        """Link words (link_words=1) or words pairs (link_words=2) sys <-> pipe_cd through AsyncFIFOs
+        """Link words (link_words=1), words pairs (link_words=2) or quads (link_words=4: Gen 2 RX
+        words quads, Gen 1 and TX words in pairs) sys <-> pipe_cd through AsyncFIFOs
         (registered FIFO writes: timings): returns the (sink, source) streams.
 
         With link_words=2 and the Link Layer at half the PIPE frequency, the RX Logical Idle words
@@ -401,9 +406,12 @@ class USB3PHY(LiteXModule):
         the Link Layer reads its words at least at the received words rate)."""
         from usb3_pipe.framing import gen2_link_layout, WordsPacker, PairsToWords, PacketsBuffer
         from usb3_pipe.framing import LogicalIdleFilter
-        layout = [("data", 32), ("ctrl", 4)] if self.link_words == 1 else gen2_link_layout()
-        sink   = stream.Endpoint(layout)
-        source = stream.Endpoint(layout)
+        from usb3_pipe.framing import WordsNarrower
+        # layout: Gen 1 words/TX words (pairs with link_words=4), ext_layout: Link Layer words.
+        layout     = [("data", 32), ("ctrl", 4)] if self.link_words == 1 else gen2_link_layout()
+        ext_layout = layout if self.link_words != 4 else gen2_link_layout(4)
+        sink   = stream.Endpoint(ext_layout)
+        source = stream.Endpoint(ext_layout)
         if self.link_words == 1:
             pipe_sink, pipe_source = stream.Endpoint(layout), stream.Endpoint(layout)
             self.comb += [
@@ -446,7 +454,7 @@ class USB3PHY(LiteXModule):
 
             # Gen 2 (Gen2PIPE, words pairs) or Gen 1 words, selected by gen2_active.
             if hasattr(self, "gen2_pipe"):
-                pipe_source = self.add_gen2_pipe_cdc(pipe, pipe_cd, layout, tx_packets, to_words,
+                pipe_source = self.add_gen2_pipe_cdc(pipe, pipe_cd, ext_layout, tx_packets, to_words,
                     to_pairs)
             else:
                 self.comb += [
@@ -459,14 +467,20 @@ class USB3PHY(LiteXModule):
         self.tx_cdc_buffer = tx_buffer = Buffer(layout, pipe_ready=True)
         self.tx_cdc        = tx_cdc    = ClockDomainsRenamer({"write": "sys", "read": pipe_cd})(
             AsyncFIFO(layout, fifo_depth))
+        tx_sink = tx_buffer.sink
+        if self.link_words == 4:
+            # Gen 1 TX words: quads -> pairs.
+            self.tx_narrower = tx_narrower = WordsNarrower(4, 2)
+            self.comb += tx_narrower.source.connect(tx_buffer.sink)
+            tx_sink = tx_narrower.sink
         if hasattr(self, "gen2_tx_sink"):
             self.comb += If(self.gen2_active,
                 sink.connect(self.gen2_tx_sink),
             ).Else(
-                sink.connect(tx_buffer.sink),
+                sink.connect(tx_sink),
             )
         else:
-            self.comb += sink.connect(tx_buffer.sink)
+            self.comb += sink.connect(tx_sink)
         self.comb += [
             tx_buffer.source.connect(tx_cdc.sink),
             tx_cdc.source.connect(pipe_sink),
@@ -513,7 +527,7 @@ class USB3PHY(LiteXModule):
         # DPPs): bounded RX backlog with a Link Layer slower than the line rate. Level from a
         # resynchronized (Gray) count of the written entries and the count of the read entries.
         self.rx_throttle = Signal() # o
-        if self.link_words == 2:
+        if self.link_words >= 2:
             cw       = bits_for(rx_depth) + 1
             wr_count = Signal(cw)
             wr_gray  = Signal(cw)
@@ -703,6 +717,7 @@ class USB3PHY(LiteXModule):
             return to_pairs.source
 
         # RX (no back-pressure).
+        assert self.link_words == 2
         rx_source = stream.Endpoint(layout)
         self.comb += [
             gen2_source.ready.eq(1),
