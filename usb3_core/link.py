@@ -126,6 +126,8 @@ class USB3LinkLayer(LiteXModule):
         rx_ctrl  = Signal(4, reset_less=True)
         rx_data1 = Signal(32) # Next word (words pairs: DPP data 8 bytes per cycle).
         rx_two   = Signal()   # Words pairs: current and next words consumed (DPP data).
+        rx_skip2 = Signal()   # Words pairs: two data words of a skipped DPP consumed.
+        rx_hold  = Signal()   # Current word not consumed.
         if lw == 1:
             self.comb += phy.source.ready.eq(1)
             self.sync += [
@@ -142,7 +144,8 @@ class USB3LinkLayer(LiteXModule):
                 rx_data.eq(swap_data(rx_window.w0)),
                 rx_ctrl.eq(swap_ctrl(rx_window.c0)),
                 rx_data1.eq(swap_data(rx_window.w1)),
-                rx_window.consume.eq(Mux(u0, Mux(rx_two, 2, rx_valid), rx_window.n)),
+                rx_window.consume.eq(Mux(u0, Mux(rx_two | rx_skip2, 2, Mux(rx_hold, 0, rx_valid)),
+                    rx_window.n)),
             ]
         rx_shp = Signal()
         rx_slc = Signal()
@@ -314,6 +317,11 @@ class USB3LinkLayer(LiteXModule):
                 ).Elif(rx_slc,
                     dpp_missing.eq(expect_now),
                     NextState("LC")
+                ).Elif((rx_sdp & ~expect_now) if lw == 2 else 0,
+                    # DPP of a Header Packet not accepted (ex: ignored until LRTY after an LBAD):
+                    # skipped at the DPP data rate (else at one word per cycle in IDLE: the next
+                    # Header Packets, ex: the retransmitted ones, checked/acknowledged late).
+                    NextState("DPP-SKIP")
                 ).Elif(rx_sdp & expect_now,
                     crc32_rx.clear.eq(1),
                     *load_rem(dpp_new, hp_w[1][16:32], dpp_length), # length_now.
@@ -332,6 +340,22 @@ class USB3LinkLayer(LiteXModule):
                 If(hp_count == 3,
                     hp_last.eq(1),
                     NextState("IDLE")
+                )
+            )
+        )
+        rx_fsm.act("DPP-SKIP",
+            If(~u0,
+                NextState("IDLE")
+            ).Elif(rx_valid,
+                If(rx_ctrl != 0,
+                    If((rx_ctrl == 0b1111) & ((rx_data == FRAMING_END) | (rx_data == FRAMING_EDB)),
+                        NextState("IDLE") # DPPEND/DPPABORT consumed.
+                    ).Else(
+                        rx_hold.eq(lw == 2), # Other framing (DPP cut): handled in IDLE.
+                        NextState("IDLE")
+                    )
+                ).Elif((rx_window.n == 2) & (rx_window.c1 == 0) if lw == 2 else 0,
+                    rx_skip2.eq(1)
                 )
             )
         )
