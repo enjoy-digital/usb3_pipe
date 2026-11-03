@@ -406,7 +406,7 @@ class GW5RateSequencer(LiteXModule):
     (busy), the rate dependent registers are written through UPAR (writes: [(addr, value_5g,
     value_10g)] or [(addr, value_5g, value_10g, wait_cycles)]: wait after the write, ex: PLL
     recalibration), then the lane is released after a settling delay. rate_10g is resynchronized
-    (asynchronous input)."""
+    (asynchronous input). Values: constants or Signals (runtime values, ex: TX FFE)."""
     def __init__(self, upar, writes, settle_cycles=256):
         writes = [tuple(w) + (0,)*(4 - len(w)) for w in writes]
         self.rate_10g = Signal() # i: Asynchronous.
@@ -420,11 +420,12 @@ class GW5RateSequencer(LiteXModule):
 
         index = Signal(max=max(len(writes), 2))
         timer = Signal(max=max([settle_cycles] + [w for a, v5, v10, w in writes]) + 1)
+        value = lambda v: C(v, 32) if isinstance(v, int) else v
         self.comb += [
             upar.addr.eq(Array([C(a, 24) for a, v5, v10, w in writes])[index]),
             upar.wrdata.eq(Mux(current,
-                Array([C(v10, 32) for a, v5, v10, w in writes])[index],
-                Array([C(v5,  32) for a, v5, v10, w in writes])[index])),
+                Array([value(v10) for a, v5, v10, w in writes])[index],
+                Array([value(v5)  for a, v5, v10, w in writes])[index])),
         ]
         waits = [w for a, v5, v10, w in writes]
         self.fsm = fsm = FSM(reset_state="IDLE")
@@ -599,9 +600,28 @@ class GW5USB3SerDes(USB3SerDes):
         # Gen 2: rate changes (UPAR registers writes, lane held in reset), raw words ---------------
         if gen2_capable:
             rate_port = GW5UPARPort()
+            writes = gw5_usb3_rate_writes(lane, refclk, pll=pll,
+                clk_freq=sys_clk_freq if xcvr_clk_freq is None else xcvr_clk_freq)
+            # TX FFE at 10Gbps (runtime, bring-up: applied at the next rate change, lane 0 registers):
+            # tx_ffe_manual: amplitude (txlev), post-cursor (c1) and pre-cursor (cm) values, else the
+            # configuration defaults (5G values, as read on hardware).
+            self.tx_ffe_manual = Signal()  # i
+            self.tx_ffe_txlev  = Signal(4) # i
+            self.tx_ffe_c1     = Signal(4) # i
+            self.tx_ffe_cm     = Signal(4) # i
+            if lane == 0:
+                txlev = Signal(32)
+                c1cm  = Signal(32)
+                ffe   = Signal(32)
+                self.comb += [
+                    txlev.eq(Mux(self.tx_ffe_manual, Cat(C(0, 12), self.tx_ffe_txlev), 0xe000)),
+                    c1cm.eq(Mux(self.tx_ffe_manual, Cat(self.tx_ffe_cm, C(0, 4), self.tx_ffe_c1), 0xb00)),
+                    ffe.eq(Mux(self.tx_ffe_manual, 0x110, 0)),
+                ]
+                writes = writes[:1] + [(0x908234, 0xe000, txlev), (0x908238, 0xb00, c1cm),
+                    (0x9082d8, 0, ffe)] + writes[1:]
             self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(
-                GW5RateSequencer(rate_port, gw5_usb3_rate_writes(lane, refclk, pll=pll,
-                    clk_freq=sys_clk_freq if xcvr_clk_freq is None else xcvr_clk_freq)))
+                GW5RateSequencer(rate_port, writes))
             # TX driver control register reset by the lane reconfiguration: written again after.
             busy_d = Signal()
             sync   = getattr(self.sync, xcvr_cd)
