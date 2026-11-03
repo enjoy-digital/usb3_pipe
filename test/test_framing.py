@@ -589,14 +589,14 @@ class TestGen2RXFraming(unittest.TestCase):
             self.rx_framing_idle_gaps(1, nbytes=nbytes, errors=True)
 
     def test_rx_framing_bit_errors(self):
-        # Random bit errors anywhere in the stream (~1 per 100 bytes): a unit with an error can be
+        # Random bit errors anywhere in the stream (~1 per 50 bytes): a unit with an error can be
         # lost/corrupted, the units without errors are all received intact and in order (no loss
         # of the framing: a bit error never costs the following units).
         for nbytes in [8, 16, 32]:
             for seed in range(2):
                 self.rx_framing_bit_errors(nbytes, seed)
 
-    def rx_framing_bit_errors(self, nbytes, seed, n_units=40, rate=1/100):
+    def rx_framing_bit_errors(self, nbytes, seed, n_units=60, rate=1/50):
         rng   = random.Random(100 + seed)
         units = random_units(rng, n_units, short=True)
         stream_bytes = []
