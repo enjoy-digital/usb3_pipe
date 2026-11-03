@@ -46,7 +46,7 @@ class USB3Bench(LiteXModule):
         count = Signal(32)
         self.comb += [
             source.valid.eq(self.source_enable),
-            source.data.eq(Cat(*[count + i for i in range(n)])),
+            source.data.eq(Cat(*[(count + i)[:32] for i in range(n)])), # 32-bit words (sums: 33-bit).
             source.be.eq(2**(4*n) - 1),
         ]
         self.sync += If(source.valid & source.ready,
