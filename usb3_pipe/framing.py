@@ -316,11 +316,13 @@ class Gen2RXFraming(LiteXModule):
     bytes per cycle for wider transceiver words (ex: 80-bit at 125MHz, a Data Block every 1.65
     cycles).
 
-    With lc_enable, LGOOD_n/LCRD_x Link Commands (both copies identical) are output on source_lc
+    With lc_enable, LGOOD_n/LCRD_x/LBAD Link Commands (both copies identical) are output on source_lc
     (Link Command word, Symbol 0 on data[0:8]) instead of source: they only concern the transmitter
-    (Header Packets acknowledgements and credits), the Link Layer gets them without waiting behind
-    the received packets (RX buffering, 7.2.4.1: Header Packets held in the Tx Header Buffers until
-    LGOOD_n).
+    (Header Packets acknowledgements, credits and retransmission requests), the Link Layer gets them
+    without waiting behind the received packets (RX buffering, 7.2.4.1: Header Packets held in the
+    Tx Header Buffers until LGOOD_n; an LBAD held behind received DPPs would delay the LRTY and the
+    retransmissions while the partner rejects the Header Packets sent in the meantime). LRTY stays
+    in order (it delimits the retransmitted Header Packets).
     """
     def __init__(self, nbytes=8):
         assert nbytes in [8, 16, 32]
@@ -467,12 +469,13 @@ class Gen2RXFraming(LiteXModule):
                 data.eq(byte),
             )
 
-        # LGOOD_n/LCRD_x Link Commands (Link Command Word copies identical, 7.2.2): source_lc. With
-        # 16+ bytes per cycle, decoded on the registered output (timings).
+        # LGOOD_n/LCRD_x/LBAD Link Commands (Link Command Word copies identical, 7.2.2): source_lc.
+        # With 16+ bytes per cycle, decoded on the registered output (timings).
         def is_fast_lc(lc_word):
             return (lc_word[0:16] == lc_word[16:32]) & (
                 ((lc_word[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
-                ((lc_word[0:11] & 0x7f8) == 0x080))   # LCRD_x/LCRD1_x/LCRD2_x.
+                ((lc_word[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.
+                ( lc_word[0:11]          == 0x180))   # LBAD.
         lc_fast   = Signal()
         out_ready = Signal()
         if nbytes >= 16:

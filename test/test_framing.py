@@ -44,16 +44,16 @@ def header_packet(rng, dw0_type=0x00, length=None):
 
 def link_command(rng):
     lcw = rng.getrandbits(16)
-    # LGOOD_n/LCRD_x (Gen2RXFraming source_lc) 1/3 of the time.
-    lcw = rng.choice([lcw, lcw, (lcw & ~0x7f0), (lcw & ~0x7f8) | 0x080])
+    # LGOOD_n/LCRD_x/LBAD (Gen2RXFraming source_lc) 3/5 of the time.
+    lcw = rng.choice([lcw, lcw, (lcw & ~0x7f0), (lcw & ~0x7f8) | 0x080, (lcw & ~0x7ff) | 0x180])
     return [k_word(SLC), (lcw | (lcw << 16), 0)]
 
 def is_fast_lc(unit):
-    """LGOOD_n/LCRD_x Link Command (Gen2RXFraming source_lc)."""
+    """LGOOD_n/LCRD_x/LBAD Link Command (Gen2RXFraming source_lc)."""
     if unit[0] != k_word(SLC):
         return False
     lcw = unit[1][0] & 0xffff
-    return ((lcw & 0x7f0) == 0x000) or ((lcw & 0x7f8) == 0x080)
+    return ((lcw & 0x7f0) == 0x000) or ((lcw & 0x7f8) == 0x080) or ((lcw & 0x7ff) == 0x180)
 
 def split_units(units, lc_enable=True):
     """Expected Gen2RXFraming outputs: words (source), Link Command words (source_lc)."""
