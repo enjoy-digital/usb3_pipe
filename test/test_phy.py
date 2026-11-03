@@ -24,6 +24,63 @@ pytestmark = pytest.mark.sim
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Simulation output checks -------------------------------------------------------------------------
+
+def _host_rx_words(out):
+    """HOST_RX words of the simulation output, (data, ctrl, data in transmission byte order)."""
+    words = []
+    for m in re.finditer(r"HOST_RX ([0-9a-f]{8}) ([0-9a-f])", out):
+        v = int(m.group(1), 16)
+        words.append((v, int(m.group(2), 16), int.from_bytes(v.to_bytes(4, "big"), "little")))
+    return words
+
+def device_packets_crc_errors(out):
+    """Device Header Packets (CRC-16/CRC-5) and Link Commands (CRC-5) received by the host model with
+    errors: (packets checked, errors)."""
+    from usb3_core.host_model import crc16, crc5
+    words, n, errors, i = _host_rx_words(out), 0, 0, 0
+    while i < len(words):
+        data, ctrl, _ = words[i]
+        if (data, ctrl) == (0xfbfbfbf7, 0xf) and i + 4 < len(words):
+            hdr = b"".join(w[2].to_bytes(4, "little") for w in words[i+1:i+4])
+            crc, lcw = words[i+4][2] & 0xffff, words[i+4][2] >> 16
+            n += 1
+            errors += not ((crc16(list(hdr)) == crc) and (crc5(lcw & 0x7ff) == (lcw >> 11)))
+            i += 5
+        elif (data, ctrl) == (0xfefefef7, 0xf) and i + 1 < len(words):
+            v = words[i+1][2]
+            n += 1
+            errors += not (((v & 0xffff) == (v >> 16)) and (crc5(v & 0x7ff) == ((v >> 11) & 0x1f)))
+            i += 2
+        else:
+            i += 1
+    return n, errors
+
+def host_lgood_latencies(out):
+    """Host Header Packet -> device LGOOD_n latencies (cycles) from the host model timing logs (after
+    the last host U0 entry, the first LGOOD_n being the Advertisement)."""
+    hp, lgood, pending, adv = [], [], None, True
+    for line in out.splitlines():
+        if "HOST entering U0" in line:
+            hp, lgood, pending, adv = [], [], None, True
+        m = re.match(r"HOST_HPTX\s+(\d+)", line)
+        if m:
+            hp.append(int(m.group(1)))
+        m = re.match(r"HOST_LCRX\s+(\d+)", line)
+        if m:
+            pending = int(m.group(1))
+        m = re.match(r"HOST_RX ([0-9a-f]{8}) 0$", line)
+        if m and pending is not None:
+            v = int.from_bytes(int(m.group(1), 16).to_bytes(4, "big"), "little") & 0x7ff
+            if (v & 0x7f0) == 0:
+                if adv:
+                    adv = False
+                else:
+                    lgood.append(pending)
+            pending = None
+    return [l - h for h, l in zip(hp, lgood)]
+
+
 class TestPHY(unittest.TestCase):
     def test_phy_reaches_idle(self):
         # Repo root = ../
@@ -160,6 +217,22 @@ class TestPHY(unittest.TestCase):
         for side in ["HOST", r"DEV\s"]:
             self.assertRegex(out, side + r"\s*entering Recovery\.Idle state", tail)
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_burst_out(self):
+        # Gen 2 80-bit with Bulk OUT bursts of max size DPs back to back (as a host with queued
+        # transfers) and a reactive host model (LGOOD_n/LCRD_x for each device Header Packet as soon
+        # as received): no Recovery, device Header Packets/Link Commands CRCs, LGOOD_n latency of the
+        # Link Layer slower than the line rate bounded (DPPs buffered before the next DPH).
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--host-burst-out", "4", "--host-burst-len", "1024"])
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+        n, errors = device_packets_crc_errors(out)
+        self.assertGreater(n, 50)
+        self.assertEqual(errors, 0)
+        latencies = host_lgood_latencies(out)
+        self.assertGreaterEqual(len(latencies), 16)
+        self.assertLess(max(latencies), 1333) # 10us at the 133MHz host model clock.
 
     def test_phy_dev_pipe_cd_no_u1u2(self):
         # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE
