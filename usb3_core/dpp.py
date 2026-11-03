@@ -109,6 +109,49 @@ class DPPSplitter(LiteXModule):
         )
 
 
+class DPPQuadSplitter(LiteXModule):
+    """128-bit Data Packet Payload words -> full 16-byte words (words=4: not last), the full 4-byte
+    words of the last word (words=1-3, not last), then its last 1-4 bytes in a 32-bit word
+    (data[0:32], words=1, last): the Link Layer appends the CRC-32/END on 32-bit words."""
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint(dpp_layout(128))
+        self.source = source = stream.Endpoint(dpp_layout(128) + [("words", 3)])
+
+        # # #
+
+        tail  = Signal() # Last bytes of a split last word.
+        full  = Signal()
+        split = Signal()
+        k     = Signal(2) # Full 4-byte words of a split last word.
+        self.comb += [
+            full.eq((sink.bytes == 16) & ~sink.last),
+            split.eq(sink.last & (sink.bytes > 4)),
+            k.eq((sink.bytes - 1)[2:4]),
+            source.valid.eq(sink.valid),
+            source.first.eq(sink.first & ~tail),
+            If(tail,
+                Case(k, {i: source.data.eq(sink.data[32*i:]) for i in range(4)}),
+                source.bytes.eq(sink.bytes - Cat(C(0, 2), k)),
+                source.words.eq(1),
+                source.last.eq(1),
+                sink.ready.eq(source.ready),
+            ).Elif(split,
+                source.data.eq(sink.data),
+                source.bytes.eq(Cat(C(0, 2), k)),
+                source.words.eq(k),
+            ).Else(
+                source.data.eq(sink.data),
+                source.bytes.eq(sink.bytes),
+                source.words.eq(Mux(full, 4, 1)),
+                source.last.eq(sink.last),
+                sink.ready.eq(source.ready),
+            ),
+        ]
+        self.sync += If(source.valid & source.ready,
+            tail.eq(~tail & split)
+        )
+
+
 class DPPNarrower(LiteXModule):
     """Data Packet Payload words (dw_in bits) -> words of dw_out bits (full words, the last one 1 to
     dw_out/8 bytes, a zero-length DPP as one 0-byte word)."""

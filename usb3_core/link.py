@@ -41,7 +41,7 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common import *
 from usb3_core.crc    import CRC5, CRC16, CRC16Words, CRC32
-from usb3_core.dpp    import DPPSplitter, DPPNarrower
+from usb3_core.dpp    import DPPSplitter, DPPQuadSplitter
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -59,7 +59,7 @@ class USB3LinkLayer(LiteXModule):
     def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}, crc32_cascade=False):
         # PHY Link Layer words (32-bit), words pairs (64-bit, USB3PHY link_words=2) or words quads
         # (128-bit, USB3PHY link_words=4): DPP words of 32, 64 or 128 bits (4, 8 or 16 bytes per
-        # cycle in the received DPPs; transmitted DPPs at 8 bytes per cycle with 128-bit words).
+        # cycle in the DPPs).
         lw = len(phy.sink.data)//32
         assert lw in [1, 2, 4]
         dw = 32*lw
@@ -701,6 +701,8 @@ class USB3LinkLayer(LiteXModule):
         tx_word  = Signal(32)
         tx_word2 = Signal(32) # Words pairs: second word (DPP data, tx_two).
         tx_two   = Signal()
+        tx_words = [Signal(32) for _ in range(2)] # Words quads: third/fourth words (DPP data).
+        tx_nw    = Signal(3)  # Words quads: words of the entry (DPP data).
         tx_ctrl  = Signal(4)
         tx_valid = Signal()
         tx_first = Signal() # First word of a packet (Link Command, Header Packet, DPH + DPP).
@@ -710,9 +712,11 @@ class USB3LinkLayer(LiteXModule):
             tx_pipe.sink.valid.eq(tx_valid),
             tx_pipe.sink.first.eq(tx_first),
             tx_pipe.sink.last.eq(tx_last),
-            tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2))),
+            tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2),
+                *[swap_data(w) for w in tx_words][:max(lw - 2, 0)])),
             tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
-            tx_pipe.sink.words.eq(Mux(tx_two, 2, 1)) if lw >= 2 else [],
+            tx_pipe.sink.words.eq(Mux(tx_two, 2, 1)) if lw == 2 else [],
+            tx_pipe.sink.words.eq(Mux(tx_nw != 0, tx_nw, 1)) if lw == 4 else [],
             tx_pipe.source.connect(phy.sink),
         ]
         tx_ready = tx_pipe.sink.ready
@@ -810,25 +814,21 @@ class USB3LinkLayer(LiteXModule):
             # Registered splitter output: CRC-32/END tail logic from registers (timings: PipeReady then
             # PipeValid, no skid multiplexer before the CRC-32), registered ready: endpoints DPP read
             # path isolated from the TX.
-            # Words quads: 128-bit DPP words narrowed to 64-bit words (8 bytes per cycle).
-            self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter()
+            # Words quads: 16-byte words (16 bytes per cycle), last bytes on 32-bit words.
+            self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter() if lw == 2 else DPPQuadSplitter()
             layout = tx_dpp_splitter.source.description
             self.tx_dpp_pipe_ready = tx_dpp_pipe_ready = stream.PipeReady(layout)
             self.tx_dpp_pipe_valid = tx_dpp_pipe_valid = stream.PipeValid(layout)
-            if lw == 4:
-                self.tx_dpp_narrower = tx_dpp_narrower = DPPNarrower(128, 64)
-                self.comb += self.tx_dpp.connect(tx_dpp_narrower.sink)
-                tx_dpp_sink = tx_dpp_narrower.source
-            else:
-                tx_dpp_sink = self.tx_dpp
             self.comb += [
-                tx_dpp_sink.connect(tx_dpp_splitter.sink),
+                self.tx_dpp.connect(tx_dpp_splitter.sink),
                 tx_dpp_splitter.source.connect(tx_dpp_pipe_ready.sink),
                 tx_dpp_pipe_ready.source.connect(tx_dpp_pipe_valid.sink),
             ]
             tx_dpp = tx_dpp_pipe_valid.source
             self.comb += tx_word2.eq(tx_dpp.data[32:64])
-        self.crc32_tx = crc32_tx = CRC32(data_width=min(dw, 64), cascade=crc32_cascade)
+            if lw == 4:
+                self.comb += [tx_words[i].eq(tx_dpp.data[64 + 32*i:96 + 32*i]) for i in range(2)]
+        self.crc32_tx = crc32_tx = CRC32(data_width=dw, cascade=crc32_cascade)
         self.comb += [
             crc32_tx.data.eq(tx_dpp.data),
             crc32_tx.bytes.eq(tx_dpp.bytes),
@@ -934,7 +934,8 @@ class USB3LinkLayer(LiteXModule):
         tx_fsm.act("DPP-DATA",
             tx_valid.eq(tx_dpp.valid),
             tx_word.eq(dpp_word),
-            tx_two.eq(tx_dpp.two) if lw >= 2 else [],
+            tx_two.eq(tx_dpp.two) if lw == 2 else [],
+            tx_nw.eq(tx_dpp.words) if lw == 4 else [],
             tx_dpp.ready.eq(tx_ready),
             If(tx_dpp.valid & tx_ready,
                 crc32_tx.ce.eq(1),

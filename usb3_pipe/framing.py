@@ -248,65 +248,63 @@ class PacketsBuffer(LiteXModule):
 
 class WordsWindow(LiteXModule):
     """Link words pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
-    w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n).
+    w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n). nwords: entries and
+    window of nwords words (w[i]/c[i]/f[i], n: 0-nwords).
 
     decode: optional function (data, ctrl) -> nflags-bit flags of a word, computed on the incoming
     words and stored with them (f0/f1: registered decodes for the window consumer, timings)."""
-    def __init__(self, decode=None, nflags=0):
-        self.sink    = sink = stream.Endpoint(gen2_link_layout())
-        self.n       = Signal(2)  # o
-        self.w0      = Signal(32) # o
-        self.c0      = Signal(4)  # o
-        self.w1      = Signal(32) # o
-        self.c1      = Signal(4)  # o
-        self.f0      = Signal(max(nflags, 1)) # o
-        self.f1      = Signal(max(nflags, 1)) # o
-        self.consume = Signal(2)  # i
+    def __init__(self, decode=None, nflags=0, nwords=2):
+        self.sink    = sink = stream.Endpoint(gen2_link_layout(nwords))
+        self.n       = Signal(bits_for(nwords))                       # o
+        self.w       = [Signal(32) for _ in range(nwords)]            # o
+        self.c       = [Signal(4)  for _ in range(nwords)]            # o
+        self.f       = [Signal(max(nflags, 1)) for _ in range(nwords)] # o
+        self.consume = Signal(bits_for(nwords))                       # i
+        self.w0, self.c0, self.f0 = self.w[0], self.c[0], self.f[0]
+        self.w1, self.c1, self.f1 = self.w[1], self.c[1], self.f[1]
 
         # # #
 
+        size  = 2*nwords
         cw    = 4 + nflags # ctrl + flags.
-        data  = [Signal(32, reset_less=True) for _ in range(4)]
-        ctrl  = [Signal(cw, reset_less=True) for _ in range(4)]
-        level = Signal(3)
-        rem   = Signal(3)
+        data  = [Signal(32, reset_less=True) for _ in range(size)]
+        ctrl  = [Signal(cw, reset_less=True) for _ in range(size)]
+        level = Signal(bits_for(size))
+        rem   = Signal(bits_for(size))
         self.comb += [
-            self.w0.eq(data[0]), self.c0.eq(ctrl[0][:4]),
-            self.w1.eq(data[1]), self.c1.eq(ctrl[1][:4]),
+            [self.w[i].eq(data[i]) for i in range(nwords)],
+            [self.c[i].eq(ctrl[i][:4]) for i in range(nwords)],
             rem.eq(level - self.consume),
-            sink.ready.eq(rem <= 2),
+            sink.ready.eq(rem <= nwords),
         ]
         if nflags:
-            self.comb += [
-                self.f0.eq(ctrl[0][4:]),
-                self.f1.eq(ctrl[1][4:]),
-            ]
+            self.comb += [self.f[i].eq(ctrl[i][4:]) for i in range(nwords)]
         in_ctrl = []
-        for w in range(2):
+        for w in range(nwords):
             d, c = sink.data[32*w:32*(w+1)], sink.ctrl[4*w:4*(w+1)]
             in_ctrl.append(Cat(c, decode(d, c)) if nflags else c)
         accept = Signal()
         self.comb += accept.eq(sink.valid & sink.ready)
-        for i in range(4):
+        for i in range(size):
             shifted_d = Signal(32)
             shifted_c = Signal(cw)
             self.comb += Case(self.consume, {c: [
-                shifted_d.eq(data[i + c] if (i + c) < 4 else 0),
-                shifted_c.eq(ctrl[i + c] if (i + c) < 4 else 0)] for c in range(3)})
-            second = (accept & (sink.words == 2) & (rem == (i - 1))) if i > 0 else 0
-            self.sync += If(accept & (rem == i),
-                data[i].eq(sink.data[0:32]), ctrl[i].eq(in_ctrl[0])
-            ).Elif(second,
-                data[i].eq(sink.data[32:64]), ctrl[i].eq(in_ctrl[1])
-            ).Else(
-                data[i].eq(shifted_d), ctrl[i].eq(shifted_c)
-            )
-        level_next = Signal(3)
+                shifted_d.eq(data[i + c] if (i + c) < size else 0),
+                shifted_c.eq(ctrl[i + c] if (i + c) < size else 0)] for c in range(nwords + 1)})
+            # Slot i written by the sink word j at rem + j == i (j < sink.words), else shifted.
+            stmt = [data[i].eq(shifted_d), ctrl[i].eq(shifted_c)]
+            for j in reversed(range(min(nwords, i + 1))):
+                cond = accept & (rem == (i - j)) & ((sink.words > j) if j > 0 else 1)
+                stmt = [If(cond,
+                    data[i].eq(sink.data[32*j:32*(j + 1)]), ctrl[i].eq(in_ctrl[j])
+                ).Else(*stmt)]
+            self.sync += stmt
+        level_next = Signal(bits_for(size))
         self.comb += level_next.eq(rem + Mux(accept, sink.words, 0))
         self.sync += [
             level.eq(level_next),
             # Available words registered (timings).
-            self.n.eq(Mux(level_next >= 2, 2, level_next)),
+            self.n.eq(Mux(level_next >= nwords, nwords, level_next)),
         ]
 
 # Gen 2 RX Framing ---------------------------------------------------------------------------------
@@ -640,26 +638,28 @@ def gen2_tx_unit_layout(nbytes=8):
     return [("data", 8*nbytes), ("bytes", bits_for(nbytes))]
 
 class Gen2TXUnitsWidener(LiteXModule):
-    """Transmission units entries: 8 bytes -> nbytes (16 or 32: entries of a unit grouped, the
-    entries before the last one of a unit are full: 8 bytes). The bytes after the last one of an
-    entry are Idle Symbols (Gen2TXBlocksPacker padding)."""
-    def __init__(self, nbytes=32):
+    """Transmission units entries: 8 bytes (or in_bytes: 16) -> nbytes (16 or 32: entries of a unit
+    grouped, the entries before the last one of a unit are full). The bytes after the last one of
+    an entry are Idle Symbols (Gen2TXBlocksPacker padding)."""
+    def __init__(self, nbytes=32, in_bytes=8):
         assert nbytes in [16, 32]
-        n = nbytes//8
-        self.sink   = sink   = stream.Endpoint(gen2_tx_unit_layout(8))
+        assert in_bytes in [8, 16]
+        n  = nbytes//in_bytes
+        ib = in_bytes
+        self.sink   = sink   = stream.Endpoint(gen2_tx_unit_layout(ib))
         self.source = source = stream.Endpoint(gen2_tx_unit_layout(nbytes))
 
         # # #
 
-        count  = Signal(max=n)                             # Held entries.
-        held_d = [Signal(64, reset_less=True) for _ in range(n - 1)]
-        data   = Signal(64)
-        idle   = int.from_bytes(bytes([GEN2_IDLE])*8, "little")
+        count  = Signal(max=max(n, 2))                     # Held entries.
+        held_d = [Signal(8*ib, reset_less=True) for _ in range(n - 1)]
+        data   = Signal(8*ib)
+        idle   = int.from_bytes(bytes([GEN2_IDLE])*ib, "little")
         self.comb += [data[8*j:8*(j+1)].eq(Mux(j >= sink.bytes, GEN2_IDLE, sink.data[8*j:8*(j+1)]))
-            for j in range(8)]
+            for j in range(ib)]
         out = Case(count, {c: [
-            source.data.eq(Cat(*held_d[:c], data, *[Constant(idle, 64)]*(n - 1 - c))),
-            source.bytes.eq(8*c + sink.bytes)] for c in range(n)})
+            source.data.eq(Cat(*held_d[:c], data, *[Constant(idle, 8*ib)]*(n - 1 - c))),
+            source.bytes.eq(ib*c + sink.bytes)] for c in range(n)})
         self.comb += [
             If(sink.last | (count == (n - 1)),
                 # Last entry of a unit or entries completing the output entry.
@@ -687,10 +687,13 @@ class Gen2TXFramer(LiteXModule):
     device does not defer), bytes after the DPPEND/DPPABORT removed. Units: Header Packet, Link
     Command, DPH with its DPP (no spacing allowed between them, 7.2.1.2.3).
 
-    One word per cycle, two in the DPPs (data words): 8 bytes per cycle."""
-    def __init__(self):
-        self.sink   = sink   = stream.Endpoint(gen2_link_layout())
-        self.source = source = stream.Endpoint(gen2_tx_unit_layout())
+    One word per cycle, two in the DPPs (data words): 8 bytes per cycle. nwords=4: words quads
+    entries, four words in the DPPs (16 bytes per cycle), units entries of 16 bytes."""
+    def __init__(self, nwords=2):
+        assert nwords in [2, 4]
+        eb = 4*nwords # Units entries bytes.
+        self.sink   = sink   = stream.Endpoint(gen2_link_layout(nwords))
+        self.source = source = stream.Endpoint(gen2_tx_unit_layout(eb))
 
         # # #
 
@@ -705,20 +708,22 @@ class Gen2TXFramer(LiteXModule):
                 data[0:8] == EDB,
                 data[0:5] == TYPE_DP,
                 ctrl == 0)
-        self.window = window = WordsWindow(decode, nflags=9)
+        self.window = window = WordsWindow(decode, nflags=9, nwords=nwords)
         self.comb += sink.connect(window.sink)
         valid0 = Signal()
         data0  = window.w0
         ctrl0  = window.c0
         ready0 = Signal() # Word 0 consumed (when valid0).
         two    = Signal() # Words 0 and 1 consumed (DPP data, 8-byte chunk).
+        four   = Signal() # Words 0 to 3 consumed (DPP data, 16-byte chunk, nwords=4).
         self.comb += [
             valid0.eq(window.n != 0),
-            window.consume.eq(Mux(two, 2, Mux(valid0 & ready0, 1, 0))),
+            window.consume.eq(Mux(four, 4, Mux(two, 2, Mux(valid0 & ready0, 1, 0)))),
         ]
 
-        # Words -> bytes chunks (4 bytes, last chunk 1-4, 8 bytes in the DPPs) ---------------------
-        chunk = stream.Endpoint([("data", 64), ("bytes", 4)])
+        # Words -> bytes chunks (4 bytes, last chunk 1-4, 8 or 16 bytes in the DPPs) --------------
+        chunk_layout = [("data", 8*eb), ("bytes", bits_for(eb))]
+        chunk = stream.Endpoint(chunk_layout)
 
         def mapped(data, ctrl, dphp=0):
             """Gen 2 bytes of a word (K Symbols to framing bytes)."""
@@ -830,11 +835,19 @@ class Gen2TXFramer(LiteXModule):
                 )
             )
         )
-        dpp_two = Signal() # Two data words available (no K Symbols): 8-byte chunk.
-        self.comb += dpp_two.eq((window.n == 2) & window.f0[8] & window.f1[8])
+        dpp_two  = Signal() # Two data words available (no K Symbols): 8-byte chunk.
+        dpp_four = Signal() # Four data words available (nwords=4): 16-byte chunk.
+        self.comb += dpp_two.eq((window.n >= 2) & window.f0[8] & window.f1[8])
+        if nwords == 4:
+            self.comb += dpp_four.eq((window.n == 4) & window.f[0][8] & window.f[1][8] &
+                window.f[2][8] & window.f[3][8])
         fsm.act("DPP",
             chunk.valid.eq(valid0),
-            If(dpp_two,
+            If(dpp_four,
+                chunk.data.eq(Cat(*window.w)),
+                chunk.bytes.eq(16),
+                four.eq(chunk.ready),
+            ).Elif(dpp_two,
                 chunk.data.eq(Cat(data0, window.w1)),
                 chunk.bytes.eq(8),
                 two.eq(chunk.ready),
@@ -844,8 +857,11 @@ class Gen2TXFramer(LiteXModule):
                 chunk.last.eq(epf != 0),
                 ready0.eq(chunk.ready),
             ),
-            If(valid0 & chunk.ready & ~dpp_two & (epf != 0), NextState("IDLE"))
+            If(valid0 & chunk.ready & ~dpp_two & ~dpp_four & (epf != 0), NextState("IDLE"))
         )
+        if nwords == 4:
+            self.add_entries16(chunk, chunk_layout, source)
+            return
 
         # Chunks -> 8-byte entries (4-byte chunks paired, 8-byte chunks never last) ----------------
         # Registered valid/ready (timings: window/FSM decisions to the pairing).
@@ -885,6 +901,41 @@ class Gen2TXFramer(LiteXModule):
                 held_v.eq(1),
             ).Else(
                 held_v.eq(0),
+            )
+        )
+
+    def add_entries16(self, chunk, chunk_layout, source):
+        # Chunks -> 16-byte entries (4/8/16-byte chunks packed in full entries, the last chunk of a
+        # unit 1-4 bytes), held words: 0-3 (multiples of 4 bytes).
+        # Registered valid/ready (timings: window/FSM decisions to the packing).
+        self.chunk_buffer = chunk_buffer = Buffer(chunk_layout, pipe_valid=True, pipe_ready=True)
+        self.comb += chunk.connect(chunk_buffer.sink)
+        chunk = chunk_buffer.source
+        held  = Signal(96, reset_less=True)
+        h     = Signal(2) # Held words.
+        cw    = Signal(3) # Chunk words.
+        t     = Signal(4) # Held + chunk words.
+        out   = Signal()
+        self.comb += [
+            cw.eq(Mux(chunk.bytes == 16, 4, Mux(chunk.bytes == 8, 2, 1))),
+            t.eq(h + cw),
+            out.eq(chunk.last | (t >= 4)),
+            source.valid.eq(chunk.valid & out),
+            Case(h, {c: source.data.eq(Cat(held[:32*c], chunk.data)[:128]) for c in range(4)}),
+            source.bytes.eq(Mux(chunk.last, Cat(C(0, 2), h) + chunk.bytes, 16)),
+            source.last.eq(chunk.last),
+            chunk.ready.eq(Mux(out, source.ready, 1)),
+        ]
+        self.sync += If(chunk.valid & chunk.ready,
+            If(chunk.last,
+                h.eq(0),
+            ).Elif(out,
+                # Chunk words after the entry held.
+                h.eq(t - 4),
+                Case(h, {c: held.eq(chunk.data[32*(4 - c):] if c else 0) for c in range(4)}),
+            ).Else(
+                h.eq(t),
+                Case(h, {c: held.eq(Cat(held[:32*c], chunk.data)[:96]) for c in range(4)}),
             )
         )
 
@@ -1174,7 +1225,7 @@ class Gen2LinkTX(LiteXModule):
         assert nbytes in [8, 32]
         assert (link_words != 4) or (nbytes == 32)
         # Link Layer words (link_words=1), words pairs (link_words=2, gen2_link_layout) or quads
-        # (link_words=4: narrowed to pairs, 8 bytes per cycle).
+        # (link_words=4: framer on quads, 16 bytes per cycle in the DPPs).
         self.sink        = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
             else gen2_link_layout(link_words))
         self.source      = source = stream.Endpoint([("data", 128)])
@@ -1183,7 +1234,7 @@ class Gen2LinkTX(LiteXModule):
 
         # # #
 
-        self.framer = framer = ResetInserter()(Gen2TXFramer())
+        self.framer = framer = ResetInserter()(Gen2TXFramer(nwords=4 if link_words == 4 else 2))
         flush_tx = Signal()
         self.specials += MultiReg(self.flush, flush_tx, "tx")
         self.comb += framer.reset.eq(self.flush)
@@ -1223,22 +1274,18 @@ class Gen2LinkTX(LiteXModule):
 
         # 32 bytes: framing/packing (sys) ----------------------------------------------------------
         # Registered valid/ready around the framer and the widener (timings).
-        framer_sink = stream.Endpoint(gen2_link_layout())
+        fw          = 4 if link_words == 4 else 2 # Framer words.
+        framer_sink = stream.Endpoint(gen2_link_layout(fw))
         if link_words == 4:
-            self.sink_narrower = sink_narrower = ResetInserter()(WordsNarrower(4, 2))
-            self.comb += [
-                sink_narrower.reset.eq(self.flush),
-                sink.connect(sink_narrower.sink),
-                sink_narrower.source.connect(framer_sink),
-            ]
+            self.comb += sink.connect(framer_sink)
         else:
             self.comb += [
                 sink.connect(framer_sink, omit={"words"}),
                 framer_sink.words.eq(sink.words if link_words == 2 else 1),
             ]
-        self.sink_buffer = sink_buffer = ResetInserter()(Buffer(gen2_link_layout(),
+        self.sink_buffer = sink_buffer = ResetInserter()(Buffer(gen2_link_layout(fw),
             pipe_valid=True, pipe_ready=True))
-        self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener(32))
+        self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener(32, in_bytes=4*fw))
         self.unit_buffer = unit_buffer = ResetInserter()(Buffer(gen2_tx_unit_layout(32),
             pipe_valid=True, pipe_ready=True))
         # Units buffer (store and forward, units bytes up to 1060: 34 entries).

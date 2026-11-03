@@ -111,8 +111,7 @@ class USB3PHY(LiteXModule):
       with link_words=2 on FPGAs where the LTSSM/Link Layer can't reach 125MHz. pipe_rx_depth: RX CDC
       FIFO depth override (default: 256 words pairs with link_words=2, for Bulk OUT bursts).
       link_words=4 (pipe_cd, Gen 2 capable SerDes with raw words wider than 40 bits): Link Layer
-      words quads (128-bit, Gen 2 RX words up to 16 bytes per cycle), Gen 1 words and the TX words
-      in up to two words per entry.
+      words quads (128-bit, Gen 2 DPP data up to 16 bytes per cycle), Gen 1 words in pairs.
 
     Link interface (what a USB3 Link Layer needs from the PHY, the Link Layer does not have to know
     the PHY internals):
@@ -391,8 +390,8 @@ class USB3PHY(LiteXModule):
             self.specials += MultiReg(pipe_s, ltssm_s)
 
     def add_pipe_cdc(self, pipe, pipe_cd, fifo_depth=32, rx_depth=None):
-        """Link words (link_words=1), words pairs (link_words=2) or quads (link_words=4: Gen 2 RX
-        words quads, Gen 1 and TX words in pairs) sys <-> pipe_cd through AsyncFIFOs
+        """Link words (link_words=1), words pairs (link_words=2) or quads (link_words=4: Gen 2 words
+        quads, Gen 1 words in pairs) sys <-> pipe_cd through AsyncFIFOs
         (registered FIFO writes: timings): returns the (sink, source) streams.
 
         With link_words=2 and the Link Layer at half the PIPE frequency, the RX Logical Idle words
