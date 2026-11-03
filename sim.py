@@ -438,7 +438,8 @@ class USB3PIPESim(SoCMini):
         prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256, host_status_gap=64, host_pm=False,
         host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
         gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
-        gen2_data_width=None, host_recovery=False, host_burst_out=0, host_burst_len=64):
+        gen2_data_width=None, host_recovery=False, host_burst_out=0, host_burst_len=64,
+        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -529,7 +530,8 @@ class USB3PIPESim(SoCMini):
                 # Sets by the Gen2TX, packets re-aligned by the Gen 2 framing).
                 host_model = renamer(USB3HostModel(enumeration_script(skp=host_skp and not gen2, latency=host_latency,
                     status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2, itp=host_itp,
-                    burst_out=host_burst_out, burst_len=host_burst_len).steps))
+                    burst_out=host_burst_out, burst_len=host_burst_len,
+                    burst_stream=host_burst_stream, lbad_test=host_lbad_test).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
@@ -558,7 +560,7 @@ class USB3PIPESim(SoCMini):
                         USB3BulkOUT(ept=2, max_burst=8, data_width=dw)],
                     with_lpm    = host_lpm))
                 self.add_module(name=f"{name}_usb3_core", module=core)
-                loopback = renamer(stream.SyncFIFO(endpoint_layout(dw), 2*256, buffered=True))
+                loopback = renamer(stream.SyncFIFO(endpoint_layout(dw), dev_loopback_depth, buffered=True))
                 self.add_module(name=f"{name}_loopback", module=loopback)
                 self.comb += [
                     core.endpoints[1].source.connect(loopback.sink),
@@ -783,6 +785,9 @@ def main():
     parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs).", choices=["1", "2"])
     parser.add_argument("--host-burst-out", default=0, help="Host model rounds of 4 Bulk OUT DPs sent back to back after the script bulk transfers.")
     parser.add_argument("--host-burst-len", default=64, help="Host model burst DPs payload length (bytes).")
+    parser.add_argument("--host-burst-stream", default=0, help="Host model Bulk OUT DPs streamed as the device Type 2 credits allow (after the bursts).")
+    parser.add_argument("--dev-loopback-depth", default=512, help="Device Bulk loopback FIFO depth (endpoint words).")
+    parser.add_argument("--host-lbad-test", action="store_true", help="Host model Bulk OUT burst with a DPH CRC error: device LBAD, LRTY and retransmission.")
     parser.add_argument("--host-recovery", action="store_true", help="Host directed to Recovery from U0 after the script (back to U0 on both sides).")
     parser.add_argument("--host-itp",      action="store_true", help="Host model Isochronous Timestamp Packets between the transfers.")
     parser.add_argument("--dev-pipe-cd",   action="store_true", help="Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, 64-bit Link Layer words).")
@@ -823,7 +828,10 @@ def main():
         gen2_data_width  = args.gen2_data_width,
         host_recovery    = args.host_recovery,
         host_burst_out   = int(args.host_burst_out),
-        host_burst_len   = int(args.host_burst_len))
+        host_burst_len   = int(args.host_burst_len),
+        host_burst_stream  = int(args.host_burst_stream),
+        dev_loopback_depth = int(args.dev_loopback_depth),
+        host_lbad_test     = args.host_lbad_test)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         opt_level   = "O0",

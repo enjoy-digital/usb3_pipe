@@ -216,6 +216,8 @@ OP_ACK  = 8 # Reactive acknowledges from here (data: rx_seq [3:0], lcrd [9:8], l
             # LGOOD_n + LCRD_x/LCRD2_x sent for each device Header Packet as soon as received,
             # between the script packets (as a host Link Layer, 7.2.4.1).
 OP_WAITN = 9 # Wait data device Header Packets received since OP_ACK (reactive acknowledges).
+OP_WAITCRED = 10 # Wait a device Type 2 credit (LCRD2_x received since OP_ACK, 4 at OP_ACK), consumed.
+OP_WAITLBAD = 11 # Wait data device LBADs received since OP_ACK.
 
 # Host LTSSM PM controls (OP_PM).
 PM_REQ_U1  = 0b00001
@@ -311,6 +313,12 @@ class USB3HostModel(LiteXModule):
             OP_WAITN: [
                 timer.wait.eq(run),
             ],
+            OP_WAITCRED: [
+                timer.wait.eq(run),
+            ],
+            OP_WAITLBAD: [
+                timer.wait.eq(run),
+            ],
             OP_SKP: [
                 self.skp.eq(run),
             ],
@@ -337,6 +345,12 @@ class USB3HostModel(LiteXModule):
         n_lcrd2    = Signal(4) # LCRD2_x to send.
         rx_hdr     = Signal()  # Word after HPSTART (DW0) expected.
         hp_count   = Signal(16) # Device Header Packets received since OP_ACK.
+        credits2   = Signal(8)  # Device Type 2 credits available (LCRD2_x received - DPs sent).
+        rx_lc      = Signal()   # Word after LCSTART (Link Command Word) expected.
+        rx_lcrd2   = Signal()
+        cred_take  = Signal()
+        lbad_count = Signal(8)  # Device LBADs received since OP_ACK.
+        lc_rx_info = Signal(11) # Received Link Command information (word after LCSTART).
         # RX: device Header Packets (HPSTART, then DW0: Type).
         inc_lgood = Signal()
         inc_lcrd  = Signal()
@@ -350,6 +364,26 @@ class USB3HostModel(LiteXModule):
                 rx_hdr.eq((sink.ctrl == 0b1111) & (sink.data == 0xfbfbfbf7))
             ),
             If(~ack_enable, hp_count.eq(0)).Elif(inc_lgood, hp_count.eq(hp_count + 1)),
+            If(sink.valid,
+                rx_lc.eq((sink.ctrl == 0b1111) & (sink.data == 0xfefefef7))
+            ),
+            If(~ack_enable,
+                lbad_count.eq(0)
+            ).Elif(ack_enable & sink.valid & rx_lc & (lc_rx_info == 0x180),
+                lbad_count.eq(lbad_count + 1),
+                Display("HOST_LBAD_RX"),
+            ),
+            If(~ack_enable,
+                credits2.eq(4)
+            ).Else(
+                credits2.eq(credits2 + rx_lcrd2 - cred_take)
+            ),
+        ]
+        # Device LCRD2_x (Link Command Word: first symbol in data[31:24]).
+        self.comb += cred_take.eq(self.enable & ~self.error & (fields["op"] == OP_WAITCRED) & (credits2 != 0))
+        self.comb += [
+            lc_rx_info.eq(Cat(sink.data[24:32], sink.data[16:19])),
+            rx_lcrd2.eq(ack_enable & sink.valid & rx_lc & ((lc_rx_info & 0x7fc) == 0x084)),
         ]
         # TX: Link Command (LCSTART + Link Command Word x2) between the script packets.
         self.crc5 = crc5 = CRC5()
@@ -424,6 +458,22 @@ class USB3HostModel(LiteXModule):
         ).Elif(~self.error,
             Case(fields["op"], {
                 OP_SEND: If(script.valid & script.ready, step.eq(step + 1)),
+                OP_WAITLBAD: [
+                    If(lbad_count >= fields["data"][0:8],
+                        step.eq(step + 1)
+                    ).Elif(timer.done,
+                        self.error.eq(1),
+                        Display("HOST_TIMEOUT step %d", step)
+                    )
+                ],
+                OP_WAITCRED: [
+                    If(credits2 != 0,
+                        step.eq(step + 1)
+                    ).Elif(timer.done,
+                        self.error.eq(1),
+                        Display("HOST_TIMEOUT step %d", step)
+                    )
+                ],
                 OP_WAITN: [
                     If(hp_count >= fields["data"][0:16],
                         step.eq(step + 1)
@@ -517,6 +567,9 @@ class HostScript:
             ((self.lcrd2 & 0x3) << 12) | (int(self.ssp) << 16), 0, 0, 0, 0))
         self.auto       = True
         self.auto_count = 0
+
+    def wait_credit(self):
+        self.steps.append((OP_WAITCRED, 0, 0, 0, 0, 0))
 
     def wait_hp(self, type2=False):
         # Wait a device Header Packet and acknowledge it (LGOOD_n + LCRD_x/LCRD1_x/LCRD2_x, 7.2.4,
@@ -653,7 +706,7 @@ def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
-    ssp=False, itp=False, burst_out=0, burst_len=64):
+    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
     itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers.
     burst_out: rounds of 4 Bulk OUT DPs sent back to back (as an xHCI host with queued transfers),
@@ -701,6 +754,47 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
             for i in range(4):
                 s.wait_hp()                                           # ACK TPs.
             seq += 4
+    if bulk and lbad_test:
+        # Bulk OUT burst with a DPH CRC error (second DP): the device sends LBAD and ignores the next
+        # Header Packets (and their DPPs) until LRTY, then the host retransmits from the bad DPH
+        # (7.2.4.1.4): 4 ACK TPs expected, no Recovery.
+        payload = [(11*i + 5) & 0xff for i in range(burst_len)]
+        seq     = len(bulk_payloads()) + 4*burst_out
+        if not getattr(s, "auto", False):
+            s.auto_ack()
+        s.mark("lbad_test")
+        def dp(i, corrupt=False):
+            words = dph(length=len(payload), ept=2, dp_seq=(seq + i) % 32, tt=s.tt(TT_BULK),
+                seq=(s.tx_seq + i) % s.seq_mod)
+            if corrupt:
+                d, c = words[3]
+                words[3] = (d ^ 0x00000100, c) # DW2 bit error: CRC-16 error.
+            return words + data_packet_payload(payload)
+        for i in range(4):
+            s.wait_credit()
+            s.send(dp(i, corrupt=(i == 1)))
+        s.steps.append((OP_WAITLBAD, 1, 0, 0, 0, 0))
+        s.send(link_command(LRTY()))
+        for i in range(1, 4):
+            s.send(dp(i))
+        s.tx_seq = (s.tx_seq + 4) % s.seq_mod
+        for i in range(4):
+            s.wait_hp()
+    if bulk and burst_stream:
+        # Bulk OUT DPs streamed as the device Type 2 credits allow (as an xHCI host with queued
+        # transfers), then their ACK TPs.
+        payload = [(3*i + 7) & 0xff for i in range(burst_len)]
+        seq     = len(bulk_payloads()) + 4*burst_out
+        if not getattr(s, "auto", False):
+            s.auto_ack()
+        s.mark("burst_stream")
+        for i in range(burst_stream):
+            s.wait_credit()
+            s.send(dph(length=len(payload), ept=2, dp_seq=(seq + i) % 32, tt=s.tt(TT_BULK),
+                seq=s.tx_seq) + data_packet_payload(payload))
+            s.tx_seq = (s.tx_seq + 1) % s.seq_mod
+        for i in range(burst_stream):
+            s.wait_hp()
     if pm:
         # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
         s.lgo(1, LXU(), "lgo_u1")

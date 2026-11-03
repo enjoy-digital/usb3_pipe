@@ -56,6 +56,21 @@ def device_packets_crc_errors(out):
             i += 1
     return n, errors
 
+def host_lgood_times(out):
+    """Times (cycles) of the LGOOD_n received by the host model (HOST_LCRX logs)."""
+    times, pending = [], None
+    for line in out.splitlines():
+        m = re.match(r"HOST_LCRX\s+(\d+)", line)
+        if m:
+            pending = int(m.group(1))
+        m = re.match(r"HOST_RX ([0-9a-f]{8}) 0$", line)
+        if m and pending is not None:
+            v = int.from_bytes(int(m.group(1), 16).to_bytes(4, "big"), "little") & 0x7ff
+            if (v & 0x7f0) == 0:
+                times.append(pending)
+            pending = None
+    return times
+
 def host_lgood_latencies(out):
     """Host Header Packet -> device LGOOD_n latencies (cycles) from the host model timing logs (after
     the last host U0 entry, the first LGOOD_n being the Advertisement)."""
@@ -233,6 +248,27 @@ class TestPHY(unittest.TestCase):
         latencies = host_lgood_latencies(out)
         self.assertGreaterEqual(len(latencies), 16)
         self.assertLess(max(latencies), 1333) # 10us at the 133MHz host model clock.
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_lbad(self):
+        # Gen 2 80-bit Bulk OUT burst with a DPH CRC error: device LBAD, Header Packets (and their DPPs)
+        # ignored until the host LRTY, retransmission accepted: no Recovery, CRCs, and the
+        # retransmitted DPHs acknowledged without waiting for the ignored DPPs (skipped at the DPP
+        # data rate).
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--host-lbad-test", "--host-burst-len", "1024", "--dev-loopback-depth", "4096"])
+        self.assertIn("HOST_LBAD_RX", out, tail)
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+        n, errors = device_packets_crc_errors(out)
+        self.assertEqual(errors, 0)
+        # LGOOD_n latency of the retransmitted DPH (first LGOOD_n after the last host LRTY ones).
+        section = out[out.index("HOST_LBAD_RX"):]
+        hptx  = [int(t) for t in re.findall(r"HOST_HPTX\s+(\d+)", section)]
+        self.assertGreaterEqual(len(hptx), 3)
+        retx   = hptx[-3] # First retransmitted DPH.
+        lgoods = [t for t in host_lgood_times(section) if t > retx]
+        self.assertTrue(len(lgoods) > 0)
+        self.assertLess(lgoods[0] - retx, 800) # ~450 cycles for a normal DPH (6us at 133MHz).
 
     def test_phy_dev_pipe_cd_no_u1u2(self):
         # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE
