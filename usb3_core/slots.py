@@ -22,7 +22,7 @@ from usb3_core.endpoints import MAX_PACKET_SIZE, MAX_PACKET_WORDS
 # USB3 Packet Slots --------------------------------------------------------------------------------
 
 class USB3PacketSlots(LiteXModule):
-    """Packet Slots: n slots x Max Packet Size (1024 bytes) in data_width words (32/64-bit).
+    """Packet Slots: n slots x Max Packet Size (1024 bytes) in data_width words (32/64/128-bit).
 
     wr_port: write port (adr/dat_w/we), rd_port: read port (adr/re/dat_r, 1 cycle latency).
     lengths: per-slot packet length in bytes (Array, indexed by slot).
@@ -30,7 +30,7 @@ class USB3PacketSlots(LiteXModule):
     """
     def __init__(self, n, data_width=32):
         assert n >= 2
-        assert data_width in [32, 64]
+        assert data_width in [32, 64, 128]
         self.n          = n
         self.data_width = data_width
         self.words      = MAX_PACKET_SIZE//(data_width//8) # Words per slot.

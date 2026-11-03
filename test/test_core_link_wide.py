@@ -4,11 +4,14 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Link Layer on PHY words pairs (64-bit, USB3PHY link_words=2) vs words (32-bit): Data
-Packet Payloads received/transmitted 8 bytes per cycle, same Link Layer words on the PHY."""
+"""USB3 Link Layer on PHY words pairs (64-bit, USB3PHY link_words=2) or quads (128-bit,
+link_words=4) vs words (32-bit): Data Packet Payloads received 8 or 16 bytes per cycle, transmitted 8
+bytes per cycle, same Link Layer words on the PHY."""
 
 import random
 import unittest
+
+import pytest
 
 from migen import *
 
@@ -28,9 +31,9 @@ class LinkDUT(LiteXModule):
     def __init__(self, link_words):
         self.phy = phy = PHYStandIn()
         phy.gen2_active = Signal(reset=1)
-        if link_words == 2:
-            phy.sink   = stream.Endpoint(link_pairs_layout())
-            phy.source = stream.Endpoint(link_pairs_layout())
+        if link_words > 1:
+            phy.sink   = stream.Endpoint(link_pairs_layout(link_words))
+            phy.source = stream.Endpoint(link_pairs_layout(link_words))
         self.link = USB3LinkLayer(phy, sys_clk_freq=125e6, ssp_tt={2: TT_BULK})
 
 def advertisement():
@@ -47,14 +50,16 @@ def start(phy):
     yield phy.sink.ready.eq(1)
 
 def send_words(phy, words, link_words, rng):
-    """PHY source: words, or words pairs (1 or 2 words per entry)."""
+    """PHY source: words, or words entries (1 to link_words words per entry)."""
     i = 0
     while i < len(words):
-        n = 2 if (link_words == 2 and (i + 1) < len(words) and rng.random() < 0.8) else 1
+        n = 1
+        if (link_words > 1) and (rng.random() < 0.8):
+            n = min(rng.choice([link_words, rng.randrange(1, link_words + 1)]), len(words) - i)
         yield phy.source.valid.eq(1)
         yield phy.source.data.eq(sum(d << (32*j) for j, (d, c) in enumerate(words[i:i+n])))
         yield phy.source.ctrl.eq(sum(c << (4*j) for j, (d, c) in enumerate(words[i:i+n])))
-        if link_words == 2:
+        if link_words > 1:
             yield phy.source.words.eq(n)
         yield
         while not (yield phy.source.ready):
@@ -173,7 +178,7 @@ class TestCoreLinkWide(unittest.TestCase):
                 if (yield phy.sink.valid) & (yield phy.sink.ready):
                     data = (yield phy.sink.data)
                     ctrl = (yield phy.sink.ctrl)
-                    n    = (yield phy.sink.words) if link_words == 2 else 1
+                    n    = (yield phy.sink.words) if link_words > 1 else 1
                     for j in range(n):
                         sent.append(((data >> (32*j)) & 0xffffffff, (ctrl >> (4*j)) & 0xf))
                 yield
@@ -234,6 +239,13 @@ class TestCoreLinkWide(unittest.TestCase):
 
     def test_rx_pairs(self):
         self.rx_test(link_words=2)
+
+    def test_rx_quads(self):
+        self.rx_test(link_words=4)
+
+    @pytest.mark.slow
+    def test_tx_quads(self):
+        self.tx_test(link_words=4)
 
     def test_tx_words(self):
         self.tx_test(link_words=1)

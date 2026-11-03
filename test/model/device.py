@@ -24,14 +24,14 @@ from test.model.host import tps, lmps, dpps
 # Bulk Loopback Device -----------------------------------------------------------------------------
 
 class PairsPHY:
-    """PHY stand-in in words pairs (USB3PHY link_words=2) for the core, words on the host side
-    (phy.source/phy.sink driven/monitored by the host models)."""
-    def __init__(self, phy, module):
+    """PHY stand-in in words pairs (USB3PHY link_words=2) or quads (n=4) for the core, words on the
+    host side (phy.source/phy.sink driven/monitored by the host models)."""
+    def __init__(self, phy, module, n=2):
         from usb3_pipe.framing import WordsToPairs, PairsToWords
         for k, v in vars(phy).items():
             setattr(self, k, v)
-        to_pairs = WordsToPairs()
-        to_words = PairsToWords()
+        to_pairs = WordsToPairs(n)
+        to_words = PairsToWords(n)
         module.submodules += to_pairs, to_words
         module.comb += [
             phy.source.connect(to_pairs.sink),
@@ -42,12 +42,12 @@ class PairsPHY:
 
 class BulkLoopbackDUT(LiteXModule):
     """USB3 Device Core (PHY stand-in) with Bulk IN/OUT endpoints (bulk_descriptors), EP2 OUT looped
-    to EP1 IN. link_words=2: core on PHY words pairs, 64-bit Bulk endpoints. crc32_cascade: see
+    to EP1 IN. link_words=2/4: core on PHY words pairs/quads, 64/128-bit Bulk endpoints. crc32_cascade: see
     USB3DeviceCore."""
     def __init__(self, max_burst=8, link_words=1, crc32_cascade=False):
         self.phy = phy = PHYStandIn()
         dw = 32*link_words
-        self.core = core = USB3DeviceCore(phy if link_words == 1 else PairsPHY(phy, self),
+        self.core = core = USB3DeviceCore(phy if link_words == 1 else PairsPHY(phy, self, link_words),
             sys_clk_freq = 125e6,
             descriptors  = bulk_descriptors(max_burst=max_burst),
             endpoints    = [

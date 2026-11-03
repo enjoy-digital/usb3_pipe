@@ -33,7 +33,7 @@ class USB3Endpoint(LiteXModule):
     def __init__(self, ept, direction, data_width=32):
         self.ept        = ept
         self.direction  = direction  # 0: OUT, 1: IN.
-        self.data_width = data_width # DPP words (32/64-bit, see USB3LinkLayer data_width).
+        self.data_width = data_width # DPP words (32/64/128-bit, see USB3LinkLayer data_width).
 
         # Protocol Layer interface.
         self.hdr_dw0      = Signal(32) # i

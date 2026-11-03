@@ -44,12 +44,12 @@ class USB3ProtocolLayer(LiteXModule):
 
         # # #
 
-        # DPP words width: Link Layer data_width (32/64-bit), 32-bit endpoints on a 64-bit Link
-        # Layer through DPPPacker/DPPRXAdapter (Control Endpoint, ...: always landed DPPs).
+        # DPP words width: Link Layer data_width (32/64/128-bit), 32-bit endpoints on a 64/128-bit
+        # Link Layer through DPPPacker/DPPRXAdapter (Control Endpoint, ...: always landed DPPs).
         dw = getattr(link, "data_width", 32)
         adapted = {ep: ep.data_width != dw for ep in endpoints}
         for ep in endpoints:
-            assert (ep.data_width == dw) or (ep.data_width == 32 and dw == 64)
+            assert (ep.data_width == dw) or (ep.data_width == 32 and dw in [64, 128])
 
         # Received Header Packets (registered: timings).
         self.rx_hp = rx_hp = stream.PipeValid(header_layout())
@@ -89,7 +89,7 @@ class USB3ProtocolLayer(LiteXModule):
                 sel_done.eq(dpp_ept == ep.ept),
             ]
             if adapted[ep]:
-                rx_adapter = DPPRXAdapter()
+                rx_adapter = DPPRXAdapter(dw=dw)
                 self.submodules += rx_adapter
                 self.comb += [
                     rx_adapter.sink.valid.eq(link.rx_dpp.valid & sel),
@@ -195,7 +195,7 @@ class USB3ProtocolLayer(LiteXModule):
         for i, ep in enumerate(endpoints):
             ep_tx_dpp = ep.tx_dpp
             if adapted[ep]:
-                packer = DPPPacker()
+                packer = DPPPacker(dw)
                 self.submodules += packer
                 self.comb += ep.tx_dpp.connect(packer.sink)
                 ep_tx_dpp = packer.source

@@ -35,7 +35,7 @@ class DPPReader(LiteXModule):
         issue  = Signal()
         valid  = Signal()
         last   = Signal(reset_less=True)
-        nbytes = Signal(4, reset_less=True)
+        nbytes = Signal(bits_for(wb), reset_less=True)
         zlp    = Signal()
         self.comb += [
             sink.ready.eq(~active),
@@ -109,57 +109,84 @@ class DPPSplitter(LiteXModule):
         )
 
 
-class DPPPacker(LiteXModule):
-    """32-bit Data Packet Payload words -> 64-bit words (8 bytes, the last one 0-8 bytes): 32-bit
-    endpoints (Control Endpoint, ...) on a 64-bit Link Layer (half rate, stored and forwarded at Gen
-    2, Gen 1 PIPE at the same rate)."""
-    def __init__(self):
-        self.sink   = sink   = stream.Endpoint(dpp_layout(32))
-        self.source = source = stream.Endpoint(dpp_layout(64))
+class DPPNarrower(LiteXModule):
+    """Data Packet Payload words (dw_in bits) -> words of dw_out bits (full words, the last one 1 to
+    dw_out/8 bytes, a zero-length DPP as one 0-byte word)."""
+    def __init__(self, dw_in=128, dw_out=64):
+        assert dw_in % dw_out == 0
+        self.sink   = sink   = stream.Endpoint(dpp_layout(dw_in))
+        self.source = source = stream.Endpoint(dpp_layout(dw_out))
 
         # # #
 
-        held   = Signal(32, reset_less=True)
-        held_v = Signal()
-        first  = Signal(reset_less=True)
+        steps = dw_in//dw_out
+        wb    = dw_out//8
+        index = Signal(max=max(steps, 2))
+        rem   = Signal(len(sink.bytes) + 1)
+        done  = Signal()
         self.comb += [
-            If(~held_v,
-                # First word of a pair (held) or a single last word.
-                source.valid.eq(sink.valid & sink.last),
-                source.data.eq(sink.data),
-                source.bytes.eq(sink.bytes),
-                source.first.eq(sink.first),
-                source.last.eq(1),
-                sink.ready.eq(Mux(sink.last, source.ready, 1)),
-            ).Else(
-                source.valid.eq(sink.valid),
-                source.data.eq(Cat(held, sink.data)),
-                source.bytes.eq(4 + sink.bytes),
-                source.first.eq(first),
-                source.last.eq(sink.last),
-                sink.ready.eq(source.ready),
-            )
+            rem.eq(sink.bytes - index*wb),
+            done.eq(rem <= wb),
+            source.valid.eq(sink.valid),
+            source.first.eq(sink.first & (index == 0)),
+            source.last.eq(sink.last & done),
+            source.bytes.eq(Mux(done, rem, wb)),
+            Case(index, {i: source.data.eq(sink.data[dw_out*i:dw_out*(i + 1)]) for i in range(steps)}),
+            sink.ready.eq(source.ready & done),
+        ]
+        self.sync += If(source.valid & source.ready,
+            If(done, index.eq(0)).Else(index.eq(index + 1))
+        )
+
+
+class DPPPacker(LiteXModule):
+    """32-bit Data Packet Payload words -> 64-bit (or dw-bit) words (full words, the last one 0 to dw/8
+    bytes): 32-bit endpoints (Control Endpoint, ...) on a 64/128-bit Link Layer (lower rate, stored
+    and forwarded at Gen 2, Gen 1 PIPE at the same rate)."""
+    def __init__(self, dw=64):
+        assert dw in [64, 128]
+        n = dw//32
+        self.sink   = sink   = stream.Endpoint(dpp_layout(32))
+        self.source = source = stream.Endpoint(dpp_layout(dw))
+
+        # # #
+
+        held  = [Signal(32, reset_less=True) for _ in range(n - 1)]
+        count = Signal(max=n) # Held words.
+        first = Signal(reset_less=True)
+        out   = Signal()
+        self.comb += [
+            out.eq(sink.last | (count == (n - 1))),
+            source.valid.eq(sink.valid & out),
+            Case(count, {c: source.data.eq(Cat(*held[:c], sink.data)) for c in range(n)}),
+            source.bytes.eq(Cat(C(0, 2), count) + sink.bytes),
+            source.first.eq(Mux(count == 0, sink.first, first)),
+            source.last.eq(sink.last),
+            sink.ready.eq(Mux(out, source.ready, 1)),
         ]
         self.sync += If(sink.valid & sink.ready,
-            If(~held_v & ~sink.last,
-                held.eq(sink.data),
-                first.eq(sink.first),
-                held_v.eq(1),
+            If(out,
+                count.eq(0),
             ).Else(
-                held_v.eq(0),
+                Case(count, {c: held[c].eq(sink.data) for c in range(n - 1)}),
+                If(count == 0, first.eq(sink.first)),
+                count.eq(count + 1),
             )
         )
 
 
 class DPPRXAdapter(LiteXModule):
-    """64-bit received Data Packet Payload words (Link Layer, not held) -> 32-bit words for a 32-bit
-    endpoint (Control Endpoint, ...), buffered, with the DPP done/ok status after its words.
+    """64-bit (or dw-bit) received Data Packet Payload words (Link Layer, not held) -> 32-bit words
+    for a 32-bit endpoint (Control Endpoint, ...), buffered, with the DPP done/ok status after its
+    words.
 
-    sink: 64-bit DPP words of the endpoint (valid when routed to it), done/ok: DPP received/status
+    sink: DPP words of the endpoint (valid when routed to it), done/ok: DPP received/status
     (rx_dpp_done/rx_dpp_ok when routed to it), setup: SETUP DP. source/source_done/source_ok/
     source_setup: to the endpoint (rx_dpp, rx_dpp_done, rx_dpp_ok, rx_dpp_setup)."""
-    def __init__(self, depth=128):
-        self.sink         = sink   = stream.Endpoint(dpp_layout(64))
+    def __init__(self, depth=128, dw=64):
+        assert dw in [64, 128]
+        n = dw//32
+        self.sink         = sink   = stream.Endpoint(dpp_layout(dw))
         self.done         = Signal() # i
         self.ok           = Signal() # i
         self.setup        = Signal() # i
@@ -172,7 +199,7 @@ class DPPRXAdapter(LiteXModule):
 
         # Buffered: synchronous RAM read (block RAMs; asynchronous reads are silently mis-implemented in
         # block RAMs by the Gowin toolchain, the DPP words then read back as zeros on hardware).
-        layout = dpp_layout(64) + [("setup", 1), ("done", 1), ("ok", 1)]
+        layout = dpp_layout(dw) + [("setup", 1), ("done", 1), ("ok", 1)]
         self.fifo = fifo = stream.SyncFIFO(layout, depth, buffered=True)
         self.comb += [
             fifo.sink.valid.eq(sink.valid | self.done),
@@ -185,14 +212,16 @@ class DPPRXAdapter(LiteXModule):
             fifo.sink.ok.eq(self.ok),
             sink.ready.eq(1),
         ]
-        half = Signal() # Upper half of the 64-bit word.
-        two  = Signal()
+        index = Signal(max=n) # 32-bit word of the dw-bit word.
+        rem   = Signal(len(sink.bytes) + 1)
+        more  = Signal()      # More bytes after this 32-bit word.
         self.comb += [
-            two.eq(fifo.source.bytes > 4),
-            source.data.eq(Mux(half, fifo.source.data[32:64], fifo.source.data[0:32])),
-            source.bytes.eq(Mux(half, fifo.source.bytes - 4, Mux(two, 4, fifo.source.bytes))),
-            source.first.eq(fifo.source.first & ~half),
-            source.last.eq(fifo.source.last & (half | ~two)),
+            rem.eq(fifo.source.bytes - Cat(C(0, 2), index)),
+            more.eq(rem > 4),
+            Case(index, {i: source.data.eq(fifo.source.data[32*i:32*(i + 1)]) for i in range(n)}),
+            source.bytes.eq(Mux(more, 4, rem)),
+            source.first.eq(fifo.source.first & (index == 0)),
+            source.last.eq(fifo.source.last & ~more),
             self.source_setup.eq(fifo.source.setup),
             If(fifo.source.done,
                 self.source_done.eq(fifo.source.valid),
@@ -200,9 +229,9 @@ class DPPRXAdapter(LiteXModule):
                 fifo.source.ready.eq(1),
             ).Else(
                 source.valid.eq(fifo.source.valid),
-                fifo.source.ready.eq(half | ~two),
+                fifo.source.ready.eq(~more),
             ),
         ]
         self.sync += If(fifo.source.valid & ~fifo.source.done,
-            half.eq(~half & two)
+            If(more, index.eq(index + 1)).Else(index.eq(0))
         )
