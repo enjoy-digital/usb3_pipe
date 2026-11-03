@@ -304,6 +304,19 @@ class TestPHY(unittest.TestCase):
         self.assertGreaterEqual(len(latencies), 20)
         self.assertLess(max(latencies), 1333) # 10us at the 133MHz host model clock.
 
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads_recovery_mid(self):
+        # Host directed Recovery between Bulk OUT DPs on 128-bit Link Layer words, Advertisements on
+        # the U0 re-entry (host model: as soon as its LTSSM is in U0), then Bulk OUT/IN: no device
+        # Recovery request (ex: PENDING_HP_TIMER without the host Advertisement), CRCs.
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--link-words", "4", "--host-recovery-mid", "--host-burst-len", "1024",
+            "--dev-loopback-depth", "4096"], recovery=True)
+        self.assertIn("HOST_ADVERTISEMENT", out, tail)
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+        n, errors = device_packets_crc_errors(out)
+        self.assertEqual(errors, 0)
+
     def test_phy_dev_pipe_cd_no_u1u2(self):
         # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE
         # frequency (FPGAs with slower fabrics): Host LGO_U1/LGO_U2 rejected (LXU), script done.

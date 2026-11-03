@@ -225,6 +225,7 @@ PM_REQ_U2  = 0b00010
 PM_LAU     = 0b00100
 PM_EXIT_U1 = 0b01000
 PM_EXIT_U2 = 0b10000
+PM_RECOVERY = 0b100000 # Directed Recovery from U0 (script kept running, Advertisement in reactive mode).
 
 class USB3HostModel(LiteXModule):
     """Scripted USB3 Host Link/Protocol Layer model.
@@ -238,7 +239,7 @@ class USB3HostModel(LiteXModule):
     def __init__(self, script, wait_timeout=2**16):
         self.enable   = Signal() # i: Run the script (ex: LTSSM in U0), restarts it when deasserted.
         self.u0       = Signal() # i: Host LTSSM in U0.
-        self.pm       = Signal(5) # o: Host LTSSM PM controls (PM_* flags, pulses).
+        self.pm       = Signal(6) # o: Host LTSSM PM controls (PM_* flags, pulses).
         self.sink     = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source   = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.skp      = Signal() # o: SKP Ordered Set insertion request (SerDes model).
@@ -283,6 +284,9 @@ class USB3HostModel(LiteXModule):
             ),
             If(self.enable & ~self.done & sink.valid & (sink.ctrl == 0b1111) & (sink.data == 0xfefefef7),
                 Display("HOST_LCRX %d", cycles)
+            ),
+            If(self.enable & ~self.done & sink.valid & (sink.ctrl == 0b1111) & (sink.data == 0xfbfbfbf7),
+                Display("HOST_HPRX %d", cycles)
             ),
         ]
 
@@ -359,6 +363,16 @@ class USB3HostModel(LiteXModule):
             inc_lgood.eq(1),
             If(ack_ssp & (sink.data[24:29] == 0x08), inc_lcrd2.eq(1)).Else(inc_lcrd.eq(1)),
         )
+        # Reactive mode: Advertisement on each U0 re-entry (7.2.4.1.1: LGOOD_n of the last Header
+        # Packet received, LCRD_A-D/LCRD2_A-D), sent as soon as U0 is entered (as a host does: the
+        # device can still be in Recovery.Idle), the pending acknowledges dropped (the device
+        # retransmits its Header Packets not acknowledged), the device Type 2 credits cleared on the
+        # U0 exit (advertised again by the device).
+        u0_d      = Signal()
+        adv_go    = Signal()
+        adv_lgood = Signal()
+        self.sync += u0_d.eq(self.u0)
+        self.comb += adv_go.eq(ack_enable & self.u0 & ~u0_d)
         self.sync += [
             If(sink.valid,
                 rx_hdr.eq((sink.ctrl == 0b1111) & (sink.data == 0xfbfbfbf7))
@@ -375,6 +389,8 @@ class USB3HostModel(LiteXModule):
             ),
             If(~ack_enable,
                 credits2.eq(4)
+            ).Elif(u0_d & ~self.u0,
+                credits2.eq(0)
             ).Else(
                 credits2.eq(credits2 + rx_lcrd2 - cred_take)
             ),
@@ -402,7 +418,7 @@ class USB3HostModel(LiteXModule):
         can_ins  = Signal()
         start_lc = Signal()
         self.comb += [
-            pending.eq((n_lgood != 0) | (n_lcrd != 0) | (n_lcrd2 != 0)),
+            pending.eq(adv_lgood | (n_lgood != 0) | (n_lcrd != 0) | (n_lcrd2 != 0)),
             can_ins.eq(ack_enable & pending & ~in_packet & ~lc_busy &
                 (~script.valid | script.first)),
             If(lc_busy,
@@ -430,7 +446,9 @@ class USB3HostModel(LiteXModule):
             If(lc_busy & source.ready, Display("HOST_LCTX %d %03x", cycles, lc_info)),
             If(start_lc,
                 lc_busy.eq(1),
-                If(n_lgood != 0,
+                If(adv_lgood,
+                    lc_kind.eq(3), lc_info.eq(Mux(ack_ssp, ack_seq - 1, (ack_seq - 1) & 0x7)),
+                ).Elif(n_lgood != 0,
                     lc_kind.eq(0), lc_info.eq(ack_seq),
                 ).Elif(n_lcrd != 0,
                     lc_kind.eq(1), lc_info.eq(0x080 | ack_lcrd),
@@ -447,6 +465,16 @@ class USB3HostModel(LiteXModule):
                 If(lc_kind == 0, ack_seq.eq(Mux(ack_ssp, ack_seq + 1, (ack_seq + 1) & 0x7))),
                 If(lc_kind == 1, ack_lcrd.eq(ack_lcrd + 1)),
                 If(lc_kind == 2, ack_lcrd2.eq(ack_lcrd2 + 1)),
+                If(lc_kind == 3, adv_lgood.eq(0)),
+            ),
+            If(adv_go,
+                Display("HOST_ADVERTISEMENT"),
+                adv_lgood.eq(1),
+                n_lgood.eq(0),
+                n_lcrd.eq(4),
+                n_lcrd2.eq(Mux(ack_ssp, 4, 0)),
+                ack_lcrd.eq(0),
+                ack_lcrd2.eq(0),
             ),
         ]
 
@@ -706,14 +734,17 @@ def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
     return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
-    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False, burst_duplex=0):
+    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False, burst_duplex=0,
+    recovery_mid=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
     itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers.
     burst_out: rounds of 4 Bulk OUT DPs sent back to back (as an xHCI host with queued transfers),
     then their 4 ACK TPs: the device transmits ACK TPs and LGOOD_n/LCRD_x back to back.
     burst_duplex: rounds of 4 Bulk OUT DPs streamed (device Type 2 credits) while the device sends 4
     Bulk IN DPs (EP1 requests with NumP=4: the data looped back from the previous round), as a full
-    duplex benchmark."""
+    duplex benchmark.
+    recovery_mid: host directed Recovery between Bulk OUT DPs (reactive mode: Advertisements on the U0
+    re-entry, as soon as U0 is entered on the host side), then Bulk OUT DPs and Bulk IN DPs."""
     s = HostScript(ssp=ssp)
     def send_itp():
         if itp:
@@ -825,6 +856,38 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
                 s.wait_hp()                                           # IN DPHs + OUT ACK TPs.
             in_seq += 4
         s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=in_seq % 32, tt=blk)
+        s.idle(4096)
+    if bulk and recovery_mid:
+        payload = [(17*i + 3) & 0xff for i in range(burst_len)]
+        seq     = len(bulk_payloads()) + 4*burst_out
+        in_seq  = len(bulk_payloads())
+        blk     = s.tt(TT_BULK)
+        if not getattr(s, "auto", False):
+            s.auto_ack()
+        def out_dps(n):
+            nonlocal seq
+            for i in range(n):
+                s.wait_credit()
+                s.send(dph(length=len(payload), ept=2, dp_seq=seq % 32, tt=blk, seq=s.tx_seq) +
+                    data_packet_payload(payload))
+                s.tx_seq = (s.tx_seq + 1) % s.seq_mod
+                seq += 1
+        s.mark("recovery_mid")
+        out_dps(2)
+        for i in range(2):
+            s.wait_hp()                                               # ACK TPs.
+        s.pm(PM_RECOVERY)
+        s.idle(256)
+        s.steps.append((OP_U0, 0, 0, 0, 0, 0))
+        s.mark("recovery_mid_u0")
+        out_dps(2)
+        for i in range(2):
+            s.wait_hp()                                               # ACK TPs.
+        # Looped back data: IN request.
+        s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=4, tp_seq=in_seq % 32, pp=1, tt=blk)
+        for i in range(4):
+            s.wait_hp()                                               # IN DPHs.
+        s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=(in_seq + 4) % 32, tt=blk)
         s.idle(4096)
     if pm:
         # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.

@@ -440,7 +440,8 @@ class USB3PIPESim(SoCMini):
         host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
         gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
         gen2_data_width=None, host_recovery=False, host_burst_out=0, host_burst_len=64,
-        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False, host_burst_duplex=0):
+        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False, host_burst_duplex=0,
+        host_recovery_mid=False, dev_link_ppm=None):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -471,14 +472,20 @@ class USB3PIPESim(SoCMini):
             cds = {"host": "sys", "dev": "sys"}
         ltssm_cds = dict(cds) # LTSSM/Link clock domains.
         if dev_pipe_cd:
-            # Device LTSSM/Link Layer/Core at the Device frequency/2.
+            # Device LTSSM/Link Layer/Core at the Device frequency/2 (dev_link_ppm: from its own
+            # phase accumulator with a frequency offset, asynchronous to the Device clock as on
+            # hardware: clock domain crossings phases drifting).
             self.cd_dev_link = ClockDomain()
-            dev_link_clk = Signal()
-            getattr(self.sync, cds["dev"]).__iadd__(dev_link_clk.eq(~dev_link_clk))
-            self.comb += [
-                self.cd_dev_link.clk.eq(dev_link_clk),
-                self.cd_dev_link.rst.eq(ResetSignal("sys")),
-            ]
+            if dev_link_ppm is not None:
+                ratio = 0.5 if cds["dev"] == "sys" else 0.125
+                self.dev_link_crg = NCOClockGenerator(self.cd_dev_link, ratio=ratio, ppm=dev_link_ppm)
+            else:
+                dev_link_clk = Signal()
+                getattr(self.sync, cds["dev"]).__iadd__(dev_link_clk.eq(~dev_link_clk))
+                self.comb += [
+                    self.cd_dev_link.clk.eq(dev_link_clk),
+                    self.cd_dev_link.rst.eq(ResetSignal("sys")),
+                ]
             ltssm_cds["dev"] = "dev_link"
             link_words = max(link_words, 2) # Words pairs (or quads: --link-words 4, Gen 2 wide words).
 
@@ -533,16 +540,30 @@ class USB3PIPESim(SoCMini):
                     status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2, itp=host_itp,
                     burst_out=host_burst_out, burst_len=host_burst_len,
                     burst_stream=host_burst_stream, lbad_test=host_lbad_test,
-                    burst_duplex=host_burst_duplex).steps))
+                    burst_duplex=host_burst_duplex, recovery_mid=host_recovery_mid).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
                 sync    = getattr(self.sync, cds[name])
                 sync   += If(ltssm.u1 | ltssm.u2, host_ux.eq(1)).Elif(ltssm.u0, host_ux.eq(0))
+                # Script directed Recovery (PM_RECOVERY): kept running until back in U0.
+                host_rec      = Signal()
+                host_rec_left = Signal()
+                sync += [
+                    If(host_model.pm[5],
+                        host_rec.eq(1),
+                        host_rec_left.eq(0),
+                    ).Elif(host_rec & ~ltssm.u0,
+                        host_rec_left.eq(1),
+                    ).Elif(host_rec & host_rec_left & ltssm.u0,
+                        host_rec.eq(0),
+                    ),
+                ]
+                self.host_pm_recovery = host_model.pm[5]
                 self.comb += [
                     phy.source.connect(host_model.sink),
                     host_model.source.connect(phy.sink),
-                    host_model.enable.eq(ltssm.u0 | ltssm.u1 | ltssm.u2 | host_ux |
+                    host_model.enable.eq(ltssm.u0 | ltssm.u1 | ltssm.u2 | host_ux | host_rec |
                         (host_model.done & host_recovery)), # Script done: not restarted by the Recovery.
                     host_model.u0.eq(ltssm.u0),
                     ltssm.req_u1.eq(host_model.pm[0]),
@@ -634,6 +655,9 @@ class USB3PIPESim(SoCMini):
                 end_timer.wait.eq(script_end),
                 done.eq(end_timer.done),
             ]
+            if (not host_recovery) and hasattr(self, "host_pm_recovery"):
+                # Script directed Recovery (PM_RECOVERY).
+                self.sync += phys["host"].ltssm.directed_recovery.eq(self.host_pm_recovery)
             if host_recovery:
                 # Host directed to Recovery from U0 once the script is done, end once both sides are
                 # back in U0.
@@ -643,7 +667,7 @@ class USB3PIPESim(SoCMini):
                 requested  = Signal()
                 self.specials += MultiReg(phys["dev"].ltssm.u0, dev_u0)
                 self.sync += [
-                    host_ltssm.directed_recovery.eq(0),
+                    host_ltssm.directed_recovery.eq(self.host_pm_recovery),
                     If(host_model.done & ~requested & host_ltssm.u0,
                         Display("HOST directed to Recovery"),
                         host_ltssm.directed_recovery.eq(1),
@@ -665,6 +689,18 @@ class USB3PIPESim(SoCMini):
                 If(dev_link.dbg_recovery,
                     Display("[%08d] DEV  Link Layer Recovery request (cause %x)", timer,
                         dev_cause)),
+            ]
+            # Device Header Packets sent by the Link Layer (host model clock cycles, as HOST_* logs).
+            dev_tx_hp_t = Signal()
+            dev_sync += If(dev_link.dbg_tx_hp, dev_tx_hp_t.eq(~dev_tx_hp_t))
+            dev_tx_hp_s = Signal()
+            dev_tx_hp_d = Signal()
+            host_cycles = Signal(32)
+            self.specials += MultiReg(dev_tx_hp_t, dev_tx_hp_s)
+            self.sync += [
+                host_cycles.eq(host_cycles + 1),
+                dev_tx_hp_d.eq(dev_tx_hp_s),
+                If(dev_tx_hp_s != dev_tx_hp_d, Display("DEV_HPTX %d", host_cycles)),
             ]
             self.sync += If(done & ~report,
                 If(host_model.error,
@@ -787,6 +823,8 @@ def main():
     parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs), 4 (128-bit words quads: --dev-pipe-cd --gen2 --gen2-data-width 80).", choices=["1", "2", "4"])
     parser.add_argument("--host-burst-out", default=0, help="Host model rounds of 4 Bulk OUT DPs sent back to back after the script bulk transfers.")
     parser.add_argument("--host-burst-len", default=64, help="Host model burst DPs payload length (bytes).")
+    parser.add_argument("--dev-link-ppm",   default=None, type=float, help="Device Link clock (--dev-pipe-cd) from its own phase accumulator with this frequency offset (asynchronous clock domain crossings).")
+    parser.add_argument("--host-recovery-mid",  action="store_true", help="Host model directed Recovery between Bulk OUT DPs (Advertisements on the U0 re-entry), then Bulk OUT/IN.")
     parser.add_argument("--host-burst-duplex", default=0, help="Host model rounds of 4 Bulk OUT DPs streamed during 4 Bulk IN DPs (full duplex).")
     parser.add_argument("--host-burst-stream", default=0, help="Host model Bulk OUT DPs streamed as the device Type 2 credits allow (after the bursts).")
     parser.add_argument("--dev-loopback-depth", default=512, help="Device Bulk loopback FIFO depth (endpoint words).")
@@ -834,6 +872,8 @@ def main():
         host_burst_len   = int(args.host_burst_len),
         host_burst_stream  = int(args.host_burst_stream),
         host_burst_duplex  = int(args.host_burst_duplex),
+        host_recovery_mid  = args.host_recovery_mid,
+        dev_link_ppm       = args.dev_link_ppm,
         dev_loopback_depth = int(args.dev_loopback_depth),
         host_lbad_test     = args.host_lbad_test)
     builder = Builder(soc, output_dir=args.output_dir)
