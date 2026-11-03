@@ -57,7 +57,7 @@ class _CRG(LiteXModule):
 class USB3SoC(USB3BaseSoC):
     def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", pll=None, serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
         with_gtr12_debug=False, with_gtr12_analyzer=False, with_analyzer=False, analyzer_group="link",
-        gen2_capable=False, with_gen2_debug=False,
+        gen2_capable=False, with_gen2_debug=False, with_trace=False,
         analyzer_csv="analyzer.csv", usb3_kwargs={}, **kwargs):
         # USB3 PIPE/SerDes at 125MHz (Gen 1 32-bit words); with a lower sys_clk_freq, the PIPE runs on
         # the GTR12 TX fabric clock ("tx" clock domain: frequency-locked to the transmitted words, no
@@ -100,7 +100,7 @@ class USB3SoC(USB3BaseSoC):
             ]
             usb3_serdes = ClockDomainsRenamer({"sys": phy_cd})(usb3_serdes)
             usb3_kwargs = dict(usb3_kwargs, phy_cd=phy_cd, phy_clk_freq=usb3_clk_freq, link_words=2,
-                with_debug=False, with_profile=False, with_trace=with_gtr12_debug)
+                with_debug=False, with_profile=False, with_trace=with_gtr12_debug or with_trace)
 
         # USB3 (PHY, Debug, Core, Leds) ------------------------------------------------------------
         add_usb3_device(self, usb3_serdes,
@@ -368,6 +368,7 @@ def main():
     parser.add_argument("--serdes-csr",     default=None, help="GTR12 register configuration file override (bring-up: serdes_toml_to_csr output).")
     parser.add_argument("--rx-idle-source", default="~astat5", help="RX Electrical Idle indicator (~astat5, elecidle, [~]astat<n>).")
     parser.add_argument("--gen2-capable",        action="store_true", help="Gen 2 (10Gbps) capable SerDes/PHY (GTR12 rate change through UPAR, 80-bit raw words).")
+    parser.add_argument("--with-trace",          action="store_true", help="USB3 Device Core Header Packets trace (bench/usb3_trace.py).")
     parser.add_argument("--with-gen2-debug",     action="store_true", help="Gen 2 bring-up debug (RX monitor on the raw RX words: alignment, blocks/Ordered Sets counters).")
     parser.add_argument("--with-gtr12-debug",    action="store_true", help="GTR12/PIPE bring-up debug (transitions/PIPE counters, RX snapshots, LTSSM history).")
     parser.add_argument("--with-gtr12-analyzer", action="store_true", help="LiteScope Analyzer on the GTR12 raw RX words.")
@@ -391,6 +392,7 @@ def main():
         with_gtr12_debug    = args.with_gtr12_debug,
         gen2_capable        = args.gen2_capable,
         with_gen2_debug     = args.with_gen2_debug,
+        with_trace          = args.with_trace,
         with_gtr12_analyzer = args.with_gtr12_analyzer,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)
