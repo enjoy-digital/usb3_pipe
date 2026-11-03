@@ -588,6 +588,87 @@ class TestGen2RXFraming(unittest.TestCase):
         for nbytes in [8, 16, 32]:
             self.rx_framing_idle_gaps(1, nbytes=nbytes, errors=True)
 
+    def test_rx_framing_bit_errors(self):
+        # Random bit errors anywhere in the stream (~1 per 100 bytes): a unit with an error can be
+        # lost/corrupted, the units without errors are all received intact and in order (no loss
+        # of the framing: a bit error never costs the following units).
+        for nbytes in [8, 16, 32]:
+            for seed in range(2):
+                self.rx_framing_bit_errors(nbytes, seed)
+
+    def rx_framing_bit_errors(self, nbytes, seed, n_units=40, rate=1/100):
+        rng   = random.Random(100 + seed)
+        units = random_units(rng, n_units, short=True)
+        stream_bytes = []
+        hit          = []
+        for u in units:
+            gap = [GEN2_IDLE]*rng.choice([0, 0, 1, 2, 5, 16])
+            ub  = gen2_unit_bytes(u)
+            h   = False
+            for i in range(len(ub)):
+                if rng.random() < rate:
+                    ub[i] ^= 1 << rng.randrange(8)
+                    h = True
+            stream_bytes += gap + ub
+            hit.append(h)
+        stream_bytes += [GEN2_IDLE]*64
+        stream_bytes += [GEN2_IDLE]*((-len(stream_bytes)) % nbytes)
+        words = [int.from_bytes(bytes(stream_bytes[i:i+nbytes]), "little")
+            for i in range(0, len(stream_bytes), nbytes)]
+        dut = Gen2RXFraming(nbytes)
+        out   = []
+        stall = []
+        def generator(dut):
+            for i, w in enumerate(words):
+                if (nbytes == 8) and (i % 2 == 0):
+                    # 8 bytes per cycle: words pairs of the 128-bit blocks (as Gen2LinkRX).
+                    yield dut.sink.valid.eq(0)
+                    yield
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(w)
+                yield
+                n = 0
+                while not (yield dut.sink.ready):
+                    n += 1
+                    if n > 1000:
+                        stall.append(i) # Framing stuck (input not accepted).
+                        return
+                    yield
+            yield dut.sink.valid.eq(0)
+            for _ in range(64):
+                yield
+        @passive
+        def checker(dut):
+            yield dut.source.ready.eq(1)
+            yield dut.source_lc.ready.eq(1)
+            yield dut.lc_enable.eq(0)
+            while True:
+                if (yield dut.source.valid):
+                    data, ctrl, n = (yield dut.source.data), (yield dut.source.ctrl), (yield dut.source.words)
+                    for w in range(n):
+                        out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
+                yield
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(stall, [], f"nbytes={nbytes} seed={seed}: framing stuck")
+        # Units without errors found intact, in order, in the output.
+        pos, lost = 0, []
+        for k, u in enumerate(units):
+            if hit[k]:
+                continue
+            words_u = split_units([u], lc_enable=False)[0]
+            found = None
+            for j in range(pos, len(out) - len(words_u) + 1):
+                if out[j:j + len(words_u)] == words_u:
+                    found = j
+                    break
+            if found is None:
+                lost.append(k)
+            else:
+                pos = found + len(words_u)
+        self.assertGreater(sum(hit), 5)
+        self.assertEqual(lost, [], f"nbytes={nbytes} seed={seed}: units without errors lost "
+            f"(units with errors: {[k for k in range(len(units)) if hit[k]]})")
+
     def rx_framing_idle_gaps(self, lc_enable, nbytes=8, errors=False):
         from usb3_pipe.framing import GEN2_DPHP
         rng   = random.Random(3)
