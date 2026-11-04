@@ -911,7 +911,11 @@ class Gen2TXDCBalance(LiteXModule):
         # level, copies for the stages registers enables: fanout), the output buffer absorbs the
         # blocks in flight when the gearbox is not ready (one block per 1.65 cycles on average).
         self.out_buffer = out_buffer = stream.SyncFIFO(gen2_block_layout(), 8, buffered=True)
-        self.comb += out_buffer.source.connect(source)
+        self.out_reg    = out_reg    = stream.PipeValid(gen2_block_layout()) # Registers to the gearbox.
+        self.comb += [
+            out_buffer.source.connect(out_reg.sink),
+            out_reg.source.connect(source),
+        ]
         gos = [Signal(name="go", attr={("syn_preserve", 1)}) for _ in range(4)]
         self.sync += [go.eq(out_buffer.level <= 3) for go in gos]
 

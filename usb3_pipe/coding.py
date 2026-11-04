@@ -536,14 +536,14 @@ class Gen2BlockAligner(LiteXModule):
             return or_terms(parts)
         ng      = (r + 15)//16 # Pointer groups of 16 positions.
         e_idx   = Signal(kr, reset_less=True)
-        e_grp   = Signal(ng) # Pointer group (one-hot) of the next cycle.
+        e_grp   = Signal(ng, reset_less=True) # Pointer group (one-hot).
         e_win   = Signal(n,  reset_less=True)
         e_found = Signal() # SYNC block (pointer set from the SYNC of the previous cycle).
         vany    = [Reduce("OR", [vb[p]] + [vs[k][p] for k in range(K)]) for p in range(r)]
-        self.comb += e_grp.eq(Cat(*[Reduce("OR", vany[16*g:16*(g+1)]) for g in range(ng)]))
         self.sync += [
             e_idx.eq(Cat(*[Reduce("OR", [vany[p] for p in range(r) if (p >> i) & 1])
                 for i in range(kr)])),
+            e_grp.eq(Cat(*[Reduce("OR", vany[16*g:16*(g+1)]) for g in range(ng)])),
             e_win.eq(win),
             e_found.eq(load_d & sink.valid),
         ]
@@ -574,19 +574,17 @@ class Gen2BlockAligner(LiteXModule):
                 q = q + (132 if q < r else 0) - dw
         ov_idx = [Signal(kr, name=f"realign_idx{c}") for c in range(2)]
         ov_grp = [Signal(ng, name=f"realign_grp{c}") for c in range(2)]
-        ov_grp_next = [Signal(ng, name=f"realign_grp_next{c}") for c in range(2)]
         ov_ext = [Signal(name=f"realign_ext{c}") for c in range(2)]
         ov_oh  = [sync_oh_d, Signal(dw)]
         self.sync += If(sink.valid, ov_oh[1].eq(ov_oh[0]))
         for c in range(2):
             ks = [k for k in range(dw) if follow[c][k] is not None]
-            self.comb += ov_grp_next[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks
-                if (follow[c][k] >> 4) == g]) for g in range(ng)]))
             self.sync += If(sink.valid,
                 ov_ext[c].eq(or_terms([ov_oh[c][k] for k in ks])),
                 ov_idx[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> i) & 1])
                     for i in range(kr)])),
-                ov_grp[c].eq(ov_grp_next[c]),
+                ov_grp[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> 4) == g])
+                    for g in range(ng)])),
             )
         d_idx     = Signal(kr, reset_less=True)
         d_win     = Signal(132 + 15, reset_less=True) # Window shifted by the pointer multiple of 16.
@@ -603,26 +601,25 @@ class Gen2BlockAligner(LiteXModule):
         ).Else(
             idx.eq(e_idx),
         )
-        # Pointer group of the next cycle (registered: fanout of the window shift one-hot selection,
-        # copies by halves of the shifted window), from the next values of the registers selected
-        # (held without a new word).
-        grp_next = Signal(ng)
-        self.comb += If(Mux(sink.valid, realign, realign_d[0]),
-            grp_next.eq(Mux(sink.valid, ov_grp_next[0], ov_grp[0]))
-        ).Elif(Mux(sink.valid, realign_d[0], realign_d[1]),
-            grp_next.eq(Mux(sink.valid, ov_grp_next[1], ov_grp[1]))
-        ).Else(
-            grp_next.eq(e_grp)
-        )
-        grps = [Signal(ng, name="grp", attr={("syn_preserve", 1)}) for _ in range(2)]
-        self.sync += [g.eq(grp_next) for g in grps]
-        dl, dh = len(d_win), len(d_win)//2
+        # Pointer group selection from the registers (kept copies: fanout of the window shift
+        # one-hot selection, each for a quarter of the shifted window).
+        nc   = 4
+        grps = [Signal(ng, name="grp", attr={("syn_keep", 1)}) for _ in range(nc)]
+        for grp in grps:
+            self.comb += If(realign_d[0],
+                grp.eq(ov_grp[0])
+            ).Elif(realign_d[1],
+                grp.eq(ov_grp[1])
+            ).Else(
+                grp.eq(e_grp)
+            )
+        dl = len(d_win)
+        dq = [(c*dl)//nc for c in range(nc + 1)]
         self.sync += [
             # Shift by the pointer group (one-hot selection).
-            d_win[:dh].eq(Reduce("OR", [Replicate(grps[0][g], dh) & e_win[16*g:16*g + dh]
-                for g in range(ng)])),
-            d_win[dh:].eq(Reduce("OR", [Replicate(grps[1][g], dl - dh) & e_win[16*g + dh:16*g + dl]
-                for g in range(ng)])),
+            [d_win[dq[c]:dq[c+1]].eq(Reduce("OR", [
+                Replicate(grps[c][g], dq[c+1] - dq[c]) & e_win[16*g + dq[c]:16*g + dq[c+1]]
+                for g in range(ng)])) for c in range(nc)],
             d_end.eq(e_end),
             d_total.eq(e_total),
             d_idx.eq(idx),

@@ -225,13 +225,20 @@ class _AsyncFIFOPipelinedRead(Module):
         ]
         # Writable registered from the next write pointer and the resynchronized read pointer
         # (conservative by one cycle: the read pointer only advances; the block RAM write enables
-        # from registers). Writers without back-pressure (RX words at the line rate) rely on the
-        # depth (64+ entries) as for the resynchronization latency.
-        q = produce.q_next
-        self.sync.write += self.writable.eq(
-            (q[-1] == consume_wdomain[-1]) | (q[-2] == consume_wdomain[-2]) |
-            (q[:-2] != consume_wdomain[:-2]))
-        self.comb += produce.ce.eq(self.writable & self.we)
+        # from registers): compares of the held/incremented pointers (from registers) selected by
+        # the write. Writers without back-pressure (RX words at the line rate) rely on the depth
+        # (64+ entries) as for the resynchronization latency.
+        def not_full(q):
+            return ((q[-1] == consume_wdomain[-1]) | (q[-2] == consume_wdomain[-2]) |
+                    (q[:-2] != consume_wdomain[:-2]))
+        q_inc  = Signal(depth_bits + 1)
+        q_incg = Signal(depth_bits + 1)
+        self.comb += [
+            q_inc.eq(produce.q_binary + 1),
+            q_incg.eq(q_inc ^ (q_inc >> 1)),
+            produce.ce.eq(self.writable & self.we),
+        ]
+        self.sync.write += self.writable.eq(Mux(produce.ce, not_full(q_incg), not_full(produce.q)))
 
         storage = Memory(width, depth)
         wrport  = storage.get_port(write_capable=True, clock_domain="write")

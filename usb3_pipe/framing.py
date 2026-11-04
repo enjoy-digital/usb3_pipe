@@ -1380,9 +1380,11 @@ class Gen2LinkTX(LiteXModule):
         self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener(32, in_bytes=4*fw))
         self.unit_buffer = unit_buffer = ResetInserter()(Buffer(gen2_tx_unit_layout(32),
             pipe_valid=True, pipe_ready=True))
-        # Units buffer (store and forward, units bytes up to 1060: 34 entries; 128: block RAM).
-        self.units  = units  = stream.SyncFIFO(gen2_tx_unit_layout(32), 128, buffered=True)
-        self.packer = packer = Gen2TXBlocksPacker()
+        # Units buffer (store and forward, units bytes up to 1060: 34 entries; 128: block RAM),
+        # its output registered to the packer (timings: block RAM output to the packer decisions).
+        self.units     = units     = stream.SyncFIFO(gen2_tx_unit_layout(32), 128, buffered=True)
+        self.units_reg = units_reg = stream.PipeValid(gen2_tx_unit_layout(32))
+        self.packer    = packer    = Gen2TXBlocksPacker()
         skp_pending = Signal()
         self.specials += MultiReg(self.skp_pending, skp_pending)
         self.comb += [
@@ -1394,7 +1396,8 @@ class Gen2LinkTX(LiteXModule):
             framer.source.connect(widener.sink),
             widener.source.connect(unit_buffer.sink),
             unit_buffer.source.connect(units.sink),
-            units.source.connect(packer.sink),
+            units.source.connect(units_reg.sink),
+            units_reg.source.connect(packer.sink),
             packer.flush.eq(self.flush),
             packer.skp_pending.eq(skp_pending),
         ]
