@@ -288,6 +288,24 @@ class TestPHY(unittest.TestCase):
         self.test_phy_gen2_80_dev_pipe_cd_lbad(["--link-words", "4"])
 
     @pytest.mark.slow
+    @pytest.mark.slow
+    def test_phy_gen1_duplex(self):
+        # Gen 1 (32-bit Link Layer words) full duplex: Bulk OUT DPs streamed (Rx Header Buffer
+        # credits) while the device sends Bulk IN DPs: no Recovery, CRCs.
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--host-burst-duplex", "4", "--host-burst-len",
+            "1024", "--dev-loopback-depth", "4096", "--output-dir", str(get_output_dir(self))]
+        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=900)
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        self.assertIn("HOST script done", out, tail)
+        self.assertNotRegex(out, r"entering Recovery\.Active state", tail)
+        section = out[out.index("HOST_MARK          9"):]
+        n, errors = device_packets_crc_errors(section)
+        self.assertGreater(n, 80)
+        self.assertEqual(errors, 0)
+
     def test_phy_gen2_80_dev_pipe_cd_quads_duplex(self):
         # Full duplex on 128-bit Link Layer words: Bulk OUT DPs streamed while the device sends Bulk
         # IN DPs (looped back data): no Recovery, CRCs, host Header Packets acknowledged (LGOOD_n)

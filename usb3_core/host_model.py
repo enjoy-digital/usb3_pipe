@@ -350,6 +350,10 @@ class USB3HostModel(LiteXModule):
         rx_hdr     = Signal()  # Word after HPSTART (DW0) expected.
         hp_count   = Signal(16) # Device Header Packets received since OP_ACK.
         credits2   = Signal(8)  # Device Type 2 credits available (LCRD2_x received - DPs sent).
+        credits1   = Signal(8)  # Gen 1: device Rx Header Buffer credits (LCRD_x received - HPs sent).
+        rx_lcrd1   = Signal()
+        tx_hp      = Signal()   # Host Header Packet sent (HPSTART).
+        credits_ok = Signal()
         rx_lc      = Signal()   # Word after LCSTART (Link Command Word) expected.
         rx_lcrd2   = Signal()
         cred_take  = Signal()
@@ -394,6 +398,20 @@ class USB3HostModel(LiteXModule):
             ).Else(
                 credits2.eq(credits2 + rx_lcrd2 - cred_take)
             ),
+            If(~ack_enable,
+                credits1.eq(4)
+            ).Elif(u0_d & ~self.u0,
+                credits1.eq(0)
+            ).Else(
+                credits1.eq(credits1 + rx_lcrd1 - tx_hp)
+            ),
+        ]
+        # Gen 1 (not SuperSpeedPlus): OP_WAITCRED waits a Rx Header Buffer credit (LCRD_x), consumed
+        # by any Header Packet sent.
+        self.comb += [
+            rx_lcrd1.eq(ack_enable & sink.valid & rx_lc & ((lc_rx_info & 0x7fc) == 0x080)),
+            tx_hp.eq(source.valid & source.ready & (source.ctrl == 0b1111) & (source.data == 0xfbfbfbf7)),
+            credits_ok.eq(Mux(ack_ssp, credits2 != 0, credits1 != 0)),
         ]
         # Device LCRD2_x (Link Command Word: first symbol in data[31:24]).
         self.comb += cred_take.eq(self.enable & ~self.error & (fields["op"] == OP_WAITCRED) & (credits2 != 0))
@@ -495,7 +513,7 @@ class USB3HostModel(LiteXModule):
                     )
                 ],
                 OP_WAITCRED: [
-                    If(credits2 != 0,
+                    If(credits_ok,
                         step.eq(step + 1)
                     ).Elif(timer.done,
                         self.error.eq(1),
