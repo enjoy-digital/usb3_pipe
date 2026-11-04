@@ -231,7 +231,8 @@ class TestCoreLinkWide(unittest.TestCase):
             return [p for p in packets if p[0] == "LC" and (p[1] & 0x780) == cmd]
         throttled, released = counts["throttled"], counts["released"]
         self.assertEqual(len(lcs(throttled, 0x000)), 1 + 2) # LGOOD_n: advertisement + 2 DPHs.
-        self.assertEqual(len(lcs(throttled, 0x080)), 0)     # No LCRD_x while throttled.
+        # LCRD_x/LCRD2_x: the Advertisement (4 + 4, not throttled), none for the 2 DPHs while throttled.
+        self.assertEqual(len(lcs(throttled, 0x080)), 4 + 4)
         self.assertGreaterEqual(len(lcs(released, 0x080)), 2)
 
     def test_rx_link_command_copies(self):

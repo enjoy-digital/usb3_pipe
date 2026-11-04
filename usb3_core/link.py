@@ -117,7 +117,8 @@ class USB3LinkLayer(LiteXModule):
         self.sync += u0_d.eq(u0)
 
         recovery = Signal() # Recovery request (pulse).
-        self.sync += phy.directed_recovery.eq(recovery)
+        self.dbg_recovery_request = Signal() # i: Directed Recovery request (pulse, bring-up).
+        self.sync += phy.directed_recovery.eq(recovery | (self.dbg_recovery_request & u0))
         self.sync += If(recovery & u0 & (self.recovery_req != (2**16 - 1)),
             self.recovery_req.eq(self.recovery_req + 1)
         )
@@ -461,8 +462,15 @@ class USB3LinkLayer(LiteXModule):
                 )
             )
         )
+        # DPP expected or being received at the U0 exit (Recovery): completed as a missing DPP (the
+        # Protocol Layer processes the DPH with its DPP status: a DPH never completed would hold
+        # its Rx Header Buffer and all the following Header Packets, seen on hardware after a
+        # Recovery in the middle of a DPP: credits never returned, partner CREDIT_HP_TIMER Recoveries).
+        dpp_cut = Signal()
         self.comb += [
-            self.rx_dpp_done.eq(dpp_end | dpp_missing | (hp_check & hp_accept & hp_is_dp & hp_dl)),
+            dpp_cut.eq(dpp_expect & u0_d & ~u0),
+            self.rx_dpp_done.eq(dpp_end | dpp_missing | dpp_cut |
+                (hp_check & hp_accept & hp_is_dp & hp_dl)),
             self.rx_dpp_ok.eq(dpp_end & (dpp_crc == crc32_rx.value)),
         ]
         self.sync += If(dpp_end | dpp_missing, dpp_expect.eq(0))
@@ -767,14 +775,14 @@ class USB3LinkLayer(LiteXModule):
         # The Advertisement (U0 entry: all the credits, 7.2.4.1.1) is not limited.
         rx_t2_credits = getattr(phy, "rx_t2_credits", LINK_HP_BUFFERS) # int or Signal (runtime).
         lcrd2_allowed = Signal()
+        # Rx Header Buffer Credit Advertisement in progress (U0 entry until the advertised credits
+        # are sent): not throttled/limited (7.2.4.1.1: all the free buffers advertised on the U0
+        # entry, the partner's CREDIT_HP_TIMERs expect them; seen on hardware after a Recovery with
+        # the RX words buffered: credits held, host Recoveries every CREDIT_HP_TIMER).
+        lcrd_adv  = Signal(3) # Advertised LCRD_x/LCRD1_x left to send (set on the U0 entry).
+        lcrd2_adv = Signal(3) # Advertised LCRD2_x left to send.
         if isinstance(rx_t2_credits, Signal) or (rx_t2_credits < LINK_HP_BUFFERS):
-            lcrd2_adv = Signal() # Type 2 credits Advertisement in progress.
-            self.sync += If(u0_rise,
-                lcrd2_adv.eq(1)
-            ).Elif(lcrd2_pending == 0,
-                lcrd2_adv.eq(0)
-            )
-            self.sync += lcrd2_allowed.eq(lcrd2_adv |
+            self.sync += lcrd2_allowed.eq((lcrd2_adv != 0) |
                 ((lcrd2_pending + rx_t2_level + rx_t2_credits) > LINK_HP_BUFFERS)) # Registered (timings).
         else:
             self.comb += lcrd2_allowed.eq(1)
@@ -787,17 +795,22 @@ class USB3LinkLayer(LiteXModule):
         sel_lau  = Signal()
         sel_lxu  = Signal()
         sel_lup  = Signal()
+        # LGOOD_n of the Header Packets received before a bad one are sent before the LBAD (the
+        # partner retransmits the Header Packets not acknowledged when it receives the LBAD: an
+        # LGOOD_n overtaken by the LBAD makes it retransmit an accepted Header Packet, received with
+        # a Header Sequence Number error: Recovery; seen on hardware in full duplex, the Link
+        # Commands waiting behind a transmitted DPP).
         self.comb += [
             If(~pm_block,
                 If(lrty_pending,
                     sel_lrty.eq(1), lc_sel.eq(LCMD_LRTY)
-                ).Elif(lbad_pending,
-                    sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
                 ).Elif(lgood_seq != rx_seq,
                     sel_lgood.eq(1), lc_sel.eq(LCMD_LGOOD | lgood_seq)
-                ).Elif((lcrd_pending != 0) & ~rx_throttle,
+                ).Elif(lbad_pending,
+                    sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
+                ).Elif((lcrd_pending != 0) & (~rx_throttle | (lcrd_adv != 0)),
                     sel_lcrd.eq(1), lc_sel.eq(LCMD_LCRD | lcrd_idx)
-                ).Elif((lcrd2_pending != 0) & ~rx_throttle & lcrd2_allowed,
+                ).Elif((lcrd2_pending != 0) & (~rx_throttle | (lcrd2_adv != 0)) & lcrd2_allowed,
                     sel_lcrd2.eq(1), lc_sel.eq(LCMD_LCRD | 0b100 | lcrd2_idx)
                 ).Elif(lau_pending,
                     sel_lau.eq(1), lc_sel.eq(LCMD_LAU)
@@ -884,6 +897,7 @@ class USB3LinkLayer(LiteXModule):
                     NextValue(hp_dws,  tx_dws[send_seq[0:ib]]),
                     NextValue(hp_dpp,  tx_dpps[send_seq[0:ib]] & ~tx_sent[send_seq[0:ib]]),
                     NextValue(hp_null, tx_dpps[send_seq[0:ib]] &  tx_sent[send_seq[0:ib]] & ssp),
+                    # DL bit (Delayed: retransmitted Header Packet, 7.2.4.1.12).
                     NextValue(hp_info, Cat(send_seq, C(0, 9 - sw), tx_sent[send_seq[0:ib]], C(0, 1))),
                     NextState("HP0")
                 ).Elif(sel_lrty | sel_lbad | sel_lgood | sel_lcrd | sel_lcrd2 | sel_lau | sel_lxu | sel_lup,
@@ -1044,6 +1058,8 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_lgood_rx      = lc_lgood & adv_received & lgood_ok           # Expected LGOOD_n received...
         self.dbg_lgood_seq     = lc_info[0:4]                                 # ...for this Header Sequence Number.
         self.dbg_lbad_rx       = lc_lbad                                      # LBAD received.
+        self.dbg_rx_lc_bad     = (lc_main | (lc_fast & u0)) & ~lc_valid      # Link Command word rejected (CRC-5/copies).
+        self.dbg_rx_dpp_bad    = dpp_end & (dpp_crc != crc32_rx.value)       # DPP received with a CRC-32 error.
         self.dbg_state     = Cat(tx_seq[0:4] if sw == 4 else Cat(tx_seq, C(0, 1)),
             ack_seq[0:4] if sw == 4 else Cat(ack_seq, C(0, 1)),
             send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
@@ -1070,8 +1086,8 @@ class USB3LinkLayer(LiteXModule):
                 If(sel_lrty,  lrty_pending.eq(0)),
                 If(sel_lbad,  lbad_pending.eq(0)),
                 If(sel_lgood, lgood_seq.eq((lgood_seq + 1) & seq_mask)),
-                If(sel_lcrd,  lcrd_idx.eq(lcrd_idx + 1)),
-                If(sel_lcrd2, lcrd2_idx.eq(lcrd2_idx + 1)),
+                If(sel_lcrd,  lcrd_idx.eq(lcrd_idx + 1),   If(lcrd_adv != 0,  lcrd_adv.eq(lcrd_adv - 1))),
+                If(sel_lcrd2, lcrd2_idx.eq(lcrd2_idx + 1), If(lcrd2_adv != 0, lcrd2_adv.eq(lcrd2_adv - 1))),
                 If(sel_lau,   lau_pending.eq(0), pm_block.eq(1)),
                 If(sel_lxu,   lxu_pending.eq(0)),
                 If(sel_lup,   lup_pending.eq(0)),
@@ -1158,8 +1174,12 @@ class USB3LinkLayer(LiteXModule):
                 lgood_seq.eq(Mux(self.reset, seq_mask, (rx_seq - 1) & seq_mask)),
                 lcrd_pending.eq(Mux(self.reset, LINK_HP_BUFFERS,
                     LINK_HP_BUFFERS - (rx_buffer.level - rx_t2_level))),
+                lcrd_adv.eq(Mux(self.reset, LINK_HP_BUFFERS,
+                    LINK_HP_BUFFERS - (rx_buffer.level - rx_t2_level))),
                 lcrd_idx.eq(0),
                 lcrd2_pending.eq(Mux(ssp, Mux(self.reset, LINK_HP_BUFFERS,
+                    LINK_HP_BUFFERS - rx_t2_level), 0)),
+                lcrd2_adv.eq(Mux(ssp, Mux(self.reset, LINK_HP_BUFFERS,
                     LINK_HP_BUFFERS - rx_t2_level), 0)),
                 lcrd2_idx.eq(0),
                 remote_credits.eq(0),

@@ -120,6 +120,22 @@ class USB3DeviceCore(LiteXModule):
                 getattr(self._recovery_cause.fields, c).eq(getattr(self._recovery_cause.fields, c) + 1))
                 for i, c in enumerate(causes)]
         )
+        # Directed Recovery request (bring-up: Recovery without a link error).
+        self._recovery_request = CSR()
+        self.comb += self.link.dbg_recovery_request.eq(self._recovery_request.re)
+        # RX errors (16-bit saturating counts): Link Command words rejected (CRC-5/copies), DPPs with
+        # a CRC-32 error.
+        self._rx_errors = CSRStatus(fields=[
+            CSRField("lc_bad",  size=16, offset=0,  description="Link Command words rejected (CRC-5/copies)."),
+            CSRField("dpp_bad", size=16, offset=16, description="DPPs received with a CRC-32 error."),
+        ])
+        for field, event in [(self._rx_errors.fields.lc_bad,  self.link.dbg_rx_lc_bad),
+                             (self._rx_errors.fields.dpp_bad, self.link.dbg_rx_dpp_bad)]:
+            event_r = Signal() # Registered event (timings: CRC comparisons).
+            self.sync += [
+                event_r.eq(event),
+                If(event_r & (field != 0xffff), field.eq(field + 1)),
+            ]
         self.comb += [
             self._status.fields.ready.eq(self.link.ready),
             self._status.fields.configured.eq(self.ep0.configured),
