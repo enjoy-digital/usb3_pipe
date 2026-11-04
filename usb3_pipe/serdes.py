@@ -620,6 +620,21 @@ class GW5USB3SerDes(USB3SerDes):
                 ]
                 writes = writes[:1] + [(0x908234, 0xe000, txlev), (0x908238, 0xb00, c1cm),
                     (0x9082d8, 0, ffe)] + writes[1:]
+            # RX CTLE at 10Gbps (runtime, bring-up: applied at the next rate change, lane 0
+            # registers): rx_eq_manual: attenuation (att) and boost values, else the configuration
+            # values (gw5_usb3_rate_writes).
+            self.rx_eq_manual = Signal()  # i
+            self.rx_eq_att    = Signal(4) # i
+            self.rx_eq_boost  = Signal(4) # i
+            if lane == 0:
+                def eq_value(default, value):
+                    v = Signal(32)
+                    self.comb += v.eq(Mux(self.rx_eq_manual,
+                        Cat(C(1, 4), Replicate(value, 4), C(0, 12)), default))
+                    return v
+                rx_eq = {0x9082d4: self.rx_eq_att, 0x9082d0: self.rx_eq_boost}
+                writes = [(w[0], w[1], eq_value(w[2], rx_eq[w[0]]) if w[0] in rx_eq else w[2]) +
+                    tuple(w[3:]) for w in writes]
             self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(
                 GW5RateSequencer(rate_port, writes))
             # TX driver control register reset by the lane reconfiguration: written again after.
@@ -627,9 +642,11 @@ class GW5USB3SerDes(USB3SerDes):
             sync   = getattr(self.sync, xcvr_cd)
             sync  += busy_d.eq(rate_sequencer.busy)
             self.comb += tx_electrical_idle.refresh.eq(busy_d & ~rate_sequencer.busy)
+            # TX re-initialization request (bring-up: TX PCS reset without a lane reconfiguration).
+            self.tx_reinit_req = Signal() # i
             self.comb += [
                 rate_sequencer.rate_10g.eq(self.rate_10g),
-                self.tx_reinit.eq(rate_sequencer.busy),
+                self.tx_reinit.eq(rate_sequencer.busy | self.tx_reinit_req),
                 self.rx_reinit.eq(rate_sequencer.busy),
                 self.gen2_rx_data.eq(gtr12.rx_raw),
             ]

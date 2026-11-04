@@ -90,6 +90,7 @@ def main():
     parser.add_argument("--ept",      default=1, type=int, help="Core trace: endpoint (clear-ept/stop).")
     parser.add_argument("--circular", action="store_true", help="Link trace: circular, stops on a U0 exit.")
     parser.add_argument("--filter",   action="store_true", help="Link trace: drop keep-alives (LUP/LDN/ITPs).")
+    parser.add_argument("--skip",     default=0, type=int, help="Link trace (circular): U0 exits/Recovery requests ignored before stopping.")
     args = parser.parse_args()
 
     bus = open_remote(args)
@@ -98,8 +99,9 @@ def main():
         (n.endswith("link_trace_count") == args.command.startswith("link"))][0]
     reg    = lambda name: getattr(bus.regs, f"{prefix}_{name}")
     if args.command == "link-clear":
-        # enable, clear, circular (stops on a U0 exit), filter (keep-alives).
-        reg("control").write(0b1 | 0b10 | (int(args.circular) << 2) | (int(args.filter) << 3))
+        # enable, clear, circular (stops on a U0 exit), filter (keep-alives), skip (stops ignored).
+        reg("control").write(0b1 | 0b10 | (int(args.circular) << 2) | (int(args.filter) << 3) |
+            (args.skip << 4))
     elif args.command == "link":
         count   = reg("count").read()
         pointer = reg("pointer").read()

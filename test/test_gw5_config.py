@@ -57,9 +57,9 @@ class TestGW5Config(unittest.TestCase):
         self.assertEqual([x[3] for x in w if len(x) == 4], [5000, 20000])
         self.assertEqual(w[-2][:3], (0x90a004, 0x22233, 0x22233))
         self.assertEqual(w[-1], (0x90033e, 0, 0))
-        # Equalizer registers back to 0 at 5G (as after the 5G configuration).
+        # Equalizer registers back to 0 at 5G (as after the 5G configuration), attenuation 8 at 10G.
         eq = {a: (v5, v10) for a, v5, v10, *_ in w if a in (0x9082d0, 0x9082d4, 0x9003a2)}
-        self.assertEqual(eq, {0x9082d0: (0, 0xcccc1), 0x9082d4: (0, 0x77771), 0x9003a2: (0, 0x10000)})
+        self.assertEqual(eq, {0x9082d0: (0, 0xcccc1), 0x9082d4: (0, 0x88881), 0x9003a2: (0, 0x10000)})
 
     def test_overrides(self):
         c = "upar_write_driver(0x000010,0x00000001) # a\nupar_write_driver(0x000020,0x00000002) # b\n"

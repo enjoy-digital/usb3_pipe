@@ -58,7 +58,7 @@ class USB3SoC(USB3BaseSoC):
     def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", pll=None, serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
         with_gtr12_debug=False, with_gtr12_analyzer=False, with_analyzer=False, analyzer_group="link",
         gen2_capable=False, with_gen2_debug=False, with_trace=False, with_tx_check=False,
-        with_ltssm_history=False,
+        with_tx_raw_check=False, with_ltssm_history=False,
         analyzer_csv="analyzer.csv", usb3_kwargs={}, **kwargs):
         # USB3 PIPE/SerDes at 125MHz (Gen 1 32-bit words); with a lower sys_clk_freq, the PIPE runs on
         # the GTR12 TX fabric clock ("tx" clock domain: frequency-locked to the transmitted words, no
@@ -129,6 +129,7 @@ class USB3SoC(USB3BaseSoC):
             self.add_ltssm_history(self.usb3_phy, sys_clk_freq)
             self.add_lgood_latency()
             self.add_gen2_rx_probes(self.usb3_phy)
+            self.add_gtr12_rx_valid_probe(gtr12)
         if with_gtr12_debug and phy_cd is not None and hasattr(self, "usb3_phy"):
             if hasattr(self.usb3_phy, "ssp"):
                 self.add_ssp_status(self.usb3_phy.ssp, usb3_serdes, phy_cd)
@@ -157,17 +158,32 @@ class USB3SoC(USB3BaseSoC):
                 CSRField("manual", size=1, offset=12, reset=0,  description="Manual TX FFE (else defaults)."),
             ])
             self.usb3_phy_reset = CSRStorage(description="USB3 PHY reset (level: retraining).")
+            self.usb3_tx_reinit = CSRStorage(description="SerDes TX re-initialization (level: TX PCS reset, no retraining).")
+            self.usb3_rx_eq = CSRStorage(fields=[
+                CSRField("att",    size=4, offset=0,  reset=8,  description="RX CTLE attenuation (10Gbps)."),
+                CSRField("boost",  size=4, offset=4,  reset=12, description="RX CTLE boost (10Gbps)."),
+                CSRField("manual", size=1, offset=8,  reset=0,  description="Manual RX CTLE (else the configuration values)."),
+            ])
+            self.comb += [
+                usb3_serdes.rx_eq_att.eq(self.usb3_rx_eq.fields.att),
+                usb3_serdes.rx_eq_boost.eq(self.usb3_rx_eq.fields.boost),
+                usb3_serdes.rx_eq_manual.eq(self.usb3_rx_eq.fields.manual),
+            ]
             self.comb += [
                 usb3_serdes.tx_ffe_txlev.eq(self.usb3_tx_ffe.fields.txlev),
                 usb3_serdes.tx_ffe_c1.eq(self.usb3_tx_ffe.fields.c1),
                 usb3_serdes.tx_ffe_cm.eq(self.usb3_tx_ffe.fields.cm),
                 usb3_serdes.tx_ffe_manual.eq(self.usb3_tx_ffe.fields.manual),
+                usb3_serdes.tx_reinit_req.eq(self.usb3_tx_reinit.storage),
                 self.usb3_phy.reset.eq(self.usb3_phy_reset.storage),
             ]
 
-        # Gen 2 TX self-check: transmitted Header Packets/Link Commands CRCs.
+        # Gen 2 TX self-checks: transmitted Header Packets/Link Commands CRCs (Data Blocks payloads,
+        # raw TX words).
         if with_tx_check:
             self.add_gen2_tx_check(self.usb3_phy)
+        if with_tx_raw_check and gen2_capable:
+            self.add_gen2_tx_raw_check(self.usb3_phy)
 
         # Gen 2 bring-up debug: RX monitor counters/status.
         if with_gen2_debug:
@@ -234,21 +250,100 @@ class USB3SoC(USB3BaseSoC):
         before the SKP Ordered Sets/scrambling) decoded by a second Gen 2 RX framing, the Header
         Packets CRC-16/CRC-5 and Link Commands CRC-5 checked (bad packets from the TX logic vs
         corrupted on the line: host LBADs)."""
+        gp        = phy.gen2_pipe
+        blocks    = gp.tx_blocks
+        stream_on = Signal()
+        self.sync.tx += stream_on.eq(gp.tx_ready & phy.gen2_active_pipe)
+        self.add_gen2_words_check("usb3_tx_check", blocks.valid & blocks.ready, blocks.data, stream_on)
+
+    def add_gen2_tx_raw_check(self, phy):
+        """Gen 2 TX blocks self-check: the transmitted blocks (Gen2TX output after the SKP Ordered
+        Sets insertion, the DC Balance and the scrambling: gearbox input, tx clock domain) decoded
+        by a second Gen 2 RX (descrambling, Ordered Sets) and RX framing, the Header Packets
+        CRC-16/CRC-5 and Link Commands CRC-5 checked (bad packets from the TX logic/timings vs
+        corrupted on the line or at the host: host LBADs). tx_raw_counts: Data Blocks, SKP Ordered
+        Sets, control blocks, SYNC/SDS/unknown control blocks (32-bit, quasi-static reads).
+        The raw words (gearbox output) are not checked: a second block aligner does not fit the tx
+        clock domain timings."""
+        from migen.genlib.cdc import MultiReg
+        from litex.soc.interconnect import stream
+        from usb3_pipe.common   import BLOCK_HEADER_DATA
+        from usb3_pipe.datapath import Gen2RX, GEN2_IDLE_BLOCK
+        blocks = phy.gen2_pipe.tx.gearbox.sink
+        # Tap registered (timings: fanout of the gearbox input registers).
+        accept = Signal()
+        header = Signal(4)
+        data   = Signal(128)
+        skp    = Signal()
+        self.sync.tx += [
+            accept.eq(blocks.valid & blocks.ready),
+            header.eq(blocks.header),
+            data.eq(blocks.data[:128]),
+            skp.eq(blocks.skp),
+        ]
+        rx = ClockDomainsRenamer("tx")(Gen2RX())
+        self.usb3_tx_raw_rx = rx
+        self.comb += [
+            rx.sink.valid.eq(accept & ~skp),
+            rx.sink.header.eq(header),
+            rx.sink.data.eq(data),
+            rx.source.ready.eq(1),
+        ]
+        # Data Blocks to the sys clock domain (RX framing at the Link Layer rate: OUT traffic), the
+        # Logical Idle blocks dropped except the one following a non idle block (Idle Symbols inside
+        # a packet still cut it).
+        idle   = Signal()
+        idle_d = Signal(reset=1)
+        self.comb += idle.eq(rx.source.data == GEN2_IDLE_BLOCK)
+        self.sync.tx += If(rx.source.valid, idle_d.eq(idle))
+        fifo = ClockDomainsRenamer({"write": "tx", "read": "sys"})(
+            stream.AsyncFIFO([("data", 128)], 512, buffered=True))
+        self.usb3_tx_raw_fifo = fifo
+        overflow    = Signal()
+        data_stream = Signal()
+        self.comb += [
+            fifo.sink.valid.eq(rx.source.valid & ~(idle & idle_d)),
+            fifo.sink.data.eq(rx.source.data),
+            fifo.source.ready.eq(1),
+        ]
+        self.sync.tx += If(fifo.sink.valid & ~fifo.sink.ready, overflow.eq(1))
+        self.specials += MultiReg(rx.data_stream, data_stream)
+        self.add_gen2_words_check("usb3_tx_raw_check", fifo.source.valid, fifo.source.data, data_stream,
+            clock_domain="sys", overflow=overflow)
+        events = [
+            accept & ~skp & (header == BLOCK_HEADER_DATA),
+            accept &  skp,
+            accept & ~skp & (header != BLOCK_HEADER_DATA),
+            rx.rx_sync,
+            rx.rx_sds,
+            rx.unknown,
+        ]
+        counts = []
+        for e in events:
+            c  = Signal(32)
+            cs = Signal(32)
+            self.sync.tx += If(e, c.eq(c + 1))
+            self.specials += MultiReg(c, cs) # Quasi-static reads only.
+            counts.append(cs)
+        self.add_indexed_status("tx_raw_counts", Cat(*counts))
+
+    def add_gen2_words_check(self, name, valid, data, data_stream, clock_domain="tx", overflow=None):
+        """Gen 2 Data Blocks payloads (valid/data/data_stream, clock_domain) decoded by a Gen 2 RX
+        framing (32-bit words), the Header Packets CRC-16/CRC-5 and Link Commands CRC-5 checked
+        (<name>_hp/_lc/_status CSRs, overflow: input buffer overflow (clock_domain, sticky), with
+        the blocks buffer one). Words consumed at the sys rate: OUT traffic (the blocks buffer
+        overflows at the IN rate)."""
         from migen.genlib.cdc import MultiReg
         from litex.soc.interconnect.csr import CSRStatus
         from usb3_pipe.framing import Gen2LinkRX, SHP, SLC
         from usb3_core.crc import CRC16Words, CRC5
-        gp = phy.gen2_pipe
-        checker = ClockDomainsRenamer({"rx": "tx"})(Gen2LinkRX(buffer_depth=1024, link_words=1,
+        checker = ClockDomainsRenamer({"rx": clock_domain})(Gen2LinkRX(buffer_depth=1024, link_words=1,
             nbytes=32))
-        self.submodules.usb3_tx_checker = checker
-        blocks = gp.tx_blocks
-        stream_on = Signal()
-        self.sync.tx += stream_on.eq(gp.tx_ready & phy.gen2_active_pipe)
+        setattr(self.submodules, f"{name}er", checker)
         self.comb += [
-            checker.sink.valid.eq(blocks.valid & blocks.ready),
-            checker.sink.data.eq(blocks.data),
-            checker.data_stream.eq(stream_on),
+            checker.sink.valid.eq(valid),
+            checker.sink.data.eq(data),
+            checker.data_stream.eq(data_stream),
             checker.rx_ready.eq(1),
             checker.lc_enable.eq(0),
             checker.source.ready.eq(1),
@@ -262,6 +357,7 @@ class USB3SoC(USB3BaseSoC):
         hp, hp_bad, lc, lc_bad, cut = [Signal(16) for _ in range(5)]
         n     = Signal(2)
         ok16  = Signal()
+        hp_bad_now = Signal()
         self.comb += [
             crc16.data.eq(words.data),
             crc5a.data.eq(words.data[16:27]),
@@ -271,7 +367,7 @@ class USB3SoC(USB3BaseSoC):
         start_hp = words.valid & (words.ctrl == 0b1111) & (words.data[0:8] == SHP)
         start_lc = words.valid & (words.ctrl == 0b1111) & (words.data[0:8] == SLC)
         fsm = FSM(reset_state="IDLE")
-        self.submodules.usb3_tx_check_fsm = fsm
+        setattr(self.submodules, f"{name}_fsm", fsm)
         fsm.act("IDLE",
             crc16.clear.eq(1),
             If(start_hp, NextValue(n, 0), NextState("HP")).Elif(start_lc, NextState("LC"))
@@ -286,11 +382,32 @@ class USB3SoC(USB3BaseSoC):
                     NextValue(n, n + 1)
                 ).Else(
                     NextValue(hp, hp + 1),
-                    If(~ok16, NextValue(hp_bad, hp_bad + 1)),
+                    If(~ok16, NextValue(hp_bad, hp_bad + 1), hp_bad_now.eq(1)),
                     NextState("IDLE")
                 )
             )
         )
+        # Snapshot of the first bad Header Packet since clear (corruption pattern): its 4 words and
+        # the 4 words before (newest first: data words then their ctrl nibbles), <name>_snap.
+        from litex.soc.interconnect.csr import CSR
+        hist  = [Signal(36) for _ in range(8)]
+        snap  = [Signal(36) for _ in range(8)]
+        taken = Signal()
+        snap_clear = CSR(name=f"{name}_snap_clear")
+        setattr(self, f"{name}_snap_clear", snap_clear)
+        self.sync += [
+            If(words.valid,
+                hist[0].eq(Cat(words.data, words.ctrl)),
+                *[hist[i].eq(hist[i-1]) for i in range(1, 8)],
+            ),
+            If(hp_bad_now & ~taken,
+                taken.eq(1),
+                snap[0].eq(Cat(words.data, words.ctrl)),
+                *[snap[i].eq(hist[i-1]) for i in range(1, 8)],
+            ),
+            If(snap_clear.re, taken.eq(0)),
+        ]
+        self.add_indexed_status(f"{name}_snap", Cat(*[s[0:32] for s in snap], *[s[32:36] for s in snap]))
         fsm.act("LC",
             If(words.valid,
                 If(words.ctrl != 0,
@@ -303,15 +420,18 @@ class USB3SoC(USB3BaseSoC):
                 NextState("IDLE")
             )
         )
-        overflow = Signal()
-        self.specials += MultiReg(checker.overflow, overflow)
-        self.usb3_tx_check_hp = CSRStatus(32, description="TX check: Header Packets [15:0], CRC errors [31:16].")
-        self.usb3_tx_check_lc = CSRStatus(32, description="TX check: Link Commands [15:0], CRC errors [31:16].")
-        self.usb3_tx_check_status = CSRStatus(32, description="TX check: packets cut by framing [15:0], blocks buffer overflow [16].")
+        overflows = Signal(2)
+        self.specials += MultiReg(Cat(checker.overflow, 0 if overflow is None else overflow), overflows)
+        overflow = overflows != 0
+        csr_hp     = CSRStatus(32, name=f"{name}_hp",     description="TX check: Header Packets [15:0], CRC errors [31:16].")
+        csr_lc     = CSRStatus(32, name=f"{name}_lc",     description="TX check: Link Commands [15:0], CRC errors [31:16].")
+        csr_status = CSRStatus(32, name=f"{name}_status", description="TX check: packets cut by framing [15:0], blocks buffer overflow [16].")
+        for csr in [csr_hp, csr_lc, csr_status]:
+            setattr(self, csr.name, csr)
         self.comb += [
-            self.usb3_tx_check_hp.status.eq(Cat(hp, hp_bad)),
-            self.usb3_tx_check_lc.status.eq(Cat(lc, lc_bad)),
-            self.usb3_tx_check_status.status.eq(Cat(cut, overflow)),
+            csr_hp.status.eq(Cat(hp, hp_bad)),
+            csr_lc.status.eq(Cat(lc, lc_bad)),
+            csr_status.status.eq(Cat(cut, overflow)),
         ]
 
     def add_gen2_rx_probes(self, phy):
@@ -333,6 +453,43 @@ class USB3SoC(USB3BaseSoC):
             If(clear.re, max_level.eq(0), stalls.eq(0)),
         ]
         self.add_indexed_status("gen2_rx_probes", Cat(max_level, C(0, 15), overflow, stalls))
+        # PHY Gen 2 RX datapath counters (GEN2_RX_COUNTERS order: blocks, header errors (corrected
+        # single bit errors: line BER), alignment errors, SYNC/TSEQ/TS1/TS2/SDS/SKP Ordered Sets,
+        # unknown control blocks), rx clock domain, quasi-static reads.
+        from usb3_pipe.datapath import GEN2_RX_COUNTERS
+        counts = []
+        for name, _ in GEN2_RX_COUNTERS:
+            c = Signal(32)
+            self.specials += MultiReg(getattr(phy.gen2_pipe.rx, f"{name}_count"), c)
+            counts.append(c)
+        self.add_indexed_status("gen2_rx_counts", Cat(*counts))
+        # PHY Gen 2 RX framing (sys): errors (unknown packet starts), corrected starts (RESYNC), and
+        # the bytes of the first unknown packet start since gen2_rx_error_clear (the skipped byte
+        # first).
+        fr = phy.gen2_pipe.rx_framing
+        self.add_indexed_status("gen2_rx_framing", Cat(fr.errors, fr.corrected))
+        self._gen2_rx_error_clear = CSR()
+        error_window = Signal(len(fr.dbg_error_window))
+        error_taken  = Signal()
+        self.sync += [
+            If(fr.dbg_error & ~error_taken,
+                error_taken.eq(1),
+                error_window.eq(fr.dbg_error_window),
+            ),
+            If(self._gen2_rx_error_clear.re, error_taken.eq(0)),
+        ]
+        self.add_indexed_status("gen2_rx_error", Cat(error_window, error_taken))
+
+    def add_gtr12_rx_valid_probe(self, gtr12):
+        """GTR12 RX interface probe (bring-up): rx clock cycles with RX_VLD_OUT low (the raw RX words
+        are consumed every cycle: an invalid word would be a duplicated/stale word), 32-bit,
+        quasi-static reads."""
+        from migen.genlib.cdc import MultiReg
+        from litex.soc.interconnect.csr import CSRStatus
+        count = Signal(32)
+        self.sync.rx += If(~gtr12.rx_valid, count.eq(count + 1))
+        self.usb3_gtr12_rx_invalid = CSRStatus(32, description="GTR12 RX_VLD_OUT low cycles (rx clock).")
+        self.specials += MultiReg(count, self.usb3_gtr12_rx_invalid.status)
 
     def add_lgood_latency(self):
         """Header Packets acknowledgement latency (bring-up): durations of the PENDING_HP_TIMER runs
@@ -566,6 +723,7 @@ def main():
     parser.add_argument("--gen2-capable",        action="store_true", help="Gen 2 (10Gbps) capable SerDes/PHY (GTR12 rate change through UPAR, 80-bit raw words).")
     parser.add_argument("--with-ltssm-history",  action="store_true", help="LTSSM states history (states with their entry time).")
     parser.add_argument("--with-tx-check",       action="store_true", help="Gen 2 TX self-check (transmitted Header Packets/Link Commands CRCs).")
+    parser.add_argument("--with-tx-raw-check",   action="store_true", help="Gen 2 TX blocks self-check (scrambled blocks with SKPs decoded: Header Packets/Link Commands CRCs).")
     parser.add_argument("--with-trace",          action="store_true", help="USB3 Device Core Header Packets trace (bench/usb3_trace.py).")
     parser.add_argument("--with-gen2-debug",     action="store_true", help="Gen 2 bring-up debug (RX monitor on the raw RX words: alignment, blocks/Ordered Sets counters).")
     parser.add_argument("--with-gtr12-debug",    action="store_true", help="GTR12/PIPE bring-up debug (transitions/PIPE counters, RX snapshots, LTSSM history).")
@@ -592,6 +750,7 @@ def main():
         with_gen2_debug     = args.with_gen2_debug,
         with_trace          = args.with_trace,
         with_tx_check       = args.with_tx_check,
+        with_tx_raw_check   = args.with_tx_raw_check,
         with_ltssm_history  = args.with_ltssm_history,
         with_gtr12_analyzer = args.with_gtr12_analyzer,
         **usb3_soc_argdict(args))
