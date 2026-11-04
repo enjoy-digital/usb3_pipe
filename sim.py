@@ -441,7 +441,7 @@ class USB3PIPESim(SoCMini):
         gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
         gen2_data_width=None, host_recovery=False, host_burst_out=0, host_burst_len=64,
         host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False, host_burst_duplex=0,
-        host_recovery_mid=False, dev_link_ppm=None):
+        host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -540,7 +540,8 @@ class USB3PIPESim(SoCMini):
                     status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2, itp=host_itp,
                     burst_out=host_burst_out, burst_len=host_burst_len,
                     burst_stream=host_burst_stream, lbad_test=host_lbad_test,
-                    burst_duplex=host_burst_duplex, recovery_mid=host_recovery_mid).steps))
+                    burst_duplex=host_burst_duplex, recovery_mid=host_recovery_mid,
+                    recovery_cut=host_recovery_cut).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
                 host_ux = Signal()
@@ -690,6 +691,37 @@ class USB3PIPESim(SoCMini):
                     Display("[%08d] DEV  Link Layer Recovery request (cause %x)", timer,
                         dev_cause)),
             ]
+            # Device Header Packets received by the Link Layer (type, Header Sequence Number, checks).
+            dev_rx_hp_info = Signal(len(dev_link.dbg_rx_hp_info))
+            rx_hp_type, rx_hp_seq = Signal(5), Signal(4)
+            rx_hp_ok, rx_hp_accept, rx_hp_seqer = Signal(), Signal(), Signal()
+            self.comb += [
+                dev_rx_hp_info.eq(dev_link.dbg_rx_hp_info),
+                rx_hp_type.eq(dev_rx_hp_info[0:5]),
+                rx_hp_seq.eq(dev_rx_hp_info[9:13]),
+                rx_hp_ok.eq(dev_rx_hp_info[13]),
+                rx_hp_accept.eq(dev_rx_hp_info[14]),
+                rx_hp_seqer.eq(dev_rx_hp_info[15]),
+            ]
+            dev_sync += If(dev_link.dbg_rx_hp,
+                Display("[%08d] DEV_HPRX type %x seq %d ok %d accept %d seqer %d", timer,
+                    rx_hp_type, rx_hp_seq, rx_hp_ok, rx_hp_accept, rx_hp_seqer))
+            tx_hp_seq, tx_hp_type, tx_hp_retry = Signal(4), Signal(5), Signal()
+            self.comb += [
+                tx_hp_seq.eq(dev_link.dbg_tx_hp_info[0:4]),
+                tx_hp_type.eq(dev_link.dbg_tx_hp_info[4:9]),
+                tx_hp_retry.eq(dev_link.dbg_tx_hp_info[9]),
+            ]
+            dev_sync += If(dev_link.dbg_tx_hp,
+                Display("[%08d] DEV_HPTXS type %x seq %d retry %d", timer, tx_hp_type, tx_hp_seq,
+                    tx_hp_retry))
+            rx_lc_info, ack_seq_dbg = Signal(11), Signal(4)
+            self.comb += [
+                rx_lc_info.eq(dev_link.dbg_rx_lc_info),
+                ack_seq_dbg.eq(dev_link.dbg_state[4:8]),
+            ]
+            dev_sync += If(dev_link.dbg_rx_lc,
+                Display("[%08d] DEV_LCRX info %x ack_seq %d", timer, rx_lc_info, ack_seq_dbg))
             # Device Header Packets sent by the Link Layer (host model clock cycles, as HOST_* logs).
             dev_tx_hp_t = Signal()
             dev_sync += If(dev_link.dbg_tx_hp, dev_tx_hp_t.eq(~dev_tx_hp_t))
@@ -825,6 +857,7 @@ def main():
     parser.add_argument("--host-burst-len", default=64, help="Host model burst DPs payload length (bytes).")
     parser.add_argument("--dev-link-ppm",   default=None, type=float, help="Device Link clock (--dev-pipe-cd) from its own phase accumulator with this frequency offset (asynchronous clock domain crossings).")
     parser.add_argument("--host-recovery-mid",  action="store_true", help="Host model directed Recovery between Bulk OUT DPs (Advertisements on the U0 re-entry), then Bulk OUT/IN.")
+    parser.add_argument("--host-recovery-cut",  action="store_true", help="With --host-recovery-mid: the Recovery cuts a Bulk OUT DP (DPP incomplete), sent again after the U0 re-entry.")
     parser.add_argument("--host-burst-duplex", default=0, help="Host model rounds of 4 Bulk OUT DPs streamed during 4 Bulk IN DPs (full duplex).")
     parser.add_argument("--host-burst-stream", default=0, help="Host model Bulk OUT DPs streamed as the device Type 2 credits allow (after the bursts).")
     parser.add_argument("--dev-loopback-depth", default=512, help="Device Bulk loopback FIFO depth (endpoint words).")
@@ -873,6 +906,7 @@ def main():
         host_burst_stream  = int(args.host_burst_stream),
         host_burst_duplex  = int(args.host_burst_duplex),
         host_recovery_mid  = args.host_recovery_mid,
+        host_recovery_cut  = args.host_recovery_cut,
         dev_link_ppm       = args.dev_link_ppm,
         dev_loopback_depth = int(args.dev_loopback_depth),
         host_lbad_test     = args.host_lbad_test)

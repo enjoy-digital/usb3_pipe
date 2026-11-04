@@ -314,6 +314,18 @@ class TestPHY(unittest.TestCase):
             "--dev-loopback-depth", "4096"], recovery=True)
         self.assertIn("HOST_ADVERTISEMENT", out, tail)
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads_recovery_cut(self):
+        # Host directed Recovery cutting a Bulk OUT DP (DPH acknowledged, DPP incomplete): the DPP
+        # completed as missing at the U0 exit (its DPH processed, Rx Header Buffer freed), the DP
+        # requested again (ACK TP retry) and sent again by the host, then Bulk OUT/IN: no device
+        # Recovery request, CRCs.
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--link-words", "4", "--host-recovery-mid", "--host-recovery-cut", "--host-burst-len", "1024",
+            "--dev-loopback-depth", "4096"], recovery=True)
+        self.assertIn("HOST_ADVERTISEMENT", out, tail)
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
         n, errors = device_packets_crc_errors(out)
         self.assertEqual(errors, 0)
 

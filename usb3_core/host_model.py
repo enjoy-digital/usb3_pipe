@@ -735,7 +735,7 @@ def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
     ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False, burst_duplex=0,
-    recovery_mid=False):
+    recovery_mid=False, recovery_cut=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
     itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers.
     burst_out: rounds of 4 Bulk OUT DPs sent back to back (as an xHCI host with queued transfers),
@@ -744,7 +744,10 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
     Bulk IN DPs (EP1 requests with NumP=4: the data looped back from the previous round), as a full
     duplex benchmark.
     recovery_mid: host directed Recovery between Bulk OUT DPs (reactive mode: Advertisements on the U0
-    re-entry, as soon as U0 is entered on the host side), then Bulk OUT DPs and Bulk IN DPs."""
+    re-entry, as soon as U0 is entered on the host side), then Bulk OUT DPs and Bulk IN DPs.
+    recovery_cut: with recovery_mid, the Recovery cuts a Bulk OUT DP (DPH acknowledged, DPP
+    incomplete, as a Recovery during an OUT DP on hardware): the device completes the DPP as missing,
+    requests the retry (ACK TP) and the DP is sent again after the U0 re-entry."""
     s = HostScript(ssp=ssp)
     def send_itp():
         if itp:
@@ -876,10 +879,27 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
         out_dps(2)
         for i in range(2):
             s.wait_hp()                                               # ACK TPs.
+        if recovery_cut:
+            # DPH acknowledged (as on hardware; the model does not retransmit the Header Packets
+            # flushed by the device Advertisement), then half of its DPP and the Recovery.
+            s.wait_credit()
+            s.send(dph(length=len(payload), ept=2, dp_seq=seq % 32, tt=blk, seq=s.tx_seq))
+            s.wait(*link_command(LGOOD(s.tx_seq))[1])
+            s.tx_seq = (s.tx_seq + 1) % s.seq_mod
+            dpp = data_packet_payload(payload)
+            s.send(dpp[:len(dpp)//2])
         s.pm(PM_RECOVERY)
         s.idle(256)
         s.steps.append((OP_U0, 0, 0, 0, 0, 0))
         s.mark("recovery_mid_u0")
+        if recovery_cut:
+            s.wait_hp()                                               # ACK TP (retry) of the cut DP.
+            s.wait_credit()
+            s.send(dph(length=len(payload), ept=2, dp_seq=seq % 32, tt=blk, seq=s.tx_seq) +
+                data_packet_payload(payload))                         # The DP again.
+            s.tx_seq = (s.tx_seq + 1) % s.seq_mod
+            seq += 1
+            s.wait_hp()                                               # ACK TP.
         out_dps(2)
         for i in range(2):
             s.wait_hp()                                               # ACK TPs.
