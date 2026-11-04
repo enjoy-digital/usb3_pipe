@@ -907,6 +907,14 @@ class Gen2TXDCBalance(LiteXModule):
         W      = 12                     # Running balance bits (at least +-511, 6.4.1.2.2).
         LIMIT  = 2**(W - 1) - 1 - 132   # Saturation (a block changes the balance by 132 at most).
 
+        # Pipeline control: the stages advance together (go: registered, from the output buffer
+        # level, copies for the stages registers enables: fanout), the output buffer absorbs the
+        # blocks in flight when the gearbox is not ready (one block per 1.65 cycles on average).
+        self.out_buffer = out_buffer = stream.SyncFIFO(gen2_block_layout(), 8, buffered=True)
+        self.comb += out_buffer.source.connect(source)
+        gos = [Signal(name="go", attr={("syn_preserve", 1)}) for _ in range(4)]
+        self.sync += [go.eq(out_buffer.level <= 3) for go in gos]
+
         # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 8 chunks, 12-13, 14,
         # 15).
         v0        = Signal()
@@ -919,10 +927,9 @@ class Gen2TXDCBalance(LiteXModule):
         ones_13   = Signal(5, reset_less=True)
         ones_14   = Signal(4, reset_less=True)
         ones_15   = Signal(4, reset_less=True)
-        ready1    = Signal()
-        self.comb += sink.ready.eq(~v0 | ready1)
+        self.comb += sink.ready.eq(gos[0])
         bits_11 = Cat(sink.header, sink.data[0:96])
-        self.sync += If(sink.ready,
+        self.sync += If(gos[0],
             v0.eq(sink.valid),
             header0.eq(sink.header),
             data0.eq(sink.data),
@@ -946,9 +953,7 @@ class Gen2TXDCBalance(LiteXModule):
         dc_reset = Signal(reset_less=True)
         inc_11   = Signal((9, True), reset_less=True)
         inc      = {k: Signal((8, True), reset_less=True) for k in keys}
-        advance  = Signal()
-        self.comb += ready1.eq(~v1 | advance)
-        self.sync += If(ready1,
+        self.sync += If(gos[1],
             v1.eq(v0),
             header.eq(header0),
             data.eq(data0),
@@ -972,9 +977,7 @@ class Gen2TXDCBalance(LiteXModule):
         ts2       = Signal(reset_less=True)
         dc_reset2 = Signal(reset_less=True)
         inc2      = {k: Signal((9, True), reset_less=True) for k in keys}
-        ready2    = Signal()
-        self.comb += advance.eq(v1 & ready2)
-        self.sync += If(ready2,
+        self.sync += If(gos[2],
             v2.eq(v1),
             header2.eq(header),
             data2.eq(data),
@@ -1029,8 +1032,7 @@ class Gen2TXDCBalance(LiteXModule):
         hold     = Signal()
         nsat     = Signal()
         self.comb += [
-            ready2.eq(~v2 | advance2),
-            advance2.eq(v2 & (~source.valid | source.ready)),
+            advance2.eq(v2 & gos[3]),
             ts_go.eq(advance2 & ts2),
             rst_go.eq(advance2 & ~ts2 & dc_reset2),
             hold.eq(~ts_go & ~rst_go),
@@ -1052,21 +1054,18 @@ class Gen2TXDCBalance(LiteXModule):
             sat_hi.eq(balance_s > LIMIT),
             sat_lo.eq(balance_s < -LIMIT),
             balance.eq(balance_next),
-            If(ready2, mid.eq(mid_next)),
+            If(gos[3], mid.eq(mid_next)),
         ]
         sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
         sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
-        self.sync += [
-            If(source.ready, source.valid.eq(0)),
-            If(advance2,
-                source.valid.eq(1),
-                source.header.eq(header2),
-                source.skp.eq(skp2),
-                If(ts2,
-                    source.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
-                ).Else(
-                    source.data.eq(data2)
-                ),
+        self.comb += [
+            out_buffer.sink.valid.eq(advance2),
+            out_buffer.sink.header.eq(header2),
+            out_buffer.sink.skp.eq(skp2),
+            If(ts2,
+                out_buffer.sink.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
+            ).Else(
+                out_buffer.sink.data.eq(data2)
             ),
         ]
 
@@ -1228,18 +1227,14 @@ class Gen2TXDatapath(LiteXModule):
         # # #
 
         if 3*data_width > 132:
-            # Registered valid/ready between Gen2TX and the DC balance and between the DC balance and
-            # the gearbox (timings: the Gen2TX block selection and the gearbox/DC balance readies at
-            # one block per cycle).
-            self.buffer      = buffer      = Buffer(gen2_tx_block_layout(), pipe_valid=True,
-                pipe_ready=True, ready_first=True) # Registered blocks to the DC balance popcounts.
-            self.gear_buffer = gear_buffer = Buffer(gen2_block_layout(), pipe_valid=True,
-                pipe_ready=True, ready_first=True) # Registered blocks to the gearbox placement.
+            # Registered blocks between Gen2TX and the DC balance (timings: the Gen2TX block
+            # selection to the DC balance popcounts, the DC balance ready is a register), the DC
+            # balance output buffer (registered) to the gearbox placement.
+            self.buffer = buffer = Buffer(gen2_tx_block_layout(), pipe_valid=True)
             self.comb += [
                 tx.source.connect(buffer.sink),
                 buffer.source.connect(dc_balance.sink),
-                dc_balance.source.connect(gear_buffer.sink),
-                gear_buffer.source.connect(gearbox.sink),
+                dc_balance.source.connect(gearbox.sink),
             ]
         else:
             self.comb += [

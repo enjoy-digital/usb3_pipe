@@ -156,8 +156,10 @@ class USB3LinkLayer(LiteXModule):
         elif lw == 2:
             # Words window (registered): one word per cycle, two in the DPPs, words dropped out of U0.
             self.rx_window = rx_window = WordsWindow(decode=rx_decode, nflags=5)
+            self.rx_buffer = rx_buffer = stream.PipeValid(link_pairs_layout(2)) # Timings.
             self.comb += [
-                phy.source.connect(rx_window.sink),
+                phy.source.connect(rx_buffer.sink),
+                rx_buffer.source.connect(rx_window.sink),
                 rx_valid.eq((rx_window.n != 0) & u0),
                 rx_data.eq(swap_data(rx_window.w0)),
                 rx_ctrl.eq(swap_ctrl(rx_window.c0)),
@@ -169,8 +171,10 @@ class USB3LinkLayer(LiteXModule):
             # Words window (registered): one word per cycle, up to four in the DPPs, words dropped
             # out of U0.
             self.rx_window = rx_window = WordsWindow(4, decode=rx_decode, nflags=5)
+            self.rx_buffer = rx_buffer = stream.PipeValid(link_pairs_layout(4)) # Timings.
             self.comb += [
-                phy.source.connect(rx_window.sink),
+                phy.source.connect(rx_buffer.sink),
+                rx_buffer.source.connect(rx_window.sink),
                 rx_valid.eq((rx_window.n != 0) & u0),
                 rx_data.eq(swap_data(rx_window.w0)),
                 rx_ctrl.eq(swap_ctrl(rx_window.c0)),

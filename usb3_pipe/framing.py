@@ -264,8 +264,8 @@ class WordsWindow(LiteXModule):
 
     Timings: the sink ready and the entry words placement are from the registered level only (the
     consumed words of the cycle select between candidates: consume is late, from the window
-    consumer decisions), an entry is accepted when the window has room without the words consumed
-    this cycle (at most one cycle lost after an irregular consumption)."""
+    consumer decisions): 3*nwords slots, an entry is accepted when 2*nwords slots or less are used
+    (the words consumed this cycle not counted: full rate kept with the level at any phase)."""
     def __init__(self, decode=None, nflags=0, nwords=2):
         self.sink    = sink = stream.Endpoint(gen2_link_layout(nwords))
         self.n       = Signal(bits_for(nwords))                       # o
@@ -278,7 +278,7 @@ class WordsWindow(LiteXModule):
 
         # # #
 
-        size  = 2*nwords
+        size  = 3*nwords
         cw    = 4 + nflags # ctrl + flags.
         data  = [Signal(32, reset_less=True) for _ in range(size)]
         ctrl  = [Signal(cw, reset_less=True) for _ in range(size)]
@@ -286,7 +286,7 @@ class WordsWindow(LiteXModule):
         self.comb += [
             [self.w[i].eq(data[i]) for i in range(nwords)],
             [self.c[i].eq(ctrl[i][:4]) for i in range(nwords)],
-            sink.ready.eq(level <= nwords),
+            sink.ready.eq(level <= 2*nwords),
         ]
         if nflags:
             self.comb += [self.f[i].eq(ctrl[i][4:]) for i in range(nwords)]
@@ -1380,8 +1380,8 @@ class Gen2LinkTX(LiteXModule):
         self.widener     = widener     = ResetInserter()(Gen2TXUnitsWidener(32, in_bytes=4*fw))
         self.unit_buffer = unit_buffer = ResetInserter()(Buffer(gen2_tx_unit_layout(32),
             pipe_valid=True, pipe_ready=True))
-        # Units buffer (store and forward, units bytes up to 1060: 34 entries).
-        self.units  = units  = stream.SyncFIFO(gen2_tx_unit_layout(32), 64, buffered=True)
+        # Units buffer (store and forward, units bytes up to 1060: 34 entries; 128: block RAM).
+        self.units  = units  = stream.SyncFIFO(gen2_tx_unit_layout(32), 128, buffered=True)
         self.packer = packer = Gen2TXBlocksPacker()
         skp_pending = Signal()
         self.specials += MultiReg(self.skp_pending, skp_pending)

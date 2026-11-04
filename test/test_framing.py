@@ -19,7 +19,7 @@ from usb3_pipe.common  import GEN2_IDLE
 from usb3_pipe.framing import Gen2TXFramer, Gen2TXPacker, Gen2RXFraming, gen2_tx_unit_layout
 from usb3_pipe.framing import Gen2TXUnitsWidener, WordsNarrower
 from usb3_pipe.framing import Gen2TXBlocksPacker, Gen2TXBlocksReader, gen2_tx_blocks_layout
-from usb3_pipe.framing import SHP, SDP, EDB, END, SLC, EPF
+from usb3_pipe.framing import SHP, SDP, EDB, END, SLC, EPF, WordsWindow
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -815,3 +815,46 @@ class TestGen2FramingVerilog(unittest.TestCase):
             log = subprocess.run(["yosys", "-p", script], capture_output=True, text=True, check=True).stdout
         self.assertEqual([int(x, 2) for x in re.findall(r"Eval result: .* = 8'([01]+)", log)], list(range(8)))
 
+
+class WordsWindowRate(Module):
+    """WordsWindow with a continuous producer (an entry of first_words words then full entries of
+    consecutive words) and a consumer taking nwords words whenever nwords are available (DPP data),
+    both synchronous (no generator latency)."""
+    def __init__(self, nwords, first_words):
+        self.submodules.window = window = WordsWindow(nwords=nwords)
+        self.taken  = Signal()
+        count = Signal(32)
+        first = Signal(reset=1)
+        self.comb += [
+            window.sink.valid.eq(1),
+            window.sink.words.eq(Mux(first, first_words, nwords)),
+            [window.sink.data[32*w:32*(w+1)].eq(count + w) for w in range(nwords)],
+            window.consume.eq(Mux(window.n == nwords, nwords, 0)),
+            self.taken.eq(window.n == nwords),
+        ]
+        self.sync += If(window.sink.ready,
+            count.eq(count + window.sink.words),
+            first.eq(0),
+        )
+
+class TestWordsWindow(unittest.TestCase):
+    def words_window_test(self, nwords, first_words):
+        # Full rate kept at any level phase (after the first partial entry), words in order.
+        dut      = WordsWindowRate(nwords, first_words)
+        cycles   = 64
+        received = []
+        def checker():
+            for cycle in range(cycles):
+                if (yield dut.taken):
+                    for i in range(nwords):
+                        received.append((yield dut.window.w[i]))
+                yield
+        run_simulation(dut, checker())
+        self.assertEqual(received, list(range(len(received))))
+        self.assertGreaterEqual(len(received), nwords*(cycles - 6))
+
+    def test_words_window_rate(self):
+        for nwords in [2, 4]:
+            for first_words in range(1, nwords + 1):
+                with self.subTest(nwords=nwords, first_words=first_words):
+                    self.words_window_test(nwords, first_words)

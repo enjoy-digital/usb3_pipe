@@ -157,6 +157,8 @@ class _AsyncFIFORegisteredRead(Module):
         ]
         writable = Signal()
         readable = Signal()
+        # Writable combinatorial (a registered, conservative writable would refuse a write of a
+        # writer without back-pressure one cycle longer: RX words at the line rate).
         self.comb += [
             writable.eq((produce.q[-1] == consume_wdomain[-1]) |
                         (produce.q[-2] == consume_wdomain[-2]) |
@@ -221,12 +223,15 @@ class _AsyncFIFOPipelinedRead(Module):
             MultiReg(produce.q, produce_rdomain, "read"),
             MultiReg(consume.q, consume_wdomain, "write"),
         ]
-        self.comb += [
-            self.writable.eq((produce.q[-1] == consume_wdomain[-1]) |
-                             (produce.q[-2] == consume_wdomain[-2]) |
-                             (produce.q[:-2] != consume_wdomain[:-2])),
-            produce.ce.eq(self.writable & self.we),
-        ]
+        # Writable registered from the next write pointer and the resynchronized read pointer
+        # (conservative by one cycle: the read pointer only advances; the block RAM write enables
+        # from registers). Writers without back-pressure (RX words at the line rate) rely on the
+        # depth (64+ entries) as for the resynchronization latency.
+        q = produce.q_next
+        self.sync.write += self.writable.eq(
+            (q[-1] == consume_wdomain[-1]) | (q[-2] == consume_wdomain[-2]) |
+            (q[:-2] != consume_wdomain[:-2]))
+        self.comb += produce.ce.eq(self.writable & self.we)
 
         storage = Memory(width, depth)
         wrport  = storage.get_port(write_capable=True, clock_domain="write")

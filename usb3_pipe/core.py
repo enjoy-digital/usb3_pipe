@@ -162,7 +162,7 @@ class USB3PIPE(LiteXModule):
             ]
 
         # TS ---------------------------------------------------------------------------------------
-        self.ts = ts = TSUnit(serdes=serdes)
+        self.ts = ts = TSUnit(serdes=serdes, drive_sink=False)
         self.comb += [
             # TS Control.
             ts.tx_enable.eq(self.ts_tx_enable),
@@ -226,8 +226,11 @@ class USB3PIPE(LiteXModule):
                 scrambler.sink.data.eq(0x00000000),
                 scrambler.sink.ctrl.eq(0b0000),
             ),
-            # Once the Training Sequences Ordered Set in progress is transmitted.
-            If(tx_enable & ~ts.tx_active,
+            # Training Sequences, else the scrambled stream once the Ordered Set in progress is
+            # transmitted.
+            If(ts.tx_active,
+                ts.source.connect(serdes.sink)
+            ).Elif(tx_enable,
                 scrambler.source.connect(serdes.sink)
             )
         ]

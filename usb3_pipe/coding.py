@@ -162,12 +162,14 @@ class Gen2BlockGearbox(LiteXModule):
         buf = Signal(196 + dw)
         rl  = Signal(max=196 + dw + 1) # Bits after the output of the cycle (placement position).
         rl_b = Signal(len(rl), attr={("syn_preserve", 1)}) # Copy for the placement shift (fanout).
+        rl_next = Signal.like(rl)
+        ready   = Signal(reset=1)      # rl <= dw, registered (timings: accept from registers).
         assert dw % 4 == 0
         out = Signal()                 # Word output this cycle (bits >= dw).
         self.comb += [
             source.valid.eq(out),
             source.data.eq(buf[0:dw]),
-            sink.ready.eq(rl <= dw),
+            sink.ready.eq(ready),
         ]
         block  = Signal(196)
         length = Signal(8)
@@ -184,6 +186,11 @@ class Gen2BlockGearbox(LiteXModule):
         self.comb += shifted.eq(Mux(out, buf[dw:], buf))
         accept = Signal()
         self.comb += accept.eq(sink.valid & sink.ready)
+        self.comb += If(accept,
+            rl_next.eq(rl + length - dw)
+        ).Else(
+            rl_next.eq(Mux(rl >= dw, rl - dw, rl))
+        )
         self.sync += [
             If(accept,
                 # rl <= dw, multiple of 4 (blocks/words lengths): 4-bit steps shift.
@@ -191,14 +198,13 @@ class Gen2BlockGearbox(LiteXModule):
                     Cat(Constant(0, 2), rl_b[2:bits_for(dw)]))),
                 # Bits >= 132 > dw: word output on the next cycle.
                 out.eq(1),
-                rl.eq(rl + length - dw),
-                rl_b.eq(rl + length - dw),
             ).Else(
                 buf.eq(shifted),
                 out.eq(rl >= dw),
-                rl.eq(Mux(rl >= dw, rl - dw, rl)),
-                rl_b.eq(Mux(rl >= dw, rl - dw, rl)),
-            )
+            ),
+            rl.eq(rl_next),
+            rl_b.eq(rl_next),
+            ready.eq(rl_next <= dw),
         ]
 
 # Gen 2 Block Aligner (RX) -------------------------------------------------------------------------
