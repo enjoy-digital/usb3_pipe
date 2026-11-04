@@ -1068,8 +1068,11 @@ class Gen2RX(LiteXModule):
     Pipeline (250MHz with one block every 3.3 cycles): descrambling, then the Ordered Sets matching
     (registered), the outputs follow the input blocks by 1 (source, rx_sync, rx_sds) to 3 cycles.
     """
-    def __init__(self, seed=GEN2_LFSR_SEED, n_ts=8):
-        self.sink   = sink   = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
+    def __init__(self, seed=GEN2_LFSR_SEED, n_ts=8, sync_from_sink=False):
+        # sync_from_sink: SYNC Ordered Set blocks flagged by the aligner (sink.sync, decoded a stage
+        # earlier: timings of the LFSR initialization), else decoded here.
+        self.sink   = sink   = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1),
+            ("sync", 1)])
         self.source = source = stream.Endpoint([("data", 128)])
 
         self.rx_tseq     = Signal()   # o: n_ts consecutive TSEQ received (pulse).
@@ -1099,7 +1102,8 @@ class Gen2RX(LiteXModule):
             sink.ready.eq(1),
             control.eq(sink.header == BLOCK_HEADER_CONTROL),
             sym0.eq(sink.data[0:8]),
-            is_sync.eq(control & (sink.data == symbols_to_int(gen2_sync_payload()))),
+            is_sync.eq(control & (sink.sync if sync_from_sink else
+                (sink.data == symbols_to_int(gen2_sync_payload())))),
             is_sds.eq( control & (sym0 == GEN2_SDS)),
             descrambler.ce.eq(sink.valid),
             descrambler.i.eq(sink.data),
@@ -1257,7 +1261,7 @@ class Gen2RXDatapath(LiteXModule):
         # # #
 
         self.aligner = aligner = Gen2BlockAligner(data_width)
-        self.rx      = rx      = Gen2RX(n_ts=n_ts)
+        self.rx      = rx      = Gen2RX(n_ts=n_ts, sync_from_sink=True)
         self.comb += [
             sink.connect(aligner.sink),
             aligner.source.connect(rx.sink),

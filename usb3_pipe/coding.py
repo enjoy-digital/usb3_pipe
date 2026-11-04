@@ -245,7 +245,8 @@ class Gen2BlockAligner(LiteXModule):
     """
     def __init__(self, data_width=32):
         self.sink   = sink   = stream.Endpoint([("data", data_width)])
-        self.source = source = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
+        self.source = source = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1),
+            ("sync", 1)]) # sync: SYNC Ordered Set block (decoded a stage earlier: timings).
 
         self.polarity  = Signal()   # o
         self.aligned   = Signal()   # o
@@ -348,12 +349,16 @@ class Gen2BlockAligner(LiteXModule):
         sync_inv_pos = Signal(dw)
         pairs,     _ = decodes("sync_pair",     n - 15, 16, lambda b: b == 0xff00)
         pairs_inv, _ = decodes("sync_pair_inv", n - 15, 16, lambda b: b == 0x00ff)
+        # Control Block Header decodes registered with the window too (timings: the SYNC search
+        # then ANDs registered decodes only).
+        ctrl_pos,     _ = decodes("sync_ctrl",     r + dw, 4, lambda b: b == BLOCK_HEADER_CONTROL)
+        ctrl_inv_pos, _ = decodes("sync_ctrl_inv", r + dw, 4, lambda b: b == (~BLOCK_HEADER_CONTROL & 0xf))
         for k in range(dw):
             p = r + k
             self.comb += [
-                sync_pos[k].eq((win[p:p+4] == BLOCK_HEADER_CONTROL) &
+                sync_pos[k].eq(ctrl_pos[p] &
                     Reduce("AND", [pairs[p + 4 + 16*i] for i in range(8)])),
-                sync_inv_pos[k].eq((win[p:p+4] == (~BLOCK_HEADER_CONTROL & 0xf)) &
+                sync_inv_pos[k].eq(ctrl_inv_pos[p] &
                     Reduce("AND", [pairs_inv[p + 4 + 16*i] for i in range(8)])),
             ]
         # Registered without the polarity toggle of the cycle (masked by the registered toggle:
@@ -632,6 +637,7 @@ class Gen2BlockAligner(LiteXModule):
         self.sync += [
             source.valid.eq(o_valid),
             out_bits.eq(o_bits),
+            source.sync.eq(o_bits == GEN2_SYNC_BITS),
             self.skp.eq(o_skp),
             self.skp_count.eq(o_total),
             self.skp_lfsr.eq(Cat(lfsr[16:24], lfsr[8:16], lfsr[0:7])),
