@@ -395,12 +395,12 @@ class Gen2BlockAligner(LiteXModule):
         # Pointer vectors without reset: cleared by a registered reset (reset fanout).
         vb        = Signal(P, reset_less=True)
         vs        = [Signal(P, name=f"skp_ptr{k}", reset_less=True) for k in range(K)]
-        reset     = Signal(reset=1)
         any_d     = Signal() # Pointer set on the previous cycle.
         load_d    = Signal() # SYNC (Unaligned) on the previous cycles: pointer set on the next one.
         load_dd   = Signal()
         load_oh   = Signal(dw) # SYNC of the previous cycle (one-hot offset): pointer bit set.
-        clear     = Signal() # Pointer cleared (SYNC with a different alignment).
+        # Pointer cleared (SYNC with a different alignment, reset): registered copies (fanout).
+        clears    = [Signal(reset=1, name="clear", attr={("syn_preserve", 1)}) for _ in range(2 + K)]
         unaligned = Signal()
         load      = Signal()
         self.comb += [
@@ -459,13 +459,24 @@ class Gen2BlockAligner(LiteXModule):
         for k, q in enumerate(realign_pos):
             realign_vb[q] = realign_oh[k]
         or_terms = lambda terms: Reduce("OR", terms) if terms else 0
-        self.sync += If(clear,
-            vb.eq(Cat(*realign_vb)),
-            [vs[k].eq(0) for k in range(K)],
-        ).Elif(sink.valid,
-            vb.eq(Cat(*[or_terms(next_b[q]) for q in range(P)])),
-            [vs[k].eq(Cat(*[or_terms(next_s[k][q]) for q in range(P)])) for k in range(K)],
-        )
+        hp = P//2
+        self.sync += [
+            If(clears[0],
+                vb[:hp].eq(Cat(*realign_vb[:hp]))
+            ).Elif(sink.valid,
+                vb[:hp].eq(Cat(*[or_terms(next_b[q]) for q in range(hp)]))
+            ),
+            If(clears[1],
+                vb[hp:].eq(Cat(*realign_vb[hp:]))
+            ).Elif(sink.valid,
+                vb[hp:].eq(Cat(*[or_terms(next_b[q]) for q in range(hp, P)]))
+            ),
+            [If(clears[2 + k],
+                vs[k].eq(0)
+            ).Elif(sink.valid,
+                vs[k].eq(Cat(*[or_terms(next_s[k][q]) for q in range(P)]))
+            ) for k in range(K)],
+        ]
 
         # SYNC with a different alignment: SYNC in the Block context not at the pointer (pointer not
         # at the SYNC, not in a SKP Ordered Set), checked over 2 cycles (partial ORs by 16 positions
@@ -491,8 +502,7 @@ class Gen2BlockAligner(LiteXModule):
             realign_oh.eq(Mux(realign, sync_oh_d, 0)),
             realign_d.eq(Cat(realign, realign_d[:-1])),
         )
-        self.sync += reset.eq(0)
-        self.comb += clear.eq(realign_d[0] | reset)
+        self.sync += [c.eq(Mux(sink.valid, realign, realign_d[0])) for c in clears]
 
         any_v = Signal()
         self.comb += any_v.eq((vb != 0) | (Reduce("OR", vs) != 0))
@@ -520,14 +530,14 @@ class Gen2BlockAligner(LiteXModule):
             return or_terms(parts)
         ng      = (r + 15)//16 # Pointer groups of 16 positions.
         e_idx   = Signal(kr, reset_less=True)
-        e_grp   = Signal(ng, reset_less=True) # Pointer group (one-hot).
+        e_grp   = Signal(ng) # Pointer group (one-hot) of the next cycle.
         e_win   = Signal(n,  reset_less=True)
         e_found = Signal() # SYNC block (pointer set from the SYNC of the previous cycle).
         vany    = [Reduce("OR", [vb[p]] + [vs[k][p] for k in range(K)]) for p in range(r)]
+        self.comb += e_grp.eq(Cat(*[Reduce("OR", vany[16*g:16*(g+1)]) for g in range(ng)]))
         self.sync += [
             e_idx.eq(Cat(*[Reduce("OR", [vany[p] for p in range(r) if (p >> i) & 1])
                 for i in range(kr)])),
-            e_grp.eq(Cat(*[Reduce("OR", vany[16*g:16*(g+1)]) for g in range(ng)])),
             e_win.eq(win),
             e_found.eq(load_d & sink.valid),
         ]
@@ -558,17 +568,19 @@ class Gen2BlockAligner(LiteXModule):
                 q = q + (132 if q < r else 0) - dw
         ov_idx = [Signal(kr, name=f"realign_idx{c}") for c in range(2)]
         ov_grp = [Signal(ng, name=f"realign_grp{c}") for c in range(2)]
+        ov_grp_next = [Signal(ng, name=f"realign_grp_next{c}") for c in range(2)]
         ov_ext = [Signal(name=f"realign_ext{c}") for c in range(2)]
         ov_oh  = [sync_oh_d, Signal(dw)]
         self.sync += If(sink.valid, ov_oh[1].eq(ov_oh[0]))
         for c in range(2):
             ks = [k for k in range(dw) if follow[c][k] is not None]
+            self.comb += ov_grp_next[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks
+                if (follow[c][k] >> 4) == g]) for g in range(ng)]))
             self.sync += If(sink.valid,
                 ov_ext[c].eq(or_terms([ov_oh[c][k] for k in ks])),
                 ov_idx[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> i) & 1])
                     for i in range(kr)])),
-                ov_grp[c].eq(Cat(*[or_terms([ov_oh[c][k] for k in ks if (follow[c][k] >> 4) == g])
-                    for g in range(ng)])),
+                ov_grp[c].eq(ov_grp_next[c]),
             )
         d_idx     = Signal(kr, reset_less=True)
         d_win     = Signal(132 + 15, reset_less=True) # Window shifted by the pointer multiple of 16.
@@ -578,20 +590,32 @@ class Gen2BlockAligner(LiteXModule):
         d_end     = Signal(7, reset_less=True)
         d_total   = Signal(6, reset_less=True)
         idx = Signal(kr)
-        grp = Signal(ng)
         self.comb += If(realign_d[0],
             idx.eq(ov_idx[0]),
-            grp.eq(ov_grp[0]),
         ).Elif(realign_d[1],
             idx.eq(ov_idx[1]),
-            grp.eq(ov_grp[1]),
         ).Else(
             idx.eq(e_idx),
-            grp.eq(e_grp),
         )
+        # Pointer group of the next cycle (registered: fanout of the window shift one-hot selection,
+        # copies by halves of the shifted window), from the next values of the registers selected
+        # (held without a new word).
+        grp_next = Signal(ng)
+        self.comb += If(Mux(sink.valid, realign, realign_d[0]),
+            grp_next.eq(Mux(sink.valid, ov_grp_next[0], ov_grp[0]))
+        ).Elif(Mux(sink.valid, realign_d[0], realign_d[1]),
+            grp_next.eq(Mux(sink.valid, ov_grp_next[1], ov_grp[1]))
+        ).Else(
+            grp_next.eq(e_grp)
+        )
+        grps = [Signal(ng, name="grp", attr={("syn_preserve", 1)}) for _ in range(2)]
+        self.sync += [g.eq(grp_next) for g in grps]
+        dl, dh = len(d_win), len(d_win)//2
         self.sync += [
             # Shift by the pointer group (one-hot selection).
-            d_win.eq(Reduce("OR", [Replicate(grp[g], len(d_win)) & e_win[16*g:16*g + len(d_win)]
+            d_win[:dh].eq(Reduce("OR", [Replicate(grps[0][g], dh) & e_win[16*g:16*g + dh]
+                for g in range(ng)])),
+            d_win[dh:].eq(Reduce("OR", [Replicate(grps[1][g], dl - dh) & e_win[16*g + dh:16*g + dl]
                 for g in range(ng)])),
             d_end.eq(e_end),
             d_total.eq(e_total),

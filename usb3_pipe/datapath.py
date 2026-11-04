@@ -798,8 +798,9 @@ class Gen2TXDCBalance(LiteXModule):
     every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
     and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex: 80-bit at
     125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then the
-    balance increments of the possible DC Balance Symbols precomputed, the running balance loop is
-    then two adders, a selection and the saturation.
+    balance increments of the possible DC Balance Symbols precomputed: the running balance loop is
+    then adders from registers and a one-hot selection, the decisions comparisons of a register
+    with constants (12-bit balance saturated at +-1915 one cycle late).
     """
     def __init__(self, one_per_cycle=False):
         self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
@@ -902,6 +903,9 @@ class Gen2TXDCBalance(LiteXModule):
         sink   = self.sink
         source = self.source
         ones   = lambda v: bin(v).count("1")
+        keys   = ["none", "15p", "15n", "14p", "14n"]
+        W      = 12                     # Running balance bits (at least +-511, 6.4.1.2.2).
+        LIMIT  = 2**(W - 1) - 1 - 132   # Saturation (a block changes the balance by 132 at most).
 
         # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 8 chunks, 12-13, 14,
         # 15).
@@ -941,8 +945,7 @@ class Gen2TXDCBalance(LiteXModule):
         ts       = Signal(reset_less=True)
         dc_reset = Signal(reset_less=True)
         inc_11   = Signal((9, True), reset_less=True)
-        inc      = {k: Signal((8, True), reset_less=True)
-            for k in ["none", "15p", "15n", "14p", "14n"]}
+        inc      = {k: Signal((8, True), reset_less=True) for k in keys}
         advance  = Signal()
         self.comb += ready1.eq(~v1 | advance)
         self.sync += If(ready1,
@@ -961,21 +964,14 @@ class Gen2TXDCBalance(LiteXModule):
             inc["14n"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ZEROS[0]) + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
         )
 
-        # Stage 2: thresholds of the running balance (DC Balance Symbols choice, balance at the end of
-        # Symbol 11 = dc_balance + inc_11: > 0, > 15, < -15, > 31, < -31) and the update of each choice
-        # (inc_11 + inc[k]) with its saturation thresholds (+-511): the running balance loop is then
-        # comparisons/adders with registered values and a selection.
+        # Stage 2: block, balance increments of the whole block for each choice.
         v2        = Signal()
         header2   = Signal(4, reset_less=True)
         data2     = Signal(192, reset_less=True)
         skp2      = Signal(reset_less=True)
         ts2       = Signal(reset_less=True)
         dc_reset2 = Signal(reset_less=True)
-        th        = {k: Signal((12, True), reset_less=True)
-            for k in ["pos", "15p", "15n", "14p", "14n"]}
-        upd       = {k: Signal((12, True), reset_less=True) for k in inc}
-        sat_hi    = {k: Signal((12, True), reset_less=True) for k in inc}
-        sat_lo    = {k: Signal((12, True), reset_less=True) for k in inc}
+        inc2      = {k: Signal((9, True), reset_less=True) for k in keys}
         ready2    = Signal()
         self.comb += advance.eq(v1 & ready2)
         self.sync += If(ready2,
@@ -985,51 +981,81 @@ class Gen2TXDCBalance(LiteXModule):
             skp2.eq(skp),
             ts2.eq(ts),
             dc_reset2.eq(dc_reset),
-            th["pos"].eq(  0 - inc_11),
-            th["15p"].eq( 15 - inc_11),
-            th["15n"].eq(-15 - inc_11),
-            th["14p"].eq( 31 - inc_11),
-            th["14n"].eq(-31 - inc_11),
-            [upd[k].eq(inc_11 + inc[k]) for k in inc],
-            [sat_hi[k].eq( 511 - (inc_11 + inc[k])) for k in inc],
-            [sat_lo[k].eq(-511 - (inc_11 + inc[k])) for k in inc],
+            [inc2[k].eq(inc_11 + inc[k]) for k in keys],
         )
 
-        # Stage 3: DC Balance Symbols, running balance update, output. Running balance copies for the
-        # thresholds and the updates (fanout).
-        dcb_th   = Signal((11, True), attr={("syn_preserve", 1)})
-        dcb_upd  = Signal((11, True), attr={("syn_preserve", 1)})
-        positive = Signal()
-        fix_14   = Signal()
-        fix_15   = Signal()
-        value    = {k: Signal((12, True)) for k in inc} # Saturated running balance of each choice.
-        updated  = Signal((12, True))
+        # Stage 3: DC Balance Symbols, running balance update, output.
+        # Running balance registers: balance (after the output blocks) and mid (balance at the end
+        # of Symbol 11 of the block in stage 2): the DC Balance Symbols decisions are comparisons of
+        # a register with constants, the updates one-hot selections of candidates computed from the
+        # registers (the choices of the block as carry-save 3-operand sums with the next block
+        # inc_11). Saturation (+-LIMIT) from registered comparisons of the balance: applied one
+        # cycle late (the balance overshoots the limit by one block at most).
+        def sx(v, w):
+            return Cat(v, Replicate(v[-1], w - len(v)))
+        def add3(x, y, z):
+            s = x ^ y ^ z
+            c = Cat(C(0, 1), ((x & y) | (x & z) | (y & z))[:W-1])
+            return (s + c)[:W]
+        def mag_gt(m, k):
+            # |m| > 2**k - 1 (two's complement).
+            return ((~m[-1] & (m[k:] != 0)) |
+                    ( m[-1] & ~((m[k:] == Replicate(C(1, 1), W - k)) & (m[:k] != 0))))
+        balance   = Signal(W)
+        balance_s = Signal((W, True))
+        mid       = Signal(W)
+        sat_hi    = Signal()
+        sat_lo    = Signal()
+        positive  = Signal()
+        fix_14    = Signal()
+        fix_15    = Signal()
         self.comb += [
-            positive.eq(dcb_th > th["pos"]),
-            fix_14.eq((dcb_th > th["14p"]) | (dcb_th < th["14n"])),
-            fix_15.eq((dcb_th > th["15p"]) | (dcb_th < th["15n"])),
-            [If(dcb_upd > sat_hi[k],
-                value[k].eq(511)
-            ).Elif(dcb_upd < sat_lo[k],
-                value[k].eq(-511)
-            ).Else(
-                value[k].eq(dcb_upd + upd[k])
-            ) for k in inc],
-            If(fix_14,
-                updated.eq(Mux(positive, value["14p"], value["14n"]))
-            ).Elif(fix_15,
-                updated.eq(Mux(positive, value["15p"], value["15n"]))
-            ).Else(
-                updated.eq(value["none"])
-            ),
+            balance_s.eq(balance),
+            dc_balance.eq(balance),
+            positive.eq(~mid[-1] & (mid != 0)),
+            fix_15.eq(mag_gt(mid, 4)),
+            fix_14.eq(mag_gt(mid, 5)),
         ]
-        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
-        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
+        sel = {
+            "14p":  fix_14 & positive,
+            "14n":  fix_14 & ~positive,
+            "15p":  ~fix_14 & fix_15 & positive,
+            "15n":  ~fix_14 & fix_15 & ~positive,
+            "none": ~fix_14 & ~fix_15,
+        }
         advance2 = Signal()
+        ts_go    = Signal()
+        rst_go   = Signal()
+        hold     = Signal()
+        nsat     = Signal()
         self.comb += [
             ready2.eq(~v2 | advance2),
             advance2.eq(v2 & (~source.valid | source.ready)),
+            ts_go.eq(advance2 & ts2),
+            rst_go.eq(advance2 & ~ts2 & dc_reset2),
+            hold.eq(~ts_go & ~rst_go),
+            nsat.eq(~sat_hi & ~sat_lo),
         ]
+        inc_11x = sx(inc_11, W)
+        lim_hi  = C(LIMIT, W)
+        lim_lo  = C((-LIMIT) & (2**W - 1), W)
+        def onehot(terms):
+            return Reduce("OR", [Replicate(s, W) & v for s, v in terms])
+        balance_next = onehot(
+            [(sat_hi, lim_hi), (sat_lo & ~sat_hi, lim_lo), (nsat & hold, balance)] +
+            [(nsat & ts_go & sel[k], (balance + sx(inc2[k], W))[:W]) for k in keys])
+        mid_next = onehot(
+            [(sat_hi, (lim_hi + inc_11x)[:W]), (sat_lo & ~sat_hi, (lim_lo + inc_11x)[:W]),
+             (nsat & hold, (balance + inc_11x)[:W]), (nsat & rst_go, inc_11x)] +
+            [(nsat & ts_go & sel[k], add3(balance, sx(inc2[k], W), inc_11x)) for k in keys])
+        self.sync += [
+            sat_hi.eq(balance_s > LIMIT),
+            sat_lo.eq(balance_s < -LIMIT),
+            balance.eq(balance_next),
+            If(ready2, mid.eq(mid_next)),
+        ]
+        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
+        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
         self.sync += [
             If(source.ready, source.valid.eq(0)),
             If(advance2,
@@ -1040,15 +1066,6 @@ class Gen2TXDCBalance(LiteXModule):
                     source.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
                 ).Else(
                     source.data.eq(data2)
-                ),
-                If(ts2,
-                    dc_balance.eq(updated),
-                    dcb_th.eq(updated),
-                    dcb_upd.eq(updated),
-                ).Elif(dc_reset2,
-                    dc_balance.eq(0),
-                    dcb_th.eq(0),
-                    dcb_upd.eq(0),
                 ),
             ),
         ]

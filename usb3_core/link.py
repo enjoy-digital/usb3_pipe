@@ -134,6 +134,18 @@ class USB3LinkLayer(LiteXModule):
         rx_hold  = Signal()   # Current word not consumed.
         rx_take  = Signal()   # Words quads: rx_k words consumed (DPP data, skipped DPP data).
         rx_k     = Signal(3)
+        rx_shp   = Signal()
+        rx_slc   = Signal()
+        rx_sdp   = Signal()
+        rx_end   = Signal()   # DPPEND/DPPABORT framing word.
+        rx_knz   = Signal()   # K Symbol(s) in the word.
+        # Words decodes stored with the words in the window (timings): HPSTART, LCSTART, DPPSTART,
+        # DPPEND/DPPABORT framing words, K Symbols.
+        def rx_decode(data, ctrl):
+            d, c = swap_data(data), swap_ctrl(ctrl)
+            k    = (c == 0b1111)
+            return Cat(k & (d == FRAMING_SHP), k & (d == FRAMING_SLC), k & (d == FRAMING_SDP),
+                k & ((d == FRAMING_END) | (d == FRAMING_EDB)), c != 0)
         if lw == 1:
             self.comb += phy.source.ready.eq(1)
             self.sync += [
@@ -143,7 +155,7 @@ class USB3LinkLayer(LiteXModule):
             ]
         elif lw == 2:
             # Words window (registered): one word per cycle, two in the DPPs, words dropped out of U0.
-            self.rx_window = rx_window = WordsWindow()
+            self.rx_window = rx_window = WordsWindow(decode=rx_decode, nflags=5)
             self.comb += [
                 phy.source.connect(rx_window.sink),
                 rx_valid.eq((rx_window.n != 0) & u0),
@@ -156,7 +168,7 @@ class USB3LinkLayer(LiteXModule):
         else:
             # Words window (registered): one word per cycle, up to four in the DPPs, words dropped
             # out of U0.
-            self.rx_window = rx_window = WordsWindow(4)
+            self.rx_window = rx_window = WordsWindow(4, decode=rx_decode, nflags=5)
             self.comb += [
                 phy.source.connect(rx_window.sink),
                 rx_valid.eq((rx_window.n != 0) & u0),
@@ -167,14 +179,12 @@ class USB3LinkLayer(LiteXModule):
                     Mux(rx_keep, 0, rx_window.n))),
             ]
         rx_words = [rx_data, rx_data1] + ([swap_data(rx_window.w[i]) for i in [2, 3]] if lw == 4 else [])
-        rx_shp = Signal()
-        rx_slc = Signal()
-        rx_sdp = Signal()
-        self.comb += [
-            rx_shp.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SHP)),
-            rx_slc.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SLC)),
-            rx_sdp.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SDP)),
-        ]
+        if lw == 1:
+            # Registered words (core order: swapped back for the decode).
+            self.comb += Cat(rx_shp, rx_slc, rx_sdp, rx_end, rx_knz).eq(
+                rx_decode(swap_data(rx_data), swap_ctrl(rx_ctrl)))
+        else:
+            self.comb += Cat(rx_shp, rx_slc, rx_sdp, rx_end, rx_knz).eq(rx_window.f0)
 
         # RX Header Packets checks -----------------------------------------------------------------
         # Header Packet words: DW0, DW1, DW2, CRC-16/Link Control Word.
@@ -363,7 +373,7 @@ class USB3LinkLayer(LiteXModule):
         if lw == 4:
             self.comb += skip_k.eq(rx_window.n)
             for i in reversed(range(4)):
-                self.comb += If((rx_window.c[i] != 0) & (rx_window.n > i), skip_k.eq(i))
+                self.comb += If(rx_window.f[i][4] & (rx_window.n > i), skip_k.eq(i))
         self.rx_fsm = rx_fsm = FSM(reset_state="IDLE")
         self.comb += rx_fsm_dpp_data.eq(rx_fsm.ongoing("DPP") & u0)
         rx_fsm.act("IDLE",
@@ -406,8 +416,8 @@ class USB3LinkLayer(LiteXModule):
             If(~u0,
                 NextState("IDLE")
             ).Elif(rx_valid,
-                If(rx_ctrl != 0,
-                    If((rx_ctrl == 0b1111) & ((rx_data == FRAMING_END) | (rx_data == FRAMING_EDB)),
+                If(rx_knz,
+                    If(rx_end,
                         NextState("IDLE") # DPPEND/DPPABORT consumed.
                     ).Else(
                         rx_hold.eq(lw >= 2), # Other framing (DPP cut): handled in IDLE.

@@ -137,56 +137,12 @@ def link_pairs_layout(n=2):
     (data[0:32]/ctrl[0:4]). n: words entries (USB3PHY link_words=4: 1-4 valid words)."""
     return [("data", 32*n), ("ctrl", 4*n), ("words", bits_for(n))]
 
-class WordsWindow(LiteXModule):
+def WordsWindow(nwords=2, decode=None, nflags=0):
     """Link words entries (link_pairs_layout(nwords)) -> window of the next nwords words (w[i]/c[i],
-    w0/c0, w1/c1, n: 0-nwords available words), consume: words consumed this cycle (0-n)."""
-    def __init__(self, nwords=2):
-        self.sink    = sink = stream.Endpoint(link_pairs_layout(nwords))
-        self.n       = Signal(bits_for(nwords))           # o
-        self.w       = [Signal(32) for _ in range(nwords)] # o
-        self.c       = [Signal(4)  for _ in range(nwords)] # o
-        self.consume = Signal(bits_for(nwords))           # i
-        self.w0, self.c0 = self.w[0], self.c[0]
-        self.w1, self.c1 = self.w[1], self.c[1]
-
-        # # #
-
-        size  = 2*nwords
-        data  = [Signal(32, reset_less=True) for _ in range(size)]
-        ctrl  = [Signal(4,  reset_less=True) for _ in range(size)]
-        level = Signal(bits_for(size))
-        rem   = Signal(bits_for(size))
-        self.comb += [
-            [self.w[i].eq(data[i]) for i in range(nwords)],
-            [self.c[i].eq(ctrl[i]) for i in range(nwords)],
-            # level - consume: candidates computed from the registered level, selected by consume
-            # (timings: consume late).
-            Case(self.consume, {c: rem.eq(level - c) for c in range(nwords + 1)}),
-            sink.ready.eq(rem <= nwords),
-        ]
-        accept = Signal()
-        self.comb += accept.eq(sink.valid & sink.ready)
-        for i in range(size):
-            shifted_d = Signal(32)
-            shifted_c = Signal(4)
-            self.comb += Case(self.consume, {c: [
-                shifted_d.eq(data[i + c] if (i + c) < size else 0),
-                shifted_c.eq(ctrl[i + c] if (i + c) < size else 0)] for c in range(nwords + 1)})
-            # Slot i written by the sink word j at rem + j == i (j < sink.words), else shifted.
-            stmt  = [data[i].eq(shifted_d), ctrl[i].eq(shifted_c)]
-            for j in reversed(range(min(nwords, i + 1))):
-                cond = accept & (rem == (i - j)) & ((sink.words > j) if j > 0 else 1)
-                stmt = If(cond,
-                    data[i].eq(sink.data[32*j:32*(j + 1)]), ctrl[i].eq(sink.ctrl[4*j:4*(j + 1)])
-                ).Else(*([stmt] if isinstance(stmt, If) else stmt))
-            self.sync += stmt
-        level_next = Signal(bits_for(size))
-        self.comb += level_next.eq(rem + Mux(accept, sink.words, 0))
-        self.sync += [
-            level.eq(level_next),
-            # Available words registered (timings).
-            self.n.eq(Mux(level_next >= nwords, nwords, level_next)),
-        ]
+    w0/c0, w1/c1, n: 0-nwords available words), consume: words consumed this cycle (0-n), decode:
+    flags stored with the words (f[i]): usb3_pipe.framing.WordsWindow."""
+    from usb3_pipe.framing import WordsWindow as _WordsWindow
+    return _WordsWindow(decode=decode, nflags=nflags, nwords=nwords)
 
 def bytes_to_be_n(nbytes, n):
     """Valid bytes of the word (1-n, 0 = n) to be (n bits)."""
