@@ -1013,6 +1013,7 @@ class Gen2TXDCBalance(LiteXModule):
         mid       = Signal(W)
         sat_hi    = Signal()
         sat_lo    = Signal()
+        nsat      = Signal(reset=1)
         positive  = Signal()
         fix_14    = Signal()
         fix_15    = Signal()
@@ -1034,13 +1035,11 @@ class Gen2TXDCBalance(LiteXModule):
         ts_go    = Signal()
         rst_go   = Signal()
         hold     = Signal()
-        nsat     = Signal()
         self.comb += [
             advance2.eq(v2 & gos[3]),
             ts_go.eq(advance2 & ts2),
             rst_go.eq(advance2 & ~ts2 & dc_reset2),
             hold.eq(~ts_go & ~rst_go),
-            nsat.eq(~sat_hi & ~sat_lo),
         ]
         inc_11x = sx(inc_11, W)
         lim_hi  = C(LIMIT, W)
@@ -1057,6 +1056,7 @@ class Gen2TXDCBalance(LiteXModule):
         self.sync += [
             sat_hi.eq(balance_s > LIMIT),
             sat_lo.eq(balance_s < -LIMIT),
+            nsat.eq(~(balance_s > LIMIT) & ~(balance_s < -LIMIT)),
             balance.eq(balance_next),
             If(gos[3], mid.eq(mid_next)),
         ]

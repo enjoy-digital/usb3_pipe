@@ -332,13 +332,14 @@ class WordsWindow(LiteXModule):
                 cand_c.append(k)
             self.sync += Case(self.consume, {c: [data[i].eq(cand_d[c]), ctrl[i].eq(cand_c[c])]
                 for c in range(nwords + 1)})
-        level_next = Signal(bits_for(size))
-        self.comb += level_next.eq(level - self.consume + Mux(accept, sink.words, 0))
-        self.sync += [
-            level.eq(level_next),
-            # Available words registered (timings).
-            self.n.eq(Mux(level_next >= nwords, nwords, level_next)),
-        ]
+        # Level and available words (registered) candidates per consumed count (timings: the late
+        # consume selects last).
+        base = Signal(bits_for(size) + 1)
+        self.comb += base.eq(level + Mux(accept, sink.words, 0))
+        self.sync += Case(self.consume, {c: [
+            level.eq(base - c),
+            self.n.eq(Mux((base - c) >= nwords, nwords, (base - c)[:bits_for(nwords)])),
+        ] for c in range(nwords + 1)})
 
 # Gen 2 RX Framing ---------------------------------------------------------------------------------
 
@@ -1511,19 +1512,23 @@ class Gen2LinkRX(LiteXModule):
                 AsyncFIFOPipelinedRead([("data", 256), ("start", 1)], 128))
             held       = Signal(128, reset_less=True)
             has        = Signal()
+            has_c      = [Signal(name="has", attr={("syn_preserve", 1)}) for _ in range(4)] # Copies.
             started    = Signal()
             held_start = Signal()
             self.sync.rx += [
                 If(~self.data_stream,
                     has.eq(0),
+                    [c.eq(0) for c in has_c],
                     started.eq(0),
                 ).Elif(sink.valid,
+                    [If(~has_c[i], held[32*i:32*(i+1)].eq(sink.data[32*i:32*(i+1)]))
+                        for i in range(4)],
                     If(~has,
-                        held.eq(sink.data),
                         held_start.eq(~started),
                         started.eq(1),
                     ),
                     has.eq(~has),
+                    [c.eq(~has) for c in has_c],
                 ),
                 If(pairs.sink.valid & ~pairs.sink.ready, self.overflow.eq(1)),
             ]

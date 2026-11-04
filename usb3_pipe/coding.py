@@ -150,8 +150,9 @@ class Gen2BlockGearbox(LiteXModule):
     cycles on average).
 
     The bits level after the output of the cycle (block placement position, 0 to data_width when a
-    block is accepted) and the output are registered: the placement is a shift by a registered
-    amount, the level loop an adder with constants and a selection."""
+    block is accepted) and the output are registered: the placement is a one-hot selection of the
+    block bits by the registered position, the level loop an adder with constants and a
+    selection, the sink ready registered from the next level."""
     def __init__(self, data_width=32):
         self.sink   = sink   = stream.Endpoint(gen2_block_layout())
         self.source = source = stream.Endpoint([("data", data_width)])
@@ -161,10 +162,11 @@ class Gen2BlockGearbox(LiteXModule):
         dw  = data_width
         buf = Signal(196 + dw)
         rl  = Signal(max=196 + dw + 1) # Bits after the output of the cycle (placement position).
-        rl_b = Signal(len(rl), attr={("syn_preserve", 1)}) # Copy for the placement shift (fanout).
         rl_next = Signal.like(rl)
         ready   = Signal(reset=1)      # rl <= dw, registered (timings: accept from registers).
         assert dw % 4 == 0
+        npos    = dw//4 + 1            # Placement positions (multiples of 4, 0 to dw).
+        pos_oh  = Signal(npos, reset=1) # Placement position (one-hot, registered with rl).
         out = Signal()                 # Word output this cycle (bits >= dw).
         self.comb += [
             source.valid.eq(out),
@@ -186,6 +188,12 @@ class Gen2BlockGearbox(LiteXModule):
         self.comb += shifted.eq(Mux(out, buf[dw:], buf))
         accept = Signal()
         self.comb += accept.eq(sink.valid & sink.ready)
+        # Block placed at the position (one-hot selection of the block bits: no barrel shifter).
+        placed = Signal(196 + dw)
+        for i in range(196 + dw):
+            terms = [pos_oh[j] & block[i - 4*j] for j in range(npos) if 0 <= (i - 4*j) < 196]
+            if terms:
+                self.comb += placed[i].eq(Reduce("OR", terms))
         self.comb += If(accept,
             rl_next.eq(rl + length - dw)
         ).Else(
@@ -193,9 +201,8 @@ class Gen2BlockGearbox(LiteXModule):
         )
         self.sync += [
             If(accept,
-                # rl <= dw, multiple of 4 (blocks/words lengths): 4-bit steps shift.
-                buf.eq(shifted | (Cat(block, Constant(0, dw)) <<
-                    Cat(Constant(0, 2), rl_b[2:bits_for(dw)]))),
+                # rl <= dw, multiple of 4 (blocks/words lengths).
+                buf.eq(shifted | placed),
                 # Bits >= 132 > dw: word output on the next cycle.
                 out.eq(1),
             ).Else(
@@ -203,8 +210,8 @@ class Gen2BlockGearbox(LiteXModule):
                 out.eq(rl >= dw),
             ),
             rl.eq(rl_next),
-            rl_b.eq(rl_next),
             ready.eq(rl_next <= dw),
+            pos_oh.eq(Cat(*[rl_next[2:] == j for j in range(npos)])),
         ]
 
 # Gen 2 Block Aligner (RX) -------------------------------------------------------------------------
