@@ -498,36 +498,30 @@ class Gen2RXFraming(LiteXModule):
                 data.eq(byte),
             )
 
-        # LGOOD_n/LCRD_x/LBAD Link Commands (Link Command Word copies identical, 7.2.2): source_lc.
-        # With 16+ bytes per cycle, decoded on the registered chunk (timings).
-        def is_fast_lc(lc_word):
-            return (lc_word[0:16] == lc_word[16:32]) & (
-                ((lc_word[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
-                ((lc_word[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.
-                ( lc_word[0:11]          == 0x180))   # LBAD.
+        # LGOOD_n/LCRD_x/LBAD Link Commands (7.2.2): source_lc. Fast Link Commands: identical copies,
+        # or a copy of a fast kind with a valid CRC-5 (the Link Layer votes between the copies): a
+        # Link Command with a bit error in one copy is not sent behind the RX words, where the
+        # following fast Link Commands would overtake it (LGOOD_n/LCRD_x out of order: Recovery,
+        # seen on hardware at 10Gbps). With 16+ bytes per cycle, decoded on the registered chunk
+        # (timings).
+        from usb3_core.crc import CRC5
+        def fast_kind(c):
+            return (((c[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
+                    ((c[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.
+                    ( c[0:11]          == 0x180))   # LBAD.
+        lc_w    = r.data[32:64] if nbytes >= 16 else out[32:64]
+        crc5    = [CRC5() for _ in range(2)]
+        fast_lc = Signal()
+        self.submodules += crc5
+        self.comb += [
+            crc5[0].data.eq(lc_w[0:11]),
+            crc5[1].data.eq(lc_w[16:27]),
+            fast_lc.eq((fast_kind(lc_w[0:16])  & ((lc_w[0:16] == lc_w[16:32]) | (crc5[0].value == lc_w[11:16]))) |
+                       (fast_kind(lc_w[16:32]) & (crc5[1].value == lc_w[27:32]))),
+        ]
         lc_fast   = Signal()
         out_ready = Signal()
         if nbytes >= 16:
-            # Fast Link Commands: a copy of the Link Command Word of a fast kind with a valid CRC-5
-            # (the Link Layer votes between the copies): a Link Command with a bit error in one copy
-            # is not sent behind the RX words, where the following fast Link Commands would overtake
-            # it (LGOOD_n/LCRD_x out of order: Recovery, seen on hardware at 10Gbps).
-            from usb3_core.crc import CRC5
-            lc_w   = r.data[32:64]
-            crc5   = [CRC5() for _ in range(2)]
-            self.submodules += crc5
-            fast_lc = Signal()
-            def fast_kind(c):
-                return (((c[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
-                        ((c[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.
-                        ( c[0:11]          == 0x180))   # LBAD.
-            self.comb += [
-                crc5[0].data.eq(lc_w[0:11]),
-                crc5[1].data.eq(lc_w[16:27]),
-                fast_lc.eq((fast_kind(lc_w[0:16])  & ((lc_w[0:16] == lc_w[16:32]) |
-                                                      (crc5[0].value == lc_w[11:16]))) |
-                           (fast_kind(lc_w[16:32]) & (crc5[1].value == lc_w[27:32]))),
-            ]
             self.out_buffer = out_buffer = PipeReady(cooked.description)
             fast = Signal()
             self.comb += [
@@ -545,10 +539,9 @@ class Gen2RXFraming(LiteXModule):
                 out_buffer.source.ready.eq(Mux(fast, source_lc.ready, source.ready)),
             ]
         else:
-            lc_word = out[32:64]
             self.comb += [
-                lc_fast.eq(self.lc_enable & (kind == KIND_LC) & is_fast_lc(lc_word)),
-                source_lc.data.eq(lc_word),
+                lc_fast.eq(self.lc_enable & (kind == KIND_LC) & fast_lc),
+                source_lc.data.eq(lc_w),
                 # Both outputs ready (not depending on the Link Command decode: timings).
                 out_ready.eq(source_lc.ready & source.ready),
             ]
