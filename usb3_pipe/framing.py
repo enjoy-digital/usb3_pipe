@@ -322,7 +322,8 @@ class Gen2RXFraming(LiteXModule):
     bytes per cycle for wider transceiver words (ex: 80-bit at 125MHz, a Data Block every 1.65
     cycles).
 
-    With lc_enable, LGOOD_n/LCRD_x/LBAD Link Commands (both copies identical) are output on source_lc
+    With lc_enable, LGOOD_n/LCRD_x/LBAD Link Commands (16+ bytes per cycle: a copy with a valid CRC-5,
+    8 bytes: both copies identical) are output on source_lc
     (Link Command word, Symbol 0 on data[0:8]) instead of source: they only concern the transmitter
     (Header Packets acknowledgements, credits and retransmission requests), the Link Layer gets them
     without waiting behind the received packets (RX buffering, 7.2.4.1: Header Packets held in the
@@ -339,6 +340,8 @@ class Gen2RXFraming(LiteXModule):
         self.errors    = Signal(16) # o: Unknown packet starts (skipped bytes).
         self.corrected = Signal(16) # o: Packet starts with a framing Symbol 0 error (3/4 valid).
         self.lc_enable = Signal()   # i: LGOOD_n/LCRD_x on source_lc.
+        self.dbg_error        = Signal()         # o: Unknown packet start skipped (pulse, bring-up).
+        self.dbg_error_window = Signal(8*nbytes) # o: Its bytes (the skipped byte first), with dbg_error.
 
         # # #
 
@@ -432,6 +435,7 @@ class Gen2RXFraming(LiteXModule):
         start     = Signal()   # First chunk of the packet.
         last      = Signal()
         dpp_len12 = Signal(11, reset=12) # Last DPH Length Field Replica + 12 (DPP length).
+        dpp_len_sel = Signal(11)         # DPP length for the DPP start (set_rem, see below).
         out       = Signal(8*nbytes)
         out_edb   = Signal(nbytes)
         self.comb += [
@@ -443,11 +447,30 @@ class Gen2RXFraming(LiteXModule):
         # Output words (registered with 16+ bytes per cycle, see the Link Commands): framing Symbols as
         # K Symbols, bytes after the packet end padded (00h).
         if nbytes >= 16:
-            output = stream.Endpoint(gen2_link_layout(nbytes//4) + [("lc", 1)])
+            # Chunk registered first (PipeValid: the window shift), the framing Symbols/padding then
+            # applied from the registers and the Link Command decoded (PipeReady registers after):
+            # timings (the shift and the Symbols selection in two stages).
+            raw = stream.Endpoint([("data", 8*nbytes), ("edb", nbytes), ("words", bits_for(nbytes//4)),
+                ("rem", 11), ("start", 1), ("kind", 3), ("fin", 1)])
+            self.out_pipe_valid = out_pipe_valid = stream.PipeValid(raw.description)
+            cooked = stream.Endpoint(gen2_link_layout(nbytes//4) + [("lc", 1)])
+            self.comb += [
+                raw.data.eq(out),
+                raw.edb.eq(out_edb),
+                raw.rem.eq(rem),
+                raw.start.eq(start),
+                raw.kind.eq(kind),
+                raw.fin.eq(last),
+                raw.connect(out_pipe_valid.sink),
+            ]
+            output = raw
+            r = out_pipe_valid.source
+            s_data, s_edb, s_rem, s_start, s_kind, dst = r.data, r.edb, r.rem, r.start, r.kind, cooked
         else:
             output = source
+            s_data, s_edb, s_rem, s_start, s_kind, dst = out, out_edb, rem, start, kind, source
         start_k = Signal(8)
-        self.comb += Case(kind, {
+        self.comb += Case(s_kind, {
             KIND_HP  : start_k.eq(SHP),
             KIND_DPH : start_k.eq(SHP),
             KIND_LC  : start_k.eq(SLC),
@@ -456,27 +479,27 @@ class Gen2RXFraming(LiteXModule):
         })
         # Byte j of the chunk is packet byte i: i >= length <-> j >= rem (comparisons with constants).
         for j in range(nbytes):
-            byte   = out[8*j:8*(j+1)]
-            data   = output.data[8*j:8*(j+1)]
-            ctrl   = output.ctrl[j]
+            byte   = s_data[8*j:8*(j+1)]
+            data   = dst.data[8*j:8*(j+1)]
+            ctrl   = dst.ctrl[j]
             is_end = Signal(name=f"is_end{j}") # DPPEND/DPPABORT.
-            self.comb += is_end.eq((kind == KIND_DPP) & ((j + 4) >= rem))
-            self.comb += If(j >= rem,
+            self.comb += is_end.eq((s_kind == KIND_DPP) & ((j + 4) >= s_rem))
+            self.comb += If(j >= s_rem,
                 data.eq(0x00),
-            ).Elif(start & (j < 3),
+            ).Elif(s_start & (j < 3),
                 ctrl.eq(1), data.eq(start_k),
-            ).Elif(start & (j == 3),
+            ).Elif(s_start & (j == 3),
                 ctrl.eq(1), data.eq(EPF),
-            ).Elif(is_end & ((j + 1) == rem),
+            ).Elif(is_end & ((j + 1) == s_rem),
                 ctrl.eq(1), data.eq(EPF),
             ).Elif(is_end,
-                ctrl.eq(1), data.eq(Mux(out_edb[j], EDB, END)),
+                ctrl.eq(1), data.eq(Mux(s_edb[j], EDB, END)),
             ).Else(
                 data.eq(byte),
             )
 
         # LGOOD_n/LCRD_x/LBAD Link Commands (Link Command Word copies identical, 7.2.2): source_lc.
-        # With 16+ bytes per cycle, decoded on the registered output (timings).
+        # With 16+ bytes per cycle, decoded on the registered chunk (timings).
         def is_fast_lc(lc_word):
             return (lc_word[0:16] == lc_word[16:32]) & (
                 ((lc_word[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
@@ -485,21 +508,35 @@ class Gen2RXFraming(LiteXModule):
         lc_fast   = Signal()
         out_ready = Signal()
         if nbytes >= 16:
-            # Registered valid/ready (PipeValid then PipeReady), the Link Command decode done on the
-            # PipeValid registers and stored with the payload (timings: not after the PipeReady
-            # output selection).
-            self.out_pipe_valid = out_pipe_valid = stream.PipeValid(gen2_link_layout(nbytes//4) +
-                [("lc", 1)])
-            self.out_buffer     = out_buffer     = PipeReady(gen2_link_layout(nbytes//4) +
-                [("lc", 1)])
+            # Fast Link Commands: a copy of the Link Command Word of a fast kind with a valid CRC-5
+            # (the Link Layer votes between the copies): a Link Command with a bit error in one copy
+            # is not sent behind the RX words, where the following fast Link Commands would overtake
+            # it (LGOOD_n/LCRD_x out of order: Recovery, seen on hardware at 10Gbps).
+            from usb3_core.crc import CRC5
+            lc_w   = r.data[32:64]
+            crc5   = [CRC5() for _ in range(2)]
+            self.submodules += crc5
+            fast_lc = Signal()
+            def fast_kind(c):
+                return (((c[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
+                        ((c[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.
+                        ( c[0:11]          == 0x180))   # LBAD.
+            self.comb += [
+                crc5[0].data.eq(lc_w[0:11]),
+                crc5[1].data.eq(lc_w[16:27]),
+                fast_lc.eq((fast_kind(lc_w[0:16])  & ((lc_w[0:16] == lc_w[16:32]) |
+                                                      (crc5[0].value == lc_w[11:16]))) |
+                           (fast_kind(lc_w[16:32]) & (crc5[1].value == lc_w[27:32]))),
+            ]
+            self.out_buffer = out_buffer = PipeReady(cooked.description)
             fast = Signal()
             self.comb += [
-                output.lc.eq(kind == KIND_LC),
-                output.connect(out_pipe_valid.sink),
-                out_pipe_valid.source.connect(out_buffer.sink, omit={"lc"}),
-                out_buffer.sink.lc.eq(out_pipe_valid.source.lc &
-                    is_fast_lc(out_pipe_valid.source.data[32:64])),
-                out_ready.eq(output.ready),
+                cooked.valid.eq(r.valid),
+                r.ready.eq(cooked.ready),
+                cooked.words.eq(r.words),
+                cooked.lc.eq((r.kind == KIND_LC) & fast_lc),
+                cooked.connect(out_buffer.sink),
+                out_ready.eq(raw.ready),
                 fast.eq(self.lc_enable & out_buffer.source.lc),
                 out_buffer.source.connect(source, omit={"valid", "ready", "lc"}),
                 source.valid.eq(out_buffer.source.valid & ~fast),
@@ -523,7 +560,7 @@ class Gen2RXFraming(LiteXModule):
                 KIND_HP  + 1 : NextValue(rem, 20),
                 KIND_DPH + 1 : NextValue(rem, 24),
                 KIND_LC  + 1 : NextValue(rem, 8),
-                KIND_DPP + 1 : NextValue(rem, dpp_len12),
+                KIND_DPP + 1 : NextValue(rem, dpp_len_sel),
                 KIND_EDB + 1 : NextValue(rem, 4),
             })
         # Unknown packet start at p (Symbol 0 of a framing Ordered Set with a bit error?): Symbols 1/2
@@ -561,6 +598,8 @@ class Gen2RXFraming(LiteXModule):
                     NextState("PACKET")
                 ).Else(
                     NextValue(self.errors, self.errors + 1),
+                    self.dbg_error.eq(1),
+                    self.dbg_error_window.eq(out),
                     NextState("IDLE"),
                     If(p == (nbytes - 1),
                         shift.eq(1),
@@ -575,13 +614,29 @@ class Gen2RXFraming(LiteXModule):
         # the DPH Data Length field (packet bytes 10-11, checked later by the Header Packet CRC-16):
         # a bit error in a replica does not lose the DPP framing.
         hlen_rem   = 24 - nbytes*(10//nbytes)  # rem of the chunk with the DPH bytes 10-11.
-        hlen_now   = out[8*(10 % nbytes):8*(10 % nbytes) + 16]
         hlen       = Signal(16, reset_less=True)
-        replica0   = out[8*(20 % nbytes):8*(20 % nbytes) + 16]
-        replica1   = out[8*(20 % nbytes) + 16:8*(20 % nbytes) + 32]
         dph_len12  = Signal(11) # DPP length + 12: candidates +12, selected (timings).
-        self.sync += If(fsm.ongoing("PACKET") & avail & out_ready & (kind == KIND_DPH) &
-            (rem == hlen_rem), hlen.eq(hlen_now))
+        if nbytes >= 16:
+            # From the registered chunk (PipeValid) of the DPH last chunk (timings: not from the
+            # window shift): the DPP start follows the DPH, found while the chunk is registered or
+            # later (dpp_len12).
+            hlen_now = r.data[8*(10 % nbytes):8*(10 % nbytes) + 16]
+            replica0 = r.data[8*(20 % nbytes):8*(20 % nbytes) + 16]
+            replica1 = r.data[8*(20 % nbytes) + 16:8*(20 % nbytes) + 32]
+            r_dph_last = Signal()
+            self.comb += r_dph_last.eq(r.valid & (r.kind == KIND_DPH) & r.fin)
+            self.sync += [
+                If(r.valid & r.ready & (r.kind == KIND_DPH) & (r.rem == hlen_rem), hlen.eq(hlen_now)),
+                If(r_dph_last & r.ready, dpp_len12.eq(dph_len12)),
+            ]
+            self.comb += dpp_len_sel.eq(Mux(r_dph_last, dph_len12, dpp_len12))
+        else:
+            self.comb += dpp_len_sel.eq(dpp_len12)
+            hlen_now = out[8*(10 % nbytes):8*(10 % nbytes) + 16]
+            replica0 = out[8*(20 % nbytes):8*(20 % nbytes) + 16]
+            replica1 = out[8*(20 % nbytes) + 16:8*(20 % nbytes) + 32]
+            self.sync += If(fsm.ongoing("PACKET") & avail & out_ready & (kind == KIND_DPH) &
+                (rem == hlen_rem), hlen.eq(hlen_now))
         hlen_sel = hlen_now if hlen_rem <= nbytes else hlen
         self.comb += dph_len12.eq(Mux(replica0 == replica1, replica0[0:11] + 12, hlen_sel[0:11] + 12))
         p_next = Signal(pw + 1)
@@ -616,7 +671,7 @@ class Gen2RXFraming(LiteXModule):
                 ),
                 If(out_ready,
                     If((kind == KIND_DPH) & last,
-                        NextValue(dpp_len12, dph_len12),
+                        NextValue(dpp_len12, dph_len12) if nbytes < 16 else [],
                     ),
                     NextValue(rem, rem - nbytes),
                     NextValue(start, 0),
@@ -1333,7 +1388,7 @@ class Gen2LinkTX(LiteXModule):
 
         # Blocks buffer (sys -> tx), chains read once complete (tx) --------------------------------
         self.blocks = blocks = ClockDomainsRenamer({"write": "sys", "read": "tx"})(
-            stream.AsyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True))
+            stream.AsyncFIFO(gen2_tx_blocks_layout(2), 64, buffered=True)) # 4 chains (timings: pointers).
         self.reader = reader = ClockDomainsRenamer("tx")(Gen2TXBlocksReader())
         # Registered valid/ready between the reader and Gen2TX (timings), registers to Gen2TX
         # (ready_first: Gen2TX block selection/payload from the registers).
