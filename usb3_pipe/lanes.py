@@ -44,7 +44,8 @@ class LaneStriper(LiteXModule):
         for lane, source in enumerate(sources):
             self.comb += [
                 source.valid.eq(sink.valid),
-                source.data.eq(Cat(*[sink.data[8*(2*i + lane):8*(2*i + lane + 1)] for i in range(4)])),
+                source.data.eq(Cat(*[sink.data[8*(2*i + lane):8*(2*i + lane + 1)]
+                    for i in range(4)])),
                 source.ctrl.eq(Cat(*[sink.ctrl[2*i + lane] for i in range(4)])),
             ]
 
@@ -72,8 +73,8 @@ class LaneDestriper(LiteXModule):
 # Lane Deskew --------------------------------------------------------------------------------------
 
 class LaneDeskew(LiteXModule):
-    """Two lanes deskew (up to depth words of skew): words before the marker are dropped on each lane
-    until the marker is at the head of both lanes, then both lanes are released together.
+    """Two lanes deskew (up to depth words of skew): words before the marker are dropped on each
+    lane until the marker is at the head of both lanes, then both lanes are released together.
 
     With a periodic marker (ex: COM words of TS1/TS2 Ordered Sets, every 4 words), max_skew (words)
     pairs the markers of the same period: the words are timestamped on arrival and two head markers
@@ -98,7 +99,8 @@ class LaneDeskew(LiteXModule):
                 sinks[lane].connect(fifos[lane].sink),
                 fifos[lane].sink.time.eq(time),
                 head.eq(fifos[lane].source.valid &
-                    (fifos[lane].source.data == marker_data) & (fifos[lane].source.ctrl == marker_ctrl)),
+                    (fifos[lane].source.data == marker_data) &
+                    (fifos[lane].source.ctrl == marker_ctrl)),
             ]
             heads.append(head)
 
@@ -134,6 +136,7 @@ class LaneDeskew(LiteXModule):
                     fifos[lane].source.ready.eq(both & sources[0].ready & sources[1].ready),
                 ).Else(
                     # Searching: drop the words before the marker (and the stale markers).
-                    fifos[lane].source.ready.eq(fifos[lane].source.valid & (~heads[lane] | stale[lane])),
+                    fifos[lane].source.ready.eq(fifos[lane].source.valid &
+                        (~heads[lane] | stale[lane])),
                 )
             ]

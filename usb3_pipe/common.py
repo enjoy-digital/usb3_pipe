@@ -247,7 +247,8 @@ class _AsyncFIFOPipelinedRead(LiteXModule):
             wrport.adr.eq(produce.q_binary[:-1]),
             wrport.dat_w.eq(self.din),
             wrport.we.eq(produce.ce),
-            rdport.adr.eq(consume.q_binary[:-1]), # Registered read pointer (read on the next cycle).
+            # Registered read pointer (read on the next cycle).
+            rdport.adr.eq(consume.q_binary[:-1]),
         ]
 
         # Memory reads (fetch: data on the next cycle) into the output buffer (3 entries: an entry
@@ -353,7 +354,8 @@ class Buffer(LiteXModule):
 # Endianness Swap ----------------------------------------------------------------------------------
 
 class EndiannessSwap(LiteXModule):
-    """Swap the data bytes/ctrl bits of stream (per word of word_bytes bytes, whole data when None)."""
+    """Swap the data bytes/ctrl bits of stream (per word of word_bytes bytes, whole data when
+    None)."""
     def __init__(self, sink, source, word_bytes=None):
         assert len(sink.data) == len(source.data)
         assert len(sink.ctrl) == len(source.ctrl)

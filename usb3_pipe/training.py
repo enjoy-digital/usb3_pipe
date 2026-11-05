@@ -209,7 +209,8 @@ class TSGenerator(LiteXModule):
         # Memory -----------------------------------------------------------------------------------
         mem_init  = ordered_set_words(ordered_set)
         mem_depth = len(mem_init)
-        port      = OrderedSetROM(self, mem_init, registered=True) # Words from a register (timings).
+        # Words from a register (timings).
+        port      = OrderedSetROM(self, mem_init, registered=True)
 
         # Memory address generation ----------------------------------------------------------------
         self.comb += [
@@ -321,7 +322,8 @@ class TSUnit(LiteXModule):
         self.tx_ts2_loopback   = Signal()        # i (Level)
         self.tx_ts2_scrambling = Signal(reset=1) # i (Level)
         self.tx_done           = Signal()        # o (Pulse)
-        self.tx_active         = Signal()        # o (Level): Ordered Sets transmitted on serdes.sink.
+        self.tx_active         = Signal()        # o (Level): Ordered Sets transmitted on
+                                                 #            serdes.sink.
 
         # # #
 

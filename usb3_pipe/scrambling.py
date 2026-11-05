@@ -127,7 +127,9 @@ class ScramblerUnit(LiteXModule):
             self.comb += [value[n].eq(lfsr_xor(cur, advance(ref, 8*i + n)[15])) for n in range(8)]
             if with_com:
                 for j in range(i):
-                    self.comb += If(self.com[j], value.eq(lfsr_value(lfsr_shift(seed, 8*(i - 1 - j)))))
+                    self.comb += If(self.com[j],
+                        value.eq(lfsr_value(lfsr_shift(seed, 8*(i - 1 - j))))
+                    )
             self.comb += self.value[8*i:8*(i+1)].eq(value)
         # Next state: cur advanced 4 symbols or, after the last COM on symbol j, constant.
         new = Signal(16)
@@ -153,7 +155,11 @@ class Scrambler(LiteXModule):
 
         # # #
 
-        self.unit = unit = ScramblerUnit(reset=reset, seed=seed, with_skp=with_skp, with_com=with_com)
+        self.unit = unit = ScramblerUnit(
+            reset    = reset,
+            seed     = seed,
+            with_skp = with_skp,
+            with_com = with_com)
         self.comb += unit.ce.eq(sink.valid & sink.ready)
         self.comb += sink.connect(source)
         for i in range(4):
@@ -215,7 +221,8 @@ class Gen2Scrambler(LiteXModule):
     """Gen 2 scrambler on nbytes bytes per cycle (byte 0 first).
 
     Per byte: advance[i] (the LFSR advances 8 bits) and scramble[i] (the byte is XORed with the LFSR
-    output, only meaningful when advancing). init re-initializes the LFSR to the seed (SYNC Ordered Set).
+    output, only meaningful when advancing). init re-initializes the LFSR to the seed (SYNC Ordered
+    Set).
 
     per_byte_advance=False: advance is a single bit for all the bytes (blocks: all advance or none),
     the keys/next state are computed directly from the current state (logic depth).

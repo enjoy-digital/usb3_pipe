@@ -17,6 +17,7 @@ from migen import *
 from litex.gen import *
 
 from litex.soc.interconnect import stream
+
 from litex.soc.cores import code_8b10b
 
 from usb3_pipe.common import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL
@@ -36,7 +37,8 @@ def encode_8b10b(d, k, rd):
     if k and code5b == 28:
         code6b, unb6, flip6 = 0b110000, True, True
     else:
-        code6b, unb6, flip6 = t.table_5b6b[code5b], t.table_5b6b_unbalanced[code5b], t.table_5b6b_flip[code5b]
+        code6b, unb6, flip6 = (t.table_5b6b[code5b], t.table_5b6b_unbalanced[code5b],
+            t.table_5b6b_flip[code5b])
     code4b = t.table_3b4b[code3b]
     unb4   = t.table_3b4b_unbalanced[code3b]
     flip4  = True if k else t.table_3b4b_flip[code3b]
@@ -88,7 +90,8 @@ class RX8b10bChecker(LiteXModule):
         # # #
 
         table = code_8b10b_table(lsb_first)
-        rom   = {code: e[0] | (e[1] << 1) | (e[2] << 2) | (e[3] << 3) for code, e in enumerate(table)}
+        rom   = {code: e[0] | (e[1] << 1) | (e[2] << 2) | (e[3] << 3)
+            for code, e in enumerate(table)}
 
         # Code lookup (distributed ROM), registered (as the decoders outputs). A block RAM would
         # absorb the decoders input register as its address register: transceiver RX data to the
@@ -228,11 +231,11 @@ class Gen2BlockAligner(LiteXModule):
       Headers (ex: TSEQ, Symbol 0 bit 0 = 1 seen as a corrected Control Block Header).
     - Locked: blocks are extracted with the alignment.
     In Aligned/Locked, an undefined Block Header (2 bits or more from 0011b/1100b) moves back to
-    Unaligned (error pulse), single bit errors are corrected (header_error). SKP Ordered Sets (control
-    block starting with SKP or SKPEND) are consumed by Dwords of 4 SKP Symbols until SKPEND (0 to 36
-    SKP Symbols, multiple of 4, 6.4.3.3): they are not output, skp pulses with the received LFSR
-    state. Up to 2 Dwords per cycle, 4 with words wider than 64 bits (the consumed bits must keep up
-    with the received words: else the pointer falls behind in a long SKP Ordered Set).
+    Unaligned (error pulse), single bit errors are corrected (header_error). SKP Ordered Sets
+    (control block starting with SKP or SKPEND) are consumed by Dwords of 4 SKP Symbols until SKPEND
+    (0 to 36 SKP Symbols, multiple of 4, 6.4.3.3): they are not output, skp pulses with the received
+    LFSR state. Up to 2 Dwords per cycle, 4 with words wider than 64 bits (the consumed bits must
+    keep up with the received words: else the pointer falls behind in a long SKP Ordered Set).
 
     Implementation (40-bit words at 250MHz, 80-bit words at 125MHz on slower fabrics): the last
     words are kept in a window and blocks are read at a bit pointer in a small range (2**k >=
@@ -242,12 +245,12 @@ class Gen2BlockAligner(LiteXModule):
     one-hot (one vector per context: Block, SKP Ordered Set continued after 4*m*k SKP Symbols): each
     position is set from a few positions of the previous cycle (pointer bit and decode at that
     position, per consumed length), no pointer mux/adder in the loop, a pointer bit dropped
-    (undefined Block Header, SKP Ordered Set error, pointer behind the window) is an alignment loss. No control signal common to
-    the positions in the loop (fanout): the SYNC search is done one word ahead (one-hot offset
-    registered) and its pointer bit set one cycle later, a SYNC with a different alignment is
-    checked over 2 cycles and sets the pointer to its alignment (decisions of these cycles
-    replaced: SYNC block and the blocks following it). The read blocks/SKP Ordered Sets are
-    extracted from the registered pointer/events (binary pointer, window delayed): outputs
+    (undefined Block Header, SKP Ordered Set error, pointer behind the window) is an alignment loss.
+    No control signal common to the positions in the loop (fanout): the SYNC search is done one word
+    ahead (one-hot offset registered) and its pointer bit set one cycle later, a SYNC with a
+    different alignment is checked over 2 cycles and sets the pointer to its alignment (decisions of
+    these cycles replaced: SYNC block and the blocks following it). The read blocks/SKP Ordered Sets
+    are extracted from the registered pointer/events (binary pointer, window delayed): outputs
     registered (4 cycles).
 
     Approximations: a SYNC received with a different alignment while a SKP Ordered Set is consumed
@@ -355,8 +358,8 @@ class Gen2BlockAligner(LiteXModule):
 
         # SYNC search (registered, one-hot offset) -------------------------------------------------
         # Offsets r to r + dw - 1 of the window (00h/FFh Symbols pairs shared): used one word later
-        # (window shifted), the SYNC is then at r - dw + offset (at most one SYNC match per word: SYNC
-        # pattern, 132-bit block).
+        # (window shifted), the SYNC is then at r - dw + offset (at most one SYNC match per word:
+        # SYNC pattern, 132-bit block).
         # 00h/FFh Symbols pairs decodes registered with the window (positions r + 4 to n - 16 used).
         sync_pos     = Signal(dw)
         sync_inv_pos = Signal(dw)
@@ -413,7 +416,8 @@ class Gen2BlockAligner(LiteXModule):
         load_dd   = Signal()
         load_oh   = Signal(dw) # SYNC of the previous cycle (one-hot offset): pointer bit set.
         # Pointer cleared (SYNC with a different alignment, reset): registered copies (fanout).
-        clears    = [Signal(reset=1, name="clear", attr={("syn_preserve", 1)}) for _ in range(2 + K)]
+        clears    = [Signal(reset=1, name="clear", attr={("syn_preserve", 1)})
+            for _ in range(2 + K)]
         unaligned = Signal()
         load      = Signal()
         self.comb += [
@@ -594,7 +598,8 @@ class Gen2BlockAligner(LiteXModule):
                     for g in range(ng)])),
             )
         d_idx     = Signal(kr, reset_less=True)
-        d_win     = Signal(132 + 15, reset_less=True) # Window shifted by the pointer multiple of 16.
+        # Window shifted by the pointer multiple of 16.
+        d_win     = Signal(132 + 15, reset_less=True)
         d_found   = Signal()
         d_extract = Signal()
         d_skp     = Signal()

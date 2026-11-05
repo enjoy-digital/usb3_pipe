@@ -17,30 +17,54 @@ TX/RX buffers gear for a 125 MHz fabric clock (40-bit at 5Gbps, 80-bit at 10Gbps
 alignment.
 """
 
-import re, sys
+import re
+import sys
+
 base, lane, rate = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 t = open(base).read()
+
 def section(t, name, f):
     pat = re.compile(r"(?ms)^\[" + re.escape(name) + r"\]\s*$(.*?)(?=^\[|\Z)")
     m = pat.search(t)
     return t[:m.start(1)] + f(m.group(1)) + t[m.end(1):]
+
 def setkv(body, k, v):
     if re.search(rf"(?m)^{k}\s*=", body):
         return re.sub(rf"(?m)^{k}\s*=.*$", f"{k} = {v}", body)
     return body.rstrip("\n") + f"\n{k} = {v}\n\n"
+
 def q1(b):
-    for k, v in [("ref_pad1_freq", '"100M"'), ("refimux0_sel", 3), ("rx_quad_clk_internal_sel", f'"LN{lane}_PMA_RX_CLK"')]:
+    for k, v in [
+        ("ref_pad1_freq",            '"100M"'),
+        ("refimux0_sel",             3),
+        ("rx_quad_clk_internal_sel", f'"LN{lane}_PMA_RX_CLK"'),
+    ]:
         b = setkv(b, k, v)
     return b
+
 gear = {"5G": '"1:2"', "10G": '"1:4"'}[rate]
+
 def ln_on(b):
-    for k, v in [("enable", "true"), ("tx_data_rate", f'"{rate}"'), ("rx_data_rate", f'"{rate}"'), ("width_mode", 20),
-                 ("tx_gear_rate", gear), ("rx_gear_rate", gear), ("encode_enable", "false"), ("decode_enable", "false"),
-                 ("word_align_enable", "true"), ("comma", '"K28.5"'), ("comma_mask", '"1111111111"'), ("loopBack", '"OFF"')]:
+    for k, v in [
+        ("enable",            "true"),
+        ("tx_data_rate",      f'"{rate}"'),
+        ("rx_data_rate",      f'"{rate}"'),
+        ("width_mode",        20),
+        ("tx_gear_rate",      gear),
+        ("rx_gear_rate",      gear),
+        ("encode_enable",     "false"),
+        ("decode_enable",     "false"),
+        ("word_align_enable", "true"),
+        ("comma",             '"K28.5"'),
+        ("comma_mask",        '"1111111111"'),
+        ("loopBack",          '"OFF"'),
+    ]:
         b = setkv(b, k, v)
     return b
+
 def ln_off(b):
     return setkv(b, "enable", "false")
+
 t = section(t, "q1", q1)
 t = section(t, f"q1.ln{lane}", ln_on)
 t = section(t, f"q1.ln{1-lane}", ln_off)

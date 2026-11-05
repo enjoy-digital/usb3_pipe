@@ -15,6 +15,7 @@ from migen.genlib.cdc import BusSynchronizer, GrayCounter, MultiReg, PulseSynchr
 from litex.gen import *
 
 from litex.soc.interconnect.csr import *
+
 from litex.soc.cores.freqmeter import FreqMeter
 
 from liteiclink.serdes.common import DRPControl
@@ -443,5 +444,6 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
             pipe.lfps_rx_wakeup_u3, pipe.ts_rx_ts1, pipe.ts_tx_ts1,
             serdes.source.valid, serdes.source.data, serdes.source.ctrl,
             serdes_debug.rx_tx_phase,
-        ] + [getattr(serdes, name) for name in ["rx_realign", "rx_buferror"] if hasattr(serdes, name)]
+        ] + [getattr(serdes, name) for name in ["rx_realign", "rx_buferror"]
+            if hasattr(serdes, name)]
     return groups

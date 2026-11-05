@@ -80,12 +80,14 @@ lane_kvs = {
     "rxsd_use_dlogic"         : "false",
     "locked_from_fabric"      : "false",
 }
+
 def lane(b):
     for name in ["encode", "decode"]:
         m = re.search(rf"(?m)^{name}_enable\s*=\s*(\w+)\s*\n", b)
         b = b[:m.start()] + b[m.end():]
         b = setkv(b, f"{name}_mode", '"8b10b"' if m.group(1) == "true" else '"OFF"')
     return setkvs(b, lane_kvs)
+
 for q in ["q0", "q1"]:
     t = section(t, q, lambda b: setkvs(b, quad_kvs))
     for l in range(4):
