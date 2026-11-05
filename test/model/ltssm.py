@@ -11,6 +11,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.ltssm import USB3LTSSM
 
 # Helpers ------------------------------------------------------------------------------------------
@@ -81,7 +83,7 @@ class LTSSMTestCase(unittest.TestCase):
 
 # LTSSM Link Harness -------------------------------------------------------------------------------
 
-class LTSSMLinkHarness(Module):
+class LTSSMLinkHarness(LiteXModule):
     """Two USB3LTSSMs (host/dev, with_timers=False) back-to-back: Polling.LFPS bursts counted, TS
     bursts of 4 cycles, TS1/TS2 received when the partner's burst is done."""
     def __init__(self, sys_clk_freq=int(125e6)):

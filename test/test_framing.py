@@ -87,7 +87,7 @@ def random_units(rng, n, short=False):
 
 # Loopback -----------------------------------------------------------------------------------------
 
-class Gen2FramingLoopback(Module):
+class Gen2FramingLoopback(LiteXModule):
     """Gen2TXFramer -> units FIFO (store and forward) -> Gen2TXPacker -> Data Blocks (Gen2TX model:
     a block every 3 cycles at most, Idle Data Blocks when no block) -> Gen2RXFraming.
 
@@ -305,7 +305,7 @@ if __name__ == "__main__":
 
 UNITS_DELAY = 8
 
-class Gen2LinkTXLoopback(Module):
+class Gen2LinkTXLoopback(LiteXModule):
     """Gen2LinkTX (sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx clock domain,
     a block every 3 or 4 cycles, Idle Data Blocks when no block) -> Gen2RXFraming (tx clock domain)."""
     def __init__(self):
@@ -380,7 +380,7 @@ class TestGen2LinkTX(unittest.TestCase):
             clocks={"sys": 8, "tx": 4})
         self.assertEqual((out, lcs), split_units(units))
 
-class Gen2LinkLoopback32(Module):
+class Gen2LinkLoopback32(LiteXModule):
     """Gen2LinkTX (32 bytes, sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx
     clock domain: a block every 1.65 cycles, Idle Data Blocks when no block) -> Gen2LinkRX (32 bytes,
     rx = tx clock domain, words pairs in sys; link_words=4: words quads)."""
@@ -476,7 +476,7 @@ class TestGen2Link32(unittest.TestCase):
 
 # Gen2TXBlocksPacker/Gen2TXBlocksReader: random block requests, no Idle Symbols inside a unit ---
 
-class Gen2TXBlocksBench(Module):
+class Gen2TXBlocksBench(LiteXModule):
     def __init__(self):
         self.submodules.packer = packer = Gen2TXBlocksPacker()
         self.submodules.fifo   = fifo   = stream.SyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True)
@@ -816,7 +816,7 @@ class TestGen2FramingVerilog(unittest.TestCase):
         self.assertEqual([int(x, 2) for x in re.findall(r"Eval result: .* = 8'([01]+)", log)], list(range(8)))
 
 
-class WordsWindowRate(Module):
+class WordsWindowRate(LiteXModule):
     """WordsWindow with a continuous producer (an entry of first_words words then full entries of
     consecutive words) and a consumer taking nwords words whenever nwords are available (DPP data),
     both synchronous (no generator latency)."""

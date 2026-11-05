@@ -46,7 +46,7 @@ def spec_words(name, link_functionality=0):
 
 # Helpers ------------------------------------------------------------------------------------------
 
-class SerDesStub(Module):
+class SerDesStub(LiteXModule):
     def __init__(self, loopback=False):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])

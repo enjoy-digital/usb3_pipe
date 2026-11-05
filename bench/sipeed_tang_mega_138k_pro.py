@@ -332,7 +332,7 @@ class USB3SoC(USB3BaseSoC):
         overflows at the IN rate)."""
         checker = ClockDomainsRenamer({"rx": clock_domain})(Gen2LinkRX(buffer_depth=1024, link_words=1,
             nbytes=32))
-        setattr(self.submodules, f"{name}er", checker)
+        self.add_module(f"{name}er", checker)
         self.comb += [
             checker.sink.valid.eq(valid),
             checker.sink.data.eq(data),
@@ -360,7 +360,7 @@ class USB3SoC(USB3BaseSoC):
         start_hp = words.valid & (words.ctrl == 0b1111) & (words.data[0:8] == SHP)
         start_lc = words.valid & (words.ctrl == 0b1111) & (words.data[0:8] == SLC)
         fsm = FSM(reset_state="IDLE")
-        setattr(self.submodules, f"{name}_fsm", fsm)
+        self.add_module(f"{name}_fsm", fsm)
         fsm.act("IDLE",
             crc16.clear.eq(1),
             If(start_hp, NextValue(n, 0), NextState("HP")).Elif(start_lc, NextState("LC"))

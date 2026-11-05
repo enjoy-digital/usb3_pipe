@@ -128,7 +128,7 @@ TS2 = OrderedSet("TS2",
 
 # Asynchronous FIFO -------------------------------------------------------------------------------
 
-class _AsyncFIFORegisteredRead(Module):
+class _AsyncFIFORegisteredRead(LiteXModule):
     """Asynchronous FIFO (migen AsyncFIFOBuffered interface/latency) with the read output register
     loaded from an asynchronous read of the memory at the registered read pointer: the read pointer
     update and the memory read are not chained (timings, FPGAs implementing the small memories as
@@ -192,7 +192,7 @@ class _AsyncFIFORegisteredRead(Module):
             self.readable.eq(readable),
         )
 
-class _AsyncFIFOPipelinedRead(Module):
+class _AsyncFIFOPipelinedRead(LiteXModule):
     """Asynchronous FIFO (migen AsyncFIFOBuffered interface) with the memory read at the registered
     read pointer (block RAM address from a register: the pointers compare/increment not on the
     memory address path, timings on fabrics with slow block RAM address routing) into a 3-entry

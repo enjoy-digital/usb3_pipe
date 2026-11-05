@@ -149,7 +149,7 @@ class TestScramblingRandom(unittest.TestCase):
         rng   = random.Random(0x7007)
         words = [random_word(rng, k_rate=0.1) for _ in range(int(400*SCALE))]
 
-        class DUT(Module):
+        class DUT(LiteXModule):
             def __init__(self):
                 self.submodules.scr = Scrambler(reset=0xffff)
                 self.submodules.des = Descrambler(reset=0xffff)
@@ -403,7 +403,7 @@ class TestUSB3PIPELoopRandom(unittest.TestCase):
                     d = 1
                 words.append((d, c, int(i == 0), int(i == len(p) - 1)))
 
-        class Top(Module):
+        class Top(LiteXModule):
             def __init__(self):
                 self.submodules.serdes = SerDesLoopModel()
                 self.submodules.pipe   = USB3PIPE(serdes=self.serdes, sys_clk_freq=int(125e6))

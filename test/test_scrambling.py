@@ -50,7 +50,7 @@ class TestScrambling(unittest.TestCase):
                     data = (data & ~(0xff << 8*i)) | (COM.value << 8*i)
                     ctrl |= 1 << i
             words.append((data, ctrl, random.random() < 0.8))
-        class DUT(Module):
+        class DUT(LiteXModule):
             def __init__(self):
                 self.submodules.ref    = Scrambler(reset=0xffff)
                 self.submodules.direct = Scrambler(reset=0xffff, with_skp=False, with_com=with_com)
@@ -267,7 +267,7 @@ class TestScrambling(unittest.TestCase):
             run_simulation(dut, [generator(dut, lane), checker(dut)])
 
     def test_scrambler_descrambler_roundtrip(self):
-        class DUT(Module):
+        class DUT(LiteXModule):
             def __init__(self):
                 self.submodules.scr = Scrambler(reset=0xffff)
                 self.submodules.des = Descrambler(reset=0xffff)

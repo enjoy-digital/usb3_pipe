@@ -364,7 +364,7 @@ class TestDatapath(unittest.TestCase):
 
         datas, ctrls = remove_skp(datas, ctrls)
 
-        class DUT(Module):
+        class DUT(LiteXModule):
             def __init__(self):
                 self.submodules.tx = TXDatapath("serdes")
                 self.submodules.rx = RXDatapath("serdes")
@@ -486,7 +486,7 @@ class TestDatapath(unittest.TestCase):
         datas = [prng.randrange(2**32) for _ in range(nwords)]
         ctrls = [0 for _ in range(nwords)]  # Payload only.
 
-        class DUT(Module):
+        class DUT(LiteXModule):
             def __init__(self):
                 self.submodules.tx = TXDatapath("serdes")
                 self.submodules.rx = RXDatapath("serdes")
