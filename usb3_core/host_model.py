@@ -21,6 +21,7 @@ The pure Python host models (script player, reactive host) used by the Migen sim
 tests are in test/model/host.py.
 """
 
+import random
 import zlib
 
 from migen import *
@@ -753,11 +754,13 @@ def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
     ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False, burst_duplex=0,
-    recovery_mid=False, recovery_cut=False):
+    recovery_mid=False, recovery_cut=False, burst_duplex_skp=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
     itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers.
     burst_out: rounds of 4 Bulk OUT DPs sent back to back (as an xHCI host with queued transfers),
     then their 4 ACK TPs: the device transmits ACK TPs and LGOOD_n/LCRD_x back to back.
+    burst_duplex_skp: burst_duplex with an ACK TP behind each OUT DP and SKP Ordered Sets at the
+    packets boundaries.
     burst_duplex: rounds of 4 Bulk OUT DPs streamed (device Type 2 credits) while the device sends 4
     Bulk IN DPs (EP1 requests with NumP=4: the data looped back from the previous round), as a full
     duplex benchmark.
@@ -870,9 +873,23 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
         for i in range(4):
             s.wait_hp()                                               # ACK TPs.
         for r in range(burst_duplex):
-            # IN request (acknowledging the previous round DPs), OUT DPs during the IN DPs.
-            s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=4, tp_seq=in_seq % 32, pp=1, tt=blk)
-            out_dps(4)
+            if burst_duplex_skp:
+                # As a host at full rate: each IN DP requested by an ACK TP behind an OUT DP, 0-3 SKP
+                # Ordered Sets at the packets boundaries (the next packets then shifted by 2 symbols
+                # when odd), the Link Commands sent in between.
+                rng = random.Random(r)
+                for i in range(4):
+                    out_dps(1)
+                    for j in range(rng.randint(0, 3)):
+                        s.skp()
+                    s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=1, tp_seq=(in_seq + i) % 32,
+                        pp=1, tt=blk)
+                    for j in range(rng.randint(0, 3)):
+                        s.skp()
+            else:
+                # IN request (acknowledging the previous round DPs), OUT DPs during the IN DPs.
+                s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=4, tp_seq=in_seq % 32, pp=1, tt=blk)
+                out_dps(4)
             for i in range(8):
                 s.wait_hp()                                           # IN DPHs + OUT ACK TPs.
             in_seq += 4

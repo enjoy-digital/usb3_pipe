@@ -167,17 +167,29 @@ class RXWordAligner(LiteXModule):
 
         # Alignment update: only at the start of a marker run (markers in the word and no marker on the
         # last symbol of the previous word), so that alignment is kept on non-marker K-codes (ex: Link
-        # Layer framing in U0) and on marker runs spanning 2 words. The new alignment is applied on
-        # the word with the marker run, so the symbols before the run are output in the same word
-        # (without a word mixing symbols before the run and the start of the run).
+        # Layer framing in U0) and on marker runs spanning 2 words. The word output on this cycle ends
+        # before the run:
+        # - Run earlier in its word than the current alignment: new alignment on this cycle (the
+        #   output word is the buffered word, the next one starts on the run).
+        # - Run later in its word: new alignment on the next cycle (the word output with the current
+        #   alignment is complete, the new alignment on this cycle would drop its first symbols: end
+        #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run word before the run (Logical Idle) are skipped.
+        run_start     = Signal()
         alignment_sel = Signal(2)
         self.comb += [
+            run_start.eq(self.enable & (marker != 0) & ~marker_d[3]),
             alignment_sel.eq(alignment_d),
-            If(self.enable & (marker != 0) & ~marker_d[3],
+            If(run_start & (alignment < alignment_d),
                 alignment_sel.eq(alignment)
             )
         ]
-        self.sync += If(sink.valid & sink.ready, alignment_d.eq(alignment_sel))
+        self.sync += If(sink.valid & sink.ready,
+            If(run_start,
+                alignment_d.eq(alignment)
+            ).Else(
+                alignment_d.eq(alignment_sel)
+            )
+        )
 
         # Data selection
         data = Cat(buf.source.data, sink.data)

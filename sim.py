@@ -440,7 +440,7 @@ class USB3PIPESim(SoCMini):
         host_lpm=False, host_itp=False, lanes=1, lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096,
         gen2_capable=False, gen2=False, link_words=1, dev_pipe_cd=False, dev_u1u2=True,
         gen2_data_width=None, host_recovery=False, host_burst_out=0, host_burst_len=64,
-        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False, host_burst_duplex=0,
+        host_burst_stream=0, dev_loopback_depth=512, host_lbad_test=False, host_burst_duplex=0, host_burst_duplex_skp=False,
         host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
@@ -540,7 +540,7 @@ class USB3PIPESim(SoCMini):
                     status_gap=host_status_gap, pm=host_pm, lpm=host_lpm, ssp=gen2, itp=host_itp,
                     burst_out=host_burst_out, burst_len=host_burst_len,
                     burst_stream=host_burst_stream, lbad_test=host_lbad_test,
-                    burst_duplex=host_burst_duplex, recovery_mid=host_recovery_mid,
+                    burst_duplex=host_burst_duplex, burst_duplex_skp=host_burst_duplex_skp, recovery_mid=host_recovery_mid,
                     recovery_cut=host_recovery_cut).steps))
                 self.add_module(name="host_model", module=host_model)
                 # Script running in U0, kept running through U1/U2 and the Recovery to U0 that follows.
@@ -859,6 +859,7 @@ def main():
     parser.add_argument("--host-recovery-mid",  action="store_true", help="Host model directed Recovery between Bulk OUT DPs (Advertisements on the U0 re-entry), then Bulk OUT/IN.")
     parser.add_argument("--host-recovery-cut",  action="store_true", help="With --host-recovery-mid: the Recovery cuts a Bulk OUT DP (DPP incomplete), sent again after the U0 re-entry.")
     parser.add_argument("--host-burst-duplex", default=0, help="Host model rounds of 4 Bulk OUT DPs streamed during 4 Bulk IN DPs (full duplex).")
+    parser.add_argument("--host-burst-duplex-skp", action="store_true", help="With --host-burst-duplex: ACK TP behind each OUT DP, SKP Ordered Sets at the packets boundaries (next packets shifted by 2 symbols).")
     parser.add_argument("--host-burst-stream", default=0, help="Host model Bulk OUT DPs streamed as the device Type 2 credits allow (after the bursts).")
     parser.add_argument("--dev-loopback-depth", default=512, help="Device Bulk loopback FIFO depth (endpoint words).")
     parser.add_argument("--host-lbad-test", action="store_true", help="Host model Bulk OUT burst with a DPH CRC error: device LBAD, LRTY and retransmission.")
@@ -905,6 +906,7 @@ def main():
         host_burst_len   = int(args.host_burst_len),
         host_burst_stream  = int(args.host_burst_stream),
         host_burst_duplex  = int(args.host_burst_duplex),
+        host_burst_duplex_skp = args.host_burst_duplex_skp,
         host_recovery_mid  = args.host_recovery_mid,
         host_recovery_cut  = args.host_recovery_cut,
         dev_link_ppm       = args.dev_link_ppm,

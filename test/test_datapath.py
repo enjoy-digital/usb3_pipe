@@ -31,7 +31,8 @@ from test.model.gen2 import popcount, gen2_channel
 
 class TestDatapath(unittest.TestCase):
     def test_rx_word_aligner(self):
-        # On a re-alignment, the word before the COM run only contains the symbols preceding it.
+        # On a re-alignment, the word output before the COM run is complete (run later in its word:
+        # the symbols of the run word before the run are skipped).
         datas_input = [
             0x030201bc, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
             0x0201bc07, 0x0605040b, 0x0a09080f, 0x0e0d0c13,
@@ -53,13 +54,13 @@ class TestDatapath(unittest.TestCase):
             0x8, 0x7, 0x0, 0x0,
         ]
         datas_reference = [
-            0x030201bc, 0x07060504, 0x0b0a0908, 0x070f0e0d,
-            0x0b0201bc, 0x0f060504, 0x130a0908, 0x1f010e0d,
-            0x202f9cbc, 0xa5000300, 0x53528d03, 0x87868500,
+            0x030201bc, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
+            0x0b0201bc, 0x0f060504, 0x130a0908, 0x010e0d0c,
+            0x202f9cbc, 0xa5000300, 0x53528d03, 0x86850000,
             0x8b8a89bc, 0x8f8e8d84, 0x92919088, 0x8c929190,
-            0xbcbcbcbc, 0x07060504, 0x0b0a0908, 0x000f0e0d,
-            0xbcbcbcbc, 0x08070605, 0x0c0b0a09, 0x00000f0e,
-            0xbcbcbcbc, 0x09080706, 0x0d0c0b0a, 0x0000000f,
+            0xbcbcbcbc, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
+            0xbcbcbcbc, 0x08070605, 0x0c0b0a09, 0x000f0e0d,
+            0xbcbcbcbc, 0x09080706, 0x0d0c0b0a, 0x00000f0e,
             0xbcbcbcbc, 0x0a090807, 0x0e0d0c0b, 0x0e0d0c0f,
         ]
         ctrls_reference = [
@@ -98,6 +99,34 @@ class TestDatapath(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.datas_errors, 0)
         self.assertEqual(dut.ctrls_errors, 0)
+
+    def test_rx_word_aligner_framing_shift_keeps_packet_end(self):
+        # A packet followed by a packet shifted by SKP Ordered Sets (removed before the aligner, the
+        # shift filled with Logical Idle before the framing): all the symbols of the first packet and
+        # the second packet aligned, for all the shifts.
+        shp, slc, epf = (SHP.value, 1), (SLC.value, 1), (K(23, 7), 1)
+        idle  = (0x00, 0)
+        first = [slc, slc, slc, epf] + [(0x81, 0), (0x58, 0), (0x81, 0), (0x58, 0)]
+        for shift in range(1, 4):
+            with self.subTest(shift=shift):
+                second   = [shp, shp, shp, epf] + [(0x10 + i, 0) for i in range(16)]
+                symbols  = first + [idle]*shift + second + [idle]*(8 - shift)
+                expected = first + second
+
+                def generator(dut):
+                    for d, c in symbols_to_words(symbols):
+                        yield dut.sink.valid.eq(1)
+                        yield dut.sink.data.eq(d)
+                        yield dut.sink.ctrl.eq(c)
+                        yield
+                    yield dut.sink.valid.eq(0)
+
+                def checker(dut):
+                    dut.words = yield from stream_monitor(dut.source, len(expected)//4, timeout=64)
+
+                dut = RXWordAligner(markers=[SHP, SDP, SLC])
+                run_simulation(dut, [generator(dut), checker(dut)])
+                self.assertEqual(dut.words, symbols_to_words(expected))
 
     def test_rx_word_aligner_keeps_alignment_on_k_after_data(self):
         # Symbol alignment is acquired on COM (TS1/TS2, USB 3.2 6.4.1.1) and must be kept in U0,
