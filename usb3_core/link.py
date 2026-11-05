@@ -29,9 +29,6 @@ ctrl words, u0/u1/u2/polling_idle/hot_reset status, lgo_u1/lgo_u2/lgo_u3/tx_lau/
 handshake, exit_u1_req/exit_u2_req, u2_timeout, directed_recovery and link_activity.
 """
 
-from functools import reduce
-from operator import add
-
 from migen import *
 from migen.genlib.misc import WaitTimer
 
@@ -664,7 +661,7 @@ class USB3LinkLayer(LiteXModule):
             self.sync += [
                 [tx_in_buf[i].eq(in_buf_t(i)) for i in range(tx_bufs)],
                 tx_count_r.eq(tx_count),
-                tx_count2_r.eq(reduce(add, [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3))
+                tx_count2_r.eq(Reduce("ADD", [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3))
                     for i in range(tx_bufs)])),
                 tx_count_rr.eq(tx_count_r),
                 tx_full1.eq((tx_count_rr - tx_count2_r) >= LINK_HP_BUFFERS),
@@ -674,7 +671,7 @@ class USB3LinkLayer(LiteXModule):
         else:
             self.comb += [
                 [tx_in_buf[i].eq(in_buf_t(i)) for i in range(tx_bufs)],
-                tx_count2.eq(reduce(add, [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3))
+                tx_count2.eq(Reduce("ADD", [Cat(tx_in_buf[i] & tx_t2[i], C(0, 3))
                     for i in range(tx_bufs)])),
                 tx_full1.eq((tx_count - tx_count2) >= LINK_HP_BUFFERS),
                 tx_full2.eq(tx_count2 >= LINK_HP_BUFFERS),

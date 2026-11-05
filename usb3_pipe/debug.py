@@ -9,9 +9,6 @@ errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug), 
 groups (usb3_analyzer_groups).
 """
 
-from functools import reduce
-from operator import xor
-
 from migen import *
 from migen.genlib.cdc import BusSynchronizer, GrayCounter, MultiReg, PulseSynchronizer
 
@@ -30,7 +27,7 @@ from usb3_pipe.datapath import GEN2_RX_COUNTERS
 def gray_decode(gray):
     """Gray to binary decoding (combinatorial)."""
     n = len(gray)
-    return Cat(*[reduce(xor, [gray[j] for j in range(i, n)]) for i in range(n)])
+    return Cat(*[Reduce("XOR", [gray[j] for j in range(i, n)]) for i in range(n)])
 
 # USB3 PHY Debug -----------------------------------------------------------------------------------
 

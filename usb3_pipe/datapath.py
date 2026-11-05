@@ -14,9 +14,6 @@
   (Gen2TXDatapath/Gen2RXDatapath, 40-bit at 250MHz for 10Gbps), see doc/gen2-x2-roadmap.md.
 """
 
-from functools import reduce
-from operator import or_, and_
-
 from migen import *
 from migen.genlib.cdc import MultiReg
 
@@ -154,7 +151,7 @@ class RXWordAligner(LiteXModule):
         def is_marker(data, ctrl):
             if check_ctrl_only:
                 return ctrl
-            return ctrl & reduce(or_, [data == m.value for m in markers])
+            return ctrl & Reduce("OR", [data == m.value for m in markers])
         marker   = Signal(4)
         marker_d = Signal(4)
         for i in range(4):
@@ -1187,7 +1184,7 @@ class Gen2RX(LiteXModule):
             checks.append(sym[4] == 0)
             if not with_link_config:
                 checks.append(sym[5] == 0)
-            return reduce(and_, checks)
+            return Reduce("AND", checks)
         valid_d = Signal()
         sync_d  = Signal()
         lc_d    = Signal(8)
@@ -1219,7 +1216,7 @@ class Gen2RX(LiteXModule):
             if name != "tseq":
                 self.sync += If(m, self.link_config.eq(lc_d))
             matches.append(match)
-        self.sync += self.unknown.eq(valid & ctl & ~sync & ~sds & ~reduce(or_, matches))
+        self.sync += self.unknown.eq(valid & ctl & ~sync & ~sds & ~Reduce("OR", matches))
 
 # Gen 2 TX/RX Datapaths ----------------------------------------------------------------------------
 

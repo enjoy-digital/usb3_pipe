@@ -13,9 +13,6 @@ data_width=64/128: two/four counter words per 64/128-bit word (same byte stream)
 words.
 """
 
-from functools import reduce
-from operator import or_
-
 from migen import *
 
 from litex.gen import *
@@ -61,7 +58,7 @@ class USB3Bench(LiteXModule):
             If(sink.valid,
                 expected.eq(sink.data[32*(n-1):32*n] + 1),
                 self.sink_words.eq(self.sink_words + n),
-                If((self.sink_words != 0) & reduce(or_, [sink.data[32*i:32*(i+1)] != (expected + i)
+                If((self.sink_words != 0) & Reduce("OR", [sink.data[32*i:32*(i+1)] != (expected + i)
                     for i in range(n)]),
                     self.sink_errors.eq(self.sink_errors + 1)
                 )
