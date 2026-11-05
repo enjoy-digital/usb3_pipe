@@ -43,7 +43,7 @@ class USB3CoreTrace(LiteXModule):
 
         mem     = Memory(64, depth)
         wr_port = mem.get_port(write_capable=True)
-        rd_port = mem.get_port(async_read=True)
+        rd_port = mem.get_port() # Synchronous read (block RAM, index from a CSR: quasi-static).
         self.specials += mem, wr_port, rd_port
 
         timestamp = Signal(30)
@@ -137,7 +137,7 @@ class USB3LinkTrace(LiteXModule):
 
         mem     = Memory(96, depth)
         wr_port = mem.get_port(write_capable=True)
-        rd_port = mem.get_port(async_read=True)
+        rd_port = mem.get_port() # Synchronous read (block RAM, index from a CSR: quasi-static).
         self.specials += mem, wr_port, rd_port
 
         timestamp = Signal(32)

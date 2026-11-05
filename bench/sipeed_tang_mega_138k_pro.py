@@ -55,8 +55,9 @@ class _CRG(LiteXModule):
 
 
 class USB3SoC(USB3BaseSoC):
-    def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
+    def __init__(self, platform, sys_clk_freq=62.5e6, sfp=0, refclk="100M", pll=None, serdes_csr=None, rx_idle_source="~astat5", with_upar=True,
         with_gtr12_debug=False, with_gtr12_analyzer=False, with_analyzer=False, analyzer_group="link",
+        gen2_capable=False, with_gen2_debug=False, with_trace=False,
         analyzer_csv="analyzer.csv", usb3_kwargs={}, **kwargs):
         # USB3 PIPE/SerDes at 125MHz (Gen 1 32-bit words); with a lower sys_clk_freq, the PIPE runs on
         # the GTR12 TX fabric clock ("tx" clock domain: frequency-locked to the transmitted words, no
@@ -86,7 +87,10 @@ class USB3SoC(USB3BaseSoC):
             xcvr_cd        = "sys" if phy_cd is None else "gtr12",
             tx_cdc         = phy_cd != "tx", # SerDes logic on the GTR12 TX clock: no TX CDC.
             refclk         = refclk,
-            csr_config     = None if serdes_csr is None else open(serdes_csr).read())
+            pll            = pll,
+            xcvr_clk_freq  = sys_clk_freq if phy_cd is not None else None, # gtr12 = sys.
+            csr_config     = None if serdes_csr is None else open(serdes_csr).read(),
+            gen2_capable   = gen2_capable)
         if phy_cd is not None:
             # GTR12 control logic on sys (free-running), SerDes datapath on the GTR12 TX clock.
             self.cd_gtr12 = ClockDomain()
@@ -96,7 +100,7 @@ class USB3SoC(USB3BaseSoC):
             ]
             usb3_serdes = ClockDomainsRenamer({"sys": phy_cd})(usb3_serdes)
             usb3_kwargs = dict(usb3_kwargs, phy_cd=phy_cd, phy_clk_freq=usb3_clk_freq, link_words=2,
-                with_debug=False, with_profile=False, with_trace=with_gtr12_debug)
+                with_debug=False, with_profile=False, with_trace=with_gtr12_debug or with_trace)
 
         # USB3 (PHY, Debug, Core, Leds) ------------------------------------------------------------
         add_usb3_device(self, usb3_serdes,
@@ -107,7 +111,7 @@ class USB3SoC(USB3BaseSoC):
         # GTR12 bring-up: lane status, SerDes registers access (UPAR).
         gtr12 = usb3_serdes.gtr12
         gtr12.add_status_csr()
-        if with_upar and ((phy_cd is None) or with_gtr12_debug): # UPAR on the sys clock.
+        if with_upar and ((phy_cd is None) or with_gtr12_debug or gen2_capable): # UPAR on the sys clock.
             gtr12.upar.add_csr()
 
         # Bring-up debug: GTR12 status transitions, PIPE counters, RX snapshots, LTSSM history.
@@ -117,6 +121,26 @@ class USB3SoC(USB3BaseSoC):
             self.add_pipe_counters(self.usb3_phy.pipe, usb3_serdes, phy_cd)
             self.add_rx_snapshots(gtr12, usb3_serdes, phy_cd, self.usb3_phy.pipe)
             self.add_ltssm_history(self.usb3_phy, sys_clk_freq)
+            if hasattr(self.usb3_phy, "ssp"):
+                self.add_ssp_status(self.usb3_phy.ssp, usb3_serdes, phy_cd)
+
+        # Gen 2 RX flow control (runtime-adjustable): Type 2 credits held by the host (4: no limit),
+        # RX words buffer throttle level (entries of 32 bytes).
+        phy = getattr(self, "usb3_phy", None)
+        if phy is not None and hasattr(phy, "gen2_rx_throttle_level"):
+            from litex.soc.interconnect.csr import CSRStorage, CSRField
+            self.usb3_rx_flow = CSRStorage(fields=[
+                CSRField("t2_credits",     size=3, offset=0, reset=4,  description="Type 2 credits held by the host (4: no limit)."),
+                CSRField("throttle_level", size=8, offset=8, reset=16, description="RX throttle level (32-byte entries)."),
+            ])
+            self.comb += [
+                phy.rx_t2_credits.eq(self.usb3_rx_flow.fields.t2_credits),
+                phy.gen2_rx_throttle_level.eq(self.usb3_rx_flow.fields.throttle_level),
+            ]
+
+        # Gen 2 bring-up debug: RX monitor counters/status.
+        if with_gen2_debug:
+            self.add_gen2_rx_monitor(usb3_serdes)
 
         # GTR12 RX analyzer (raw RX words, rx clock domain).
         if with_gtr12_analyzer:
@@ -270,6 +294,60 @@ class USB3SoC(USB3BaseSoC):
             # 64x (data[32], ctrl[4]), newest first.
             self.add_indexed_status("tx_ring", Cat(*ring))
 
+    def add_ssp_status(self, ssp, serdes, cd):
+        """SuperSpeedPlus Polling status (bring-up): SSPPolling state, last received LFPS burst/period
+        (sys cycles), received bursts/SCD1/SCD2/plain Polling LFPS counters, transmitted bursts
+        counters (SSPPolling, SerDes in cd)."""
+        from migen.genlib.cdc import MultiReg
+        fe      = ssp.frontend
+        burst   = Signal(16)
+        period  = Signal(16)
+        def edge(s):
+            s_d = Signal()
+            self.sync += s_d.eq(s)
+            return s & ~s_d
+        events  = [edge(fe.burst_end), edge(ssp.scd_chk.scd1), edge(ssp.scd_chk.scd2),
+            edge(ssp.scd_chk.plain), edge(ssp.tx_lfps)]
+        counts  = []
+        for e in events:
+            c = Signal(16)
+            self.sync += If(e, c.eq(c + 1))
+            counts.append(c)
+        # Transmitted bursts at the SerDes (cd).
+        tx_lfps_d = Signal()
+        tx_count  = Signal(16)
+        tx_count_sys = Signal(16)
+        sync = getattr(self.sync, cd)
+        sync += [
+            tx_lfps_d.eq(serdes.tx_lfps),
+            If(serdes.tx_lfps & ~tx_lfps_d, tx_count.eq(tx_count + 1)),
+        ]
+        self.specials += MultiReg(tx_count, tx_count_sys)
+        counts.append(tx_count_sys)
+        self.sync += [
+            If(fe.burst_end,   burst.eq(fe.burst)),
+            If(fe.burst_start, period.eq(fe.period)),
+        ]
+        # state[16], burst[16], period[16], bursts/SCD1/SCD2/plain/SSP TX/SerDes TX counts (16-bit).
+        self.add_indexed_status("ssp_status", Cat(ssp.state, Constant(0, 12), burst, period, *counts))
+
+    def add_gen2_rx_monitor(self, serdes):
+        """Gen 2 RX monitor (bring-up): Gen2RXDatapath on the raw RX words in a reset-less rx clock
+        domain (kept across the rate changes: counters accumulated over the 10Gbps periods), with
+        its debug CSRs (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters)."""
+        from usb3_pipe.datapath import Gen2RXDatapath
+        from usb3_pipe.debug    import Gen2RXDebug
+        self.cd_rx_nr = ClockDomain(reset_less=True)
+        self.comb += self.cd_rx_nr.clk.eq(ClockSignal("rx"))
+        gen2_rx = ClockDomainsRenamer("rx_nr")(Gen2RXDatapath(data_width=len(serdes.gen2_rx_data)))
+        self.usb3_gen2_rx_datapath = gen2_rx
+        self.comb += [
+            gen2_rx.sink.valid.eq(1),
+            gen2_rx.sink.data.eq(serdes.gen2_rx_data),
+            gen2_rx.source.ready.eq(1),
+        ]
+        self.usb3_gen2_rx = Gen2RXDebug(gen2_rx, clock_domain="rx_nr")
+
     def add_gtr12_transitions(self, gtr12):
         """Transitions counters of the GTR12 lane status bits (rx_elecidle, astat[0:6], stat[0:13]),
         sampled in the reset-less RX clock domain: LFPS/Electrical Idle indicators identification."""
@@ -300,9 +378,12 @@ def main():
     parser.add_argument("--sys-clk-freq",   default=62.5e6, type=float, help="System clock frequency (125MHz: PHY/Core/SoC in sys).")
     parser.add_argument("--sfp",            default=0, type=int, help="SFP cage (SFP2USB adapter).", choices=[0, 1])
     parser.add_argument("--refclk",         default="100M", help="GTR12 reference clock: 100MHz REFCLK1 or 125MHz REFCLK0 (dock PLLs).", choices=["100M", "125M"])
+    parser.add_argument("--pll",            default=None, help="GTR12 lane PLL (default: QPLL1, CPLL: 125MHz REFCLK0, required for 10G).", choices=["QPLL1", "CPLL"])
     parser.add_argument("--serdes-csr",     default=None, help="GTR12 register configuration file override (bring-up: serdes_toml_to_csr output).")
     parser.add_argument("--rx-idle-source", default="~astat5", help="RX Electrical Idle indicator (~astat5, elecidle, [~]astat<n>).")
-    parser.add_argument("--no-upar",        action="store_true", help="No SerDes registers runtime access (UPAR).")
+    parser.add_argument("--gen2-capable",        action="store_true", help="Gen 2 (10Gbps) capable SerDes/PHY (GTR12 rate change through UPAR, 80-bit raw words).")
+    parser.add_argument("--with-trace",          action="store_true", help="USB3 Device Core Header Packets trace (bench/usb3_trace.py).")
+    parser.add_argument("--with-gen2-debug",     action="store_true", help="Gen 2 bring-up debug (RX monitor on the raw RX words: alignment, blocks/Ordered Sets counters).")
     parser.add_argument("--with-gtr12-debug",    action="store_true", help="GTR12/PIPE bring-up debug (transitions/PIPE counters, RX snapshots, LTSSM history).")
     parser.add_argument("--with-gtr12-analyzer", action="store_true", help="LiteScope Analyzer on the GTR12 raw RX words.")
     parser.add_argument("--place-option",   default=2, type=int, help="Gowin place algorithm.", choices=[0, 1, 2])
@@ -319,10 +400,13 @@ def main():
         sys_clk_freq   = args.sys_clk_freq,
         sfp            = args.sfp,
         refclk         = args.refclk,
+        pll            = args.pll,
         serdes_csr     = args.serdes_csr,
         rx_idle_source = args.rx_idle_source,
-        with_upar      = not args.no_upar,
         with_gtr12_debug    = args.with_gtr12_debug,
+        gen2_capable        = args.gen2_capable,
+        with_gen2_debug     = args.with_gen2_debug,
+        with_trace          = args.with_trace,
         with_gtr12_analyzer = args.with_gtr12_analyzer,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)

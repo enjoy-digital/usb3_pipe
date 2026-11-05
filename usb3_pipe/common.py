@@ -200,9 +200,43 @@ class AsyncFIFO(LiteXModule):
 
 # Stream Buffer ------------------------------------------------------------------------------------
 
+class PipeReady(LiteXModule):
+    """stream.PipeReady equivalent with the payload register loaded whenever it is empty (stored
+    payload only used once valid): the source ready only drives the valid register, not the enable
+    of the payload registers (timings: wide payloads, deep downstream readies). Payload register
+    without reset (not used before loaded)."""
+    def __init__(self, layout):
+        self.sink   = sink   = stream.Endpoint(layout)
+        self.source = source = stream.Endpoint(layout)
+
+        # # #
+
+        valid  = Signal()
+        sink_d = stream.Endpoint(layout)
+        for s in sink_d.flatten():
+            s.reset_less = True
+        self.sync += [
+            If(sink.valid & ~source.ready,
+                valid.eq(1)
+            ).Elif(source.ready,
+                valid.eq(0)
+            ),
+            If(~valid,
+                sink_d.eq(sink)
+            )
+        ]
+        self.comb += [
+            sink.ready.eq(~valid),
+            If(valid,
+                sink_d.connect(source, omit={"ready"})
+            ).Else(
+                sink.connect(source, omit={"ready"})
+            )
+        ]
+
 class Buffer(LiteXModule):
-    """stream.Buffer equivalent, ready_first: PipeReady then PipeValid (registered source
-    payload/valid: no skid multiplexer between the registers and the downstream logic)."""
+    """stream.Buffer equivalent with PipeReady (pipe_ready: payload registers enable not from the
+    source ready). ready_first: PipeReady then PipeValid (registered source payload/valid)."""
     def __init__(self, layout, pipe_valid=True, pipe_ready=False, ready_first=False):
         self.sink   = sink   = stream.Endpoint(layout)
         self.source = source = stream.Endpoint(layout)
@@ -214,7 +248,7 @@ class Buffer(LiteXModule):
             self.pipe_valid = stream.PipeValid(layout)
             pipeline.append(self.pipe_valid)
         if pipe_ready:
-            self.pipe_ready = stream.PipeReady(layout)
+            self.pipe_ready = PipeReady(layout)
             pipeline.append(self.pipe_ready)
         if ready_first:
             pipeline.reverse()

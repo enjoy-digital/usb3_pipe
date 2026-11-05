@@ -34,15 +34,26 @@ def gw5_csr_overrides(csr_config, overrides):
     return csr_config
 
 def gw5_usb3_csr_config(lane, rate="5G", refclk="100M", position="Q1", pll=None):
-    """GTR12 register configuration of Q1 lane (0/1) at rate (5G) from the 100MHz REFCLK1 (100M) or
-    the 125MHz REFCLK0 (125M) of the quad (GW5AST-138B, QPLL1), or of Q0 lane 0 from the 125MHz
-    REFCLK0 (GW5AT-15: QPLL0, as Gowin's USB 3.0 PHY IP, GW5AT15_Q0_QPLL0_OVERRIDES applied; QPLL1: no
-    link on hardware). pll: QPLL0 on Q0, QPLL1 on Q1 by default."""
+    """GTR12 register configuration of Q1 lane (0/1) at rate (5G/10G) from the 100MHz REFCLK1 (100M)
+    or the 125MHz REFCLK0 (125M, 5G only) of the quad (GW5AST-138B, QPLL1), or of Q0 lane 0 at 5G
+    from the 125MHz REFCLK0 (GW5AT-15: QPLL0, as Gowin's USB 3.0 PHY IP, GW5AT15_Q0_QPLL0_OVERRIDES
+    applied; QPLL1: no link on hardware). pll: QPLL0 on Q0, QPLL1 on Q1 by default.
+
+    CPLL (Q1 lane 0, 125MHz REFCLK0, 5G/10G): configurations generated from the LiteEth GW5
+    10GBASE-R lane configuration (validated 10G CPLL clocking) with the USB3 rates and widths, CDR VCO
+    bias 0x7D (as LiteEth: the generated value does not lock), automatic RX equalizer at 5G and manual
+    at 10G (boost 12, attenuation 7: the automatic one does not receive a host at 10G through the
+    SFP2USB adapter, the manual one prevents the 5G link, measured on hardware). The 10G rate on the GW5AST-138B Q1 lanes requires this configuration (the
+    QPLL1 10G configuration gives bit errors)."""
     assert refclk in ["100M", "125M"]
     assert position in ["Q0", "Q1"]
     if pll is None:
         pll = "QPLL0" if position == "Q0" else "QPLL1"
-    assert pll in ["QPLL0", "QPLL1"]
+    assert pll in ["QPLL0", "QPLL1", "CPLL"]
+    if pll == "CPLL":
+        assert (position, lane, refclk) == ("Q1", 0, "125M")
+        return open(os.path.join(os.path.dirname(__file__), f"usb3_{rate.lower()}_ln0_cpll.csr")).read()
+    assert (rate == "5G") or ((position, refclk) == ("Q1", "100M"))
     suffix = "" if refclk == "100M" else "_ref125"
     quad   = "" if position == "Q1" else "_q0"
     if position == "Q0":
@@ -54,3 +65,54 @@ def gw5_usb3_csr_config(lane, rate="5G", refclk="100M", position="Q1", pll=None)
     if (position, pll) == ("Q0", "QPLL0"):
         csr_config = gw5_csr_overrides(csr_config, GW5AT15_Q0_QPLL0_OVERRIDES)
     return csr_config
+
+def gw5_usb3_rate_writes(lane, refclk="100M", pll="QPLL1", clk_freq=62.5e6):
+    """Register writes of the 5G <-> 10G rate change of a Q1 lane: [(addr, value_5g, value_10g)], the
+    writes of the 5G and 10G configurations that differ (same writes sequence). CPLL: the writes done
+    with the CPLL in reset and the CDR signal detect toggled, the CPLL released after 50us, then
+    200us for its lock: [(addr, value_5g, value_10g, wait_cycles)], clk_freq: rate sequencer clock
+    frequency. The rate change has to be short: the link partner trains its receiver equalizer on
+    the TSEQ Ordered Sets right after the SuperSpeedPlus Polling (Polling.RxEQ, ~7ms at 10Gbps).
+    Measured on hardware: with 1ms waits (~4ms rate change) the host does not receive the Gen 2
+    Training Sequences, with these waits it does."""
+    def writes(rate):
+        csr = gw5_usb3_csr_config(lane, rate, refclk, pll=pll)
+        return [(int(a, 16), int(v, 16)) for a, v in
+            re.findall(r"upar_write_driver\((0x[0-9a-fA-F]+),(0x[0-9a-fA-F]+)\)", csr)]
+    w5, w10 = writes("5G"), writes("10G")
+    # CPLL: RX equalizer automatic at 5G, manual at 10G (writes set separately below).
+    eq = {0x9003a7, 0x9003a2, 0x9082d0, 0x9082d4} if pll == "CPLL" else set()
+    w5  = [(a, v) for a, v in w5  if a not in eq]
+    w10 = [(a, v) for a, v in w10 if a not in eq]
+    assert [a for a, v in w5] == [a for a, v in w10]
+    diff = [(a, v5, v10) for (a, v5), (_, v10) in zip(w5, w10) if v5 != v10]
+    if pll != "CPLL":
+        return diff
+    cpll_reset = 0x90a004 + 0x200*lane
+    toggle_rxsd = 0x90033e + 0x200*lane
+    reset_wait = int(50e-6*clk_freq)
+    lock_wait  = int(200e-6*clk_freq)
+    return ([(cpll_reset, 0x22322, 0x22322)] + diff + [
+        # RX equalizer: manual at 10G (boost 12, attenuation 7), automatic at 5G (registers at 0, as
+        # after the 5G configuration, read on hardware).
+        (0x9003a7, 0x60000000, 0x60000000),
+        (0x9082d4, 0x00000000, 0x00077771),
+        (0x9082d0, 0x00000000, 0x000cccc1),
+        (0x9003a2, 0x00000000, 0x00010000),
+        (0x9003a7, 0x00000000, 0x60000000),
+        (toggle_rxsd, 0x10000, 0x10000, reset_wait),
+        (cpll_reset,  0x22233, 0x22233, lock_wait),
+        (toggle_rxsd, 0x00000, 0x00000),
+    ])
+
+# TX Electrical Idle: lane TX driver control register, as written by the Gowin USB 3.2 PHY IP (Gowin
+# IDE SerDes IP library) on its TxElecIdle changes (measured on hardware): 0x1 driver in electrical
+# idle, 0x7 driver active. The Gowin IP generator also writes 0x1 at initialization.
+GW5_TX_IDLE_VALUE   = 0x1
+GW5_TX_ACTIVE_VALUE = 0x7
+
+def gw5_tx_idle_reg(lane, position="Q1"):
+    """Address of the TX driver control register of a lane (Q0: 0x8003a4, Q1: 0x9003a4, 0x200 per
+    lane, as listed by the Gowin IP generator)."""
+    assert position in ["Q0", "Q1"]
+    return {"Q0": 0x8003a4, "Q1": 0x9003a4}[position] + 0x200*lane
