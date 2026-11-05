@@ -41,7 +41,7 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common import *
 from usb3_core.crc    import CRC5, CRC16, CRC16Words, CRC32
-from usb3_core.dpp    import DPPSplitter
+from usb3_core.dpp    import DPPSplitter, DPPQuadSplitter
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -57,9 +57,11 @@ PORT_CFG_RESP_DW0 = TYPE_LMP | (LMP_SUB_PORT_CFG_RESP << 5) | (1 << 9)
 
 class USB3LinkLayer(LiteXModule):
     def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}, crc32_cascade=False):
-        # PHY Link Layer words (32-bit) or words pairs (64-bit, USB3PHY link_words=2): DPP words of
-        # 32 or 64 bits (8 bytes per cycle in the DPPs).
-        lw = 2 if len(phy.sink.data) == 64 else 1
+        # PHY Link Layer words (32-bit), words pairs (64-bit, USB3PHY link_words=2) or words quads
+        # (128-bit, USB3PHY link_words=4): DPP words of 32, 64 or 128 bits (4, 8 or 16 bytes per
+        # cycle in the DPPs).
+        lw = len(phy.sink.data)//32
+        assert lw in [1, 2, 4]
         dw = 32*lw
         self.data_width = dw
 
@@ -106,6 +108,7 @@ class USB3LinkLayer(LiteXModule):
         u0      = Signal()
         u0_d    = Signal()
         u0_rise = Signal()
+        rx_keep = getattr(phy, "rx_keep", Constant(0, 1)) # RX words kept until U0 (Recovery.Idle).
         self.comb += [
             u0.eq(phy.u0),
             u0_rise.eq(u0 & ~u0_d),
@@ -114,7 +117,8 @@ class USB3LinkLayer(LiteXModule):
         self.sync += u0_d.eq(u0)
 
         recovery = Signal() # Recovery request (pulse).
-        self.sync += phy.directed_recovery.eq(recovery)
+        self.dbg_recovery_request = Signal() # i: Directed Recovery request (pulse, bring-up).
+        self.sync += phy.directed_recovery.eq(recovery | (self.dbg_recovery_request & u0))
         self.sync += If(recovery & u0 & (self.recovery_req != (2**16 - 1)),
             self.recovery_req.eq(self.recovery_req + 1)
         )
@@ -128,6 +132,20 @@ class USB3LinkLayer(LiteXModule):
         rx_two   = Signal()   # Words pairs: current and next words consumed (DPP data).
         rx_skip2 = Signal()   # Words pairs: two data words of a skipped DPP consumed.
         rx_hold  = Signal()   # Current word not consumed.
+        rx_take  = Signal()   # Words quads: rx_k words consumed (DPP data, skipped DPP data).
+        rx_k     = Signal(3)
+        rx_shp   = Signal()
+        rx_slc   = Signal()
+        rx_sdp   = Signal()
+        rx_end   = Signal()   # DPPEND/DPPABORT framing word.
+        rx_knz   = Signal()   # K Symbol(s) in the word.
+        # Words decodes stored with the words in the window (timings): HPSTART, LCSTART, DPPSTART,
+        # DPPEND/DPPABORT framing words, K Symbols.
+        def rx_decode(data, ctrl):
+            d, c = swap_data(data), swap_ctrl(ctrl)
+            k    = (c == 0b1111)
+            return Cat(k & (d == FRAMING_SHP), k & (d == FRAMING_SLC), k & (d == FRAMING_SDP),
+                k & ((d == FRAMING_END) | (d == FRAMING_EDB)), c != 0)
         if lw == 1:
             self.comb += phy.source.ready.eq(1)
             self.sync += [
@@ -135,26 +153,42 @@ class USB3LinkLayer(LiteXModule):
                 rx_data.eq(swap_data(phy.source.data)),
                 rx_ctrl.eq(swap_ctrl(phy.source.ctrl)),
             ]
-        else:
+        elif lw == 2:
             # Words window (registered): one word per cycle, two in the DPPs, words dropped out of U0.
-            self.rx_window = rx_window = WordsWindow()
+            self.rx_window = rx_window = WordsWindow(decode=rx_decode, nflags=5)
+            self.rx_words_reg = rx_words_reg = stream.PipeValid(link_pairs_layout(2)) # Timings.
             self.comb += [
-                phy.source.connect(rx_window.sink),
+                phy.source.connect(rx_words_reg.sink),
+                rx_words_reg.source.connect(rx_window.sink),
                 rx_valid.eq((rx_window.n != 0) & u0),
                 rx_data.eq(swap_data(rx_window.w0)),
                 rx_ctrl.eq(swap_ctrl(rx_window.c0)),
                 rx_data1.eq(swap_data(rx_window.w1)),
                 rx_window.consume.eq(Mux(u0, Mux(rx_two | rx_skip2, 2, Mux(rx_hold, 0, rx_valid)),
-                    rx_window.n)),
+                    Mux(rx_keep, 0, rx_window.n))),
             ]
-        rx_shp = Signal()
-        rx_slc = Signal()
-        rx_sdp = Signal()
-        self.comb += [
-            rx_shp.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SHP)),
-            rx_slc.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SLC)),
-            rx_sdp.eq((rx_ctrl == 0b1111) & (rx_data == FRAMING_SDP)),
-        ]
+        else:
+            # Words window (registered): one word per cycle, up to four in the DPPs, words dropped
+            # out of U0.
+            self.rx_window = rx_window = WordsWindow(4, decode=rx_decode, nflags=5)
+            self.rx_words_reg = rx_words_reg = stream.PipeValid(link_pairs_layout(4)) # Timings.
+            self.comb += [
+                phy.source.connect(rx_words_reg.sink),
+                rx_words_reg.source.connect(rx_window.sink),
+                rx_valid.eq((rx_window.n != 0) & u0),
+                rx_data.eq(swap_data(rx_window.w0)),
+                rx_ctrl.eq(swap_ctrl(rx_window.c0)),
+                rx_data1.eq(swap_data(rx_window.w1)),
+                rx_window.consume.eq(Mux(u0, Mux(rx_take, rx_k, Mux(rx_hold, 0, rx_valid)),
+                    Mux(rx_keep, 0, rx_window.n))),
+            ]
+        rx_words = [rx_data, rx_data1] + ([swap_data(rx_window.w[i]) for i in [2, 3]] if lw == 4 else [])
+        if lw == 1:
+            # Registered words (core order: swapped back for the decode).
+            self.comb += Cat(rx_shp, rx_slc, rx_sdp, rx_end, rx_knz).eq(
+                rx_decode(swap_data(rx_data), swap_ctrl(rx_ctrl)))
+        else:
+            self.comb += Cat(rx_shp, rx_slc, rx_sdp, rx_end, rx_knz).eq(rx_window.f0)
 
         # RX Header Packets checks -----------------------------------------------------------------
         # Header Packet words: DW0, DW1, DW2, CRC-16/Link Control Word.
@@ -196,10 +230,12 @@ class USB3LinkLayer(LiteXModule):
         self.crc5_lc1 = crc5_lc1 = CRC5()
         lc_ok0 = Signal()
         lc_ok1 = Signal()
+        lc_diff  = Signal(16)
+        lc_close = Signal() # Copies differing by 3 bits at most.
         if hasattr(phy, "source_lc"):
             self.comb += [
                 lc_fast.eq(phy.source_lc.valid & ~lc_main),
-                phy.source_lc.ready.eq(lc_fast | ~u0),
+                phy.source_lc.ready.eq((lc_fast & u0) | (~u0 & ~rx_keep)),
                 phy.source_lc_enable.eq(1),
                 lc_data.eq(Mux(lc_fast, swap_data(phy.source_lc.data), rx_data)),
             ]
@@ -208,9 +244,15 @@ class USB3LinkLayer(LiteXModule):
         self.comb += [
             crc5_lc0.data.eq(lc_data[0:11]),
             crc5_lc1.data.eq(lc_data[16:27]),
+            lc_diff.eq(lc_data[0:16] ^ lc_data[16:32]),
+            lc_close.eq(Reduce("ADD", [Cat(lc_diff[i], C(0, 4)) for i in range(16)]) <= 3),
             lc_ok0.eq(crc5_lc0.value == lc_data[11:16]),
             lc_ok1.eq(crc5_lc1.value == lc_data[27:32]),
-            lc_valid.eq((lc_main | (lc_fast & u0)) & (lc_ok0 | lc_ok1)),
+            # A copy with a correct CRC-5 and the two copies close (<= 3 bits differing): a Link
+            # Command with an error in one copy is accepted, a corrupted/misframed word passes a
+            # single CRC-5 once in 16 (seen on hardware with a degraded receiver: LBAD/LGOOD_n/
+            # LCRD_x decoded from noise, spurious retransmissions and Recoveries).
+            lc_valid.eq((lc_main | (lc_fast & u0)) & (lc_ok0 | lc_ok1) & lc_close),
         ]
         self.sync += [
             lc_check.eq(lc_valid),
@@ -257,11 +299,24 @@ class USB3LinkLayer(LiteXModule):
             v_s = Signal(17)
             self.comb += v_s.eq(v)
             return [v_s, v_s >= 8, v_s > 4, v_s == 8, v_s <= 4, v_s != 0, Mux(v_s >= 4, 4, v_s)]
+        # Words quads: words of the next DPP word (1-4, words of 4 bytes), its bytes (1-16), last.
+        rem_need  = Signal(3, reset_less=True)
+        rem_bytes = Signal(5, reset_less=True)
+        rem_le16  = Signal(reset_less=True)
+        if lw == 4:
+            def rem_fields(v):
+                v_s = Signal(17)
+                self.comb += v_s.eq(v)
+                return [v_s, v_s != 0, v_s <= 16, Mux(v_s >= 16, 4, (v_s + 3)[2:5]),
+                    Mux(v_s >= 16, 16, v_s[0:5])]
         def load_rem(sel, v1, v0):
             # dpp_rem <- sel ? v1 : v0, with its comparisons: candidates comparisons from registered
             # values, selected (timings: sel late).
             f1, f0 = rem_fields(v1), rem_fields(v0)
-            regs = [dpp_rem, rem_ge8, rem_gt4, rem_eq8, rem_le4, rem_ne0, rem_pb]
+            if lw == 4:
+                regs = [dpp_rem, rem_ne0, rem_le16, rem_need, rem_bytes]
+            else:
+                regs = [dpp_rem, rem_ge8, rem_gt4, rem_eq8, rem_le4, rem_ne0, rem_pb]
             return [NextValue(r, Mux(sel, a, b)) for r, a, b in zip(regs, f1, f0)]
         dpp_off   = Signal(2, reset_less=True)
         dpp_first = Signal(reset_less=True)
@@ -282,6 +337,11 @@ class USB3LinkLayer(LiteXModule):
                 dpp_two.eq(rx_fsm_dpp_data & ~dpp_held_v & (rx_window.n == 2) & rem_ge8),
                 dpp_hold.eq(~dpp_two & ~dpp_held_v & rem_gt4),
             ]
+        # Words quads: DPP words of 16 bytes (the last one 1-16 bytes), consumed once their words
+        # (rem_need) are in the window (no held words), CRC-32 on the words as consumed.
+        dpp_quad = Signal() # DPP word consumed (rem_need words).
+        if lw == 4:
+            self.comb += dpp_quad.eq(rx_fsm_dpp_data & rem_ne0 & (rx_window.n >= rem_need))
         self.comb += [
             dpp_pb.eq(rem_pb),
             Case(dpp_off, {
@@ -290,11 +350,18 @@ class USB3LinkLayer(LiteXModule):
                 2: dpp_crc.eq(Cat(dpp_prev[16:32], rx_data[0:16])),
                 3: dpp_crc.eq(Cat(dpp_prev[24:32], rx_data[0:24])),
             }),
-            crc32_rx.data.eq(Cat(rx_data, Mux(dpp_two, rx_data1, 0))[:dw]),
-            crc32_rx.bytes.eq(Mux(dpp_two, 8, dpp_pb)),
-            self.rx_dpp.data.eq(Mux(dpp_held_v,
-                Cat(dpp_held, rx_data), Cat(rx_data, Mux(dpp_two, rx_data1, 0)))[:dw]),
-            self.rx_dpp.bytes.eq(Mux(dpp_two, 8, Mux(dpp_held_v, 4 + dpp_pb, dpp_pb))),
+            [
+                crc32_rx.data.eq(Cat(*rx_words)),
+                crc32_rx.bytes.eq(rem_bytes),
+                self.rx_dpp.data.eq(Cat(*rx_words)),
+                self.rx_dpp.bytes.eq(rem_bytes),
+            ] if lw == 4 else [
+                crc32_rx.data.eq(Cat(rx_data, Mux(dpp_two, rx_data1, 0))[:dw]),
+                crc32_rx.bytes.eq(Mux(dpp_two, 8, dpp_pb)),
+                self.rx_dpp.data.eq(Mux(dpp_held_v,
+                    Cat(dpp_held, rx_data), Cat(rx_data, Mux(dpp_two, rx_data1, 0)))[:dw]),
+                self.rx_dpp.bytes.eq(Mux(dpp_two, 8, Mux(dpp_held_v, 4 + dpp_pb, dpp_pb))),
+            ],
             # DPH with DL bit (no DPP): routed with the DPH fields (rx_dpp_done on hp_check).
             If(hp_check,
                 self.rx_dpp.ept.eq(hp_w[1][8:12]),
@@ -305,6 +372,12 @@ class USB3LinkLayer(LiteXModule):
             ),
         ]
 
+        # Words quads: leading data words in the window (skipped DPP data, 0-4).
+        skip_k = Signal(3)
+        if lw == 4:
+            self.comb += skip_k.eq(rx_window.n)
+            for i in reversed(range(4)):
+                self.comb += If(rx_window.f[i][4] & (rx_window.n > i), skip_k.eq(i))
         self.rx_fsm = rx_fsm = FSM(reset_state="IDLE")
         self.comb += rx_fsm_dpp_data.eq(rx_fsm.ongoing("DPP") & u0)
         rx_fsm.act("IDLE",
@@ -317,7 +390,7 @@ class USB3LinkLayer(LiteXModule):
                 ).Elif(rx_slc,
                     dpp_missing.eq(expect_now),
                     NextState("LC")
-                ).Elif((rx_sdp & ~expect_now) if lw == 2 else 0,
+                ).Elif((rx_sdp & ~expect_now) if lw >= 2 else 0,
                     # DPP of a Header Packet not accepted (ex: ignored until LRTY after an LBAD):
                     # skipped at the DPP data rate (else at one word per cycle in IDLE: the next
                     # Header Packets, ex: the retransmitted ones, checked/acknowledged late).
@@ -347,15 +420,18 @@ class USB3LinkLayer(LiteXModule):
             If(~u0,
                 NextState("IDLE")
             ).Elif(rx_valid,
-                If(rx_ctrl != 0,
-                    If((rx_ctrl == 0b1111) & ((rx_data == FRAMING_END) | (rx_data == FRAMING_EDB)),
+                If(rx_knz,
+                    If(rx_end,
                         NextState("IDLE") # DPPEND/DPPABORT consumed.
                     ).Else(
-                        rx_hold.eq(lw == 2), # Other framing (DPP cut): handled in IDLE.
+                        rx_hold.eq(lw >= 2), # Other framing (DPP cut): handled in IDLE.
                         NextState("IDLE")
                     )
                 ).Elif((rx_window.n == 2) & (rx_window.c1 == 0) if lw == 2 else 0,
                     rx_skip2.eq(1)
+                ).Elif(skip_k > 1 if lw == 4 else 0,
+                    rx_take.eq(1),
+                    rx_k.eq(skip_k),
                 )
             )
         )
@@ -368,6 +444,20 @@ class USB3LinkLayer(LiteXModule):
         rx_fsm.act("DPP",
             If(~u0,
                 NextState("IDLE")
+            ).Elif((rx_valid & rem_ne0) if lw == 4 else 0,
+                # Words quads: DPP word when its words are in the window.
+                rx_hold.eq(~dpp_quad),
+                rx_take.eq(dpp_quad),
+                rx_k.eq(rem_need),
+                If(dpp_quad,
+                    self.rx_dpp.valid.eq(1),
+                    self.rx_dpp.first.eq(dpp_first),
+                    self.rx_dpp.last.eq(rem_le16),
+                    crc32_rx.ce.eq(1),
+                    NextValue(dpp_first, 0),
+                    *load_rem(rem_le16, 0, dpp_rem - 16),
+                    NextValue(dpp_prev, Array(rx_words)[rem_need - 1]),
+                )
             ).Elif(rx_valid,
                 If(rem_ne0,
                     self.rx_dpp.valid.eq(~dpp_hold),
@@ -386,8 +476,15 @@ class USB3LinkLayer(LiteXModule):
                 )
             )
         )
+        # DPP expected or being received at the U0 exit (Recovery): completed as a missing DPP (the
+        # Protocol Layer processes the DPH with its DPP status: a DPH never completed would hold
+        # its Rx Header Buffer and all the following Header Packets, seen on hardware after a
+        # Recovery in the middle of a DPP: credits never returned, partner CREDIT_HP_TIMER Recoveries).
+        dpp_cut = Signal()
         self.comb += [
-            self.rx_dpp_done.eq(dpp_end | dpp_missing | (hp_check & hp_accept & hp_is_dp & hp_dl)),
+            dpp_cut.eq(dpp_expect & u0_d & ~u0),
+            self.rx_dpp_done.eq(dpp_end | dpp_missing | dpp_cut |
+                (hp_check & hp_accept & hp_is_dp & hp_dl)),
             self.rx_dpp_ok.eq(dpp_end & (dpp_crc == crc32_rx.value)),
         ]
         self.sync += If(dpp_end | dpp_missing, dpp_expect.eq(0))
@@ -559,7 +656,7 @@ class USB3LinkLayer(LiteXModule):
         # counts). Else combinatorial.
         tx_push_busy = Signal()
         in_buf_t = lambda i: ((i - ack_seq[0:ib]) & (tx_bufs - 1)) < tx_count
-        if lw == 2:
+        if lw >= 2:
             tx_count_r  = Signal(4)
             tx_count_rr = Signal(4)
             tx_count2_r = Signal(4)
@@ -615,7 +712,7 @@ class USB3LinkLayer(LiteXModule):
                 tx_push_dpp.eq(self.tx_hp.dpp),
             ),
         ]
-        if lw == 2:
+        if lw >= 2:
             self.sync += If(tx_push,
                 tx_push_hold.eq(3)
             ).Elif(tx_push_hold != 0,
@@ -635,18 +732,22 @@ class USB3LinkLayer(LiteXModule):
         tx_word  = Signal(32)
         tx_word2 = Signal(32) # Words pairs: second word (DPP data, tx_two).
         tx_two   = Signal()
+        tx_words = [Signal(32) for _ in range(2)] # Words quads: third/fourth words (DPP data).
+        tx_nw    = Signal(3)  # Words quads: words of the entry (DPP data).
         tx_ctrl  = Signal(4)
         tx_valid = Signal()
         tx_first = Signal() # First word of a packet (Link Command, Header Packet, DPH + DPP).
         tx_last  = Signal() # Last word of a packet (Link Command, Header Packet, DPH + DPP).
-        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout() if lw == 1 else link_pairs_layout()) # Registered (timings).
+        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout() if lw == 1 else link_pairs_layout(lw)) # Registered (timings).
         self.comb += [
             tx_pipe.sink.valid.eq(tx_valid),
             tx_pipe.sink.first.eq(tx_first),
             tx_pipe.sink.last.eq(tx_last),
-            tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2))),
+            tx_pipe.sink.data.eq(Cat(swap_data(tx_word), swap_data(tx_word2),
+                *[swap_data(w) for w in tx_words][:max(lw - 2, 0)])),
             tx_pipe.sink.ctrl.eq(swap_ctrl(tx_ctrl)),
             tx_pipe.sink.words.eq(Mux(tx_two, 2, 1)) if lw == 2 else [],
+            tx_pipe.sink.words.eq(Mux(tx_nw != 0, tx_nw, 1)) if lw == 4 else [],
             tx_pipe.source.connect(phy.sink),
         ]
         tx_ready = tx_pipe.sink.ready
@@ -688,14 +789,14 @@ class USB3LinkLayer(LiteXModule):
         # The Advertisement (U0 entry: all the credits, 7.2.4.1.1) is not limited.
         rx_t2_credits = getattr(phy, "rx_t2_credits", LINK_HP_BUFFERS) # int or Signal (runtime).
         lcrd2_allowed = Signal()
+        # Rx Header Buffer Credit Advertisement in progress (U0 entry until the advertised credits
+        # are sent): not throttled/limited (7.2.4.1.1: all the free buffers advertised on the U0
+        # entry, the partner's CREDIT_HP_TIMERs expect them; seen on hardware after a Recovery with
+        # the RX words buffered: credits held, host Recoveries every CREDIT_HP_TIMER).
+        lcrd_adv  = Signal(3) # Advertised LCRD_x/LCRD1_x left to send (set on the U0 entry).
+        lcrd2_adv = Signal(3) # Advertised LCRD2_x left to send.
         if isinstance(rx_t2_credits, Signal) or (rx_t2_credits < LINK_HP_BUFFERS):
-            lcrd2_adv = Signal() # Type 2 credits Advertisement in progress.
-            self.sync += If(u0_rise,
-                lcrd2_adv.eq(1)
-            ).Elif(lcrd2_pending == 0,
-                lcrd2_adv.eq(0)
-            )
-            self.sync += lcrd2_allowed.eq(lcrd2_adv |
+            self.sync += lcrd2_allowed.eq((lcrd2_adv != 0) |
                 ((lcrd2_pending + rx_t2_level + rx_t2_credits) > LINK_HP_BUFFERS)) # Registered (timings).
         else:
             self.comb += lcrd2_allowed.eq(1)
@@ -708,17 +809,22 @@ class USB3LinkLayer(LiteXModule):
         sel_lau  = Signal()
         sel_lxu  = Signal()
         sel_lup  = Signal()
+        # LGOOD_n of the Header Packets received before a bad one are sent before the LBAD (the
+        # partner retransmits the Header Packets not acknowledged when it receives the LBAD: an
+        # LGOOD_n overtaken by the LBAD makes it retransmit an accepted Header Packet, received with
+        # a Header Sequence Number error: Recovery; seen on hardware in full duplex, the Link
+        # Commands waiting behind a transmitted DPP).
         self.comb += [
             If(~pm_block,
                 If(lrty_pending,
                     sel_lrty.eq(1), lc_sel.eq(LCMD_LRTY)
-                ).Elif(lbad_pending,
-                    sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
                 ).Elif(lgood_seq != rx_seq,
                     sel_lgood.eq(1), lc_sel.eq(LCMD_LGOOD | lgood_seq)
-                ).Elif((lcrd_pending != 0) & ~rx_throttle,
+                ).Elif(lbad_pending,
+                    sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
+                ).Elif((lcrd_pending != 0) & (~rx_throttle | (lcrd_adv != 0)),
                     sel_lcrd.eq(1), lc_sel.eq(LCMD_LCRD | lcrd_idx)
-                ).Elif((lcrd2_pending != 0) & ~rx_throttle & lcrd2_allowed,
+                ).Elif((lcrd2_pending != 0) & (~rx_throttle | (lcrd2_adv != 0)) & lcrd2_allowed,
                     sel_lcrd2.eq(1), lc_sel.eq(LCMD_LCRD | 0b100 | lcrd2_idx)
                 ).Elif(lau_pending,
                     sel_lau.eq(1), lc_sel.eq(LCMD_LAU)
@@ -744,7 +850,8 @@ class USB3LinkLayer(LiteXModule):
             # Registered splitter output: CRC-32/END tail logic from registers (timings: PipeReady then
             # PipeValid, no skid multiplexer before the CRC-32), registered ready: endpoints DPP read
             # path isolated from the TX.
-            self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter()
+            # Words quads: 16-byte words (16 bytes per cycle), last bytes on 32-bit words.
+            self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter() if lw == 2 else DPPQuadSplitter()
             layout = tx_dpp_splitter.source.description
             self.tx_dpp_pipe_ready = tx_dpp_pipe_ready = stream.PipeReady(layout)
             self.tx_dpp_pipe_valid = tx_dpp_pipe_valid = stream.PipeValid(layout)
@@ -755,12 +862,15 @@ class USB3LinkLayer(LiteXModule):
             ]
             tx_dpp = tx_dpp_pipe_valid.source
             self.comb += tx_word2.eq(tx_dpp.data[32:64])
+            if lw == 4:
+                self.comb += [tx_words[i].eq(tx_dpp.data[64 + 32*i:96 + 32*i]) for i in range(2)]
         self.crc32_tx = crc32_tx = CRC32(data_width=dw, cascade=crc32_cascade)
         self.comb += [
             crc32_tx.data.eq(tx_dpp.data),
             crc32_tx.bytes.eq(tx_dpp.bytes),
         ]
-        crc_next = crc32_tx.next_value
+        # Words quads: last words of 1-4 bytes on data[0:32] (DPPQuadSplitter).
+        crc_next = crc32_tx.next_value32 if lw == 4 else crc32_tx.next_value
         end_bytes = [(FRAMING_END >> 8*i) & 0xff for i in range(4)]
         def end_slice(i, j):
             return Cat(*[C(end_bytes[k], 8) for k in range(i, j)])
@@ -801,6 +911,7 @@ class USB3LinkLayer(LiteXModule):
                     NextValue(hp_dws,  tx_dws[send_seq[0:ib]]),
                     NextValue(hp_dpp,  tx_dpps[send_seq[0:ib]] & ~tx_sent[send_seq[0:ib]]),
                     NextValue(hp_null, tx_dpps[send_seq[0:ib]] &  tx_sent[send_seq[0:ib]] & ssp),
+                    # DL bit (Delayed: retransmitted Header Packet, 7.2.4.1.12).
                     NextValue(hp_info, Cat(send_seq, C(0, 9 - sw), tx_sent[send_seq[0:ib]], C(0, 1))),
                     NextState("HP0")
                 ).Elif(sel_lrty | sel_lbad | sel_lgood | sel_lcrd | sel_lcrd2 | sel_lau | sel_lxu | sel_lup,
@@ -862,6 +973,7 @@ class USB3LinkLayer(LiteXModule):
             tx_valid.eq(tx_dpp.valid),
             tx_word.eq(dpp_word),
             tx_two.eq(tx_dpp.two) if lw == 2 else [],
+            tx_nw.eq(tx_dpp.words) if lw == 4 else [],
             tx_dpp.ready.eq(tx_ready),
             If(tx_dpp.valid & tx_ready,
                 crc32_tx.ce.eq(1),
@@ -904,7 +1016,11 @@ class USB3LinkLayer(LiteXModule):
         self.submodules += t_pending_hp_ss
         pending_hp_done = Signal()
         self.comb += [
-            t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood & (~adv_received | (ack_seq != send_seq))),
+            # Restarted on LGOOD_n and on LBAD (Header Packets answered: retransmission from the LRTY,
+            # else a Header Packet with errors at the partner costs a Recovery on top of its
+            # retransmission).
+            t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood & ~lc_lbad &
+                (~adv_received | (ack_seq != send_seq))),
             t_pending_hp_ss.wait.eq(t_pending_hp.wait),
             pending_hp_done.eq(Mux(ssp, t_pending_hp.done, t_pending_hp_ss.done)),
         ]
@@ -956,6 +1072,8 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_lgood_rx      = lc_lgood & adv_received & lgood_ok           # Expected LGOOD_n received...
         self.dbg_lgood_seq     = lc_info[0:4]                                 # ...for this Header Sequence Number.
         self.dbg_lbad_rx       = lc_lbad                                      # LBAD received.
+        self.dbg_rx_lc_bad     = (lc_main | (lc_fast & u0)) & ~lc_valid      # Link Command word rejected (CRC-5/copies).
+        self.dbg_rx_dpp_bad    = dpp_end & (dpp_crc != crc32_rx.value)       # DPP received with a CRC-32 error.
         self.dbg_state     = Cat(tx_seq[0:4] if sw == 4 else Cat(tx_seq, C(0, 1)),
             ack_seq[0:4] if sw == 4 else Cat(ack_seq, C(0, 1)),
             send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
@@ -982,8 +1100,8 @@ class USB3LinkLayer(LiteXModule):
                 If(sel_lrty,  lrty_pending.eq(0)),
                 If(sel_lbad,  lbad_pending.eq(0)),
                 If(sel_lgood, lgood_seq.eq((lgood_seq + 1) & seq_mask)),
-                If(sel_lcrd,  lcrd_idx.eq(lcrd_idx + 1)),
-                If(sel_lcrd2, lcrd2_idx.eq(lcrd2_idx + 1)),
+                If(sel_lcrd,  lcrd_idx.eq(lcrd_idx + 1),   If(lcrd_adv != 0,  lcrd_adv.eq(lcrd_adv - 1))),
+                If(sel_lcrd2, lcrd2_idx.eq(lcrd2_idx + 1), If(lcrd2_adv != 0, lcrd2_adv.eq(lcrd2_adv - 1))),
                 If(sel_lau,   lau_pending.eq(0), pm_block.eq(1)),
                 If(sel_lxu,   lxu_pending.eq(0)),
                 If(sel_lup,   lup_pending.eq(0)),
@@ -1070,8 +1188,12 @@ class USB3LinkLayer(LiteXModule):
                 lgood_seq.eq(Mux(self.reset, seq_mask, (rx_seq - 1) & seq_mask)),
                 lcrd_pending.eq(Mux(self.reset, LINK_HP_BUFFERS,
                     LINK_HP_BUFFERS - (rx_buffer.level - rx_t2_level))),
+                lcrd_adv.eq(Mux(self.reset, LINK_HP_BUFFERS,
+                    LINK_HP_BUFFERS - (rx_buffer.level - rx_t2_level))),
                 lcrd_idx.eq(0),
                 lcrd2_pending.eq(Mux(ssp, Mux(self.reset, LINK_HP_BUFFERS,
+                    LINK_HP_BUFFERS - rx_t2_level), 0)),
+                lcrd2_adv.eq(Mux(ssp, Mux(self.reset, LINK_HP_BUFFERS,
                     LINK_HP_BUFFERS - rx_t2_level), 0)),
                 lcrd2_idx.eq(0),
                 remote_credits.eq(0),

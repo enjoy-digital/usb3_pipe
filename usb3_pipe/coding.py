@@ -150,8 +150,9 @@ class Gen2BlockGearbox(LiteXModule):
     cycles on average).
 
     The bits level after the output of the cycle (block placement position, 0 to data_width when a
-    block is accepted) and the output are registered: the placement is a shift by a registered
-    amount, the level loop an adder with constants and a selection."""
+    block is accepted) and the output are registered: the placement is a one-hot selection of the
+    block bits by the registered position, the level loop an adder with constants and a
+    selection, the sink ready registered from the next level."""
     def __init__(self, data_width=32):
         self.sink   = sink   = stream.Endpoint(gen2_block_layout())
         self.source = source = stream.Endpoint([("data", data_width)])
@@ -161,13 +162,16 @@ class Gen2BlockGearbox(LiteXModule):
         dw  = data_width
         buf = Signal(196 + dw)
         rl  = Signal(max=196 + dw + 1) # Bits after the output of the cycle (placement position).
-        rl_b = Signal(len(rl), attr={("syn_preserve", 1)}) # Copy for the placement shift (fanout).
+        rl_next = Signal.like(rl)
+        ready   = Signal(reset=1)      # rl <= dw, registered (timings: accept from registers).
         assert dw % 4 == 0
+        npos    = dw//4 + 1            # Placement positions (multiples of 4, 0 to dw).
+        pos_oh  = Signal(npos, reset=1) # Placement position (one-hot, registered with rl).
         out = Signal()                 # Word output this cycle (bits >= dw).
         self.comb += [
             source.valid.eq(out),
             source.data.eq(buf[0:dw]),
-            sink.ready.eq(rl <= dw),
+            sink.ready.eq(ready),
         ]
         block  = Signal(196)
         length = Signal(8)
@@ -184,21 +188,30 @@ class Gen2BlockGearbox(LiteXModule):
         self.comb += shifted.eq(Mux(out, buf[dw:], buf))
         accept = Signal()
         self.comb += accept.eq(sink.valid & sink.ready)
+        # Block placed at the position (one-hot selection of the block bits: no barrel shifter).
+        placed = Signal(196 + dw)
+        for i in range(196 + dw):
+            terms = [pos_oh[j] & block[i - 4*j] for j in range(npos) if 0 <= (i - 4*j) < 196]
+            if terms:
+                self.comb += placed[i].eq(Reduce("OR", terms))
+        self.comb += If(accept,
+            rl_next.eq(rl + length - dw)
+        ).Else(
+            rl_next.eq(Mux(rl >= dw, rl - dw, rl))
+        )
         self.sync += [
             If(accept,
-                # rl <= dw, multiple of 4 (blocks/words lengths): 4-bit steps shift.
-                buf.eq(shifted | (Cat(block, Constant(0, dw)) <<
-                    Cat(Constant(0, 2), rl_b[2:bits_for(dw)]))),
+                # rl <= dw, multiple of 4 (blocks/words lengths).
+                buf.eq(shifted | placed),
                 # Bits >= 132 > dw: word output on the next cycle.
                 out.eq(1),
-                rl.eq(rl + length - dw),
-                rl_b.eq(rl + length - dw),
             ).Else(
                 buf.eq(shifted),
                 out.eq(rl >= dw),
-                rl.eq(Mux(rl >= dw, rl - dw, rl)),
-                rl_b.eq(Mux(rl >= dw, rl - dw, rl)),
-            )
+            ),
+            rl.eq(rl_next),
+            ready.eq(rl_next <= dw),
+            pos_oh.eq(Cat(*[rl_next[2:] == j for j in range(npos)])),
         ]
 
 # Gen 2 Block Aligner (RX) -------------------------------------------------------------------------
@@ -245,7 +258,8 @@ class Gen2BlockAligner(LiteXModule):
     """
     def __init__(self, data_width=32):
         self.sink   = sink   = stream.Endpoint([("data", data_width)])
-        self.source = source = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
+        self.source = source = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1),
+            ("sync", 1)]) # sync: SYNC Ordered Set block (decoded a stage earlier: timings).
 
         self.polarity  = Signal()   # o
         self.aligned   = Signal()   # o
@@ -348,12 +362,16 @@ class Gen2BlockAligner(LiteXModule):
         sync_inv_pos = Signal(dw)
         pairs,     _ = decodes("sync_pair",     n - 15, 16, lambda b: b == 0xff00)
         pairs_inv, _ = decodes("sync_pair_inv", n - 15, 16, lambda b: b == 0x00ff)
+        # Control Block Header decodes registered with the window too (timings: the SYNC search
+        # then ANDs registered decodes only).
+        ctrl_pos,     _ = decodes("sync_ctrl",     r + dw, 4, lambda b: b == BLOCK_HEADER_CONTROL)
+        ctrl_inv_pos, _ = decodes("sync_ctrl_inv", r + dw, 4, lambda b: b == (~BLOCK_HEADER_CONTROL & 0xf))
         for k in range(dw):
             p = r + k
             self.comb += [
-                sync_pos[k].eq((win[p:p+4] == BLOCK_HEADER_CONTROL) &
+                sync_pos[k].eq(ctrl_pos[p] &
                     Reduce("AND", [pairs[p + 4 + 16*i] for i in range(8)])),
-                sync_inv_pos[k].eq((win[p:p+4] == (~BLOCK_HEADER_CONTROL & 0xf)) &
+                sync_inv_pos[k].eq(ctrl_inv_pos[p] &
                     Reduce("AND", [pairs_inv[p + 4 + 16*i] for i in range(8)])),
             ]
         # Registered without the polarity toggle of the cycle (masked by the registered toggle:
@@ -390,12 +408,12 @@ class Gen2BlockAligner(LiteXModule):
         # Pointer vectors without reset: cleared by a registered reset (reset fanout).
         vb        = Signal(P, reset_less=True)
         vs        = [Signal(P, name=f"skp_ptr{k}", reset_less=True) for k in range(K)]
-        reset     = Signal(reset=1)
         any_d     = Signal() # Pointer set on the previous cycle.
         load_d    = Signal() # SYNC (Unaligned) on the previous cycles: pointer set on the next one.
         load_dd   = Signal()
         load_oh   = Signal(dw) # SYNC of the previous cycle (one-hot offset): pointer bit set.
-        clear     = Signal() # Pointer cleared (SYNC with a different alignment).
+        # Pointer cleared (SYNC with a different alignment, reset): registered copies (fanout).
+        clears    = [Signal(reset=1, name="clear", attr={("syn_preserve", 1)}) for _ in range(2 + K)]
         unaligned = Signal()
         load      = Signal()
         self.comb += [
@@ -454,13 +472,24 @@ class Gen2BlockAligner(LiteXModule):
         for k, q in enumerate(realign_pos):
             realign_vb[q] = realign_oh[k]
         or_terms = lambda terms: Reduce("OR", terms) if terms else 0
-        self.sync += If(clear,
-            vb.eq(Cat(*realign_vb)),
-            [vs[k].eq(0) for k in range(K)],
-        ).Elif(sink.valid,
-            vb.eq(Cat(*[or_terms(next_b[q]) for q in range(P)])),
-            [vs[k].eq(Cat(*[or_terms(next_s[k][q]) for q in range(P)])) for k in range(K)],
-        )
+        hp = P//2
+        self.sync += [
+            If(clears[0],
+                vb[:hp].eq(Cat(*realign_vb[:hp]))
+            ).Elif(sink.valid,
+                vb[:hp].eq(Cat(*[or_terms(next_b[q]) for q in range(hp)]))
+            ),
+            If(clears[1],
+                vb[hp:].eq(Cat(*realign_vb[hp:]))
+            ).Elif(sink.valid,
+                vb[hp:].eq(Cat(*[or_terms(next_b[q]) for q in range(hp, P)]))
+            ),
+            [If(clears[2 + k],
+                vs[k].eq(0)
+            ).Elif(sink.valid,
+                vs[k].eq(Cat(*[or_terms(next_s[k][q]) for q in range(P)]))
+            ) for k in range(K)],
+        ]
 
         # SYNC with a different alignment: SYNC in the Block context not at the pointer (pointer not
         # at the SYNC, not in a SKP Ordered Set), checked over 2 cycles (partial ORs by 16 positions
@@ -486,8 +515,7 @@ class Gen2BlockAligner(LiteXModule):
             realign_oh.eq(Mux(realign, sync_oh_d, 0)),
             realign_d.eq(Cat(realign, realign_d[:-1])),
         )
-        self.sync += reset.eq(0)
-        self.comb += clear.eq(realign_d[0] | reset)
+        self.sync += [c.eq(Mux(sink.valid, realign, realign_d[0])) for c in clears]
 
         any_v = Signal()
         self.comb += any_v.eq((vb != 0) | (Reduce("OR", vs) != 0))
@@ -573,21 +601,32 @@ class Gen2BlockAligner(LiteXModule):
         d_end     = Signal(7, reset_less=True)
         d_total   = Signal(6, reset_less=True)
         idx = Signal(kr)
-        grp = Signal(ng)
         self.comb += If(realign_d[0],
             idx.eq(ov_idx[0]),
-            grp.eq(ov_grp[0]),
         ).Elif(realign_d[1],
             idx.eq(ov_idx[1]),
-            grp.eq(ov_grp[1]),
         ).Else(
             idx.eq(e_idx),
-            grp.eq(e_grp),
         )
+        # Pointer group selection from the registers (kept copies: fanout of the window shift
+        # one-hot selection, each for a quarter of the shifted window).
+        nc   = 4
+        grps = [Signal(ng, name="grp", attr={("syn_keep", 1)}) for _ in range(nc)]
+        for grp in grps:
+            self.comb += If(realign_d[0],
+                grp.eq(ov_grp[0])
+            ).Elif(realign_d[1],
+                grp.eq(ov_grp[1])
+            ).Else(
+                grp.eq(e_grp)
+            )
+        dl = len(d_win)
+        dq = [(c*dl)//nc for c in range(nc + 1)]
         self.sync += [
             # Shift by the pointer group (one-hot selection).
-            d_win.eq(Reduce("OR", [Replicate(grp[g], len(d_win)) & e_win[16*g:16*g + len(d_win)]
-                for g in range(ng)])),
+            [d_win[dq[c]:dq[c+1]].eq(Reduce("OR", [
+                Replicate(grps[c][g], dq[c+1] - dq[c]) & e_win[16*g + dq[c]:16*g + dq[c+1]]
+                for g in range(ng)])) for c in range(nc)],
             d_end.eq(e_end),
             d_total.eq(e_total),
             d_idx.eq(idx),
@@ -632,6 +671,7 @@ class Gen2BlockAligner(LiteXModule):
         self.sync += [
             source.valid.eq(o_valid),
             out_bits.eq(o_bits),
+            source.sync.eq(o_bits == GEN2_SYNC_BITS),
             self.skp.eq(o_skp),
             self.skp_count.eq(o_total),
             self.skp_lfsr.eq(Cat(lfsr[16:24], lfsr[8:16], lfsr[0:7])),

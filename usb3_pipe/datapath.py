@@ -167,17 +167,30 @@ class RXWordAligner(LiteXModule):
 
         # Alignment update: only at the start of a marker run (markers in the word and no marker on the
         # last symbol of the previous word), so that alignment is kept on non-marker K-codes (ex: Link
-        # Layer framing in U0) and on marker runs spanning 2 words. The new alignment is applied on
-        # the word with the marker run, so the symbols before the run are output in the same word
-        # (without a word mixing symbols before the run and the start of the run).
+        # Layer framing in U0) and on marker runs spanning 2 words. The word output on this cycle ends
+        # before the run:
+        # - Run earlier in its word than the current alignment: new alignment on this cycle (the
+        #   output word is the buffered word, the next one starts on the run).
+        # - Run later in its word: new alignment on the next cycle (the word output with the current
+        #   alignment is complete, the new alignment on this cycle would drop its first symbols: end
+        #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run word
+        #   before the run (Logical Idle) are skipped.
+        run_start     = Signal()
         alignment_sel = Signal(2)
         self.comb += [
+            run_start.eq(self.enable & (marker != 0) & ~marker_d[3]),
             alignment_sel.eq(alignment_d),
-            If(self.enable & (marker != 0) & ~marker_d[3],
+            If(run_start & (alignment < alignment_d),
                 alignment_sel.eq(alignment)
             )
         ]
-        self.sync += If(sink.valid & sink.ready, alignment_d.eq(alignment_sel))
+        self.sync += If(sink.valid & sink.ready,
+            If(run_start,
+                alignment_d.eq(alignment)
+            ).Else(
+                alignment_d.eq(alignment_sel)
+            )
+        )
 
         # Data selection
         data = Cat(buf.source.data, sink.data)
@@ -798,8 +811,9 @@ class Gen2TXDCBalance(LiteXModule):
     every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
     and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex: 80-bit at
     125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then the
-    balance increments of the possible DC Balance Symbols precomputed, the running balance loop is
-    then two adders, a selection and the saturation.
+    balance increments of the possible DC Balance Symbols precomputed: the running balance loop is
+    then adders from registers and a one-hot selection, the decisions comparisons of a register
+    with constants (12-bit balance saturated at +-1915 one cycle late).
     """
     def __init__(self, one_per_cycle=False):
         self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
@@ -902,6 +916,21 @@ class Gen2TXDCBalance(LiteXModule):
         sink   = self.sink
         source = self.source
         ones   = lambda v: bin(v).count("1")
+        keys   = ["none", "15p", "15n", "14p", "14n"]
+        W      = 12                     # Running balance bits (at least +-511, 6.4.1.2.2).
+        LIMIT  = 2**(W - 1) - 1 - 132   # Saturation (a block changes the balance by 132 at most).
+
+        # Pipeline control: the stages advance together (go: registered, from the output buffer
+        # level, copies for the stages registers enables: fanout), the output buffer absorbs the
+        # blocks in flight when the gearbox is not ready (one block per 1.65 cycles on average).
+        self.out_buffer = out_buffer = stream.SyncFIFO(gen2_block_layout(), 8, buffered=True)
+        self.out_reg    = out_reg    = stream.PipeValid(gen2_block_layout()) # Registers to the gearbox.
+        self.comb += [
+            out_buffer.source.connect(out_reg.sink),
+            out_reg.source.connect(source),
+        ]
+        gos = [Signal(name="go", attr={("syn_preserve", 1)}) for _ in range(4)]
+        self.sync += [go.eq(out_buffer.level <= 3) for go in gos]
 
         # Stage 0: block and partial popcounts (Block Header + Symbols 0-11 in 8 chunks, 12-13, 14,
         # 15).
@@ -915,10 +944,9 @@ class Gen2TXDCBalance(LiteXModule):
         ones_13   = Signal(5, reset_less=True)
         ones_14   = Signal(4, reset_less=True)
         ones_15   = Signal(4, reset_less=True)
-        ready1    = Signal()
-        self.comb += sink.ready.eq(~v0 | ready1)
+        self.comb += sink.ready.eq(gos[0])
         bits_11 = Cat(sink.header, sink.data[0:96])
-        self.sync += If(sink.ready,
+        self.sync += If(gos[0],
             v0.eq(sink.valid),
             header0.eq(sink.header),
             data0.eq(sink.data),
@@ -941,11 +969,8 @@ class Gen2TXDCBalance(LiteXModule):
         ts       = Signal(reset_less=True)
         dc_reset = Signal(reset_less=True)
         inc_11   = Signal((9, True), reset_less=True)
-        inc      = {k: Signal((8, True), reset_less=True)
-            for k in ["none", "15p", "15n", "14p", "14n"]}
-        advance  = Signal()
-        self.comb += ready1.eq(~v1 | advance)
-        self.sync += If(ready1,
+        inc      = {k: Signal((8, True), reset_less=True) for k in keys}
+        self.sync += If(gos[1],
             v1.eq(v0),
             header.eq(header0),
             data.eq(data0),
@@ -961,95 +986,103 @@ class Gen2TXDCBalance(LiteXModule):
             inc["14n"].eq(2*(ones_13 + ones(GEN2_DC_REDUCE_ZEROS[0]) + ones(GEN2_DC_REDUCE_ZEROS[1])) - 32),
         )
 
-        # Stage 2: thresholds of the running balance (DC Balance Symbols choice, balance at the end of
-        # Symbol 11 = dc_balance + inc_11: > 0, > 15, < -15, > 31, < -31) and the update of each choice
-        # (inc_11 + inc[k]) with its saturation thresholds (+-511): the running balance loop is then
-        # comparisons/adders with registered values and a selection.
+        # Stage 2: block, balance increments of the whole block for each choice.
         v2        = Signal()
         header2   = Signal(4, reset_less=True)
         data2     = Signal(192, reset_less=True)
         skp2      = Signal(reset_less=True)
         ts2       = Signal(reset_less=True)
         dc_reset2 = Signal(reset_less=True)
-        th        = {k: Signal((12, True), reset_less=True)
-            for k in ["pos", "15p", "15n", "14p", "14n"]}
-        upd       = {k: Signal((12, True), reset_less=True) for k in inc}
-        sat_hi    = {k: Signal((12, True), reset_less=True) for k in inc}
-        sat_lo    = {k: Signal((12, True), reset_less=True) for k in inc}
-        ready2    = Signal()
-        self.comb += advance.eq(v1 & ready2)
-        self.sync += If(ready2,
+        inc2      = {k: Signal((9, True), reset_less=True) for k in keys}
+        self.sync += If(gos[2],
             v2.eq(v1),
             header2.eq(header),
             data2.eq(data),
             skp2.eq(skp),
             ts2.eq(ts),
             dc_reset2.eq(dc_reset),
-            th["pos"].eq(  0 - inc_11),
-            th["15p"].eq( 15 - inc_11),
-            th["15n"].eq(-15 - inc_11),
-            th["14p"].eq( 31 - inc_11),
-            th["14n"].eq(-31 - inc_11),
-            [upd[k].eq(inc_11 + inc[k]) for k in inc],
-            [sat_hi[k].eq( 511 - (inc_11 + inc[k])) for k in inc],
-            [sat_lo[k].eq(-511 - (inc_11 + inc[k])) for k in inc],
+            [inc2[k].eq(inc_11 + inc[k]) for k in keys],
         )
 
-        # Stage 3: DC Balance Symbols, running balance update, output. Running balance copies for the
-        # thresholds and the updates (fanout).
-        dcb_th   = Signal((11, True), attr={("syn_preserve", 1)})
-        dcb_upd  = Signal((11, True), attr={("syn_preserve", 1)})
-        positive = Signal()
-        fix_14   = Signal()
-        fix_15   = Signal()
-        value    = {k: Signal((12, True)) for k in inc} # Saturated running balance of each choice.
-        updated  = Signal((12, True))
+        # Stage 3: DC Balance Symbols, running balance update, output.
+        # Running balance registers: balance (after the output blocks) and mid (balance at the end
+        # of Symbol 11 of the block in stage 2): the DC Balance Symbols decisions are comparisons of
+        # a register with constants, the updates one-hot selections of candidates computed from the
+        # registers (the choices of the block as carry-save 3-operand sums with the next block
+        # inc_11). Saturation (+-LIMIT) from registered comparisons of the balance: applied one
+        # cycle late (the balance overshoots the limit by one block at most).
+        def sx(v, w):
+            return Cat(v, Replicate(v[-1], w - len(v)))
+        def add3(x, y, z):
+            s = x ^ y ^ z
+            c = Cat(C(0, 1), ((x & y) | (x & z) | (y & z))[:W-1])
+            return (s + c)[:W]
+        def mag_gt(m, k):
+            # |m| > 2**k - 1 (two's complement).
+            return ((~m[-1] & (m[k:] != 0)) |
+                    ( m[-1] & ~((m[k:] == Replicate(C(1, 1), W - k)) & (m[:k] != 0))))
+        balance   = Signal(W)
+        balance_s = Signal((W, True))
+        mid       = Signal(W)
+        sat_hi    = Signal()
+        sat_lo    = Signal()
+        nsat      = Signal(reset=1)
+        positive  = Signal()
+        fix_14    = Signal()
+        fix_15    = Signal()
         self.comb += [
-            positive.eq(dcb_th > th["pos"]),
-            fix_14.eq((dcb_th > th["14p"]) | (dcb_th < th["14n"])),
-            fix_15.eq((dcb_th > th["15p"]) | (dcb_th < th["15n"])),
-            [If(dcb_upd > sat_hi[k],
-                value[k].eq(511)
-            ).Elif(dcb_upd < sat_lo[k],
-                value[k].eq(-511)
-            ).Else(
-                value[k].eq(dcb_upd + upd[k])
-            ) for k in inc],
-            If(fix_14,
-                updated.eq(Mux(positive, value["14p"], value["14n"]))
-            ).Elif(fix_15,
-                updated.eq(Mux(positive, value["15p"], value["15n"]))
-            ).Else(
-                updated.eq(value["none"])
-            ),
+            balance_s.eq(balance),
+            dc_balance.eq(balance),
+            positive.eq(~mid[-1] & (mid != 0)),
+            fix_15.eq(mag_gt(mid, 4)),
+            fix_14.eq(mag_gt(mid, 5)),
+        ]
+        sel = {
+            "14p":  fix_14 & positive,
+            "14n":  fix_14 & ~positive,
+            "15p":  ~fix_14 & fix_15 & positive,
+            "15n":  ~fix_14 & fix_15 & ~positive,
+            "none": ~fix_14 & ~fix_15,
+        }
+        advance2 = Signal()
+        ts_go    = Signal()
+        rst_go   = Signal()
+        hold     = Signal()
+        self.comb += [
+            advance2.eq(v2 & gos[3]),
+            ts_go.eq(advance2 & ts2),
+            rst_go.eq(advance2 & ~ts2 & dc_reset2),
+            hold.eq(~ts_go & ~rst_go),
+        ]
+        inc_11x = sx(inc_11, W)
+        lim_hi  = C(LIMIT, W)
+        lim_lo  = C((-LIMIT) & (2**W - 1), W)
+        def onehot(terms):
+            return Reduce("OR", [Replicate(s, W) & v for s, v in terms])
+        balance_next = onehot(
+            [(sat_hi, lim_hi), (sat_lo & ~sat_hi, lim_lo), (nsat & hold, balance)] +
+            [(nsat & ts_go & sel[k], (balance + sx(inc2[k], W))[:W]) for k in keys])
+        mid_next = onehot(
+            [(sat_hi, (lim_hi + inc_11x)[:W]), (sat_lo & ~sat_hi, (lim_lo + inc_11x)[:W]),
+             (nsat & hold, (balance + inc_11x)[:W]), (nsat & rst_go, inc_11x)] +
+            [(nsat & ts_go & sel[k], add3(balance, sx(inc2[k], W), inc_11x)) for k in keys])
+        self.sync += [
+            sat_hi.eq(balance_s > LIMIT),
+            sat_lo.eq(balance_s < -LIMIT),
+            nsat.eq(~(balance_s > LIMIT) & ~(balance_s < -LIMIT)),
+            balance.eq(balance_next),
+            If(gos[3], mid.eq(mid_next)),
         ]
         sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
         sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
-        advance2 = Signal()
         self.comb += [
-            ready2.eq(~v2 | advance2),
-            advance2.eq(v2 & (~source.valid | source.ready)),
-        ]
-        self.sync += [
-            If(source.ready, source.valid.eq(0)),
-            If(advance2,
-                source.valid.eq(1),
-                source.header.eq(header2),
-                source.skp.eq(skp2),
-                If(ts2,
-                    source.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
-                ).Else(
-                    source.data.eq(data2)
-                ),
-                If(ts2,
-                    dc_balance.eq(updated),
-                    dcb_th.eq(updated),
-                    dcb_upd.eq(updated),
-                ).Elif(dc_reset2,
-                    dc_balance.eq(0),
-                    dcb_th.eq(0),
-                    dcb_upd.eq(0),
-                ),
+            out_buffer.sink.valid.eq(advance2),
+            out_buffer.sink.header.eq(header2),
+            out_buffer.sink.skp.eq(skp2),
+            If(ts2,
+                out_buffer.sink.data.eq(Cat(data2[0:112], sym14, sym15, data2[128:]))
+            ).Else(
+                out_buffer.sink.data.eq(data2)
             ),
         ]
 
@@ -1068,8 +1101,11 @@ class Gen2RX(LiteXModule):
     Pipeline (250MHz with one block every 3.3 cycles): descrambling, then the Ordered Sets matching
     (registered), the outputs follow the input blocks by 1 (source, rx_sync, rx_sds) to 3 cycles.
     """
-    def __init__(self, seed=GEN2_LFSR_SEED, n_ts=8):
-        self.sink   = sink   = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1)])
+    def __init__(self, seed=GEN2_LFSR_SEED, n_ts=8, sync_from_sink=False):
+        # sync_from_sink: SYNC Ordered Set blocks flagged by the aligner (sink.sync, decoded a stage
+        # earlier: timings of the LFSR initialization), else decoded here.
+        self.sink   = sink   = stream.Endpoint([("header", 4), ("data", 128), ("header_error", 1),
+            ("sync", 1)])
         self.source = source = stream.Endpoint([("data", 128)])
 
         self.rx_tseq     = Signal()   # o: n_ts consecutive TSEQ received (pulse).
@@ -1099,7 +1135,8 @@ class Gen2RX(LiteXModule):
             sink.ready.eq(1),
             control.eq(sink.header == BLOCK_HEADER_CONTROL),
             sym0.eq(sink.data[0:8]),
-            is_sync.eq(control & (sink.data == symbols_to_int(gen2_sync_payload()))),
+            is_sync.eq(control & (sink.sync if sync_from_sink else
+                (sink.data == symbols_to_int(gen2_sync_payload())))),
             is_sds.eq( control & (sym0 == GEN2_SDS)),
             descrambler.ce.eq(sink.valid),
             descrambler.i.eq(sink.data),
@@ -1207,18 +1244,14 @@ class Gen2TXDatapath(LiteXModule):
         # # #
 
         if 3*data_width > 132:
-            # Registered valid/ready between Gen2TX and the DC balance and between the DC balance and
-            # the gearbox (timings: the Gen2TX block selection and the gearbox/DC balance readies at
-            # one block per cycle).
-            self.buffer      = buffer      = Buffer(gen2_tx_block_layout(), pipe_valid=True,
-                pipe_ready=True, ready_first=True) # Registered blocks to the DC balance popcounts.
-            self.gear_buffer = gear_buffer = Buffer(gen2_block_layout(), pipe_valid=True,
-                pipe_ready=True, ready_first=True) # Registered blocks to the gearbox placement.
+            # Registered blocks between Gen2TX and the DC balance (timings: the Gen2TX block
+            # selection to the DC balance popcounts, the DC balance ready is a register), the DC
+            # balance output buffer (registered) to the gearbox placement.
+            self.buffer = buffer = Buffer(gen2_tx_block_layout(), pipe_valid=True)
             self.comb += [
                 tx.source.connect(buffer.sink),
                 buffer.source.connect(dc_balance.sink),
-                dc_balance.source.connect(gear_buffer.sink),
-                gear_buffer.source.connect(gearbox.sink),
+                dc_balance.source.connect(gearbox.sink),
             ]
         else:
             self.comb += [
@@ -1257,7 +1290,7 @@ class Gen2RXDatapath(LiteXModule):
         # # #
 
         self.aligner = aligner = Gen2BlockAligner(data_width)
-        self.rx      = rx      = Gen2RX(n_ts=n_ts)
+        self.rx      = rx      = Gen2RX(n_ts=n_ts, sync_from_sink=True)
         self.comb += [
             sink.connect(aligner.sink),
             aligner.source.connect(rx.sink),

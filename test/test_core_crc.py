@@ -97,6 +97,35 @@ class TestCoreCRC(unittest.TestCase):
                 self.assertEqual((yield dut.value), crc32(data), f"length {length}")
         run_simulation(dut, generator(dut))
 
+    def test_crc32_128(self):
+        # 128-bit words: 4, 8, 12 or 16 bytes per word, the last one 1-16 bytes.
+        rng = random.Random(128)
+        dut = CRC32(data_width=128)
+        def generator(dut):
+            for length in [1, 3, 4, 5, 8, 13, 15, 16, 17, 31, 64, 131]:
+                data = [rng.randrange(256) for _ in range(length)]
+                yield dut.clear.eq(1)
+                yield
+                yield dut.clear.eq(0)
+                i = 0
+                while i < length:
+                    n = min(length - i, 16) if (length - i) <= 16 else rng.choice([4, 8, 12, 16])
+                    chunk = data[i:i+n]
+                    yield dut.ce.eq(1)
+                    yield dut.data.eq(int.from_bytes(bytes(chunk + [rng.randrange(256) for _ in
+                        range(16 - len(chunk))]), "little"))
+                    yield dut.bytes.eq(n)
+                    yield
+                    if (i + n) == length:
+                        self.assertEqual((yield dut.next_value), crc32(data), f"length {length}")
+                        if n <= 4:
+                            self.assertEqual((yield dut.next_value32), crc32(data), f"length {length}")
+                    i += n
+                yield dut.ce.eq(0)
+                yield
+                self.assertEqual((yield dut.value), crc32(data), f"length {length}")
+        run_simulation(dut, generator(dut))
+
     def test_crc32_cascade(self):
         self.test_crc32(cascade=True)
 

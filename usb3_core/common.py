@@ -128,64 +128,21 @@ def tx_header_layout():
     return header_layout() + [("dpp", 1)]
 
 def dpp_layout(data_width=32):
-    """Data Packet Payload words (bytes: valid bytes of the word, 1-4 or 1-8 with 64-bit words, 0 for
-    a zero-length DPP)."""
-    return [("data", data_width), ("bytes", 3 if data_width == 32 else 4)]
+    """Data Packet Payload words (bytes: valid bytes of the word, 1-4, 1-8 or 1-16 with 32, 64 or
+    128-bit words, 0 for a zero-length DPP)."""
+    return [("data", data_width), ("bytes", bits_for(data_width//8))]
 
-def link_pairs_layout():
+def link_pairs_layout(n=2):
     """PHY Link Layer words pairs (USB3PHY link_words=2): words: 1 or 2 valid words, word 0 first
-    (data[0:32]/ctrl[0:4])."""
-    return [("data", 64), ("ctrl", 8), ("words", 2)]
+    (data[0:32]/ctrl[0:4]). n: words entries (USB3PHY link_words=4: 1-4 valid words)."""
+    return [("data", 32*n), ("ctrl", 4*n), ("words", bits_for(n))]
 
-class WordsWindow(LiteXModule):
-    """Link words pairs (link_pairs_layout) -> window of the next two words (w0/c0, w1/c1, n: 0-2
-    available words), consume: words consumed this cycle (0-n)."""
-    def __init__(self):
-        self.sink    = sink = stream.Endpoint(link_pairs_layout())
-        self.n       = Signal(2)  # o
-        self.w0      = Signal(32) # o
-        self.c0      = Signal(4)  # o
-        self.w1      = Signal(32) # o
-        self.c1      = Signal(4)  # o
-        self.consume = Signal(2)  # i
-
-        # # #
-
-        data  = [Signal(32, reset_less=True) for _ in range(4)]
-        ctrl  = [Signal(4,  reset_less=True) for _ in range(4)]
-        level = Signal(3)
-        rem   = Signal(3)
-        self.comb += [
-            self.w0.eq(data[0]), self.c0.eq(ctrl[0]),
-            self.w1.eq(data[1]), self.c1.eq(ctrl[1]),
-            # level - consume: candidates computed from the registered level, selected by consume
-            # (timings: consume late).
-            Case(self.consume, {c: rem.eq(level - c) for c in range(3)}),
-            sink.ready.eq(rem <= 2),
-        ]
-        accept = Signal()
-        self.comb += accept.eq(sink.valid & sink.ready)
-        for i in range(4):
-            shifted_d = Signal(32)
-            shifted_c = Signal(4)
-            self.comb += Case(self.consume, {c: [
-                shifted_d.eq(data[i + c] if (i + c) < 4 else 0),
-                shifted_c.eq(ctrl[i + c] if (i + c) < 4 else 0)] for c in range(3)})
-            second = (accept & (sink.words == 2) & (rem == (i - 1))) if i > 0 else 0
-            self.sync += If(accept & (rem == i),
-                data[i].eq(sink.data[0:32]), ctrl[i].eq(sink.ctrl[0:4])
-            ).Elif(second,
-                data[i].eq(sink.data[32:64]), ctrl[i].eq(sink.ctrl[4:8])
-            ).Else(
-                data[i].eq(shifted_d), ctrl[i].eq(shifted_c)
-            )
-        level_next = Signal(3)
-        self.comb += level_next.eq(rem + Mux(accept, sink.words, 0))
-        self.sync += [
-            level.eq(level_next),
-            # Available words registered (timings).
-            self.n.eq(Mux(level_next >= 2, 2, level_next)),
-        ]
+def WordsWindow(nwords=2, decode=None, nflags=0):
+    """Link words entries (link_pairs_layout(nwords)) -> window of the next nwords words (w[i]/c[i],
+    w0/c0, w1/c1, n: 0-nwords available words), consume: words consumed this cycle (0-n), decode:
+    flags stored with the words (f[i]): usb3_pipe.framing.WordsWindow."""
+    from usb3_pipe.framing import WordsWindow as _WordsWindow
+    return _WordsWindow(decode=decode, nflags=nflags, nwords=nwords)
 
 def bytes_to_be_n(nbytes, n):
     """Valid bytes of the word (1-n, 0 = n) to be (n bits)."""

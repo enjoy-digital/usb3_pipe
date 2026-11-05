@@ -234,13 +234,13 @@ class TestPHY(unittest.TestCase):
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
 
     @pytest.mark.slow
-    def test_phy_gen2_80_dev_pipe_cd_burst_out(self):
+    def test_phy_gen2_80_dev_pipe_cd_burst_out(self, extra=[]):
         # Gen 2 80-bit with Bulk OUT bursts of max size DPs back to back (as a host with queued
         # transfers) and a reactive host model (LGOOD_n/LCRD_x for each device Header Packet as soon
         # as received): no Recovery, device Header Packets/Link Commands CRCs, LGOOD_n latency of the
         # Link Layer slower than the line rate bounded (DPPs buffered before the next DPH).
         out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
-            "--host-burst-out", "4", "--host-burst-len", "1024"])
+            "--host-burst-out", "4", "--host-burst-len", "1024", *extra])
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
         n, errors = device_packets_crc_errors(out)
         self.assertGreater(n, 50)
@@ -250,13 +250,13 @@ class TestPHY(unittest.TestCase):
         self.assertLess(max(latencies), 1333) # 10us at the 133MHz host model clock.
 
     @pytest.mark.slow
-    def test_phy_gen2_80_dev_pipe_cd_lbad(self):
+    def test_phy_gen2_80_dev_pipe_cd_lbad(self, extra=[]):
         # Gen 2 80-bit Bulk OUT burst with a DPH CRC error: device LBAD, Header Packets (and their DPPs)
         # ignored until the host LRTY, retransmission accepted: no Recovery, CRCs, and the
         # retransmitted DPHs acknowledged without waiting for the ignored DPPs (skipped at the DPP
         # data rate).
         out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
-            "--host-lbad-test", "--host-burst-len", "1024", "--dev-loopback-depth", "4096"])
+            "--host-lbad-test", "--host-burst-len", "1024", "--dev-loopback-depth", "4096", *extra])
         self.assertIn("HOST_LBAD_RX", out, tail)
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
         n, errors = device_packets_crc_errors(out)
@@ -269,6 +269,97 @@ class TestPHY(unittest.TestCase):
         lgoods = [t for t in host_lgood_times(section) if t > retx]
         self.assertTrue(len(lgoods) > 0)
         self.assertLess(lgoods[0] - retx, 800) # ~450 cycles for a normal DPH (6us at 133MHz).
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads(self):
+        # Gen 2 80-bit with 128-bit Link Layer words (USB3PHY link_words=4: RX words quads from the
+        # 32 bytes framing, DPP data received 16 bytes per cycle, 128-bit Bulk endpoints).
+        self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--link-words", "4"])
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads_burst_out(self):
+        # Bulk OUT bursts (see test_phy_gen2_80_dev_pipe_cd_burst_out) on 128-bit Link Layer words.
+        self.test_phy_gen2_80_dev_pipe_cd_burst_out(["--link-words", "4"])
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads_lbad(self):
+        # DPH CRC error/LBAD/LRTY (see test_phy_gen2_80_dev_pipe_cd_lbad) on 128-bit Link Layer words.
+        self.test_phy_gen2_80_dev_pipe_cd_lbad(["--link-words", "4"])
+
+    @pytest.mark.slow
+    def test_phy_gen1_duplex(self):
+        # Gen 1 (32-bit Link Layer words) full duplex: Bulk OUT DPs streamed (Rx Header Buffer
+        # credits) while the device sends Bulk IN DPs: no Recovery, CRCs.
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--host-burst-duplex", "4", "--host-burst-len",
+            "1024", "--dev-loopback-depth", "4096", "--output-dir", str(get_output_dir(self))]
+        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=900)
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        self.assertIn("HOST script done", out, tail)
+        self.assertNotRegex(out, r"entering Recovery\.Active state", tail)
+        section = out[out.index("HOST_MARK          9"):]
+        n, errors = device_packets_crc_errors(section)
+        self.assertGreater(n, 80)
+        self.assertEqual(errors, 0)
+
+    @pytest.mark.slow
+    def test_phy_gen1_duplex_skp(self):
+        # Gen 1 full duplex at full rate: ACK TP behind each OUT DP, SKP Ordered Sets at the packets
+        # boundaries: the framing shifted by 2 symbols right behind a packet or a Link Command (the
+        # framing aligner lost the end of the word before the shift: Recovery storm on hardware).
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--host-burst-duplex", "64", "--host-burst-duplex-skp",
+            "--host-burst-len", "1024", "--dev-loopback-depth", "4096", "--output-dir", str(get_output_dir(self))]
+        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=900)
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        self.assertIn("HOST script done", out, tail)
+        self.assertNotRegex(out, r"entering Recovery\.Active state", tail)
+
+    def test_phy_gen2_80_dev_pipe_cd_quads_duplex(self):
+        # Full duplex on 128-bit Link Layer words: Bulk OUT DPs streamed while the device sends Bulk
+        # IN DPs (looped back data): no Recovery, CRCs, host Header Packets acknowledged (LGOOD_n)
+        # within the host PENDING_HP_TIMER while the device transmits DPPs.
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--link-words", "4", "--host-burst-duplex", "4", "--host-burst-len", "1024",
+            "--dev-loopback-depth", "4096"])
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+        section = out[out.index("HOST_MARK          9"):]
+        n, errors = device_packets_crc_errors(section)
+        self.assertGreater(n, 80)
+        self.assertEqual(errors, 0)
+        latencies = host_lgood_latencies(section)
+        self.assertGreaterEqual(len(latencies), 20)
+        self.assertLess(max(latencies), 1333) # 10us at the 133MHz host model clock.
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads_recovery_mid(self):
+        # Host directed Recovery between Bulk OUT DPs on 128-bit Link Layer words, Advertisements on
+        # the U0 re-entry (host model: as soon as its LTSSM is in U0), then Bulk OUT/IN: no device
+        # Recovery request (ex: PENDING_HP_TIMER without the host Advertisement), CRCs.
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--link-words", "4", "--host-recovery-mid", "--host-burst-len", "1024",
+            "--dev-loopback-depth", "4096"], recovery=True)
+        self.assertIn("HOST_ADVERTISEMENT", out, tail)
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+
+    @pytest.mark.slow
+    def test_phy_gen2_80_dev_pipe_cd_quads_recovery_cut(self):
+        # Host directed Recovery cutting a Bulk OUT DP (DPH acknowledged, DPP incomplete): the DPP
+        # completed as missing at the U0 exit (its DPH processed, Rx Header Buffer freed), the DP
+        # requested again (ACK TP retry) and sent again by the host, then Bulk OUT/IN: no device
+        # Recovery request, CRCs.
+        out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
+            "--link-words", "4", "--host-recovery-mid", "--host-recovery-cut", "--host-burst-len", "1024",
+            "--dev-loopback-depth", "4096"], recovery=True)
+        self.assertIn("HOST_ADVERTISEMENT", out, tail)
+        self.assertNotRegex(out, r"Link Layer Recovery request", tail)
+        n, errors = device_packets_crc_errors(out)
+        self.assertEqual(errors, 0)
 
     def test_phy_dev_pipe_cd_no_u1u2(self):
         # Device without U1/U2 (USB3PHY with_u1u2=False) and LTSSM/Link Layer/Core at half the PIPE

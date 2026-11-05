@@ -496,7 +496,7 @@ def usb3_soc_args(parser, output_dir, with_uartbone=True):
     parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
     parser.add_argument("--lean",              action="store_true", help="No PHY debug, throughput profile and core trace (timings).")
     parser.add_argument("--max-burst",         default=8, type=int, help="Bulk endpoints Max Burst (loopback/bench examples).", choices=[2, 4, 8, 16])
-    parser.add_argument("--link-words",        default=1, type=int, help="Link Layer words: 1 (32-bit) or 2 (64-bit, loopback/bench examples: Gen 2 bandwidth).", choices=[1, 2])
+    parser.add_argument("--link-words",        default=1, type=int, help="Link Layer words: 1 (32-bit), 2 (64-bit) or 4 (128-bit, Gen 2 with wide SerDes words), loopback/bench examples: Gen 2 bandwidth.", choices=[1, 2, 4])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
     parser.add_argument("--analyzer-group",    default="link",      help="LiteScope probes group (phase: requires --with-serdes-debug).", choices=USB3_ANALYZER_GROUPS)

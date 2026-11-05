@@ -9,7 +9,7 @@
 - Source (Bulk IN) : 32-bit incrementing counter words at full rate (max size packets).
 - Sink   (Bulk OUT): checks the 32-bit incrementing counter words (resynchronized on errors).
 
-data_width=64: two counter words per 64-bit word (same byte stream), words counters in 32-bit
+data_width=64/128: two/four counter words per 64/128-bit word (same byte stream), words counters in 32-bit
 words.
 """
 
@@ -29,7 +29,7 @@ from usb3_core.common import endpoint_layout
 
 class USB3Bench(LiteXModule):
     def __init__(self, with_csr=True, data_width=32):
-        assert data_width in [32, 64]
+        assert data_width in [32, 64, 128]
         n = data_width//32 # Counter words per word.
         self.source = source = stream.Endpoint(endpoint_layout(data_width)) # To Bulk IN.
         self.sink   = sink   = stream.Endpoint(endpoint_layout(data_width)) # From Bulk OUT.

@@ -127,6 +127,7 @@ class USB3LinkTrace(LiteXModule):
             CSRField("clear",  size=1, pulse=True, description="Trace clear (timestamp reset)."),
             CSRField("circular", size=1, description="Circular, stops on a U0 exit."),
             CSRField("filter",   size=1, description="Drop LUP/LDN only entries and ITPs."),
+            CSRField("skip",     size=4, description="Circular: U0 exits/Recovery requests ignored before stopping."),
         ])
         self._count   = CSRStatus(16, description="Recorded entries.")
         self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
@@ -154,16 +155,18 @@ class USB3LinkTrace(LiteXModule):
             link.dbg_rx_lc, link.dbg_tx_lc, link.dbg_rx_hp, link.dbg_tx_hp,
             link.dbg_u0 & ~u0_d, ~link.dbg_u0 & u0_d, link.dbg_recovery))
         entry = Signal(96)
-        # Keep-alive filter: LUP (TX), LDN (RX) and ITPs (with their LGOOD_n/LCRD_x) dropped.
+        # Keep-alive filter: LUP (TX), LDN (RX) and ITPs dropped (their LGOOD_n/LCRD_x kept: the
+        # LGOOD_n/LCRD_x sequences diagnose the lost Link Commands).
         keepalive = Signal()
         itp       = Signal()
         self.comb += [
             itp.eq(link.dbg_rx_hp & (link.dbg_rx_hp_info[0:5] == TYPE_ITP)),
             keepalive.eq(
-                (~link.dbg_rx_lc | (link.dbg_rx_lc_info == 0x580) | (link.dbg_rx_lc_info[7:11] == 0)) &
-                (~link.dbg_tx_lc | (link.dbg_tx_lc_sel  == 0x400) | (link.dbg_tx_lc_sel[7:11]  == 0)) &
+                (~link.dbg_rx_lc | (link.dbg_rx_lc_info == 0x580)) &
+                (~link.dbg_tx_lc | (link.dbg_tx_lc_sel  == 0x400)) &
                 (~link.dbg_rx_hp | itp) & ~link.dbg_tx_hp & (events[4:7] == 0)),
         ]
+        skipped = Signal(4)
         record = Signal()
         self.comb += [
             entry.eq(Cat(timestamp, events, link.dbg_rx_lc_info, link.dbg_tx_lc_sel,
@@ -178,12 +181,22 @@ class USB3LinkTrace(LiteXModule):
             If(wr_port.we,
                 pointer.eq(Mux(pointer == (depth - 1), 0, pointer + 1)),
                 If(count != depth, count.eq(count + 1)),
-                If(self._control.fields.circular & (events[5] | events[6]), stopped.eq(1)),
+                # Stop events: U0 exits, Recovery requests (not counted with skip: followed by a U0
+                # exit).
+                If(self._control.fields.circular &
+                    (events[5] | (events[6] & (self._control.fields.skip == 0))),
+                    If(skipped == self._control.fields.skip,
+                        stopped.eq(1)
+                    ).Else(
+                        skipped.eq(skipped + 1)
+                    )
+                ),
             ),
             If(self._control.fields.clear,
                 count.eq(0),
                 pointer.eq(0),
                 stopped.eq(0),
+                skipped.eq(0),
                 timestamp.eq(0),
             ),
         ]

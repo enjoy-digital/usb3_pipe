@@ -149,6 +149,7 @@ _STATUS_DESCRIPTIONS = {
     "hot_reset"    : "LTSSM in Hot Reset.",
     "ess_inactive" : "LTSSM in eSS.Inactive.",
     "polling_idle" : "LTSSM in Polling.Idle.",
+    "rx_keep"      : "RX symbols kept for the Link Layer until U0 (Recovery.Idle).",
 }
 
 _LINK_CTRL_DESCRIPTIONS = {

@@ -304,7 +304,8 @@ class TSUnit(LiteXModule):
     Ordered Set is always completed (tx_active while transmitting), including when the requests come
     from a LTSSM in another clock domain and change after the end of a burst (tx_done).
     """
-    def __init__(self, serdes):
+    def __init__(self, serdes, drive_sink=True):
+        self.source            = stream.Endpoint([("data", 32), ("ctrl", 4)]) # o: Ordered Sets.
         self.rx_ts1            = Signal()        # o (Pulse)
         self.rx_ts1_inv        = Signal()        # o (Pulse)
         self.rx_ts2            = Signal()        # o (Pulse)
@@ -366,14 +367,27 @@ class TSUnit(LiteXModule):
         # Generations are aborted when no longer requested (tx_enable deasserted or other TS
         # requested by the LTSSM): an interrupted burst restarts on an Ordered Set boundary (with
         # COM, 6.4.1.1) and with a full burst.
+        # Ordered Sets on source (one-hot selection: timings), on serdes.sink with drive_sink (else
+        # selected by the PIPE with its scrambled stream).
+        source = self.source
         for i, g in enumerate(generators):
             self.comb += [
                 g.abort.eq(~sel[i]),
-                If(sel[i],
-                    g.start.eq(1),
-                    g.source.connect(serdes.sink),
-                ),
+                g.start.eq(sel[i]),
+                g.source.ready.eq(sel[i] & source.ready),
             ]
+        def selected(name, width=1):
+            return Reduce("OR", [Replicate(sel[i], width) & getattr(g.source, name)
+                for i, g in enumerate(generators)])
+        self.comb += [
+            source.valid.eq(selected("valid")),
+            source.first.eq(selected("first")),
+            source.last.eq(selected("last")),
+            source.data.eq(selected("data", 32)),
+            source.ctrl.eq(selected("ctrl", 4)),
+        ]
+        if drive_sink:
+            self.comb += If(self.tx_active, source.connect(serdes.sink))
         self.comb += [
             self.tx_done.eq(tseq_generator.done | ts1_generator.done | ts2_generator.done),
             # Link Functionality of the transmitted TS2 (Hot Reset/Loopback, 7.5.4.9.1).

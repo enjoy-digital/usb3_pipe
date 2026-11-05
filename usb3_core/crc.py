@@ -97,8 +97,9 @@ class CRC16Words(LiteXModule):
 # CRC-32 -------------------------------------------------------------------------------------------
 
 class CRC32(LiteXModule):
-    """CRC-32 of a Data Packet Payload, computed on 32-bit words (1 to 4 valid bytes per word) or on
-    64-bit words (data_width=64: 1 to 4 valid bytes on data[0:32], or 8 valid bytes).
+    """CRC-32 of a Data Packet Payload, computed on 32-bit words (1 to 4 valid bytes per word), on
+    64-bit words (data_width=64: 1 to 4 valid bytes on data[0:32], or 8 valid bytes) or on 128-bit
+    words (data_width=128: 1 to 16 valid bytes).
 
     clear: initialize the CRC (before the first word), ce: process data (bytes valid bytes:
     data[0:8] first, 0: no data). value: CRC of the processed data (registered state), next_value:
@@ -107,32 +108,49 @@ class CRC32(LiteXModule):
     cascade: the 1 to 4 bytes results from 4 chained 1-byte stages (taps) instead of 4 parallel
     equation sets (less logic: ~-27% with data_width=64, deeper: ~+3 LUT levels), the 8 bytes
     equations unchanged.
+
+    data_width=128: the full 4-byte words of the data (4, 8, 12 or 16 bytes) processed with the
+    data, the last 1-3 bytes (a word not a multiple of 4 bytes: the last word of a DPP) registered
+    and processed in value/next_value (state loop on the full words only, timings): the next data
+    is then processed after a clear. next_value32: CRC including 1-4 bytes (bytes) of data[0:32] (a
+    last word on 32 bits: shallower than next_value).
     """
     def __init__(self, data_width=32, cascade=False):
-        assert data_width in [32, 64]
-        self.clear      = Signal()           # i
-        self.ce         = Signal()           # i
-        self.data       = Signal(data_width) # i
-        self.bytes      = Signal(4)          # i: Valid bytes (0-4, 8 with data_width=64).
-        self.value      = Signal(32)         # o
-        self.next_value = Signal(32)         # o
+        assert data_width in [32, 64, 128]
+        self.clear      = Signal()                   # i
+        self.ce         = Signal()                   # i
+        self.data       = Signal(data_width)         # i
+        self.bytes      = Signal(bits_for(data_width//8)) # i: Valid bytes (0-4, 8 with data_width=64, 0-16 with data_width=128).
+        self.value      = Signal(32)                 # o
+        self.next_value = Signal(32)                 # o
+        self.next_value32 = Signal(32)               # o
 
         # # #
 
+        poly  = 0x04c11db7
         state = Signal(32, reset=0xffffffff)
         new   = Signal(32)
+        new32 = Signal(32)
+        self.comb += [
+            Case(self.bytes, {**{n: new32.eq(Cat(*crc_next(32, poly, state, self.data[:8*n])))
+                for n in [1, 2, 3, 4]}, "default": new32.eq(state)}),
+            self.next_value32.eq(crc_value(32, new32)),
+        ]
+        if data_width == 128:
+            self.add_words_tail(state, new, poly)
+            return
         sizes = [1, 2, 3, 4] + ([8] if data_width == 64 else [])
         if cascade:
             taps = [state]
             for i in range(4):
                 tap = Signal(32)
-                self.comb += tap.eq(Cat(*crc_next(32, 0x04c11db7, taps[-1], self.data[8*i:8*(i + 1)])))
+                self.comb += tap.eq(Cat(*crc_next(32, poly, taps[-1], self.data[8*i:8*(i + 1)])))
                 taps.append(tap)
             cases = {n: new.eq(taps[n]) for n in [1, 2, 3, 4]}
             if data_width == 64:
-                cases[8] = new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:64])))
+                cases[8] = new.eq(Cat(*crc_next(32, poly, state, self.data[:64])))
         else:
-            cases = {n: new.eq(Cat(*crc_next(32, 0x04c11db7, state, self.data[:8*n])))
+            cases = {n: new.eq(Cat(*crc_next(32, poly, state, self.data[:8*n])))
                 for n in sizes}
         cases["default"] = new.eq(state)
         self.comb += Case(self.bytes, cases)
@@ -145,5 +163,42 @@ class CRC32(LiteXModule):
         ]
         self.comb += [
             self.value.eq(crc_value(32, state)),
+            self.next_value.eq(crc_value(32, new)),
+        ]
+
+    def add_words_tail(self, state, new, poly):
+        # Full words (bytes[2:5]: 0-4 words) -> state, tail bytes (bytes[0:2]: 0-3) registered.
+        words     = self.bytes[2:5]
+        tail      = self.bytes[0:2]
+        full      = Signal(32)
+        tail_data = Signal(24)
+        self.comb += Case(words, {
+            **{q: [
+                full.eq(Cat(*crc_next(32, poly, state, self.data[:32*q])) if q else state),
+                tail_data.eq(self.data[32*q:32*q + 24] if q < 4 else 0),
+            ] for q in range(5)},
+            "default": full.eq(state),
+        })
+        tail_r      = Signal(2)
+        tail_data_r = Signal(24, reset_less=True)
+        self.sync += [
+            If(self.clear,
+                state.eq(0xffffffff),
+                tail_r.eq(0),
+            ).Elif(self.ce,
+                state.eq(full),
+                tail_r.eq(tail),
+                tail_data_r.eq(tail_data),
+            )
+        ]
+        def with_tail(s, n, d):
+            # s with the n (Signal: 0-3) bytes of d.
+            r = Signal(32)
+            self.comb += Case(n, {b: r.eq(Cat(*crc_next(32, poly, s, d[:8*b])) if b else s)
+                for b in range(4)})
+            return r
+        self.comb += [
+            new.eq(with_tail(full, tail, tail_data)),
+            self.value.eq(crc_value(32, with_tail(state, tail_r, tail_data_r))),
             self.next_value.eq(crc_value(32, new)),
         ]
