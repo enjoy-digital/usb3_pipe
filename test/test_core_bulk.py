@@ -13,6 +13,8 @@ import pytest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_core.host_model import *
 from usb3_core.common     import LCMD_LBAD, TYPE_TP, TYPE_DP, TP_SUB_ACK, TP_SUB_NRDY, TP_SUB_ERDY
 from usb3_core.endpoints  import MAX_PACKET_SIZE, MAX_PACKET_WORDS

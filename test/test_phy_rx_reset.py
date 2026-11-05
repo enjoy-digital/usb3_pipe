@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.phy import USB3PHY
 
 from test.model.gt import GTModel

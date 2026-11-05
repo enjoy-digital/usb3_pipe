@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.ltssm import USB3LTSSM
 
 # Single-instance LTSSM state/transition/timeout coverage (USB 3.2 section 7.5) ---------------------

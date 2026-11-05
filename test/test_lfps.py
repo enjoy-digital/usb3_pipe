@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe import lfps
 
 class TestLFPS(unittest.TestCase):

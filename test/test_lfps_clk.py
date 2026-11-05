@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.lfps import LFPSBurstGenerator
 
 # LFPS clock period (USB 3.2 6.9.1, Table 6-29: tPeriod 20-100ns) ----------------------------------

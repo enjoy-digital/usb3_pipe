@@ -9,6 +9,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_core.bridge import USB3ByteUnpacker, USB3BytePacker
 
 def to_words(data):
