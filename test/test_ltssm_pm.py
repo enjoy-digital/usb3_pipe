@@ -17,6 +17,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.ltssm import USB3LTSSM
 from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
     exit_burst_cycles, exit_u1_min_cycles, exit_u2_min_cycles, exit_u3_min_cycles)

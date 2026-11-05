@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import K

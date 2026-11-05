@@ -9,6 +9,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.common import COM, SKP, gen2_skp_lfsr_symbols
 from usb3_pipe.scrambling import Scrambler, Descrambler
 from usb3_pipe.scrambling import GEN2_LFSR_SEED, gen2_lfsr_advance, Gen2Scrambler

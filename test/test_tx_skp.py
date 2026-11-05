@@ -9,6 +9,8 @@ import unittest
 from migen import *
 from migen.sim import passive
 
+from litex.gen import *
+
 from usb3_pipe.common import SKP
 from usb3_pipe.core import USB3PIPE
 from usb3_pipe.datapath import TXSKPInserter

@@ -16,6 +16,8 @@ from math import ceil, floor
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe import lfps
 from usb3_pipe.lfps import LFPSChecker, LFPSBurstChecker, LFPSUnit
 

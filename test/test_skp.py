@@ -9,6 +9,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.datapath import RXSKPRemover
 
 from test.common import (words_to_symbols, symbols_to_words, strip_skp, random_symbols,

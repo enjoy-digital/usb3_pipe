@@ -10,6 +10,8 @@ import pytest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.core import USB3PIPE
 
 from sim import USB3SerDesModel

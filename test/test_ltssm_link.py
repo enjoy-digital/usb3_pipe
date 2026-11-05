@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from test.model.ltssm import LTSSMLinkHarness
 
 

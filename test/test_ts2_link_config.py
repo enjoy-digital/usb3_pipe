@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.common import TS1, TS2, LinkConfig
 from usb3_pipe.core import USB3PIPE
 from usb3_pipe.phy import USB3PHY
