@@ -173,7 +173,8 @@ class RXWordAligner(LiteXModule):
         #   output word is the buffered word, the next one starts on the run).
         # - Run later in its word: new alignment on the next cycle (the word output with the current
         #   alignment is complete, the new alignment on this cycle would drop its first symbols: end
-        #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run word before the run (Logical Idle) are skipped.
+        #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run word
+        #   before the run (Logical Idle) are skipped.
         run_start     = Signal()
         alignment_sel = Signal(2)
         self.comb += [
