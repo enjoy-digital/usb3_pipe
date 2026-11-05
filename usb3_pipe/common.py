@@ -10,6 +10,7 @@ Configuration and Gen 2 Block Headers (6.3.2.2), Symbols/Ordered Sets identifier
 """
 
 from migen import *
+from migen.genlib.cdc import MultiReg, GrayCounter
 
 from litex.gen import *
 
@@ -133,7 +134,6 @@ class _AsyncFIFORegisteredRead(Module):
     update and the memory read are not chained (timings, FPGAs implementing the small memories as
     registers/LUTs: Gowin GW5A)."""
     def __init__(self, width, depth):
-        from migen.genlib.cdc import MultiReg, GrayCounter
         self.width    = width
         self.depth    = depth
         self.din      = Signal(width)
@@ -198,7 +198,6 @@ class _AsyncFIFOPipelinedRead(Module):
     memory address path, timings on fabrics with slow block RAM address routing) into a 3-entry
     output buffer loaded by the memory reads (full read rate). Latency: as AsyncFIFOBuffered."""
     def __init__(self, width, depth):
-        from migen.genlib.cdc import MultiReg, GrayCounter
         self.width    = width
         self.depth    = depth
         self.din      = Signal(width)
@@ -284,16 +283,14 @@ class _AsyncFIFOPipelinedRead(Module):
 class AsyncFIFOPipelinedRead(LiteXModule):
     """stream.AsyncFIFO(layout, depth, buffered=True) equivalent with _AsyncFIFOPipelinedRead."""
     def __init__(self, layout, depth):
-        from litex.soc.interconnect.stream import _FIFOWrapper
-        self.wrapper = _FIFOWrapper(_AsyncFIFOPipelinedRead, layout, depth)
+        self.wrapper = stream._FIFOWrapper(_AsyncFIFOPipelinedRead, layout, depth)
         self.sink    = self.wrapper.sink
         self.source  = self.wrapper.source
 
 class AsyncFIFO(LiteXModule):
     """stream.AsyncFIFO(layout, depth, buffered=True) equivalent with _AsyncFIFORegisteredRead."""
     def __init__(self, layout, depth=8):
-        from litex.soc.interconnect.stream import _FIFOWrapper
-        self.wrapper = _FIFOWrapper(_AsyncFIFORegisteredRead, layout, depth)
+        self.wrapper = stream._FIFOWrapper(_AsyncFIFORegisteredRead, layout, depth)
         self.sink    = self.wrapper.sink
         self.source  = self.wrapper.source
 

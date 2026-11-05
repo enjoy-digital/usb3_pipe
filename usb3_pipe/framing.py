@@ -538,7 +538,7 @@ class Gen2RXFraming(LiteXModule):
         # following fast Link Commands would overtake it (LGOOD_n/LCRD_x out of order: Recovery,
         # seen on hardware at 10Gbps). With 16+ bytes per cycle, decoded on the registered chunk
         # (timings).
-        from usb3_core.crc import CRC5
+        from usb3_core.crc import CRC5 # Imported here: the PHY package does not depend on usb3_core.
         def fast_kind(c):
             return (((c[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
                     ((c[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.

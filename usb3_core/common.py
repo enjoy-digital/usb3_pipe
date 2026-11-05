@@ -17,6 +17,8 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.framing import WordsWindow as _WordsWindow
+
 # Helpers ------------------------------------------------------------------------------------------
 
 def swap_data(data):
@@ -141,7 +143,6 @@ def WordsWindow(nwords=2, decode=None, nflags=0):
     """Link words entries (link_pairs_layout(nwords)) -> window of the next nwords words (w[i]/c[i],
     w0/c0, w1/c1, n: 0-nwords available words), consume: words consumed this cycle (0-n), decode:
     flags stored with the words (f[i]): usb3_pipe.framing.WordsWindow."""
-    from usb3_pipe.framing import WordsWindow as _WordsWindow
     return _WordsWindow(decode=decode, nflags=nflags, nwords=nwords)
 
 def bytes_to_be_n(nbytes, n):

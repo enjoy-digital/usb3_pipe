@@ -25,8 +25,10 @@ bench/alibaba_xcku3p.py).
 
 from migen import *
 
-from litex.soc.cores.uart import UART, Stream2Wishbone
+from litex.gen import *
+
 from litex.soc.interconnect import stream
+from litex.soc.cores.uart   import UART, Stream2Wishbone
 
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore

@@ -22,6 +22,8 @@ from usb3_pipe.datapath   import GEN2_DATA_WIDTH
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, link_layout
+from usb3_pipe.framing    import gen2_link_layout, WordsToPairs, PairsToWords, WordsPacker
+from usb3_pipe.framing    import PacketsBuffer, LogicalIdleFilter, WordsNarrower
 
 # LTSSM <-> PIPE -----------------------------------------------------------------------------------
 
@@ -340,7 +342,6 @@ class USB3PHY(LiteXModule):
 
     def add_pairs_adapters(self, pipe):
         """Words pairs (link_words=2) <-> Gen 1 PIPE words: returns the (sink, source) pairs streams."""
-        from usb3_pipe.framing import WordsToPairs, PairsToWords
         to_words = PairsToWords()
         to_pairs = WordsToPairs()
         self.submodules += to_words, to_pairs
@@ -403,9 +404,6 @@ class USB3PHY(LiteXModule):
         entry (the Link Layer only sends words in U0, the PIPE tx_ready resynchronization is shorter
         than the FIFO latency). The RX path has no back-pressure (received words at the line rate:
         the Link Layer reads its words at least at the received words rate)."""
-        from usb3_pipe.framing import gen2_link_layout, WordsPacker, PairsToWords, PacketsBuffer
-        from usb3_pipe.framing import LogicalIdleFilter
-        from usb3_pipe.framing import WordsNarrower
         # layout: Gen 1 words/TX words (pairs with link_words=4), ext_layout: Link Layer words.
         layout     = [("data", 32), ("ctrl", 4)] if self.link_words == 1 else gen2_link_layout()
         ext_layout = layout if self.link_words != 4 else gen2_link_layout(4)
@@ -566,7 +564,6 @@ class USB3PHY(LiteXModule):
     def add_gen2_datapath(self, pipe):
         """Link Layer words: Gen2PIPE (Gen 2 packet framing) while gen2_active, else Gen 1 PIPE
         (words or words pairs: link_words)."""
-        from usb3_pipe.framing import gen2_link_layout
         layout = [("data", 32), ("ctrl", 4)] if self.link_words == 1 else gen2_link_layout()
         self.sink   = sink   = stream.Endpoint(layout)
         self.source = source = stream.Endpoint(layout)

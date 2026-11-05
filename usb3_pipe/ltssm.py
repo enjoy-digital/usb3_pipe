@@ -15,11 +15,11 @@ from migen.genlib.misc import WaitTimer
 from litex.gen import *
 
 from usb3_pipe.common import LTSSM_PIPE_INTERFACE
-from usb3_pipe.lfps import (U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst,
-    exit_burst_cycles,
-    exit_u1_min_cycles, exit_u2_min_cycles, exit_u3_min_cycles)
-from usb3_pipe.lfps import (LFPSRXFrontEnd, SCDGenerator, SCDChecker, LBPMGenerator, LBPMChecker,
-    LBPM_PHY_CAPABILITY, LBPM_PHY_READY, lbpm_phy_capability, rounded_cycles)
+from usb3_pipe.lfps   import U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst
+from usb3_pipe.lfps   import exit_burst_cycles, exit_u1_min_cycles, exit_u2_min_cycles
+from usb3_pipe.lfps   import exit_u3_min_cycles
+from usb3_pipe.lfps   import LFPSRXFrontEnd, SCDGenerator, SCDChecker, LBPMGenerator, LBPMChecker
+from usb3_pipe.lfps   import LBPM_PHY_CAPABILITY, LBPM_PHY_READY, lbpm_phy_capability, rounded_cycles
 
 # Link Training and Status State Machine -----------------------------------------------------------
 

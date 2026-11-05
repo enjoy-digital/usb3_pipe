@@ -32,6 +32,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common import phy_layout
+from usb3_core.crc    import CRC5
 
 # CRCs (USB 3.2 7.2.1/7.2.2: bits transmitted LSB first, inverted remainder) -----------------------
 
@@ -339,7 +340,6 @@ class USB3HostModel(LiteXModule):
             "default": []
         }))
         # Reactive acknowledges (OP_ACK) ----------------------------------------------------------
-        from usb3_core.crc import CRC5
         ack_enable = Signal()
         ack_ssp    = Signal()
         ack_seq    = Signal(4)

@@ -14,14 +14,21 @@ import argparse
 import common # Repository root on the path.
 
 from migen import *
+from migen.genlib.cdc import MultiReg, PulseSynchronizer
 
 from litex.gen import *
 
 from litex_boards.platforms import sipeed_tang_mega_138k_pro
 
+from litex.soc.interconnect           import stream
+from litex.soc.interconnect.csr       import *
 from litex.soc.cores.clock.gowin_gw5a import GW5APLL
 
-from usb3_pipe import GW5USB3SerDes
+from usb3_pipe          import GW5USB3SerDes
+from usb3_pipe.common   import COM, K, BLOCK_HEADER_DATA
+from usb3_pipe.datapath import Gen2RX, Gen2RXDatapath, GEN2_IDLE_BLOCK, GEN2_RX_COUNTERS
+from usb3_pipe.framing  import Gen2LinkRX, SHP, SLC
+from usb3_core.crc      import CRC16Words, CRC5
 
 from usb3_soc import USB3BaseSoC, add_usb3_device, usb3_analyzer
 from usb3_soc import usb3_soc_args, usb3_soc_argdict, usb3_soc_build
@@ -138,7 +145,6 @@ class USB3SoC(USB3BaseSoC):
         # RX words buffer throttle level (entries of 32 bytes).
         phy = getattr(self, "usb3_phy", None)
         if phy is not None and hasattr(phy, "gen2_rx_throttle_level"):
-            from litex.soc.interconnect.csr import CSRStorage, CSRField
             self.usb3_rx_flow = CSRStorage(fields=[
                 CSRField("t2_credits",     size=3, offset=0, reset=4,  description="Type 2 credits held by the host (4: no limit)."),
                 CSRField("throttle_level", size=8, offset=8, reset=16, description="RX throttle level (32-byte entries)."),
@@ -150,7 +156,6 @@ class USB3SoC(USB3BaseSoC):
 
         # Gen 2 TX FFE (runtime, applied at the next 10Gbps rate change) and PHY reset (retraining).
         if with_ltssm_history and hasattr(usb3_serdes, "tx_ffe_manual"):
-            from litex.soc.interconnect.csr import CSRStorage, CSRField
             self.usb3_tx_ffe = CSRStorage(fields=[
                 CSRField("txlev",  size=4, offset=0,  reset=14, description="TX amplitude."),
                 CSRField("c1",     size=4, offset=4,  reset=11, description="TX post-cursor."),
@@ -209,11 +214,9 @@ class USB3SoC(USB3BaseSoC):
         if with_analyzer:
             self.analyzer = usb3_analyzer(self, analyzer_group, analyzer_csv)
 
-
     def add_indexed_status(self, name, value):
         """Wide (debug) value read 32-bit word by word: <name>_sel (word index), <name>_data (word,
         registered): small CSR bus read mux (timings)."""
-        from litex.soc.interconnect.csr import CSRStorage, CSRStatus
         words = (len(value) + 31)//32
         sel   = CSRStorage(bits_for(max(words - 1, 1)), name=f"{name}_sel")
         data  = CSRStatus(32, name=f"{name}_data")
@@ -225,9 +228,6 @@ class USB3SoC(USB3BaseSoC):
     def add_pipe_counters(self, pipe, serdes, cd):
         """PIPE bring-up counters (cd clock domain, 16-bit wrapping, resynchronized): SerDes RX words
         with a COM / K28.4 (decode error substitution) symbol, TS1/TS1 inverted/TS2 detections."""
-        from migen.genlib.cdc import MultiReg
-        from litex.soc.interconnect.csr import CSRStatus
-        from usb3_pipe.common import COM, K
         src = serdes.source
         def has(symbol):
             return src.valid & src.ready & Reduce("OR", [src.ctrl[i] & (src.data[8*i:8*(i+1)] == symbol)
@@ -265,10 +265,7 @@ class USB3SoC(USB3BaseSoC):
         Sets, control blocks, SYNC/SDS/unknown control blocks (32-bit, quasi-static reads).
         The raw words (gearbox output) are not checked: a second block aligner does not fit the tx
         clock domain timings."""
-        from migen.genlib.cdc import MultiReg
-        from litex.soc.interconnect import stream
         from usb3_pipe.common   import BLOCK_HEADER_DATA
-        from usb3_pipe.datapath import Gen2RX, GEN2_IDLE_BLOCK
         blocks = phy.gen2_pipe.tx.gearbox.sink
         # Tap registered (timings: fanout of the gearbox input registers).
         accept = Signal()
@@ -333,10 +330,6 @@ class USB3SoC(USB3BaseSoC):
         (<name>_hp/_lc/_status CSRs, overflow: input buffer overflow (clock_domain, sticky), with
         the blocks buffer one). Words consumed at the sys rate: OUT traffic (the blocks buffer
         overflows at the IN rate)."""
-        from migen.genlib.cdc import MultiReg
-        from litex.soc.interconnect.csr import CSRStatus
-        from usb3_pipe.framing import Gen2LinkRX, SHP, SLC
-        from usb3_core.crc import CRC16Words, CRC5
         checker = ClockDomainsRenamer({"rx": clock_domain})(Gen2LinkRX(buffer_depth=1024, link_words=1,
             nbytes=32))
         setattr(self.submodules, f"{name}er", checker)
@@ -389,7 +382,6 @@ class USB3SoC(USB3BaseSoC):
         )
         # Snapshot of the first bad Header Packet since clear (corruption pattern): its 4 words and
         # the 4 words before (newest first: data words then their ctrl nibbles), <name>_snap.
-        from litex.soc.interconnect.csr import CSR
         hist  = [Signal(36) for _ in range(8)]
         snap  = [Signal(36) for _ in range(8)]
         taken = Signal()
@@ -438,8 +430,6 @@ class USB3SoC(USB3BaseSoC):
         """Gen 2 RX backlog probes (bring-up): words buffer max level (32-byte entries), cycles with
         the RX framing output stalled (words buffer full), blocks pairs buffer overflow (sticky),
         cleared by gen2_rx_probes_clear."""
-        from migen.genlib.cdc import MultiReg
-        from litex.soc.interconnect.csr import CSR
         lrx = phy.gen2_pipe.link_rx
         self._gen2_rx_probes_clear = clear = CSR()
         max_level = Signal(16)
@@ -456,7 +446,6 @@ class USB3SoC(USB3BaseSoC):
         # PHY Gen 2 RX datapath counters (GEN2_RX_COUNTERS order: blocks, header errors (corrected
         # single bit errors: line BER), alignment errors, SYNC/TSEQ/TS1/TS2/SDS/SKP Ordered Sets,
         # unknown control blocks), rx clock domain, quasi-static reads.
-        from usb3_pipe.datapath import GEN2_RX_COUNTERS
         counts = []
         for name, _ in GEN2_RX_COUNTERS:
             c = Signal(32)
@@ -484,8 +473,6 @@ class USB3SoC(USB3BaseSoC):
         """GTR12 RX interface probe (bring-up): rx clock cycles with RX_VLD_OUT low (the raw RX words
         are consumed every cycle: an invalid word would be a duplicated/stale word), 32-bit,
         quasi-static reads."""
-        from migen.genlib.cdc import MultiReg
-        from litex.soc.interconnect.csr import CSRStatus
         count = Signal(32)
         self.sync.rx += If(~gtr12.rx_valid, count.eq(count + 1))
         self.usb3_gtr12_rx_invalid = CSRStatus(32, description="GTR12 RX_VLD_OUT low cycles (rx clock).")
@@ -495,7 +482,6 @@ class USB3SoC(USB3BaseSoC):
         """Header Packets acknowledgement latency (bring-up): durations of the PENDING_HP_TIMER runs
         (Header Packets sent, no LGOOD_n received), max and histogram (16 bins of 64 cycles, last:
         960+ cycles), 16-bit saturating, cleared by lgood_latency_clear."""
-        from litex.soc.interconnect.csr import CSR
         link = self.usb3_core.link
         self._lgood_latency_clear = clear = CSR()
         wait = link.t_pending_hp.wait
@@ -520,7 +506,6 @@ class USB3SoC(USB3BaseSoC):
         """LTSSM states history (bring-up): last n states (5-bit encoding) with their entry time
         (us), frozen while ltssm_history_freeze is set, and automatically after `after` changes
         following the first U0 exit (states before/after it kept, ltssm_history_rearm: re-armed)."""
-        from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
         self._ltssm_history_freeze = CSRStorage()
         self._ltssm_history_rearm  = CSR()
         sw      = len(phy.ltssm_state)
@@ -562,8 +547,6 @@ class USB3SoC(USB3BaseSoC):
         """RX snapshots (bring-up, captured registers static when read): 8 cycles of GTR12 raw words
         and decoders outputs from a K28.5 in the raw words (rx clock domain), 16 SerDes RX words
         (cd clock domain). Re-armed on each rx_snapshot_arm write."""
-        from migen.genlib.cdc import PulseSynchronizer
-        from litex.soc.interconnect.csr import CSR, CSRStatus
         self._rx_snapshot_arm = CSR()
         def snapshot(domain, n, data, trigger):
             arm = PulseSynchronizer("sys", domain)
@@ -637,7 +620,6 @@ class USB3SoC(USB3BaseSoC):
         """SuperSpeedPlus Polling status (bring-up): SSPPolling state, last received LFPS burst/period
         (sys cycles), received bursts/SCD1/SCD2/plain Polling LFPS counters, transmitted bursts
         counters (SSPPolling, SerDes in cd)."""
-        from migen.genlib.cdc import MultiReg
         fe      = ssp.frontend
         burst   = Signal(16)
         period  = Signal(16)
@@ -674,7 +656,6 @@ class USB3SoC(USB3BaseSoC):
         """Gen 2 RX monitor (bring-up): Gen2RXDatapath on the raw RX words in a reset-less rx clock
         domain (kept across the rate changes: counters accumulated over the 10Gbps periods), with
         its debug CSRs (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters)."""
-        from usb3_pipe.datapath import Gen2RXDatapath
         from usb3_pipe.debug    import Gen2RXDebug
         self.cd_rx_nr = ClockDomain(reset_less=True)
         self.comb += self.cd_rx_nr.clk.eq(ClockSignal("rx"))
@@ -690,8 +671,6 @@ class USB3SoC(USB3BaseSoC):
     def add_gtr12_transitions(self, gtr12):
         """Transitions counters of the GTR12 lane status bits (rx_elecidle, astat[0:6], stat[0:13]),
         sampled in the reset-less RX clock domain: LFPS/Electrical Idle indicators identification."""
-        from migen.genlib.cdc import MultiReg
-        from litex.soc.interconnect.csr import CSRStatus
         self.cd_rx_nr = ClockDomain(reset_less=True)
         self.comb += self.cd_rx_nr.clk.eq(ClockSignal("rx"))
         bits = [gtr12.rx_elecidle] + [gtr12.astat[i] for i in range(6)] + [gtr12.stat[i] for i in range(13)]
