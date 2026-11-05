@@ -449,7 +449,7 @@ class TestLTSSMPMConcurrency(PMTestCase):
         dut = self.make_dut()
         run_simulation(dut, generator(dut))
 
-# Ux Exit (6.9.2, 7.2.4.2.7, 7.5.7.2/7.5.8.2/7.5.9.2) ------------------------------------------------
+# Ux Exit (6.9.2, 7.2.4.2.7, 7.5.7.2/7.5.8.2/7.5.9.2) ----------------------------------------------
 
 class TestLTSSMUxExit(PMTestCase):
     def make_exit_dut(self, **kwargs):
@@ -665,7 +665,7 @@ class TestLTSSMUxExit(PMTestCase):
         dut = self.make_exit_dut()
         run_simulation(dut, generator(dut))
 
-# U3 Wakeup retries (7.2.4.2.4, tU3WakeupRetryDelay) ------------------------------------------------
+# U3 Wakeup retries (7.2.4.2.4, tU3WakeupRetryDelay) -----------------------------------------------
 
 class TestLTSSMU3WakeupRetry(PMTestCase):
     def test_ds_wakeup_retries_stays_u3(self):
@@ -820,7 +820,7 @@ class TestLTSSMU1Timers(PMTestCase):
         dut = self.make_dut(sys_clk_freq=LONG_CLK_FREQ, timer_scale=LONG_SCALE)
         run_simulation(dut, generator(dut))
 
-# Two LTSSMs back-to-back ---------------------------------------------------------------------------
+# Two LTSSMs back-to-back --------------------------------------------------------------------------
 
 class LTSSMPMLinkHarness(LTSSMLinkHarness):
     """LTSSMLinkHarness + LCMD (LGO/LAU/LXU) and exit/wakeup/Ping LFPS cross connections.

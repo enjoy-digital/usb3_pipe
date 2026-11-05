@@ -180,7 +180,7 @@ class PyHost:
             yield
         raise TimeoutError("PyHost wait timeout")
 
-# Received Packets Helpers ------------------------------------------------------------------------
+# Received Packets Helpers -------------------------------------------------------------------------
 
 def tps(packets):
     """Transaction Packets: (subtype, nump, seq)."""

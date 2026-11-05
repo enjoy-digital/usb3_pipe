@@ -274,7 +274,7 @@ class TestLFPSPollingChecker(unittest.TestCase):
             with self.subTest(sys_clk_freq=f):
                 self.assertEqual(polling_detections(f, [], tail=2000)[0], [])
 
-# Ping / U1 / U2 / U3 / Warm Reset detection boundaries (Table 6-30/6-31, 6.9.2/6.9.3) -----------
+# Ping / U1 / U2 / U3 / Warm Reset detection boundaries (Table 6-30/6-31, 6.9.2/6.9.3) -------------
 
 def burst_responses(f, bursts, gap=64, timer_scale=1):
     """Send single bursts to a LFPSUnit, return per burst (pings, u1, u2, u3, reset) seen."""

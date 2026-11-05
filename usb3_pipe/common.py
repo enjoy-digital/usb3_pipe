@@ -126,7 +126,7 @@ TS2 = OrderedSet("TS2",
 # [2] : 0x45454545
 # [3] : 0x45454545
 
-# Asynchronous FIFO -------------------------------------------------------------------------------
+# Asynchronous FIFO --------------------------------------------------------------------------------
 
 class _AsyncFIFORegisteredRead(LiteXModule):
     """Asynchronous FIFO (migen AsyncFIFOBuffered interface/latency) with the read output register

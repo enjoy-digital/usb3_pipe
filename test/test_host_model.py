@@ -35,7 +35,7 @@ HW_PACKETS = [
     (tp(TP_SUB_ACK, seq=4, addr=2, tp_seq=1),                  "fbfbfbf7 04000004 01002000 00000000 27e80428"),
 ]
 
-# Host Model -------------------------------------------------------------------------------------
+# Host Model ---------------------------------------------------------------------------------------
 
 class TestHostModel(unittest.TestCase):
     def test_packets_vs_hardware(self):

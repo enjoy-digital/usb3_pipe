@@ -301,7 +301,7 @@ class TestGen2Framing(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-# Gen2LinkTX (sys -> tx clock domains) ---------------------------------------------------------------
+# Gen2LinkTX (sys -> tx clock domains) -------------------------------------------------------------
 
 UNITS_DELAY = 8
 
@@ -556,7 +556,7 @@ class TestGen2TXBlocks(unittest.TestCase):
             idle = False
             k += 1
 
-# Gen2RXFraming: packets at any byte position, random Idle Symbols between them ----------------------
+# Gen2RXFraming: packets at any byte position, random Idle Symbols between them --------------------
 
 def gen2_unit_bytes(unit):
     """Gen 2 bytes of a unit of Link Layer words (as transmitted by a host: framing bytes, DPHSTART +

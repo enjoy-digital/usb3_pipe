@@ -12,7 +12,7 @@ from litex.gen import *
 
 from usb3_pipe.ltssm import USB3LTSSM
 
-# Single-instance LTSSM state/transition/timeout coverage (USB 3.2 section 7.5) ---------------------
+# Single-instance LTSSM state/transition/timeout coverage (USB 3.2 section 7.5) --------------------
 #
 # Timers are accelerated with timer_scale (all timeouts divided by timer_scale): at 125MHz and
 # TIMER_SCALE=10000, 1ms = 12 cycles, 2ms = 25, 6ms = 75, 12ms = 150, 100ms = 1250, 360ms = 4500.

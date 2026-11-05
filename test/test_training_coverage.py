@@ -25,7 +25,7 @@ from usb3_pipe.training import TSUnit
 
 from test.common import ordered_set_words, stream_driver, symbols_to_words, words_to_symbols
 
-# Spec reference Ordered Sets (Table 6-4 TSEQ, Table 6-5 TS1/TS2), written independently ----------
+# Spec reference Ordered Sets (Table 6-4 TSEQ, Table 6-5 TS1/TS2), written independently -----------
 
 def D(x, y):
     return (y << 5) | x
