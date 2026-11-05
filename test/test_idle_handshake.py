@@ -16,7 +16,7 @@ from usb3_pipe.core import USB3PIPE
 from usb3_pipe.ltssm import USB3LTSSM
 from usb3_pipe.phy import USB3PHY
 
-from test.common import ScramblerModel, ordered_set_words, words_to_symbols, symbols_to_words
+from test.common      import ScramblerModel, ordered_set_words, words_to_symbols, symbols_to_words
 from test.model.gt    import GTModel, wire_monitor
 from test.model.ltssm import wait_for
 
@@ -102,8 +102,8 @@ class TestIdleHandshake(unittest.TestCase):
             yield dut.lfps_tx_count.eq(24)
             yield
             self.assertTrue((yield from wait_for(dut, dut.ts_tx_tseq)))
-            for pulse in [dut.ts_tx_done, dut.ts_rx_ts1, dut.ts_tx_done, dut.ts_rx_ts2, dut.ts_tx_done,
-                dut.ts_tx_done]:
+            for pulse in [dut.ts_tx_done, dut.ts_rx_ts1, dut.ts_tx_done, dut.ts_rx_ts2,
+                dut.ts_tx_done, dut.ts_tx_done]:
                 yield pulse.eq(1)
                 yield
                 yield pulse.eq(0)

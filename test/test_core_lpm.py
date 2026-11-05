@@ -118,7 +118,8 @@ def get_status(host):
     return (yield from pyhost_control_in(host, setup_packet(0x80, 0x00, 0, 0, 2)))
 
 def set_feature(host, feature, enable=True):
-    return (yield from pyhost_control_out(host, setup_packet(0x00, 0x03 if enable else 0x01, feature, 0, 0)))
+    return (yield from pyhost_control_out(host,
+        setup_packet(0x00, 0x03 if enable else 0x01, feature, 0, 0)))
 
 def lgo(host, n):
     """Send LGO_Un, returns the response (LAU/LXU), LPMA sent after LAU."""
@@ -234,7 +235,8 @@ class TestCoreLPM(unittest.TestCase):
         payload = list(range(16))
         def scenario(dut, host, ltssm):
             ep = dut.core.endpoints[0]
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x00, 0x09, 1, 0, 0))))
             n0 = len(host.hps)
             host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=1, tp_seq=0, pp=1)
             yield from pyhost_wait_tp(host, n0, subtypes=(TP_SUB_NRDY,))
@@ -269,7 +271,8 @@ class TestCoreLPM(unittest.TestCase):
         payload = list(range(16))
         def scenario(dut, host, ltssm):
             ep = dut.core.endpoints[0]
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x00, 0x09, 1, 0, 0))))
             for i in range(0, len(payload), 4):
                 yield ep.sink.valid.eq(1)
                 yield ep.sink.data.eq(int.from_bytes(bytes(payload[i:i+4]), "little"))

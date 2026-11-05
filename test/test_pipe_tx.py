@@ -43,7 +43,7 @@ class TestUSB3PIPETX(unittest.TestCase):
         run_simulation(dut, [generator(dut), checker(dut)])
 
         # Descramble from the scrambler seed (state after the last TS2, see Scrambler).
-        symbols = ScramblerModel(seed=0x7dbd).process(words_to_symbols(dut.wire))
+        symbols  = ScramblerModel(seed=0x7dbd).process(words_to_symbols(dut.wire))
         received = [w for w in symbols_to_words(symbols) if w != (0, 0)]
         self.assertEqual(received[:len(words)], words)
 

@@ -17,8 +17,8 @@ from usb3_pipe.common import SKP, SDP, SHP, SLC, EPF, TS2
 from usb3_pipe.core import USB3PIPE
 
 from test.model.gt import GTModel
-from test.common import (ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words, strip_skp,
-    swap_word)
+from test.common   import ScramblerModel, words_to_symbols, symbols_to_words, ordered_set_words
+from test.common   import strip_skp, swap_word
 
 # Helpers ------------------------------------------------------------------------------------------
 

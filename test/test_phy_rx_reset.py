@@ -36,7 +36,8 @@ class TestPHYRXReset(unittest.TestCase):
         resets = [state for state, rx_reset in dut.samples if rx_reset]
         self.assertGreater(len(resets), 0)
         self.assertEqual(set(resets), {exit_to_rx_detect})
-        self.assertTrue(all(rx_reset for state, rx_reset in dut.samples if state == exit_to_rx_detect))
+        self.assertTrue(all(rx_reset for state, rx_reset in dut.samples
+            if state == exit_to_rx_detect))
 
 if __name__ == "__main__":
     unittest.main()

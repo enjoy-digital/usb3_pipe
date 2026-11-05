@@ -4,7 +4,8 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Mass Storage RAM disk: Bulk-Only Transport/SCSI commands (Migen simulation, reactive host)."""
+"""USB3 Mass Storage RAM disk: Bulk-Only Transport/SCSI commands (Migen simulation, reactive
+host)."""
 
 import struct
 import unittest
@@ -47,7 +48,8 @@ class TestCoreMSC(unittest.TestCase):
                     host.send(data_packet_payload(chunk))
                     state["out_seq"] = (state["out_seq"] + 1) % 32
             count = 1 + ((-(-length//1024)) if (din and length) else 0)
-            packets, state["in_seq"] = yield from pyhost_bulk_in(host, ept=1, count=count, seq=state["in_seq"])
+            packets, state["in_seq"] = yield from pyhost_bulk_in(host, ept=1, count=count,
+                seq=state["in_seq"])
             data = sum(packets[:-1], [])
             csw  = packets[-1]
             self.assertEqual(len(csw), 13)
@@ -57,9 +59,11 @@ class TestCoreMSC(unittest.TestCase):
 
         def scenario():
             yield from pyhost_link_init(host)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x00, 0x09, 1, 0, 0))))
             # Get Max LUN.
-            self.assertEqual((yield from pyhost_control_in(host, setup_packet(0xa1, 0xfe, 0, 0, 1))), [0])
+            self.assertEqual((yield from pyhost_control_in(host,
+                setup_packet(0xa1, 0xfe, 0, 0, 1))), [0])
             # TEST UNIT READY.
             data, residue, status = yield from command([SCSI_TEST_UNIT_READY])
             self.assertEqual((data, residue, status), ([], 0, 0))
@@ -73,18 +77,22 @@ class TestCoreMSC(unittest.TestCase):
             # WRITE(10) 2 blocks at LBA 5, READ(10) back.
             if with_data:
                 block = [(7*i + 1) & 0xff for i in range(1024)]
-                data, residue, status = yield from command([SCSI_WRITE_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024,
+                data, residue, status = yield from command(
+                    [SCSI_WRITE_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024,
                     din=False, data_out=block)
                 self.assertEqual((residue, status), (0, 0))
-                data, residue, status = yield from command([SCSI_READ_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024)
+                data, residue, status = yield from command(
+                    [SCSI_READ_10, 0, 0, 0, 0, 5, 0, 0, 2, 0], length=1024)
                 self.assertEqual((data, residue, status), (block, 0, 0))
             # Unsupported command (IN 8 bytes): padded, failed, REQUEST SENSE: ILLEGAL REQUEST/0x20.
             data, residue, status = yield from command([0xff], length=8)
             self.assertEqual((data, status), ([0]*8, 1))
-            data, residue, status = yield from command([SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0], length=18)
+            data, residue, status = yield from command(
+                [SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0], length=18)
             self.assertEqual((data[0], data[2] & 0xf, data[12]), (0x70, 0x05, 0x20))
             # Out of range READ(10): failed.
-            data, residue, status = yield from command([SCSI_READ_10, 0, 0, 0, 0, 31, 0, 0, 2, 0], length=1024)
+            data, residue, status = yield from command(
+                [SCSI_READ_10, 0, 0, 0, 0, 31, 0, 0, 2, 0], length=1024)
             self.assertEqual(status, 1)
         run_pyhost(dut, host, scenario())
 

@@ -4,7 +4,8 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""128b/132b (Gen 2) block gearbox/aligner (6.3.2, 6.4.1.2.4) against bit-serial reference models."""
+"""128b/132b (Gen 2) block gearbox/aligner (6.3.2, 6.4.1.2.4) against bit-serial reference
+models."""
 
 import os
 import re
@@ -28,8 +29,8 @@ from test.model.gen2 import int_to_bits, bits_from_words, words_from_bits
 # Gen 2 --------------------------------------------------------------------------------------------
 
 class TestGen2Coding(unittest.TestCase):
-    def gearbox_aligner_roundtrip_test(self, data_width=32, skp_period=10, skp_lengths=[0, 4, 8, 20, 36],
-        offset=37, header_error=True):
+    def gearbox_aligner_roundtrip_test(self, data_width=32, skp_period=10,
+        skp_lengths=[0, 4, 8, 20, 36], offset=37, header_error=True):
         # Blocks (SYNC first, data/control, SKP Ordered Sets of 0-36 SKP Symbols) -> gearbox -> bit
         # offset -> aligner: blocks recovered after the SYNC, SKP removed, Block Header single bit
         # error corrected.
@@ -60,8 +61,8 @@ class TestGen2Coding(unittest.TestCase):
         expected = [(h, d) for h, d, *_ in [b for b in blocks if b[0] != "SKP"]]
 
         # TX gearbox (132-bit blocks only, SKP payloads are checked through the TX tests).
-        tx = Gen2BlockGearbox(data_width)
-        words = []
+        tx     = Gen2BlockGearbox(data_width)
+        words  = []
         normal = [b for b in blocks if b[0] != "SKP"]
         def tx_generator(dut):
             for header, payload, _ in normal:
@@ -168,13 +169,13 @@ class TestGen2Coding(unittest.TestCase):
             script = f"read_verilog {f}; prep -top popcount; " + "; ".join(
                 f"eval -set {i.backtrace[-1][0]} {v} -show {le1.backtrace[-1][0]},{gt1.backtrace[-1][0]},{cnt.backtrace[-1][0]}"
                 for v in range(16))
-            log = subprocess.run(["yosys", "-p", script], capture_output=True, text=True, check=True).stdout
+            log = subprocess.run(["yosys", "-p", script], capture_output=True, text=True,
+                check=True).stdout
         # "Eval result: { \\le1 \\gt1 \\cnt } = 5'xyzzz."
-        results = [int(x, 2) for x in re.findall(r"Eval result: .* = 5'([01]+)", log)]
-        values  = sum([[r >> 4, (r >> 3) & 1, r & 0b111] for r in results], [])
+        results  = [int(x, 2) for x in re.findall(r"Eval result: .* = 5'([01]+)", log)]
+        values   = sum([[r >> 4, (r >> 3) & 1, r & 0b111] for r in results], [])
         expected = []
         for v in range(16):
             n = bin(v).count("1")
             expected += [int(n <= 1), int(n > 1), n]
         self.assertEqual(values, expected)
-

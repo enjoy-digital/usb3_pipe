@@ -39,8 +39,10 @@ runpy.run_path(sys.argv[0], run_name="__main__")
 
 def elaborate(target, output_dir, args=[]):
     """Elaborate target (gateware/software generation, no build) into output_dir, return csr.csv."""
-    cmd = [sys.executable, "-c", RUN_TARGET, f"bench/{target}.py", "--output-dir", str(output_dir)] + args
-    p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    cmd = [sys.executable, "-c", RUN_TARGET, f"bench/{target}.py",
+        "--output-dir", str(output_dir)] + args
+    p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True)
     assert p.returncode == 0, p.stdout[-4000:]
     assert list((output_dir / "gateware").glob("*.v")), p.stdout[-4000:]
     return (output_dir / "csr.csv").read_text()

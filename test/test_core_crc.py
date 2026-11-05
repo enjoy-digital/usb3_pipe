@@ -119,7 +119,8 @@ class TestCoreCRC(unittest.TestCase):
                     if (i + n) == length:
                         self.assertEqual((yield dut.next_value), crc32(data), f"length {length}")
                         if n <= 4:
-                            self.assertEqual((yield dut.next_value32), crc32(data), f"length {length}")
+                            self.assertEqual((yield dut.next_value32), crc32(data),
+                                f"length {length}")
                     i += n
                 yield dut.ce.eq(0)
                 yield

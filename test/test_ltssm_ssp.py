@@ -27,8 +27,8 @@ class Link(LiteXModule):
     """Two ports, electrical idle of each RX = partner TX not sending LFPS (with a few cycles of
     channel/detection delay), LBPMs sent by each port decoded by a monitor (monitors[name])."""
     def __init__(self, a, b, delay=3):
-        self.a = a
-        self.b = b
+        self.a        = a
+        self.b        = b
         self.monitors = {}
         for name, tx, rx in [("a", a, b), ("b", b, a)]:
             sr = Signal(delay)
@@ -46,6 +46,9 @@ class SSPort(LiteXModule):
         self.gen     = SCDGenerator(SYS_CLK_FREQ, TIMER_SCALE)
         self.tx_lfps = Signal()
         self.idle    = Signal()
+
+        # # #
+
         self.comb += [
             self.gen.enable.eq(1),
             self.gen.mode.eq(0),

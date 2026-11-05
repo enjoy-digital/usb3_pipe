@@ -48,7 +48,7 @@ class TestLanes(unittest.TestCase):
         # Marker on both lanes (as duplicated Ordered Sets): striped from a link word.
         marker_word = (0xbcbcbcbcbcbcbcbc, 0xff)
         striper = LaneStriper()
-        lanes = [[], []]
+        lanes   = [[], []]
         def strip_gen(dut):
             for lane in range(2):
                 yield dut.sources[lane].ready.eq(1)
@@ -58,7 +58,8 @@ class TestLanes(unittest.TestCase):
                 yield dut.sink.ctrl.eq(ctrl)
                 yield
                 for lane in range(2):
-                    lanes[lane].append(((yield dut.sources[lane].data), (yield dut.sources[lane].ctrl)))
+                    lanes[lane].append(((yield dut.sources[lane].data),
+                        (yield dut.sources[lane].ctrl)))
         run_simulation(striper, strip_gen(striper))
         lanes[0] = [(rng.getrandbits(32), 0) for _ in range(1)] + lanes[0]
         lanes[1] = [(rng.getrandbits(32), 0) for _ in range(4)] + lanes[1]
@@ -78,15 +79,16 @@ class TestLanes(unittest.TestCase):
             yield dut.destriper.source.ready.eq(1)
             for _ in range(300):
                 if (yield dut.destriper.source.valid):
-                    out.append(((yield dut.destriper.source.data), (yield dut.destriper.source.ctrl)))
+                    out.append(((yield dut.destriper.source.data),
+                        (yield dut.destriper.source.ctrl)))
                 yield
         run_simulation(dut, [lane_gen(dut, 0), lane_gen(dut, 1), checker(dut)])
         self.assertEqual(out, [marker_word] + words)
 
     def test_deskew_periodic_marker(self):
         # Periodic marker (TS1/TS2 COM words, every 4 words), lanes skewed by up to 1 word in either
-        # direction, deskew started at any point of the period: the markers of the same Ordered Set are
-        # paired (max_skew=1), the link words are recovered.
+        # direction, deskew started at any point of the period: the markers of the same Ordered Set
+        # are paired (max_skew=1), the link words are recovered.
         rng    = random.Random(1)
         marker = (0xbcbcbcbcbcbcbcbc, 0xff)
         stream = []
@@ -109,7 +111,8 @@ class TestLanes(unittest.TestCase):
                         self.deskew    = LaneDeskew(0xbcbcbcbc, 0b1111, max_skew=1)
                         self.destriper = LaneDestriper()
                         for lane in range(2):
-                            self.comb += self.deskew.sources[lane].connect(self.destriper.sinks[lane])
+                            self.comb += self.deskew.sources[lane].connect(
+                                self.destriper.sinks[lane])
                 dut = DUT()
                 out = []
                 def lane_gen(dut, lane):
@@ -125,7 +128,8 @@ class TestLanes(unittest.TestCase):
                     yield dut.destriper.source.ready.eq(1)
                     for _ in range(200):
                         if (yield dut.destriper.source.valid):
-                            out.append(((yield dut.destriper.source.data), (yield dut.destriper.source.ctrl)))
+                            out.append(((yield dut.destriper.source.data),
+                                (yield dut.destriper.source.ctrl)))
                         yield
                 run_simulation(dut, [lane_gen(dut, 0), lane_gen(dut, 1), checker(dut)])
                 self.assertTrue(len(out), f"start={start} skew={skew}")

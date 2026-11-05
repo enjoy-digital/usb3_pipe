@@ -35,8 +35,8 @@ def _host_rx_words(out):
     return words
 
 def device_packets_crc_errors(out):
-    """Device Header Packets (CRC-16/CRC-5) and Link Commands (CRC-5) received by the host model with
-    errors: (packets checked, errors)."""
+    """Device Header Packets (CRC-16/CRC-5) and Link Commands (CRC-5) received by the host model
+    with errors: (packets checked, errors)."""
     from usb3_core.host_model import crc16, crc5
     words, n, errors, i = _host_rx_words(out), 0, 0, 0
     while i < len(words):
@@ -72,8 +72,8 @@ def host_lgood_times(out):
     return times
 
 def host_lgood_latencies(out):
-    """Host Header Packet -> device LGOOD_n latencies (cycles) from the host model timing logs (after
-    the last host U0 entry, the first LGOOD_n being the Advertisement)."""
+    """Host Header Packet -> device LGOOD_n latencies (cycles) from the host model timing logs
+    (after the last host U0 entry, the first LGOOD_n being the Advertisement)."""
     hp, lgood, pending, adv = [], [], None, True
     for line in out.splitlines():
         if "HOST entering U0" in line:
@@ -94,7 +94,6 @@ def host_lgood_latencies(out):
                     lgood.append(pending)
             pending = None
     return [l - h for h, l in zip(hp, lgood)]
-
 
 class TestPHY(unittest.TestCase):
     def test_phy_reaches_idle(self):
@@ -170,8 +169,10 @@ class TestPHY(unittest.TestCase):
         self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
         for side in ["HOST", r"DEV\s"]:
             self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: 0, gen2: 1\)", tail)
-            for state in ["Polling.RxEQ", "Polling.Active", "Polling.Configuration", "Polling.Idle", "U0"]:
-                self.assertRegex(out, side + r"\s*entering " + state.replace(".", r"\.") + " state", tail)
+            for state in ["Polling.RxEQ", "Polling.Active", "Polling.Configuration",
+                "Polling.Idle", "U0"]:
+                self.assertRegex(out, side + r"\s*entering " + state.replace(".", r"\.") + " state",
+                    tail)
         self.assertIn("HOST script done", out, tail)
 
     def run_link_words2(self, args, recovery=False):
@@ -212,9 +213,9 @@ class TestPHY(unittest.TestCase):
         self.run_link_words2(["--gen2", "--dev-pipe-cd"])
 
     def test_phy_gen2_80_dev_pipe_cd(self):
-        # Gen 2 on 80-bit raw words (ex: GW5A GTR12 1:4 gear at 125MHz) with the Device Link Layer at
-        # half the PIPE frequency: framing/packing at 32 bytes per cycle at the Link Layer frequency
-        # (blocks pairs/blocks buffers between the PIPE and the Link Layer clock domains).
+        # Gen 2 on 80-bit raw words (ex: GW5A GTR12 1:4 gear at 125MHz) with the Device Link Layer
+        # at half the PIPE frequency: framing/packing at 32 bytes per cycle at the Link Layer
+        # frequency (blocks pairs/blocks buffers between the PIPE and the Link Layer clock domains).
         self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80"])
 
     @pytest.mark.slow
@@ -237,8 +238,8 @@ class TestPHY(unittest.TestCase):
     def test_phy_gen2_80_dev_pipe_cd_burst_out(self, extra=[]):
         # Gen 2 80-bit with Bulk OUT bursts of max size DPs back to back (as a host with queued
         # transfers) and a reactive host model (LGOOD_n/LCRD_x for each device Header Packet as soon
-        # as received): no Recovery, device Header Packets/Link Commands CRCs, LGOOD_n latency of the
-        # Link Layer slower than the line rate bounded (DPPs buffered before the next DPH).
+        # as received): no Recovery, device Header Packets/Link Commands CRCs, LGOOD_n latency of
+        # the Link Layer slower than the line rate bounded (DPPs buffered before the next DPH).
         out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
             "--host-burst-out", "4", "--host-burst-len", "1024", *extra])
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
@@ -251,8 +252,8 @@ class TestPHY(unittest.TestCase):
 
     @pytest.mark.slow
     def test_phy_gen2_80_dev_pipe_cd_lbad(self, extra=[]):
-        # Gen 2 80-bit Bulk OUT burst with a DPH CRC error: device LBAD, Header Packets (and their DPPs)
-        # ignored until the host LRTY, retransmission accepted: no Recovery, CRCs, and the
+        # Gen 2 80-bit Bulk OUT burst with a DPH CRC error: device LBAD, Header Packets (and their
+        # DPPs) ignored until the host LRTY, retransmission accepted: no Recovery, CRCs, and the
         # retransmitted DPHs acknowledged without waiting for the ignored DPPs (skipped at the DPP
         # data rate).
         out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
@@ -263,7 +264,7 @@ class TestPHY(unittest.TestCase):
         self.assertEqual(errors, 0)
         # LGOOD_n latency of the retransmitted DPH (first LGOOD_n after the last host LRTY ones).
         section = out[out.index("HOST_LBAD_RX"):]
-        hptx  = [int(t) for t in re.findall(r"HOST_HPTX\s+(\d+)", section)]
+        hptx   = [int(t) for t in re.findall(r"HOST_HPTX\s+(\d+)", section)]
         self.assertGreaterEqual(len(hptx), 3)
         retx   = hptx[-3] # First retransmitted DPH.
         lgoods = [t for t in host_lgood_times(section) if t > retx]
@@ -284,7 +285,8 @@ class TestPHY(unittest.TestCase):
 
     @pytest.mark.slow
     def test_phy_gen2_80_dev_pipe_cd_quads_lbad(self):
-        # DPH CRC error/LBAD/LRTY (see test_phy_gen2_80_dev_pipe_cd_lbad) on 128-bit Link Layer words.
+        # DPH CRC error/LBAD/LRTY (see test_phy_gen2_80_dev_pipe_cd_lbad) on 128-bit Link Layer
+        # words.
         self.test_phy_gen2_80_dev_pipe_cd_lbad(["--link-words", "4"])
 
     @pytest.mark.slow
@@ -310,8 +312,9 @@ class TestPHY(unittest.TestCase):
         # Gen 1 full duplex at full rate: ACK TP behind each OUT DP, SKP Ordered Sets at the packets
         # boundaries: the framing shifted by 2 symbols right behind a packet or a Link Command (the
         # framing aligner lost the end of the word before the shift: Recovery storm on hardware).
-        cmd = [sys.executable, str(ROOT / "sim.py"), "--host-burst-duplex", "64", "--host-burst-duplex-skp",
-            "--host-burst-len", "1024", "--dev-loopback-depth", "4096", "--output-dir", str(get_output_dir(self))]
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--host-burst-duplex", "64",
+            "--host-burst-duplex-skp", "--host-burst-len", "1024", "--dev-loopback-depth", "4096",
+            "--output-dir", str(get_output_dir(self))]
         p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, timeout=900)
         out  = p.stdout or ""
@@ -354,8 +357,8 @@ class TestPHY(unittest.TestCase):
         # requested again (ACK TP retry) and sent again by the host, then Bulk OUT/IN: no device
         # Recovery request, CRCs.
         out, tail = self.run_link_words2(["--gen2", "--dev-pipe-cd", "--gen2-data-width", "80",
-            "--link-words", "4", "--host-recovery-mid", "--host-recovery-cut", "--host-burst-len", "1024",
-            "--dev-loopback-depth", "4096"], recovery=True)
+            "--link-words", "4", "--host-recovery-mid", "--host-recovery-cut", "--host-burst-len",
+            "1024", "--dev-loopback-depth", "4096"], recovery=True)
         self.assertIn("HOST_ADVERTISEMENT", out, tail)
         self.assertNotRegex(out, r"Link Layer Recovery request", tail)
         n, errors = device_packets_crc_errors(out)
@@ -412,10 +415,12 @@ class TestPHYX2(unittest.TestCase):
             # Single link training to U0, lanes deskewed.
             u0 = re.findall(side + r"\s*entering U0 state", out)
             self.assertEqual(len(u0), 1, f"{name}: {side} entered U0 {len(u0)} times." + tail)
-            self.assertNotRegex(out, side + r"\s*entering (Recovery|eSS|Polling.ExitTo|Compliance)", tail)
+            self.assertNotRegex(out, side + r"\s*entering (Recovery|eSS|Polling.ExitTo|Compliance)",
+                tail)
             self.assertRegex(out, side + r"\s*lanes deskewed", tail)
         for side in ["HOST", "DEV"]:
-            m = re.search(side + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors, x2: (\d)", out)
+            m = re.search(side + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors, x2: (\d)",
+                out)
             self.assertIsNotNone(m, f"{name}: No {side} PRBS report." + tail)
             self.assertGreater(int(m.group(2)), 0)
             self.assertEqual(int(m.group(3)), 0, f"{name}: {side} PRBS errors." + tail)

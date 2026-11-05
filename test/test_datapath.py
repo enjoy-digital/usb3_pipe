@@ -28,7 +28,6 @@ from test.common import ordered_set_words, words_to_symbols, symbols_to_words, s
 from test.model.gen2 import Gen2ReferenceDecoder, int_to_bits, bits_from_words, words_from_bits
 from test.model.gen2 import popcount, gen2_channel
 
-
 class TestDatapath(unittest.TestCase):
     def test_rx_word_aligner(self):
         # On a re-alignment, the word output before the COM run is complete (run later in its word:
@@ -102,8 +101,8 @@ class TestDatapath(unittest.TestCase):
 
     def test_rx_word_aligner_framing_shift_keeps_packet_end(self):
         # A packet followed by a packet shifted by SKP Ordered Sets (removed before the aligner, the
-        # shift filled with Logical Idle before the framing): all the symbols of the first packet and
-        # the second packet aligned, for all the shifts.
+        # shift filled with Logical Idle before the framing): all the symbols of the first packet
+        # and the second packet aligned, for all the shifts.
         shp, slc, epf = (SHP.value, 1), (SLC.value, 1), (K(23, 7), 1)
         idle  = (0x00, 0)
         first = [slc, slc, slc, epf] + [(0x81, 0), (0x58, 0), (0x81, 0), (0x58, 0)]
@@ -151,7 +150,8 @@ class TestDatapath(unittest.TestCase):
                     yield dut.sink.valid.eq(0)
 
                 def checker(dut):
-                    dut.words = yield from stream_monitor(dut.source, len(wire) - 1, timeout=4*len(wire))
+                    dut.words = yield from stream_monitor(dut.source, len(wire) - 1,
+                        timeout=4*len(wire))
 
                 dut = RXWordAligner()
                 run_simulation(dut, [generator(dut), checker(dut)])
@@ -592,8 +592,8 @@ RUN_TX_SHORT = dict(n_ts1=48, n_ts2=16, n_packets=8)
 
 class TestGen2Datapath(unittest.TestCase):
     def tx_vs_reference_test(self, data_width=32, **kwargs):
-        # Gen2TX output decoded with the bit-serial reference model: Ordered Sets content, DC Balance
-        # Symbols, SKP LFSR Symbols, SYNC/SKP scheduling and Data Blocks.
+        # Gen2TX output decoded with the bit-serial reference model: Ordered Sets content, DC
+        # Balance Symbols, SKP LFSR Symbols, SYNC/SKP scheduling and Data Blocks.
         words, packets = run_tx(link_config=0x08, data_width=data_width, **kwargs)
         blocks = Gen2ReferenceDecoder(self).decode(bits_from_words(words, data_width))
         kinds  = [b[0] for b in blocks]
@@ -651,8 +651,9 @@ class TestGen2Datapath(unittest.TestCase):
         self.tx_vs_reference_test(data_width=GEN2_DATA_WIDTH, **RUN_TX_SHORT)
 
     def test_tx_sync_on_tseq_end(self):
-        # SYNC Ordered Set before the first TS1 when the TSEQ SYNC period is not reached (Polling.RxEQ
-        # -> Polling.Active: the partner descrambler is seeded by the SYNC), single SYNC at start.
+        # SYNC Ordered Set before the first TS1 when the TSEQ SYNC period is not reached
+        # (Polling.RxEQ -> Polling.Active: the partner descrambler is seeded by the SYNC), single
+        # SYNC at start.
         words, _ = run_tx(n_tseq=20, n_ts1=8, n_ts2=8, n_packets=1, sync_interval_tseq=64)
         kinds = [b[0] for b in Gen2ReferenceDecoder(self).decode(bits_from_words(words, 32))]
         first_ts1 = kinds.index("TS1")
@@ -692,9 +693,9 @@ class TestGen2Datapath(unittest.TestCase):
         # - channel: bit offset, polarity inversion, a bit removed during TS1 (and with tseq_slip a
         #   bit removed during TSEQ and a Block Header bit error in TS2), SKP Ordered Sets
         #   shortened/lengthened (re-timer clock compensation). Realignment on the next SYNC.
-        # - RX: polarity detected on the first SYNC (aligned on the next one), TSEQ/TS1/TS2 detected,
-        #   SDS, Data Blocks recovered, received SKP LFSR state equal to the RX descrambler state,
-        #   counters.
+        # - RX: polarity detected on the first SYNC (aligned on the next one), TSEQ/TS1/TS2
+        #   detected, SDS, Data Blocks recovered, received SKP LFSR state equal to the RX
+        #   descrambler state, counters.
         words, packets = run_tx(link_config=0x08, data_width=data_width, **kwargs)
         bits   = bits_from_words(words, data_width)
         blocks = Gen2ReferenceDecoder(self).decode(bits)
@@ -761,7 +762,8 @@ class TestGen2Datapath(unittest.TestCase):
         self.assertEqual(events["align_errors_count"], len(slips))
         self.assertEqual(events["sds_count"], 1)
         # TSEQ before the second SYNC (polarity), until the SYNC after the slip.
-        self.assertLessEqual(kinds.count("TSEQ") - events["tseq_count"], 8 + (8 if tseq_slip else 0))
+        self.assertLessEqual(kinds.count("TSEQ") - events["tseq_count"],
+            8 + (8 if tseq_slip else 0))
         self.assertLessEqual(kinds.count("TS1")  - events["ts1_count"], 32) # Until the next SYNC.
         self.assertEqual(events["ts2_count"], kinds.count("TS2"))
         self.assertEqual(events["skp_count"], len(events["skp"]))
@@ -773,7 +775,8 @@ class TestGen2Datapath(unittest.TestCase):
             self.assertEqual(skp_lfsr, rx_lfsr)
         self.assertEqual(events["data"], sent_data[:len(events["data"])])
         self.assertGreaterEqual(len(events["data"]), len(sent_data) - 2)
-        self.assertEqual([d for d in events["data"] if d != GEN2_IDLE_BLOCK][:10], [d for p in packets for d in p][:10])
+        self.assertEqual([d for d in events["data"] if d != GEN2_IDLE_BLOCK][:10],
+            [d for p in packets for d in p][:10])
 
     def test_loopback(self):
         # Short: less TS1/TS2/packets, one SKP Ordered Set edit.

@@ -36,7 +36,8 @@ def pulse(signal):
 
 class LTSSMTestCase(unittest.TestCase):
     """Single USB3LTSSM (with_timers=False) driven to U0: LFPS/TS units and partner inputs pulsed
-    (Polling.LFPS -> Polling.RxEQ -> Polling.Active -> Polling.Configuration -> Polling.Idle -> U0)."""
+    (Polling.LFPS -> Polling.RxEQ -> Polling.Active -> Polling.Configuration -> Polling.Idle ->
+    U0)."""
     def wait_for(self, dut, signal, timeout=64):
         return (yield from wait_for(dut, signal, timeout))
 
@@ -71,7 +72,8 @@ class LTSSMTestCase(unittest.TestCase):
         yield
         yield dut.ts_rx_ts2.eq(0)
         yield
-        # 16 TS2 sent after receiving the TS2s (7.5.4.9.2): end of the current burst, then a full one.
+        # 16 TS2 sent after receiving the TS2s (7.5.4.9.2): end of the current burst, then a full
+        # one.
         for _ in range(2):
             yield dut.ts_tx_done.eq(1)
             yield
@@ -95,6 +97,8 @@ class LTSSMLinkHarness(LiteXModule):
         self.host_lfps_count = Signal(16)
         self.dev_lfps_count  = Signal(16)
 
+        # # #
+
         host_ts_counter = Signal(3)
         dev_ts_counter  = Signal(3)
         host_ts_active  = Signal()
@@ -103,7 +107,8 @@ class LTSSMLinkHarness(LiteXModule):
         dev_ts_done     = Signal()
 
         self.comb += [
-            host_ts_active.eq(host.ts_tx_enable & (host.ts_tx_tseq | host.ts_tx_ts1 | host.ts_tx_ts2)),
+            host_ts_active.eq(host.ts_tx_enable &
+                (host.ts_tx_tseq | host.ts_tx_ts1 | host.ts_tx_ts2)),
             dev_ts_active.eq(dev.ts_tx_enable & (dev.ts_tx_tseq | dev.ts_tx_ts1 | dev.ts_tx_ts2)),
             host.lfps_tx_count.eq(self.host_lfps_count),
             dev.lfps_tx_count.eq(self.dev_lfps_count),

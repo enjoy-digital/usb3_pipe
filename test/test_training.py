@@ -13,11 +13,11 @@ from litex.gen import *
 from usb3_pipe.common import TSEQ, TS1, TS1_INV, TS2, LinkConfig
 from usb3_pipe.training import TSChecker, TSGenerator
 
-
 class TestTraining(unittest.TestCase):
     def test_ts1_checker(self):
         ts1_length = len(TS1.to_bytes())//4
-        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts1_length)]
         def generator(dut, n_loops):
             yield dut.sink.valid.eq(1)
             for i in range(n_loops):
@@ -50,7 +50,8 @@ class TestTraining(unittest.TestCase):
 
     def test_ts1_inv_checker(self):
         ts1_length = len(TS1_INV.to_bytes())//4
-        ts1_words  = [int.from_bytes(TS1_INV.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        ts1_words  = [int.from_bytes(TS1_INV.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts1_length)]
         def generator(dut, n_loops):
             yield dut.sink.valid.eq(1)
             for i in range(n_loops):
@@ -80,7 +81,8 @@ class TestTraining(unittest.TestCase):
 
     def test_ts2_checker(self):
         ts2_length = len(TS2.to_bytes())//4
-        ts2_words  = [int.from_bytes(TS2.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts2_length)]
+        ts2_words  = [int.from_bytes(TS2.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts2_length)]
         def generator(dut, n_loops):
             yield dut.sink.valid.eq(1)
             for i in range(n_loops):
@@ -113,7 +115,8 @@ class TestTraining(unittest.TestCase):
 
     def test_ts1_checker_data_error_recovery(self):
         ts1_length = len(TS1.to_bytes())//4
-        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts1_length)]
         def generator(dut):
             yield dut.sink.valid.eq(1)
             ordered_sets = [
@@ -155,7 +158,8 @@ class TestTraining(unittest.TestCase):
 
     def test_ts1_checker_error_ctrl(self):
         ts1_length = len(TS1.to_bytes())//4
-        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts1_length)]
         def generator(dut, n_loops, error_at):
             yield dut.sink.valid.eq(1)
             for i in range(n_loops):
@@ -192,7 +196,8 @@ class TestTraining(unittest.TestCase):
 
     def test_tseq_generator(self):
         tseq_length = len(TSEQ.to_bytes())//4
-        tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little") for i in range(tseq_length)]
+        tseq_words  = [int.from_bytes(TSEQ.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(tseq_length)]
         def generator(dut, n_loops):
             for i in range(n_loops):
                 yield dut.start.eq(1)
@@ -267,7 +272,8 @@ class TestTraining(unittest.TestCase):
 
     def test_ts1_generator(self):
         ts1_length = len(TS1.to_bytes())//4
-        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts1_length)]
         def generator(dut, n_loops):
             for i in range(n_loops):
                 yield dut.start.eq(1)
@@ -309,7 +315,8 @@ class TestTraining(unittest.TestCase):
 
     def test_ts1_generator_link_config(self):
         ts1_length = len(TS1.to_bytes())//4
-        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little") for i in range(ts1_length)]
+        ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts1_length)]
         def generator(dut):
             yield dut.source.ready.eq(1)
             yield

@@ -74,13 +74,15 @@ class TestPHYLong(unittest.TestCase):
                 # Single link training to U0 (no Recovery/Rx.Detect loops).
                 for side in ["HOST", r"DEV\s"]:
                     u0 = re.findall(side + r"\s*entering U0 state", out)
-                    self.assertEqual(len(u0), 1, f"{name}: {side} entered U0 {len(u0)} times." + tail)
+                    self.assertEqual(len(u0), 1,
+                        f"{name}: {side} entered U0 {len(u0)} times." + tail)
                     self.assertNotRegex(out, side + r"\s*entering (Recovery|eSS|Polling.ExitTo)",
                         f"{name}: Unexpected {side} state." + tail)
 
                 # PRBS payload checked on both sides without errors.
                 for side in ["HOST", "DEV"]:
-                    m = re.search(side + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors", out)
+                    m = re.search(side + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors",
+                        out)
                     self.assertIsNotNone(m, f"{name}: No {side} PRBS report." + tail)
                     words, packets, errors = map(int, m.groups())
                     self.assertGreaterEqual(words, PRBS_WORDS)

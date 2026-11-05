@@ -239,7 +239,8 @@ class TestLTSSMStateOutputs(unittest.TestCase, LTSSMDriver):
         def generator(dut):
             yield from self.goto(dut, "eSS.Inactive")
             yield from self.expect(dut, "Polling.ExitToRxDetect", cycles(12e-3) + 16)
-            expected = {name: int(name in ["lfps_tx_idle", "exit_to_rx_detect"]) for name in OUTPUTS}
+            expected = {name: int(name in ["lfps_tx_idle", "exit_to_rx_detect"])
+                for name in OUTPUTS}
             self.assertEqual((yield from outputs(dut)), expected)
             yield from self.expect(dut, "Polling.Entry", 16)
             yield from self.expect(dut, "Polling.LFPS", 4)
@@ -289,7 +290,8 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
     def test_polling_lfps_without_timers_stays(self):
         def generator(dut):
             yield from self.expect(dut, "Polling.LFPS", 4)
-            self.assertTrue((yield from stay_in(dut, "Polling.LFPS", cycles(360e-3, dut.scale) + 64)))
+            self.assertTrue((yield from stay_in(dut, "Polling.LFPS",
+                cycles(360e-3, dut.scale) + 64)))
         run(new_dut(COMPLIANCE_SCALE, with_timers=False), generator)
 
     def test_polling_active_12ms_timeout(self):
@@ -422,8 +424,8 @@ class TestLTSSMTimeouts(unittest.TestCase, LTSSMDriver):
                 run(new_dut(), generator)
 
     def test_ux_exit_timer_in_recovery(self):
-        # Ux_EXIT_TIMER (6ms, 7.2.4.2.1) armed on U1 exit LFPS: Recovery not completed -> eSS.Inactive
-        # 6ms after the exit start (before tRecoveryActiveTimeout).
+        # Ux_EXIT_TIMER (6ms, 7.2.4.2.1) armed on U1 exit LFPS: Recovery not completed ->
+        # eSS.Inactive 6ms after the exit start (before tRecoveryActiveTimeout).
         def generator(dut):
             yield from self.goto(dut, "U1")
             for _ in range(4):
@@ -556,10 +558,10 @@ class TestLTSSMWarmReset(unittest.TestCase, WarmResetChecks):
                 scale = COMPLIANCE_SCALE if src == "Compliance" else TIMER_SCALE
                 run(new_dut(scale, with_timers=(src == "Compliance")), generator)
 
-# Warm Reset in every state (except eSS.Disabled): an upstream port shall transition to Rx.Detect upon
-# detection of Warm Reset, a downstream port when directed to issue Warm Reset (USB 3.2 6.9 / 7.4.2 /
-# exit conditions of 7.5.2.2 eSS.Inactive, 7.5.4.x Polling, 7.5.7.2 U1, 7.5.8.2 U2, 7.5.10.x
-# Recovery, 7.5.11.3 Loopback.Exit, 7.5.12.x Hot Reset).
+# Warm Reset in every state (except eSS.Disabled): an upstream port shall transition to Rx.Detect
+# upon detection of Warm Reset, a downstream port when directed to issue Warm Reset (USB 3.2 6.9 /
+# 7.4.2 / exit conditions of 7.5.2.2 eSS.Inactive, 7.5.4.x Polling, 7.5.7.2 U1, 7.5.8.2 U2,
+# 7.5.10.x Recovery, 7.5.11.3 Loopback.Exit, 7.5.12.x Hot Reset).
 
 UFP_WARM_RESET_STATES = [
     "Polling.LFPS", "Polling.RxEQ", "Polling.Active", "Polling.Configuration", "Polling.Idle",
@@ -686,9 +688,9 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
         run(new_dut(), generator)
 
     def test_polling_configuration_directed_loopback_sets_ts2_loopback_bit(self):
-        # A port directed to Loopback as master sets the Loopback bit in the Link Configuration field
-        # of the TS2 it transmits in Polling.Configuration (7.5.4.9.1, Table 6-6), which is how the
-        # slave learns it must enter Loopback from Polling.Idle (7.5.4.10.2).
+        # A port directed to Loopback as master sets the Loopback bit in the Link Configuration
+        # field of the TS2 it transmits in Polling.Configuration (7.5.4.9.1, Table 6-6), which is
+        # how the slave learns it must enter Loopback from Polling.Idle (7.5.4.10.2).
         def generator(dut):
             yield dut.loopback_capable.eq(1)
             yield dut.directed_loopback.eq(1)
@@ -885,8 +887,8 @@ class TestLTSSMCompliance(unittest.TestCase, LTSSMDriver):
 
     def test_ufp_polling_lfps_timeout_after_link_up_is_not_compliance(self):
         # Polling.LFPS -> Compliance Mode on the 360ms timeout only if the port has not yet
-        # successfully completed Polling.LFPS since power-on / Warm Reset (7.5.4.3.2): a UFP that was
-        # in U0 and re-trains (e.g. after eSS.Inactive) must not enter Compliance.
+        # successfully completed Polling.LFPS since power-on / Warm Reset (7.5.4.3.2): a UFP that
+        # was in U0 and re-trains (e.g. after eSS.Inactive) must not enter Compliance.
         def generator(dut):
             yield from self.goto(dut, "eSS.Inactive") # Was in U0 before.
             yield from self.expect(dut, "Polling.LFPS", cycles(12e-3, dut.scale) + 32)

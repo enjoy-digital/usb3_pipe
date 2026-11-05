@@ -11,7 +11,7 @@ from migen import *
 
 from litex.gen import *
 
-from litex.soc.interconnect import stream
+from litex.soc.interconnect     import stream
 from litex.soc.cores.code_8b10b import Encoder, Decoder
 
 from usb3_pipe.common import K
@@ -21,8 +21,8 @@ K28_4 = K(28, 4)
 
 # Helpers ------------------------------------------------------------------------------------------
 
-K_SYMBOLS = [x | (y << 5) for x, y in [(28, 0), (28, 1), (28, 2), (28, 3), (28, 4), (28, 5), (28, 6),
-    (28, 7), (23, 7), (27, 7), (29, 7), (30, 7)]]
+K_SYMBOLS = [x | (y << 5) for x, y in [(28, 0), (28, 1), (28, 2), (28, 3), (28, 4), (28, 5),
+    (28, 6), (28, 7), (23, 7), (27, 7), (29, 7), (30, 7)]]
 
 def random_symbols(n, rng):
     return [(rng.choice(K_SYMBOLS), 1) if rng.random() < 0.1 else (rng.randrange(256), 0)

@@ -12,19 +12,15 @@ import unittest
 
 from test import test_core_bulk
 
-
 class TestCoreBulkWide(test_core_bulk.TestCoreBulk):
     link_words = 2
-
 
 class TestCoreBulkWideCascade(test_core_bulk.TestCoreBulk):
     link_words    = 2
     crc32_cascade = True
 
-
 class TestCoreBulkQuads(test_core_bulk.TestCoreBulk):
     link_words = 4
-
 
 class TestCoreBulkCascade(test_core_bulk.TestCoreBulk):
     link_words    = 1

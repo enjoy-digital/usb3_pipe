@@ -116,14 +116,17 @@ class TestCoreIso(unittest.TestCase):
             yield from pyhost_link_init(host)
             yield from configure(host, alt=1)
             # GET_INTERFACE: alternate setting 1.
-            self.assertEqual((yield from pyhost_control_in(host, setup_packet(0x81, 0x0a, 0, 0, 1))), [1])
+            self.assertEqual((yield from pyhost_control_in(host,
+                setup_packet(0x81, 0x0a, 0, 0, 1))), [1])
             # PING -> PING_RESPONSE (Endpoint Number/Direction copied).
             f = yield from pyhost_ping(host, ept=1)
             self.assertEqual((f["subtype"], f["ept"]), (TP_SUB_PING_RESP, 1))
             # No data: zero-length DP, Seq Num 0, LPF.
             dps = yield from pyhost_iso_in(host, ept=1, bursts=[max_burst])
-            self.assertEqual([(d["seq"], d["lpf"], d["length"], p) for d, p, crc in dps], [(0, 1, 0, [])])
-            # Transfers: one ACK TP per interval, then several ACK TPs per interval (Seq Num + NumP).
+            self.assertEqual([(d["seq"], d["lpf"], d["length"], p) for d, p, crc in dps],
+                [(0, 1, 0, [])])
+            # Transfers: one ACK TP per interval, then several ACK TPs per interval (Seq Num +
+            # NumP).
             state["read"] = 0
             for i, t in enumerate(transfers):
                 yield from host.wait(lambda: state["written"] > i)
@@ -136,7 +139,8 @@ class TestCoreIso(unittest.TestCase):
             self.assertEqual([(d["seq"], d["lpf"], d["length"]) for d, p, crc in dps], [(0, 1, 0)])
             # Isochronous: no TP response from the device (only PING_RESPONSEs and EP0 ACKs).
             yield from wait(32)
-            iso_tps = [tp_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x04 and tp_fields(hp)["ept"] == 1]
+            iso_tps = [tp_fields(hp) for hp in host.hps
+                if (hp[0] & 0x1f) == 0x04 and tp_fields(hp)["ept"] == 1]
             self.assertTrue(all(f["subtype"] == TP_SUB_PING_RESP for f in iso_tps))
             # Each DP sent once (no retry).
             iso_dps = [d for d, p, crc in pyhost_dps(host) if d["ept"] == 1]
@@ -154,7 +158,8 @@ class TestCoreIso(unittest.TestCase):
     @pytest.mark.slow
     def test_iso_in_long(self):
         self.iso_in_test(
-            transfers = [payload(0, 4096), payload(1, 2500), payload(2, 1024), payload(3, 102), payload(4, 3072)],
+            transfers = [payload(0, 4096), payload(1, 2500), payload(2, 1024), payload(3, 102),
+                payload(4, 3072)],
             bursts    = [[4], [2, 2], [1, 1, 1, 1], [4], [1, 3]])
 
     @pytest.mark.slow
@@ -197,7 +202,8 @@ class TestCoreIso(unittest.TestCase):
             yield from host.wait(lambda: len(pyhost_dps(host)) > d0)
             yield from wait(300)
             dps = pyhost_dps(host)[d0:]
-            self.assertEqual([(d["seq"], d["lpf"], p) for d, p, crc in dps], [(0, 0, transfers[0][:1024])])
+            self.assertEqual([(d["seq"], d["lpf"], p) for d, p, crc in dps],
+                [(0, 0, transfers[0][:1024])])
             dps = yield from pyhost_iso_in(host, ept=1, bursts=[max_burst])
             self.check_transfer(dps, transfers[1], max_burst)
             self.assertEqual((yield dut.iso.n_drops), 2)

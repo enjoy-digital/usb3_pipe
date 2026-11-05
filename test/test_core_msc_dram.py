@@ -113,8 +113,8 @@ class DRAMStorageDUT(LiteXModule):
     def __init__(self, size, base):
         module = SimDDR3(125e6, "1:4")
         module.geom_settings.addressbits = 16
-        self.phy  = SDRAMPHYModel(module, data_width=16, clk_freq=125e6)
-        self.sdram = LiteDRAMCore(self.phy, module.geom_settings, module.timing_settings, 125e6)
+        self.phy     = SDRAMPHYModel(module, data_width=16, clk_freq=125e6)
+        self.sdram   = LiteDRAMCore(self.phy, module.geom_settings, module.timing_settings, 125e6)
         self.storage = USB3MSCDRAM(
             rd_port = self.sdram.crossbar.get_port("read"),
             wr_port = self.sdram.crossbar.get_port("write"),
@@ -194,7 +194,8 @@ class TestCoreMSCDRAM(unittest.TestCase):
                     host.send(data_packet_payload(chunk))
                     state["out_seq"] = (state["out_seq"] + 1) % 32
             count = 1 + ((-(-length//1024)) if (din and length) else 0)
-            packets, state["in_seq"] = yield from pyhost_bulk_in(host, ept=1, count=count, seq=state["in_seq"])
+            packets, state["in_seq"] = yield from pyhost_bulk_in(host, ept=1, count=count,
+                seq=state["in_seq"])
             data = sum(packets[:-1], [])
             csw  = packets[-1]
             self.assertEqual(len(csw), 13)
@@ -203,15 +204,19 @@ class TestCoreMSCDRAM(unittest.TestCase):
             return data, residue, status
 
         def rw10(op, lba, nblk):
-            return [op, 0] + list(lba.to_bytes(4, "big")) + [0] + list(nblk.to_bytes(2, "big")) + [0]
+            return ([op, 0] + list(lba.to_bytes(4, "big")) + [0] +
+                list(nblk.to_bytes(2, "big")) + [0])
 
         def scenario():
             yield from pyhost_link_init(host)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
-            # DRAM not ready: TEST UNIT READY fails, REQUEST SENSE: NOT READY/LOGICAL UNIT NOT READY.
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x00, 0x09, 1, 0, 0))))
+            # DRAM not ready: TEST UNIT READY fails, REQUEST SENSE: NOT READY/LOGICAL UNIT NOT
+            # READY.
             data, residue, status = yield from command([SCSI_TEST_UNIT_READY])
             self.assertEqual(status, 1)
-            data, residue, status = yield from command([SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0], length=18)
+            data, residue, status = yield from command([SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0],
+                length=18)
             self.assertEqual((data[2] & 0xf, data[12]), (0x02, 0x04))
             # READ(10) while not ready: padded, failed.
             data, residue, status = yield from command(rw10(SCSI_READ_10, 0, 1), length=512)
@@ -245,9 +250,11 @@ class TestCoreMSCDRAM(unittest.TestCase):
             data, residue, status = yield from command(rw10(SCSI_READ_10, lba - 1, 4), length=4*512)
             self.assertEqual((data, residue, status), ([0]*512 + block + [0]*512, 0, 0))
             # Out of range READ(10): failed, ILLEGAL REQUEST/LBA OUT OF RANGE.
-            data, residue, status = yield from command(rw10(SCSI_READ_10, blocks - 1, 2), length=1024)
+            data, residue, status = yield from command(rw10(SCSI_READ_10, blocks - 1, 2),
+                length=1024)
             self.assertEqual(status, 1)
-            data, residue, status = yield from command([SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0], length=18)
+            data, residue, status = yield from command([SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0],
+                length=18)
             self.assertEqual((data[2] & 0xf, data[12]), (0x05, 0x21))
 
         run_simulation(dut, [

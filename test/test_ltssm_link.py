@@ -12,7 +12,6 @@ from litex.gen import *
 
 from test.model.ltssm import LTSSMLinkHarness
 
-
 class TestLTSSMLink(unittest.TestCase):
     def wait_for(self, signal, timeout=256):
         for i in range(timeout):

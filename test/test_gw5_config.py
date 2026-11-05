@@ -14,13 +14,14 @@ from usb3_pipe.gw5 import gw5_usb3_csr_config, gw5_usb3_rate_writes, gw5_csr_ove
 from usb3_pipe.gw5 import GW5AT15_Q0_QPLL0_OVERRIDES
 
 def writes(csr_config):
-    return {int(a, 16): int(v, 16) for a, v in re.findall(r"upar_write_driver\((0x[0-9A-Fa-f]+),(0x[0-9A-Fa-f]+)\)",
-        csr_config)}
+    return {int(a, 16): int(v, 16) for a, v in re.findall(
+        r"upar_write_driver\((0x[0-9A-Fa-f]+),(0x[0-9A-Fa-f]+)\)", csr_config)}
 
 class TestGW5Config(unittest.TestCase):
     def test_gw5ast138_default(self):
         # Q1 (GW5AST-138B): QPLL1 by default, no overrides.
-        self.assertEqual(gw5_usb3_csr_config(0, "5G", "100M"), gw5_usb3_csr_config(0, "5G", "100M", pll="QPLL1"))
+        self.assertEqual(gw5_usb3_csr_config(0, "5G", "100M"),
+            gw5_usb3_csr_config(0, "5G", "100M", pll="QPLL1"))
         with self.assertRaises(AssertionError):
             gw5_usb3_csr_config(0, "5G", "100M", pll="QPLL0")
 
@@ -49,8 +50,8 @@ class TestGW5Config(unittest.TestCase):
             gw5_usb3_csr_config(0, "10G", "100M", pll="CPLL")
 
     def test_cpll_rate_writes(self):
-        # CPLL rate change: CPLL reset, the differing writes, RX equalizer mode, signal detect toggle,
-        # CPLL released after 50us, 200us for its lock (short: Polling.RxEQ of the partner).
+        # CPLL rate change: CPLL reset, the differing writes, RX equalizer mode, signal detect
+        # toggle, CPLL released after 50us, 200us for its lock (short: Polling.RxEQ of the partner).
         w = gw5_usb3_rate_writes(0, "125M", pll="CPLL", clk_freq=100e6)
         self.assertEqual(w[0], (0x90a004, 0x22322, 0x22322))
         self.assertIn((0x90a00c, 0x10140108, 0x10280108), w)
@@ -59,10 +60,12 @@ class TestGW5Config(unittest.TestCase):
         self.assertEqual(w[-1], (0x90033e, 0, 0))
         # Equalizer registers back to 0 at 5G (as after the 5G configuration), attenuation 8 at 10G.
         eq = {a: (v5, v10) for a, v5, v10, *_ in w if a in (0x9082d0, 0x9082d4, 0x9003a2)}
-        self.assertEqual(eq, {0x9082d0: (0, 0xcccc1), 0x9082d4: (0, 0x88881), 0x9003a2: (0, 0x10000)})
+        self.assertEqual(eq,
+            {0x9082d0: (0, 0xcccc1), 0x9082d4: (0, 0x88881), 0x9003a2: (0, 0x10000)})
 
     def test_overrides(self):
-        c = "upar_write_driver(0x000010,0x00000001) # a\nupar_write_driver(0x000020,0x00000002) # b\n"
+        c = ("upar_write_driver(0x000010,0x00000001) # a\n"
+            "upar_write_driver(0x000020,0x00000002) # b\n")
         self.assertEqual(writes(gw5_csr_overrides(c, {0x10: 0x5, 0x20: None})), {0x10: 0x5})
         with self.assertRaises(AssertionError):
             gw5_csr_overrides(c, {0x30: 0x1}) # Not written: refused.

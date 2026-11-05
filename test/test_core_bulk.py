@@ -47,7 +47,8 @@ class TestCoreBulk(unittest.TestCase):
             host.send(data)
 
     def acks(self, host, start=0):
-        return [tp_fields(hp) for hp in host.hps[start:] if (hp[0] & 0x1f) == 0x04 and (hp[1] & 0xf) == 1]
+        return [tp_fields(hp) for hp in host.hps[start:]
+            if (hp[0] & 0x1f) == 0x04 and (hp[1] & 0xf) == 1]
 
     @pytest.mark.slow
     def test_bulk_out_burst_in_burst(self):
@@ -160,7 +161,8 @@ class TestCoreBulk(unittest.TestCase):
                 yield
             dphs = [dph_fields(hp) for hp in host.hps if (hp[0] & 0x1f) == 0x08]
             self.assertEqual([(d["seq"], d["eob"]) for d in dphs], [(0, 0), (1, 1)])
-            # ACK TP of DP0 (window still open, sent before the EOB DP was received), then of the EOB DP.
+            # ACK TP of DP0 (window still open, sent before the EOB DP was received), then of the
+            # EOB DP.
             host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=8, tp_seq=1)
             host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=0, tp_seq=2)
             n0 = len(host.hps)
@@ -186,7 +188,8 @@ class TestCoreBulk(unittest.TestCase):
                 self.out_burst(host, k, 2, seq0=k)
                 yield from host.wait(lambda: len(self.acks(host, n0)) >= 2)
                 acks = self.acks(host, n0)
-                self.assertEqual([(a["seq"], a["retry"]) for a in acks], [((k + 1) % 32, 0), ((k + 2) % 32, 0)])
+                self.assertEqual([(a["seq"], a["retry"]) for a in acks],
+                    [((k + 1) % 32, 0), ((k + 2) % 32, 0)])
                 for _ in range(1024):
                     yield
                 host.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=2, tp_seq=k, pp=1)
@@ -241,9 +244,10 @@ class TestCoreBulk(unittest.TestCase):
         run_pyhost(dut, host, scenario())
 
     def test_bulk_in_short_packets(self):
-        # Two short packets available: only the first one is sent (a short packet ends the transfer),
-        # the second one after the host ACK TP (NumP=0, ERDY, new request), with the next Sequence
-        # Number (found on hardware with a CDC-ACM console: the host dropped the second packet).
+        # Two short packets available: only the first one is sent (a short packet ends the
+        # transfer), the second one after the host ACK TP (NumP=0, ERDY, new request), with the next
+        # Sequence Number (found on hardware with a CDC-ACM console: the host dropped the second
+        # packet).
         dut  = self.dut(max_burst=8)
         host = PyHost(dut.phy)
         def scenario():
@@ -346,9 +350,11 @@ class EndpointHost:
                     seq, length = dphs.pop(0)
                     self.dps.append((seq, length))
                     if length != 4*len(dpp):
-                        self.errors.append("DP {}: length {}, DPP {} bytes".format(seq, length, 4*len(dpp)))
+                        self.errors.append(
+                            "DP {}: length {}, DPP {} bytes".format(seq, length, 4*len(dpp)))
                     elif seq != self.seq or self.window == 0:
-                        self.errors.append("DP {}: expected {} (window {})".format(seq, self.seq, self.window))
+                        self.errors.append(
+                            "DP {}: expected {} (window {})".format(seq, self.seq, self.window))
                     else:
                         self.seq   += 1
                         self.data  += dpp

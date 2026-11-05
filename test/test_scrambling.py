@@ -192,7 +192,6 @@ class TestScrambling(unittest.TestCase):
         dut.run = True
         run_simulation(dut, [generator(dut), checker(dut)])
 
-
     def test_descrambler_data(self):
         def generator(dut):
             for i in range(16):
@@ -301,7 +300,6 @@ class TestScrambling(unittest.TestCase):
         dut = DUT()
         dut.run = True
         run_simulation(dut, [generator(dut), checker(dut)])
-
 
     def test_scrambler_enable_passthrough(self):
         def generator(dut):

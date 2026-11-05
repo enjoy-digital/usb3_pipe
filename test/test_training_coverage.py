@@ -50,6 +50,9 @@ class SerDesStub(LiteXModule):
     def __init__(self, loopback=False):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
         if loopback:
             self.comb += [
                 self.sink.ready.eq(1),
@@ -162,8 +165,8 @@ class TestTSUnitTX(unittest.TestCase):
                 self.assertLess(remaining, 64)
             dut.result["remaining"] = remaining
             dut.result["sent"]      = len(words) + skipped + remaining
-            dut.result["first"] = (yield serdes.sink.first)
-            dut.result["last"]  = (yield serdes.sink.last)
+            dut.result["first"]     = (yield serdes.sink.first)
+            dut.result["last"]      = (yield serdes.sink.last)
             yield
             # Request held: a new TSEQ sequence starts with a COM.
             dut.result["next"] = ((yield serdes.sink.data), (yield serdes.sink.ctrl),
