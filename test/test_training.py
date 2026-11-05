@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.common import TSEQ, TS1, TS1_INV, TS2, LinkConfig
 from usb3_pipe.training import TSChecker, TSGenerator
 

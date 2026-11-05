@@ -15,6 +15,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import COM, SKP, TSEQ, TS1, TS1_INV, TS2, LinkConfig

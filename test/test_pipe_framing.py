@@ -9,6 +9,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common import SKP, SDP, SHP, SLC, EPF, TS2

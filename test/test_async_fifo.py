@@ -9,6 +9,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.common import AsyncFIFO
 
 class TestAsyncFIFO(unittest.TestCase):

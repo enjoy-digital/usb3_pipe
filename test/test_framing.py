@@ -11,6 +11,8 @@ import pytest
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.common  import GEN2_IDLE

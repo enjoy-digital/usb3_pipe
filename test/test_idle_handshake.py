@@ -9,6 +9,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.common import TS2
 from usb3_pipe.core import USB3PIPE
 from usb3_pipe.ltssm import USB3LTSSM

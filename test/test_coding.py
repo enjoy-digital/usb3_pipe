@@ -18,6 +18,8 @@ import pytest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.common import *
 from usb3_pipe.coding import Gen2BlockGearbox, Gen2BlockAligner, popcount
 
