@@ -10,6 +10,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_core.bench import USB3Bench
 
 class TestUSB3Bench(unittest.TestCase):

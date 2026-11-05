@@ -8,6 +8,8 @@ import unittest
 
 from migen import *
 
+from litex.gen import *
+
 from usb3_pipe.gw5    import gw5_usb3_rate_writes
 from usb3_pipe.serdes import GW5RateSequencer
 
