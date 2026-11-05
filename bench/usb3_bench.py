@@ -108,7 +108,8 @@ class Bench:
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("direction",       choices=["in", "out", "both"])
     parser.add_argument("--duration",      default=5.0,     type=float, help="Duration (s).")
     parser.add_argument("--transfer-size", default=1 << 20, type=int,   help="Transfer size (bytes, multiple of 1024).")
@@ -142,13 +143,15 @@ def main():
         if time.time() - tl >= 1.0:
             now = time.time()
             rates = {d: (bench.bytes[d] - last[d])/(now - tl)/1e6 for d in ["in", "out"]}
-            print(f"  IN {rates['in']:7.1f} MB/s  OUT {rates['out']:7.1f} MB/s  errors {bench.errors}  failures {bench.failures}")
+            print(f"  IN {rates['in']:7.1f} MB/s  OUT {rates['out']:7.1f} MB/s  "
+                  f"errors {bench.errors}  failures {bench.failures}")
             last = dict(bench.bytes)
             tl   = now
     dt = time.time() - t0
     for d in ["in", "out"]:
         if bench.bytes[d]:
-            print(f"{d.upper():3s}: {bench.bytes[d]/1e6:9.1f} MB in {dt:.1f}s: {bench.bytes[d]/dt/1e6:7.1f} MB/s")
+            print(f"{d.upper():3s}: {bench.bytes[d]/1e6:9.1f} MB in {dt:.1f}s: "
+                  f"{bench.bytes[d]/dt/1e6:7.1f} MB/s")
     print(f"IN data errors: {bench.errors}, transfer failures: {bench.failures}")
 
     sink_errors = 0

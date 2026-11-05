@@ -125,8 +125,8 @@ def usb_find_device(product, location=None):
         devs = [dev for dev in devs if Path(dev).name == location]
     if len(devs) != 1:
         found = [Path(dev).name for dev in devs]
-        raise RuntimeError(f"USB device '{product}': {len(devs)} match(es) {found}, select one with "
-            "$USB3_PIPE_FTDI (sysfs location, ex: 5-4).")
+        raise RuntimeError(f"USB device '{product}': {len(devs)} match(es) {found}, select one "
+            "with $USB3_PIPE_FTDI (sysfs location, ex: 5-4).")
     dev      = devs[0]
     busnum   = int(usb_attr(dev, "busnum"))
     devnum   = int(usb_attr(dev, "devnum"))

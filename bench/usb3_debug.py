@@ -80,7 +80,8 @@ class USB3DebugClient:
         r.update(counters)
         if hasattr(self.bus.regs, "usb3_serdes_debug_rx_errors_symbols_count"):
             for name in RX_COUNTERS:
-                r[f"rx_{name}"] = getattr(self.bus.regs, f"usb3_serdes_debug_rx_errors_{name}_count").read()
+                r[f"rx_{name}"] = getattr(self.bus.regs,
+                    f"usb3_serdes_debug_rx_errors_{name}_count").read()
             r["rx_max_good_run"] = self.bus.regs.usb3_serdes_debug_rx_errors_max_good_run.read()
             tx_freq = self.bus.regs.usb3_serdes_debug_tx_freq_value.read()
             rx_freq = self.bus.regs.usb3_serdes_debug_rx_freq_value.read()
@@ -92,7 +93,8 @@ class USB3DebugClient:
         entries = []
         for i in range(min(count, USB3PHY_DEBUG_HISTORY_DEPTH)):
             self.reg("history_index").write(i)
-            entries.append((self.reg("history_time").read(), self.state_name(self.reg("history_state").read())))
+            entries.append((self.reg("history_time").read(),
+                self.state_name(self.reg("history_state").read())))
         return count, entries
 
     def history_freeze(self, enable=True):
@@ -193,8 +195,8 @@ class GTDRPClient:
 def host_status(lines=20, kern_log=DEFAULT_KERN_LOG):
     # SuperSpeed devices (sysfs, hubs excluded) and the last USB kernel messages (kern_log: None to
     # skip them).
-    devices = usb_superspeed_devices(with_hubs=False, attrs=["idVendor", "idProduct", "manufacturer",
-        "product", "serial", "speed", "bConfigurationValue"])
+    devices = usb_superspeed_devices(with_hubs=False, attrs=["idVendor", "idProduct",
+        "manufacturer", "product", "serial", "speed", "bConfigurationValue"])
     r = {"devices": [d | {"path": path} for path, d in devices.items()], "kern_log": []}
     if kern_log is not None:
         try:

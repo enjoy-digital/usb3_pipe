@@ -19,7 +19,7 @@ from litex_boards.platforms import sqrl_acorn
 from litex.build.generic_platform import *
 
 from litex.soc.cores.clock import *
-from litex.soc.cores.xadc import S7SystemMonitor
+from litex.soc.cores.xadc  import S7SystemMonitor
 
 from litedram.modules import MT41K512M16
 from litedram.phy     import s7ddrphy
@@ -176,7 +176,8 @@ class USB3SoC(USB3BaseSoC):
 # Build --------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="USB3-PIPE on the SQRL Acorn CLE-215+ (Artix7 GTP), LiteX Acorn Baseboard (Mini).")
+    parser = argparse.ArgumentParser(
+        description="USB3-PIPE on the SQRL Acorn CLE-215+ (Artix7 GTP), LiteX Acorn Baseboard (Mini).")
     parser.add_argument("--variant",   default="mini",      help="LiteX Acorn Baseboard variant.", choices=["mini", "standard"])
     parser.add_argument("--with-dram", action="store_true", help="Enable the DDR3 SDRAM (requires a CPU, default with the msc_dram example).")
     usb3_soc_args(parser, output_dir="build/sqrl_acorn")
@@ -186,7 +187,8 @@ def main():
     gtp_group.add_argument("--lpm-hold",  default="none", help="GTP LPM adaptation hold (rxeq: adapt only in Polling.RxEQ).", choices=["none", "rxeq", "always"])
     args = parser.parse_args()
 
-    # DRAM disk: DDR3 SDRAM, initialized by the BIOS (VexRiscv CPU by default, console on a stub UART).
+    # DRAM disk: DDR3 SDRAM, initialized by the BIOS (VexRiscv CPU by default, console on a stub
+    # UART).
     with_dram = args.with_dram or (args.example == "msc_dram")
     if with_dram and args.cpu_type is None:
         args.cpu_type = "vexriscv"

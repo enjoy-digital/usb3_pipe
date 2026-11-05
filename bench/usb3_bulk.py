@@ -54,8 +54,8 @@ def info(dev):
     for cfg in dev:
         for intf in cfg:
             for ep in intf:
-                print(f"  EP 0x{ep.bEndpointAddress:02x}: {usb.util.endpoint_type(ep.bmAttributes)} "
-                      f"wMaxPacketSize {ep.wMaxPacketSize}")
+                print(f"  EP 0x{ep.bEndpointAddress:02x}: {usb.util.endpoint_type(ep.bmAttributes)}"
+                      f" wMaxPacketSize {ep.wMaxPacketSize}")
 
 # Loopback -----------------------------------------------------------------------------------------
 
@@ -72,18 +72,21 @@ def loopback(dev, size, count, random_sizes=False, timeout=1000, seed=0):
         if back != data:
             errors += 1
             if errors <= 4:
-                first = next((j for j, (a, b) in enumerate(zip(back, data)) if a != b), min(len(back), len(data)))
-                print(f"  packet {i}: {len(data)} bytes sent, {len(back)} received, first error at byte {first}")
+                first = next((j for j, (a, b) in enumerate(zip(back, data)) if a != b),
+                    min(len(back), len(data)))
+                print(f"  packet {i}: {len(data)} bytes sent, {len(back)} received, "
+                      f"first error at byte {first}")
         nbytes += n
     dt = time.time() - t0
-    print(f"{count} packets, {nbytes} bytes, {errors} errors, {2*nbytes*8/dt/1e6:.1f} Mbps (OUT+IN, "
-          f"one packet per transfer)")
+    print(f"{count} packets, {nbytes} bytes, {errors} errors, {2*nbytes*8/dt/1e6:.1f} Mbps "
+          f"(OUT+IN, one packet per transfer)")
     return errors
 
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--size",         default=1024, type=int, help="Packets size (bytes, max 1024).")
     parser.add_argument("--count",        default=100,  type=int, help="Number of packets.")
     parser.add_argument("--random-sizes", action="store_true",    help="Random packets sizes (up to --size).")
