@@ -6,6 +6,7 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+import os
 import argparse
 
 from migen import *
@@ -914,6 +915,7 @@ def main():
         host_lbad_test     = args.host_lbad_test)
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
+        jobs        = len(os.sched_getaffinity(0)), # Compiler jobs limited to the CPUs (else one per generated file).
         opt_level   = "O0",
         interactive = False,
         trace       = args.trace,
