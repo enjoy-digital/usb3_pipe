@@ -69,7 +69,8 @@ def add_usb3_console(soc, usb3_acm):
 def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False, max_burst=8,
     with_trace=True):
     """Add a USB3 Device Core example design to soc (on usb3_phy), with_lpm: U1/U2 Link Power
-    Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples), with_trace: core traces."""
+    Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples), with_trace: core
+    traces."""
     assert example in USB3_EXAMPLES
     # Link Layer words (USB3PHY link_words): 64-bit Bulk endpoints in the vendor Bulk examples.
     dw = 32*getattr(usb3_phy, "link_words", 1)

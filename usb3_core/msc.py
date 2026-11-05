@@ -19,8 +19,8 @@ A USB3 device exposing a disk (/dev/sdX, no driver needed) backed by a storage:
 """
 
 import os
-import subprocess
 import tempfile
+import subprocess
 
 from migen import *
 
@@ -368,7 +368,7 @@ class USB3MSCSCSI(LiteXModule):
                 NextValue(out, Mux(out <= 4, 0, out - 4)),
             )
         )
-        csw = Array([C(CSW_SIGNATURE, 32), tag, residue, Cat(status, C(0, 24))])
+        csw      = Array([C(CSW_SIGNATURE, 32), tag, residue, Cat(status, C(0, 24))])
         csw_word = Signal(2)
         fsm.act("CSW",
             bulk_in.sink.valid.eq(1),

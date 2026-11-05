@@ -101,13 +101,13 @@ class USB3BulkIN(USB3Endpoint):
         # Flow control (8.10.1/8.10.2): after an EOB DP, a NRDY or a window closed by the host (NumP
         # of 0), an ERDY is sent when data is available and the host requests again. ACK TPs
         # received for packets sent before an EOB (with a NumP still open) do not reopen the window.
-        fc_eob  = Signal() # EOB sent: waiting for the acknowledgement of the sent packets.
-        fc_data = Signal() # Waiting for data: ERDY when a packet is available.
-        fc_req  = Signal() # ERDY sent: waiting for the host request.
+        fc_eob   = Signal() # EOB sent: waiting for the acknowledgement of the sent packets.
+        fc_data  = Signal() # Waiting for data: ERDY when a packet is available.
+        fc_req   = Signal() # ERDY sent: waiting for the host request.
         # Short packet sent: the ACK TPs of the packets sent before it (acked < inflight) are stale
         # (the short packet ends the host transfer), only its ACK TP reopens the window.
         fc_short = Signal()
-        fc      = Signal()
+        fc       = Signal()
         self.comb += fc.eq(fc_eob | fc_data | fc_req)
 
         # Sending ----------------------------------------------------------------------------------
@@ -241,8 +241,8 @@ class USB3BulkIN(USB3Endpoint):
                     fc_req.eq(0),
                     # A pending ERDY (window closed, data available) is cancelled by a host request
                     # received before it is sent (seen at Gen 2 in full duplex: NumP=0 then a new
-                    # request right after), else the ERDY was sent and the request (already received)
-                    # waited for (transfers stalled until the host retry).
+                    # request right after), else the ERDY was sent and the request (already
+                    # received) waited for (transfers stalled until the host retry).
                     erdy_pending.eq(0),
                     If(h.nump == 0,
                         # Window closed by the host (ex: after a short packet, 8.10.2): ERDY when
@@ -289,9 +289,9 @@ class USB3BulkIN(USB3Endpoint):
         ]
 
         # Debug (sending state).
-        self.dbg_no_data  = ~avail & ~fc                            # No packet written to send.
-        self.dbg_no_win   = avail & ~fc & ~in_win                   # Waiting for a host request.
-        self.dbg_fc       = fc                                      # Flow control (EOB/NRDY/ERDY).
+        self.dbg_no_data  = ~avail & ~fc                             # No packet written to send.
+        self.dbg_no_win   = avail & ~fc & ~in_win                    # Waiting for a host request.
+        self.dbg_fc       = fc                                       # Flow control (EOB/NRDY/ERDY).
         self.dbg_hp_wait  = avail & ~fc & in_win & ~self.tx_hp.ready # Link Layer not ready.
         self.dbg_inflight = inflight
 
@@ -327,9 +327,9 @@ class USB3BulkOUT(USB3Endpoint):
         decide_ptr = Signal(pbits) # Next landed slot to accept/discard (Protocol Layer, in order).
         rd_ptr     = Signal(pbits) # Next slot read by the user.
         exp_seq    = Signal(5)     # Next expected Sequence Number.
-        free       = Signal(pbits)     # Slots available to land DPPs.
+        free       = Signal(pbits) # Slots available to land DPPs.
         occupied   = Signal(pbits)
-        decided    = Signal(pbits)     # Slots of decided (accepted/discarded) packets not read yet.
+        decided    = Signal(pbits) # Slots of decided (accepted/discarded) packets not read yet.
         self.comb += [
             occupied.eq(land_ptr - rd_ptr),
             decided.eq(decide_ptr - rd_ptr),
@@ -442,7 +442,8 @@ class USB3BulkOUT(USB3Endpoint):
         self.sync += [
             rd_valid.eq(rd_issue),
             rd_last.eq(rd_issue & (rd_count + 1 >= rd_words)),
-            rd_be.eq(Mux(rd_count + 1 >= rd_words, bytes_to_be_n(rd_len[:log2_int(wb)], wb), 2**wb - 1)),
+            rd_be.eq(Mux(rd_count + 1 >= rd_words,
+                bytes_to_be_n(rd_len[:log2_int(wb)], wb), 2**wb - 1)),
             If(~rd_active,
                 # Next decided slot: read it (valid, not empty) or skip it.
                 If(rd_ptr != decide_ptr,

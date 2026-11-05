@@ -117,13 +117,14 @@ class CRC32(LiteXModule):
     """
     def __init__(self, data_width=32, cascade=False):
         assert data_width in [32, 64, 128]
-        self.clear      = Signal()                   # i
-        self.ce         = Signal()                   # i
-        self.data       = Signal(data_width)         # i
-        self.bytes      = Signal(bits_for(data_width//8)) # i: Valid bytes (0-4, 8 with data_width=64, 0-16 with data_width=128).
-        self.value      = Signal(32)                 # o
-        self.next_value = Signal(32)                 # o
-        self.next_value32 = Signal(32)               # o
+        self.clear        = Signal()                        # i
+        self.ce           = Signal()                        # i
+        self.data         = Signal(data_width)              # i
+        # Valid bytes (0-4, 8 with data_width=64, 0-16 with data_width=128).
+        self.bytes        = Signal(bits_for(data_width//8)) # i
+        self.value        = Signal(32)                      # o
+        self.next_value   = Signal(32)                      # o
+        self.next_value32 = Signal(32)                      # o
 
         # # #
 

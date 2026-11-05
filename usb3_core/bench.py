@@ -9,8 +9,8 @@
 - Source (Bulk IN) : 32-bit incrementing counter words at full rate (max size packets).
 - Sink   (Bulk OUT): checks the 32-bit incrementing counter words (resynchronized on errors).
 
-data_width=64/128: two/four counter words per 64/128-bit word (same byte stream), words counters in 32-bit
-words.
+data_width=64/128: two/four counter words per 64/128-bit word (same byte stream), words counters in
+32-bit words.
 """
 
 from migen import *
@@ -43,7 +43,8 @@ class USB3Bench(LiteXModule):
         count = Signal(32)
         self.comb += [
             source.valid.eq(self.source_enable),
-            source.data.eq(Cat(*[(count + i)[:32] for i in range(n)])), # 32-bit words (sums: 33-bit).
+            # 32-bit words (sums: 33-bit).
+            source.data.eq(Cat(*[(count + i)[:32] for i in range(n)])),
             source.be.eq(2**(4*n) - 1),
         ]
         self.sync += If(source.valid & source.ready,

@@ -105,9 +105,9 @@ class USB3EndpointControl(USB3Endpoint):
         # # #
 
         # Requests Table / ROM ---------------------------------------------------------------------
-        requests = descriptors.get_requests()
-        rom      = []
-        entries  = []
+        requests      = descriptors.get_requests()
+        rom           = []
+        entries       = []
         status_offset = None # GET_STATUS(Device) response word.
         for bmRequestType, bRequest, wValue, response, kind in requests:
             offset = len(rom)
@@ -128,12 +128,12 @@ class USB3EndpointControl(USB3Endpoint):
         mem_init     = rom + [0]*(mem_depth - len(rom))
         # Not a module attribute (would be CSR-mapped).
         mem          = Memory(32, mem_depth, init=mem_init)
-        rd_port = mem.get_port(has_re=True)
+        rd_port      = mem.get_port(has_re=True)
         self.specials += mem, rd_port
 
         # Setup Packet -----------------------------------------------------------------------------
-        setup_w0 = Signal(32)
-        setup_w1 = Signal(32)
+        setup_w0    = Signal(32)
+        setup_w1    = Signal(32)
         setup_count = Signal(2)
         self.sync += If(self.rx_dpp.valid & self.rx_dpp_setup,
             If(self.rx_dpp.first,
@@ -152,13 +152,13 @@ class USB3EndpointControl(USB3Endpoint):
 
         # Request matching (first match, registered: the request is decoded when the SETUP lands and
         # used from its Data/Status stages).
-        kind   = Signal(4)
-        offset = Signal(max=max(mem_depth, 2), reset_less=True)
-        length = Signal(16, reset_less=True)
+        kind         = Signal(4)
+        offset       = Signal(max=max(mem_depth, 2), reset_less=True)
+        length       = Signal(16, reset_less=True)
         match_kind   = Signal(4)
         match_offset = Signal(max=max(mem_depth, 2))
         match_length = Signal(16)
-        cases  = None
+        cases        = None
         for _bmRequestType, _bRequest, _wValue, e_offset, e_length, e_kind in reversed(entries):
             match = (bmRequestType == _bmRequestType) & (bRequest == _bRequest)
             if _wValue is not None:
@@ -321,7 +321,6 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_length.eq(wLength),
                 self.req_in.ready.eq(self.req_valid & ~resp_ready &
                     (resp_words != EP0_HANDLER_WORDS)),
-
             ]
             self.sync += [
                 If(new_setup,
@@ -358,7 +357,7 @@ class USB3EndpointControl(USB3Endpoint):
                 in_total.eq(total),
             )
         ]
-        in_req       = Signal()                   # Host request (ACK TP with NumP) pending...
+        in_req       = Signal()                    # Host request (ACK TP with NumP) pending...
         in_req_seq   = Signal(5, reset_less=True)  # ...for this Sequence Number.
         send_pending = Signal()
         send_seq     = Signal(5, reset_less=True)

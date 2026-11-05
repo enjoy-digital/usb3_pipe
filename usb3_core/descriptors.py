@@ -147,15 +147,15 @@ class USB3Descriptors:
         max_power_ma = 0,
         device_class = (0x00, 0x00, 0x00),
         with_lpm     = False):
-        self.vid          = vid
-        self.pid          = pid
-        self.bcd_device   = bcd_device
-        self.strings      = [manufacturer, product, serial]
-        self.interfaces   = [] if interfaces is None else interfaces
-        self.max_power_ma = max_power_ma
-        self.device_class = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
-        self.with_lpm     = with_lpm
-        self.with_ssp     = False
+        self.vid            = vid
+        self.pid            = pid
+        self.bcd_device     = bcd_device
+        self.strings        = [manufacturer, product, serial]
+        self.interfaces     = [] if interfaces is None else interfaces
+        self.max_power_ma   = max_power_ma
+        self.device_class   = device_class # (bDeviceClass, bDeviceSubClass, bDeviceProtocol).
+        self.with_lpm       = with_lpm
+        self.with_ssp       = False
         self.class_requests = [] # (bmRequestType, bRequest, IN response bytes or None).
 
     def enable_ssp(self):
@@ -195,8 +195,9 @@ class USB3Descriptors:
         caps     = usb2_ext + ss_cap
         n_caps   = 2
         if self.with_ssp:
-            # SuperSpeedPlus USB Device Capability (9.6.2.5): one Sublink Speed ID (0), symmetric RX/TX
-            # attributes, 10Gbps (LSE: Gb/s, LSM: 10), SuperSpeedPlus protocol, 1 RX/TX lane minimum.
+            # SuperSpeedPlus USB Device Capability (9.6.2.5): one Sublink Speed ID (0), symmetric
+            # RX/TX attributes, 10Gbps (LSE: Gb/s, LSM: 10), SuperSpeedPlus protocol, 1 RX/TX lane
+            # minimum.
             attrs   = [
                 (0 << 0) | (3 << 4) | (0b00 << 6) | (1 << 14) | (10 << 16), # RX.
                 (0 << 0) | (3 << 4) | (0b10 << 6) | (1 << 14) | (10 << 16), # TX.

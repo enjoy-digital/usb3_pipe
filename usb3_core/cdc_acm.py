@@ -129,6 +129,6 @@ class USB3CDCACM(LiteXModule):
             with_ep0_handler = True)
         function = USB3CDCACMFunction(core.ep0, core.endpoints[0], core.endpoints[1])
         self.function = function
-        self.sink    = function.sink
-        self.source  = function.source
-        self.connect = function.connect
+        self.sink     = function.sink
+        self.source   = function.source
+        self.connect  = function.connect

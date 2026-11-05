@@ -28,16 +28,16 @@ from usb3_core.common import TYPE_ITP
 class USB3CoreTrace(LiteXModule):
     def __init__(self, link, depth=512):
         self._control = CSRStorage(fields=[
-            CSRField("enable", size=1, reset=1, description="Trace enable (stops when full)."),
-            CSRField("clear",  size=1, pulse=True, description="Trace clear (timestamp reset)."),
+            CSRField("enable",     size=1, reset=1, description="Trace enable (stops when full)."),
+            CSRField("clear",      size=1, pulse=True, description="Trace clear (timestamp reset)."),
             CSRField("circular",   size=1, description="Circular (stopped with enable=0)."),
             CSRField("ept_filter", size=1, description="Record only the ept endpoint packets."),
             CSRField("ept",        size=4, description="Endpoint number (ept_filter)."),
         ])
         self._count   = CSRStatus(16, description="Recorded entries.")
         self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
-        self._index = CSRStorage(16, description="Entry to read.")
-        self._data  = CSRStatus(64,  description="Entry (dw1, type, direction, timestamp).")
+        self._index   = CSRStorage(16, description="Entry to read.")
+        self._data    = CSRStatus(64,  description="Entry (dw1, type, direction, timestamp).")
 
         # # #
 
@@ -118,21 +118,22 @@ class USB3LinkTrace(LiteXModule):
     tx_lc_sel[50:61], rx_hp[61:77] (type, LMP subtype, seq, ok, accept, seq error), tx_hp[77:87]
     (seq, type, retry), recovery causes[87:92] (seq error, LGOOD, LCRD, PENDING_HP, CREDIT_HP).
 
-    Modes: linear (stops when full) or circular (stops on a U0 exit or a Recovery request: the last entries before it are
-    kept, oldest at the write pointer), keep-alive filter (LUP/LDN only entries and ITPs dropped).
+    Modes: linear (stops when full) or circular (stops on a U0 exit or a Recovery request: the last
+    entries before it are kept, oldest at the write pointer), keep-alive filter (LUP/LDN only
+    entries and ITPs dropped).
     """
     def __init__(self, link, depth=1024):
         self._control = CSRStorage(fields=[
-            CSRField("enable", size=1, reset=1, description="Trace enable (stops when full)."),
-            CSRField("clear",  size=1, pulse=True, description="Trace clear (timestamp reset)."),
+            CSRField("enable",   size=1, reset=1, description="Trace enable (stops when full)."),
+            CSRField("clear",    size=1, pulse=True, description="Trace clear (timestamp reset)."),
             CSRField("circular", size=1, description="Circular, stops on a U0 exit."),
             CSRField("filter",   size=1, description="Drop LUP/LDN only entries and ITPs."),
             CSRField("skip",     size=4, description="Circular: U0 exits/Recovery requests ignored before stopping."),
         ])
         self._count   = CSRStatus(16, description="Recorded entries.")
         self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
-        self._index = CSRStorage(16, description="Entry to read.")
-        self._data  = CSRStatus(96,  description="Entry.")
+        self._index   = CSRStorage(16, description="Entry to read.")
+        self._data    = CSRStatus(96,  description="Entry.")
 
         # # #
 
@@ -167,7 +168,7 @@ class USB3LinkTrace(LiteXModule):
                 (~link.dbg_rx_hp | itp) & ~link.dbg_tx_hp & (events[4:7] == 0)),
         ]
         skipped = Signal(4)
-        record = Signal()
+        record  = Signal()
         self.comb += [
             entry.eq(Cat(timestamp, events, link.dbg_rx_lc_info, link.dbg_tx_lc_sel,
                 link.dbg_rx_hp_info, link.dbg_tx_hp_info, link.dbg_recovery_cause)),
@@ -206,4 +207,3 @@ class USB3LinkTrace(LiteXModule):
             rd_port.adr.eq(self._index.storage),
             self._data.status.eq(rd_port.dat_r),
         ]
-

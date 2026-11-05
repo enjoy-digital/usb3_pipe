@@ -99,7 +99,8 @@ class USB3LinkLayer(LiteXModule):
         ]
         def is_type2(dw0, dw1):
             """Type 2 packet (SuperSpeedPlus): asynchronous DP (TT: Control/Bulk)."""
-            return ssp & (dw0[0:5] == TYPE_DP) & ((dw1[12:15] == TT_CONTROL) | (dw1[12:15] == TT_BULK))
+            return ssp & (dw0[0:5] == TYPE_DP) & ((dw1[12:15] == TT_CONTROL) |
+                (dw1[12:15] == TT_BULK))
 
         # Link State -------------------------------------------------------------------------------
         u0      = Signal()
@@ -151,7 +152,8 @@ class USB3LinkLayer(LiteXModule):
                 rx_ctrl.eq(swap_ctrl(phy.source.ctrl)),
             ]
         elif lw == 2:
-            # Words window (registered): one word per cycle, two in the DPPs, words dropped out of U0.
+            # Words window (registered): one word per cycle, two in the DPPs, words dropped out
+            # of U0.
             self.rx_window = rx_window = WordsWindow(decode=rx_decode, nflags=5)
             self.rx_words_reg = rx_words_reg = stream.PipeValid(link_pairs_layout(2)) # Timings.
             self.comb += [
@@ -179,7 +181,8 @@ class USB3LinkLayer(LiteXModule):
                 rx_window.consume.eq(Mux(u0, Mux(rx_take, rx_k, Mux(rx_hold, 0, rx_valid)),
                     Mux(rx_keep, 0, rx_window.n))),
             ]
-        rx_words = [rx_data, rx_data1] + ([swap_data(rx_window.w[i]) for i in [2, 3]] if lw == 4 else [])
+        rx_words = [rx_data, rx_data1] + ([swap_data(rx_window.w[i]) for i in [2, 3]]
+            if lw == 4 else [])
         if lw == 1:
             # Registered words (core order: swapped back for the decode).
             self.comb += Cat(rx_shp, rx_slc, rx_sdp, rx_end, rx_knz).eq(
@@ -225,8 +228,8 @@ class USB3LinkLayer(LiteXModule):
         lc_info  = Signal(11, reset_less=True)
         self.crc5_lc0 = crc5_lc0 = CRC5()
         self.crc5_lc1 = crc5_lc1 = CRC5()
-        lc_ok0 = Signal()
-        lc_ok1 = Signal()
+        lc_ok0   = Signal()
+        lc_ok1   = Signal()
         lc_diff  = Signal(16)
         lc_close = Signal() # Copies differing by 3 bits at most.
         if hasattr(phy, "source_lc"):
@@ -474,9 +477,9 @@ class USB3LinkLayer(LiteXModule):
             )
         )
         # DPP expected or being received at the U0 exit (Recovery): completed as a missing DPP (the
-        # Protocol Layer processes the DPH with its DPP status: a DPH never completed would hold
-        # its Rx Header Buffer and all the following Header Packets, seen on hardware after a
-        # Recovery in the middle of a DPP: credits never returned, partner CREDIT_HP_TIMER Recoveries).
+        # Protocol Layer processes the DPH with its DPP status: a DPH never completed would hold its
+        # Rx Header Buffer and all the following Header Packets, seen on hardware after a Recovery
+        # in the middle of a DPP: credits never returned, partner CREDIT_HP_TIMER Recoveries).
         dpp_cut = Signal()
         self.comb += [
             dpp_cut.eq(dpp_expect & u0_d & ~u0),
@@ -501,16 +504,16 @@ class USB3LinkLayer(LiteXModule):
         ]
 
         # Header Packets flow control state.
-        rx_seq          = Signal(sw) # Rx Header Sequence Number (next expected).
-        lbad_wait       = Signal()   # LBAD sent, waiting for LRTY.
-        lgood_seq       = Signal(sw) # Next LGOOD_n to send (pending while != rx_seq).
-        lcrd_pending    = Signal(3)  # LCRD_x/LCRD1_x to send.
-        lcrd_idx        = Signal(2)  # Next LCRD_x/LCRD1_x index.
-        lcrd2_pending   = Signal(3)  # LCRD2_x to send (SuperSpeedPlus).
-        lcrd2_idx       = Signal(2)  # Next LCRD2_x index.
-        rx_t2_level     = Signal(4)  # Type 2 packets in the Rx Header Buffers.
-        lbad_pending    = Signal()
-        lrty_pending    = Signal()
+        rx_seq           = Signal(sw) # Rx Header Sequence Number (next expected).
+        lbad_wait        = Signal()   # LBAD sent, waiting for LRTY.
+        lgood_seq        = Signal(sw) # Next LGOOD_n to send (pending while != rx_seq).
+        lcrd_pending     = Signal(3)  # LCRD_x/LCRD1_x to send.
+        lcrd_idx         = Signal(2)  # Next LCRD_x/LCRD1_x index.
+        lcrd2_pending    = Signal(3)  # LCRD2_x to send (SuperSpeedPlus).
+        lcrd2_idx        = Signal(2)  # Next LCRD2_x index.
+        rx_t2_level      = Signal(4)  # Type 2 packets in the Rx Header Buffers.
+        lbad_pending     = Signal()
+        lrty_pending     = Signal()
         tx_seq           = Signal(sw) # Tx Header Sequence Number (next new Header Packet).
         ack_seq          = Signal(sw) # ACK Tx Header Sequence Number (next expected LGOOD_n).
         send_seq         = Signal(sw) # Next Header Packet to (re)send.
@@ -518,16 +521,16 @@ class USB3LinkLayer(LiteXModule):
         remote_lcrd_idx  = Signal(2)  # Next expected LCRD_x/LCRD1_x.
         remote_credits2  = Signal(3)  # Remote Type 2 Rx Buffer Credit Count (SuperSpeedPlus).
         remote_lcrd2_idx = Signal(2)  # Next expected LCRD2_x.
-        adv_received    = Signal()  # Header Sequence Number Advertisement received.
-        lau_pending     = Signal()
-        lxu_pending     = Signal()
-        lup_pending     = Signal()
-        pm_block        = Signal()  # LAU sent: no more transmission until the next U0 entry.
-        portcap_pending = Signal(reset=1)
-        portcfg_pending = Signal()
-        force_pm_accept = Signal()
-        pm_accepted     = Signal()  # LGO_U1/LGO_U2 accepted: no new Header Packets until next U0.
-        u2_timeout      = Signal(8) # U2 Inactivity Timeout (LMP).
+        adv_received     = Signal()   # Header Sequence Number Advertisement received.
+        lau_pending      = Signal()
+        lxu_pending      = Signal()
+        lup_pending      = Signal()
+        pm_block         = Signal()   # LAU sent: no more transmission until the next U0 entry.
+        portcap_pending  = Signal(reset=1)
+        portcfg_pending  = Signal()
+        force_pm_accept  = Signal()
+        pm_accepted      = Signal()   # LGO_U1/LGO_U2 accepted: no new Header Packets until next U0.
+        u2_timeout       = Signal(8)  # U2 Inactivity Timeout (LMP).
 
         self.comb += self.ready.eq(u0 & adv_received & ~pm_block)
 
@@ -588,8 +591,8 @@ class USB3LinkLayer(LiteXModule):
         # LGO_U3 always accepted (7.2.4.2.4). Forwarded to the LTSSM (it requests LAU), else LXU.
         lpm_idle = Signal()
         self.comb += lpm_idle.eq(adv_received &
-            (lgood_seq == rx_seq) & (lcrd_pending == 0) & (lcrd2_pending == 0) & ~rx_buffer.source.valid &
-            ~lbad_wait & ~lbad_pending &
+            (lgood_seq == rx_seq) & (lcrd_pending == 0) & (lcrd2_pending == 0) &
+            ~rx_buffer.source.valid & ~lbad_wait & ~lbad_pending &
             (ack_seq == tx_seq) & (send_seq == tx_seq) & (remote_credits == LINK_HP_BUFFERS) &
             (~ssp | (remote_credits2 == LINK_HP_BUFFERS)) &
             ~lrty_pending &
@@ -654,9 +657,9 @@ class USB3LinkLayer(LiteXModule):
         tx_push_busy = Signal()
         in_buf_t = lambda i: ((i - ack_seq[0:ib]) & (tx_bufs - 1)) < tx_count
         if lw >= 2:
-            tx_count_r  = Signal(4)
-            tx_count_rr = Signal(4)
-            tx_count2_r = Signal(4)
+            tx_count_r   = Signal(4)
+            tx_count_rr  = Signal(4)
+            tx_count2_r  = Signal(4)
             tx_push_hold = Signal(2)
             self.sync += [
                 [tx_in_buf[i].eq(in_buf_t(i)) for i in range(tx_bufs)],
@@ -717,8 +720,10 @@ class USB3LinkLayer(LiteXModule):
             )
         # Transfer Type (TT) of the ACK TPs/DPHs in SuperSpeedPlus operation (8.2, 8.10.4).
         tx_tt = Signal(3)
-        self.comb += Case(self.tx_hp.dw1[8:12], {**{ept: tx_tt.eq(tt) for ept, tt in ssp_tt.items()},
-            "default": tx_tt.eq(TT_BULK)})
+        self.comb += Case(self.tx_hp.dw1[8:12], {
+            **{ept: tx_tt.eq(tt) for ept, tt in ssp_tt.items()},
+            "default": tx_tt.eq(TT_BULK),
+        })
         self.comb += tx_dw1.eq(self.tx_hp.dw1)
         self.comb += If(ssp & ((self.tx_hp.dw0[0:5] == TYPE_DP) |
             ((self.tx_hp.dw0[0:5] == TYPE_TP) & (self.tx_hp.dw1[0:4] == TP_SUB_ACK))),
@@ -735,7 +740,9 @@ class USB3LinkLayer(LiteXModule):
         tx_valid = Signal()
         tx_first = Signal() # First word of a packet (Link Command, Header Packet, DPH + DPP).
         tx_last  = Signal() # Last word of a packet (Link Command, Header Packet, DPH + DPP).
-        self.tx_pipe = tx_pipe = stream.PipeValid(phy_layout() if lw == 1 else link_pairs_layout(lw)) # Registered (timings).
+        # Registered (timings).
+        self.tx_pipe = tx_pipe = stream.PipeValid(
+            phy_layout() if lw == 1 else link_pairs_layout(lw))
         self.comb += [
             tx_pipe.sink.valid.eq(tx_valid),
             tx_pipe.sink.first.eq(tx_first),
@@ -769,20 +776,20 @@ class USB3LinkLayer(LiteXModule):
 
         # Transmission requests (by priority).
         can_send_hp = Signal()
-        send_t2 = Signal()
+        send_t2     = Signal()
         self.comb += [
             send_t2.eq(tx_t2[send_seq[0:ib]]),
             can_send_hp.eq(adv_received & (send_seq != tx_seq) &
                 Mux(send_t2, remote_credits2 != 0, remote_credits != 0) & ~lrty_pending),
         ]
-        # RX throttling (PHY rx_throttle, ex: RX words buffered for a Link Layer at half the PHY words
-        # rate): Rx Header Buffer credits (LCRD_x) held, the partner stops sending Header Packets (and
-        # their DPPs) once its credits are used (Link Layer flow control, 7.2.4.1).
+        # RX throttling (PHY rx_throttle, ex: RX words buffered for a Link Layer at half the PHY
+        # words rate): Rx Header Buffer credits (LCRD_x) held, the partner stops sending Header
+        # Packets (and their DPPs) once its credits are used (Link Layer flow control, 7.2.4.1).
         rx_throttle = getattr(phy, "rx_throttle", Constant(0, 1))
         # Type 2 credits held by the partner limited to rx_t2_credits (PHY rx_t2_credits, ex: Link
         # Layer slower than the line rate: the received DPPs are buffered and a DPH is checked, its
-        # LGOOD_n sent, once the DPPs before it are consumed: the DPPs the partner can send ahead are
-        # limited to bound this latency, PENDING_HP_TIMER of the partner).
+        # LGOOD_n sent, once the DPPs before it are consumed: the DPPs the partner can send ahead
+        # are limited to bound this latency, PENDING_HP_TIMER of the partner).
         # The Advertisement (U0 entry: all the credits, 7.2.4.1.1) is not limited.
         rx_t2_credits = getattr(phy, "rx_t2_credits", LINK_HP_BUFFERS) # int or Signal (runtime).
         lcrd2_allowed = Signal()
@@ -793,19 +800,20 @@ class USB3LinkLayer(LiteXModule):
         lcrd_adv  = Signal(3) # Advertised LCRD_x/LCRD1_x left to send (set on the U0 entry).
         lcrd2_adv = Signal(3) # Advertised LCRD2_x left to send.
         if isinstance(rx_t2_credits, Signal) or (rx_t2_credits < LINK_HP_BUFFERS):
+            # Registered (timings).
             self.sync += lcrd2_allowed.eq((lcrd2_adv != 0) |
-                ((lcrd2_pending + rx_t2_level + rx_t2_credits) > LINK_HP_BUFFERS)) # Registered (timings).
+                ((lcrd2_pending + rx_t2_level + rx_t2_credits) > LINK_HP_BUFFERS))
         else:
             self.comb += lcrd2_allowed.eq(1)
-        start_hp = Signal()
-        sel_lrty = Signal()
-        sel_lbad = Signal()
+        start_hp  = Signal()
+        sel_lrty  = Signal()
+        sel_lbad  = Signal()
         sel_lgood = Signal()
-        sel_lcrd = Signal()
+        sel_lcrd  = Signal()
         sel_lcrd2 = Signal()
-        sel_lau  = Signal()
-        sel_lxu  = Signal()
-        sel_lup  = Signal()
+        sel_lau   = Signal()
+        sel_lxu   = Signal()
+        sel_lup   = Signal()
         # LGOOD_n of the Header Packets received before a bad one are sent before the LBAD (the
         # partner retransmits the Header Packets not acknowledged when it receives the LBAD: an
         # LGOOD_n overtaken by the LBAD makes it retransmit an accepted Header Packet, received with
@@ -844,9 +852,9 @@ class USB3LinkLayer(LiteXModule):
         if lw == 1:
             tx_dpp = self.tx_dpp
         else:
-            # Registered splitter output: CRC-32/END tail logic from registers (timings: PipeReady then
-            # PipeValid, no skid multiplexer before the CRC-32), registered ready: endpoints DPP read
-            # path isolated from the TX.
+            # Registered splitter output: CRC-32/END tail logic from registers (timings: PipeReady
+            # then PipeValid, no skid multiplexer before the CRC-32), registered ready: endpoints
+            # DPP read path isolated from the TX.
             # Words quads: 16-byte words (16 bytes per cycle), last bytes on 32-bit words.
             self.tx_dpp_splitter   = tx_dpp_splitter   = DPPSplitter() if lw == 2 else DPPQuadSplitter()
             layout = tx_dpp_splitter.source.description
@@ -867,7 +875,7 @@ class USB3LinkLayer(LiteXModule):
             crc32_tx.bytes.eq(tx_dpp.bytes),
         ]
         # Words quads: last words of 1-4 bytes on data[0:32] (DPPQuadSplitter).
-        crc_next = crc32_tx.next_value32 if lw == 4 else crc32_tx.next_value
+        crc_next  = crc32_tx.next_value32 if lw == 4 else crc32_tx.next_value
         end_bytes = [(FRAMING_END >> 8*i) & 0xff for i in range(4)]
         def end_slice(i, j):
             return Cat(*[C(end_bytes[k], 8) for k in range(i, j)])
@@ -909,9 +917,11 @@ class USB3LinkLayer(LiteXModule):
                     NextValue(hp_dpp,  tx_dpps[send_seq[0:ib]] & ~tx_sent[send_seq[0:ib]]),
                     NextValue(hp_null, tx_dpps[send_seq[0:ib]] &  tx_sent[send_seq[0:ib]] & ssp),
                     # DL bit (Delayed: retransmitted Header Packet, 7.2.4.1.12).
-                    NextValue(hp_info, Cat(send_seq, C(0, 9 - sw), tx_sent[send_seq[0:ib]], C(0, 1))),
+                    NextValue(hp_info,
+                        Cat(send_seq, C(0, 9 - sw), tx_sent[send_seq[0:ib]], C(0, 1))),
                     NextState("HP0")
-                ).Elif(sel_lrty | sel_lbad | sel_lgood | sel_lcrd | sel_lcrd2 | sel_lau | sel_lxu | sel_lup,
+                ).Elif(sel_lrty | sel_lbad | sel_lgood | sel_lcrd | sel_lcrd2 |
+                    sel_lau | sel_lxu | sel_lup,
                     tx_sent_lc.eq(1),
                     NextValue(lc_word, Cat(lc_sel, crc5_lctx.value, lc_sel, crc5_lctx.value)),
                     NextState("LC0")
@@ -950,8 +960,8 @@ class USB3LinkLayer(LiteXModule):
                     )
                 )
             )
-        # Retransmitted DPH (DL bit set) in SuperSpeedPlus operation: DPP replaced by a nullified DPP
-        # (DPPABORT, 7.2.4.1.13/7.2.1.2.2), the Gen 2 framing has a DPP after each DPH.
+        # Retransmitted DPH (DL bit set) in SuperSpeedPlus operation: DPP replaced by a nullified
+        # DPP (DPPABORT, 7.2.4.1.13/7.2.1.2.2), the Gen 2 framing has a DPP after each DPH.
         tx_fsm.act("DPP-ABORT",
             tx_valid.eq(1),
             tx_last.eq(1),
@@ -1002,19 +1012,21 @@ class USB3LinkLayer(LiteXModule):
         # U0 keep-alive: LUP when nothing sent for 10us (7.5.6.1).
         self.t_lup = t_lup = WaitTimer(scaled(10e-6))
         self.comb += t_lup.wait.eq(u0 & ~pm_block & ~tx_sent_lc & ~tx_sent_hp & ~lup_pending)
-        # PENDING_HP_TIMER (10us, Table 7-7): Header Packets sent and not acknowledged, Advertisement
-        # expected (the partner returns LGOOD_n within 3us/1.5us in SuperSpeed/SuperSpeedPlus operation).
+        # PENDING_HP_TIMER (10us, Table 7-7): Header Packets sent and not acknowledged,
+        # Advertisement expected (the partner returns LGOOD_n within 3us/1.5us in
+        # SuperSpeed/SuperSpeedPlus operation).
         # SuperSpeedPlus at Gen 2: the Header Packets are transmitted on the line after their DPP is
         # stored (Gen 2 TX framing, DPH and DPP without spacing): the timer is extended by the
         # maximum DPP buffering time (1024 bytes on the 32-bit Link Layer words).
         pending_hp_ssp = 10e-6 + (1024 + 64)/4/sys_clk_freq
-        self.t_pending_hp = t_pending_hp = WaitTimer(scaled(pending_hp_ssp if ssp_capable else 10e-6))
+        self.t_pending_hp = t_pending_hp = WaitTimer(
+            scaled(pending_hp_ssp if ssp_capable else 10e-6))
         t_pending_hp_ss = WaitTimer(scaled(10e-6))
         self.submodules += t_pending_hp_ss
         pending_hp_done = Signal()
         self.comb += [
-            # Restarted on LGOOD_n and on LBAD (Header Packets answered: retransmission from the LRTY,
-            # else a Header Packet with errors at the partner costs a Recovery on top of its
+            # Restarted on LGOOD_n and on LBAD (Header Packets answered: retransmission from the
+            # LRTY, else a Header Packet with errors at the partner costs a Recovery on top of its
             # retransmission).
             t_pending_hp.wait.eq(u0 & ~pm_block & ~lc_lgood & ~lc_lbad &
                 (~adv_received | (ack_seq != send_seq))),
@@ -1028,8 +1040,8 @@ class USB3LinkLayer(LiteXModule):
 
         # Flow Control -----------------------------------------------------------------------------
         # Credits of the Header Packets to retransmit on LBAD (sent, not acknowledged) per type:
-        # counters (+1 sent, -1 acknowledged, 0 when send_seq is set to ack_seq: LBAD, Advertisement,
-        # link reset).
+        # counters (+1 sent, -1 acknowledged, 0 when send_seq is set to ack_seq: LBAD,
+        # Advertisement, link reset).
         lbad_t1 = Signal(4)
         lbad_t2 = Signal(4)
         ack_t2  = Signal()
@@ -1052,8 +1064,8 @@ class USB3LinkLayer(LiteXModule):
         self.dbg_tx_lc     = tx_sent_lc
         self.dbg_tx_lc_sel = lc_sel
         self.dbg_rx_hp     = hp_check
-        self.dbg_rx_hp_info = Cat(hp_w[0][0:5], hp_w[0][5:9], hp_seq[0:4] if sw == 4 else Cat(hp_seq, C(0, 1)),
-            hp_ok, hp_accept, rx_hp_seqer)
+        self.dbg_rx_hp_info = Cat(hp_w[0][0:5], hp_w[0][5:9],
+            hp_seq[0:4] if sw == 4 else Cat(hp_seq, C(0, 1)), hp_ok, hp_accept, rx_hp_seqer)
         self.dbg_tx_hp     = tx_sent_hp
         self.dbg_tx_hp_info = Cat(send_seq[0:4] if sw == 4 else Cat(send_seq, C(0, 1)),
             tx_dws[send_seq[0:ib]][0:5], tx_sent[send_seq[0:ib]])
@@ -1105,8 +1117,8 @@ class USB3LinkLayer(LiteXModule):
             ),
             If(t_lup.done & ~lup_pending, lup_pending.eq(1)), # done stays set 1 cycle after.
 
-
-            # Local Rx Header Buffer credits (LCRD_x/LCRD1_x/LCRD2_x on each freed Rx Header Buffer).
+            # Local Rx Header Buffer credits (LCRD_x/LCRD1_x/LCRD2_x on each freed Rx Header
+            # Buffer).
             lcrd_pending.eq(lcrd_pending + (rx_pop & ~rx_pop_t2) - (tx_sent_lc & sel_lcrd)),
             lcrd2_pending.eq(lcrd2_pending + rx_pop_t2 - (tx_sent_lc & sel_lcrd2)),
 
@@ -1152,8 +1164,10 @@ class USB3LinkLayer(LiteXModule):
             If(lc_lcrd & lcrd_ok &  lc_info[2], remote_lcrd2_idx.eq(remote_lcrd2_idx + 1)),
 
             # Sent, not acknowledged Header Packets per type (LBAD credits).
-            lbad_t1.eq(lbad_t1 + (tx_sent_hp & ~send_t2) - (lc_lgood & adv_received & lgood_ok & ~ack_t2)),
-            lbad_t2.eq(lbad_t2 + (tx_sent_hp &  send_t2) - (lc_lgood & adv_received & lgood_ok &  ack_t2)),
+            lbad_t1.eq(lbad_t1 + (tx_sent_hp & ~send_t2) -
+                (lc_lgood & adv_received & lgood_ok & ~ack_t2)),
+            lbad_t2.eq(lbad_t2 + (tx_sent_hp &  send_t2) -
+                (lc_lgood & adv_received & lgood_ok &  ack_t2)),
             If((lc_lgood & ~adv_received) | lc_lbad | self.reset,
                 lbad_t1.eq(0),
                 lbad_t2.eq(0),
