@@ -6,15 +6,21 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3-PIPE on the Sipeed Tang Mega 138K Pro (Gowin GW5AST-138B GTR12) with a SFP2USB adapter in
-SFP0 (Q1 lane 0, --sfp 1: lane 1), GTR12 reference clock from the dock (--refclk: 100MHz REFCLK1 or
-125MHz REFCLK0, --pll: QPLL1 or CPLL): Gen 1x1 (5Gbps) validated, Gen 2x1 (10Gbps, --gen2-capable
---pll CPLL --refclk 125M) in bring-up (doc/targets.md). The PIPE and SerDes datapath run on the
-GTR12 TX clock at 125MHz and the LTSSM/Link Layer/Core/SoC in sys at 62.5MHz (--sys-clk-freq,
-USB3PHY pipe_cd) on 64-bit Link Layer words (--link-words 4: 128-bit). UARTBone by default or
-JTAGBone (--with-jtagbone); the bitstream (.fs) is loaded with openFPGALoader (--load is not
-usable: it expects a .bit). Build: ./bench/sipeed_tang_mega_138k_pro.py --build [--example <name>],
-shared options: bench/usb3_soc.py, bring-up options: --help.
+"""USB3-PIPE on the Sipeed Tang Mega 138K Pro (Gowin GW5AST-138B GTR12).
+
+SFP2USB adapter in SFP0 (GTR12 Q1 lane 0; --sfp 1: lane 1), GTR12 reference clock from the dock
+(--refclk: 100MHz REFCLK1 or 125MHz REFCLK0; --pll: QPLL1 or CPLL). Gen 1x1 (5Gbps) validated,
+Gen 2x1 (10Gbps) in bring-up: --gen2-capable --pll CPLL --refclk 125M (doc/targets.md).
+
+Clocking (slow fabric): the PIPE and the SerDes datapath run on the GTR12 TX clock at 125MHz, the
+LTSSM/Link Layer/Core/SoC in sys at 62.5MHz (--sys-clk-freq, USB3PHY pipe_cd) on 64-bit Link Layer
+words (--link-words 4: 128-bit).
+
+Bridge: UARTBone by default, JTAGBone with --with-jtagbone. The bitstream (.fs) is loaded with
+openFPGALoader (--load is not usable: it expects a .bit).
+
+Build: ./bench/sipeed_tang_mega_138k_pro.py --build [--example <name>]. Shared options:
+bench/usb3_soc.py; bring-up options: --help.
 """
 
 import argparse

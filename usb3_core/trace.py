@@ -27,9 +27,10 @@ from usb3_core.common import TYPE_ITP
 
 class USB3CoreTrace(LiteXModule):
     """Header Packets trace of a USB3LinkLayer (link): depth entries of 64 bits (see the module
-    docstring) in a block RAM, CSRs: control (enable, clear, circular, ept_filter/ept), count,
-    pointer, index/data (entry read back); decoded by bench/usb3_trace.py (clear/dump/clear-ept/
-    stop).
+    docstring) in a block RAM.
+
+    CSRs: control (enable, clear, circular, ept_filter/ept), count, pointer, index/data (entry read
+    back); decoded by bench/usb3_trace.py (clear/dump/clear-ept/stop).
     """
     def __init__(self, link, depth=512):
         self._control = CSRStorage(fields=[

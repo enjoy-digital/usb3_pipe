@@ -41,10 +41,11 @@ def dpp_job_layout(n_endpoints):
 class USB3ProtocolLayer(LiteXModule):
     """USB3 Protocol Layer between the Link Layer and the endpoints (see the module docstring).
 
-    link: USB3LinkLayer (data_width: 32/64/128-bit DPP words), endpoints: USB3Endpoint list (Control
-    Endpoint included; 32-bit endpoints on a 64/128-bit Link Layer are adapted by
-    DPPPacker/DPPRXAdapter), dev_addr: Device Address inserted in the transmitted Header Packets.
-    pm_busy: pending packets or busy endpoints (U1/U2 entries rejected by the Link Layer).
+    - link: USB3LinkLayer (data_width: 32/64/128-bit DPP words).
+    - endpoints: USB3Endpoint list (Control Endpoint included); 32-bit endpoints on a 64/128-bit
+      Link Layer are adapted by DPPPacker/DPPRXAdapter.
+    - dev_addr: Device Address inserted in the transmitted Header Packets.
+    - pm_busy: pending packets or busy endpoints (U1/U2 entries rejected by the Link Layer).
     """
     def __init__(self, link, endpoints, dev_addr):
         self.pm_busy = Signal() # o: Pending Header Packets/DPPs or busy endpoints (U1/U2 rejected).
