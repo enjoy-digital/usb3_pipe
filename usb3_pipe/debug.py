@@ -45,16 +45,44 @@ class USB3PHYDebug(LiteXModule):
       entries).
     - PHY reset (re-runs link training from Polling) and counters/history clear.
     - SerDes RX re-initialization (transceiver RX reset sequence).
+
+    With pipe_cd (PIPE and SerDes in another clock domain): the PIPE events are taken from the
+    LTSSM inputs (resynchronized by the PHY), the SerDes levels/pulses are resynchronized here
+    (rx_errors_cycles then counts sys cycles).
     """
     def __init__(self, phy, serdes, sys_clk_freq):
-        ltssm = phy.ltssm
-        pipe  = phy.pipe
+        ltssm  = phy.ltssm
+        pipe   = phy.pipe
+        cd     = phy.pipe_cd
+        events = pipe if cd is None else ltssm
+
+        def level(s):
+            if cd is None:
+                return s
+            s_sys = Signal()
+            self.specials += MultiReg(s, s_sys)
+            return s_sys
+
+        def pulse(s):
+            if cd is None:
+                return s
+            s_r  = Signal()
+            sync = getattr(self.sync, cd)
+            sync += s_r.eq(s)
+            ps = PulseSynchronizer(cd, "sys")
+            self.submodules += ps
+            self.comb += ps.i.eq(s_r)
+            return ps.o
 
         self._phy_reset       = CSRStorage(description="PHY (PIPE + LTSSM) reset (level).")
         self._serdes_rx_reset = CSRStorage(description="SerDes RX re-initialization (level).")
         self._clear           = CSR() # Clear counters and history (write).
-        self._status          = CSRStatus(11, description="Status: LTSSM state [7:0], "
-            "SerDes ready [8], RX idle [9], RX polarity [10].")
+        self._status          = CSRStatus(fields=[
+            CSRField("ltssm_state",  size=8, description="LTSSM state (get_ltssm_states)."),
+            CSRField("serdes_ready", size=1, description="SerDes ready."),
+            CSRField("rx_idle",      size=1, description="SerDes RX electrical idle."),
+            CSRField("rx_polarity",  size=1, description="SerDes RX polarity inverted."),
+        ])
         self._timestamp       = CSRStatus(32, description="Timestamp (us).")
 
         # # #
@@ -65,8 +93,10 @@ class USB3PHYDebug(LiteXModule):
         self.comb += [
             clear.eq(self._clear.re),
             phy.reset.eq(self._phy_reset.storage),
-            self._status.status.eq(Cat(phy.ltssm_state, Constant(0, 8 - len(phy.ltssm_state)),
-                serdes.ready, serdes.rx_idle, serdes.rx_polarity)),
+            self._status.fields.ltssm_state.eq(phy.ltssm_state),
+            self._status.fields.serdes_ready.eq(level(serdes.ready)),
+            self._status.fields.rx_idle.eq(level(serdes.rx_idle)),
+            self._status.fields.rx_polarity.eq(level(serdes.rx_polarity)),
         ]
 
         # Timestamp (us).
@@ -142,18 +172,18 @@ class USB3PHYDebug(LiteXModule):
             for i in range(4)]))
         events = [
             # Name,               Signal,                     Edge (1) or Level (0).
-            ("ts1",               pipe.ts_rx_ts1,             1),
-            ("ts1_inv",           pipe.ts_rx_ts1_inv,         1),
-            ("ts2",               pipe.ts_rx_ts2,             1),
-            ("lfps_polling",      pipe.lfps_rx_polling,       1),
-            ("lfps_ping",         pipe.lfps_rx_ping,          1),
-            ("lfps_exit_u1",      pipe.lfps_rx_exit_u1,       1),
-            ("lfps_exit_u2",      pipe.lfps_rx_exit_u2,       1),
-            ("lfps_wakeup_u3",    pipe.lfps_rx_wakeup_u3,     1),
-            ("lfps_reset",        pipe.lfps_rx_reset,         1),
-            ("rx_idle",           serdes.rx_idle,             1),
-            ("rx_errors_cycles",  serdes.rx_errors,           0),
-            ("k28_4",             k28_4,                      0),
+            ("ts1",               events.ts_rx_ts1,           1),
+            ("ts1_inv",           events.ts_rx_ts1_inv,       1),
+            ("ts2",               events.ts_rx_ts2,           1),
+            ("lfps_polling",      events.lfps_rx_polling,     1),
+            ("lfps_ping",         events.lfps_rx_ping,        1),
+            ("lfps_exit_u1",      events.lfps_rx_exit_u1,     1),
+            ("lfps_exit_u2",      events.lfps_rx_exit_u2,     1),
+            ("lfps_wakeup_u3",    events.lfps_rx_wakeup_u3,   1),
+            ("lfps_reset",        events.lfps_rx_reset,       1),
+            ("rx_idle",           level(serdes.rx_idle),      1),
+            ("rx_errors_cycles",  level(serdes.rx_errors),    0),
+            ("k28_4",             pulse(k28_4),               0),
             ("u0",                ltssm.u0,                   1),
             ("recovery",          ltssm.recovery,             1),
             ("u1",                ltssm.u1,                   1),
@@ -339,8 +369,13 @@ class Gen2RXDebug(LiteXModule):
     """
     def __init__(self, rx_datapath, clock_domain="rx"):
         self._clear  = CSR()
-        self._status = CSRStatus(16, description="Status: aligned [0], locked [1], polarity [2], "
-            "data_stream [3], link_config [15:8].")
+        self._status = CSRStatus(fields=[
+            CSRField("aligned",     size=1, description="Block aligned."),
+            CSRField("locked",      size=1, description="Block alignment locked."),
+            CSRField("polarity",    size=1, description="RX polarity inverted."),
+            CSRField("data_stream", size=1, description="Receiving the Data Stream."),
+            CSRField("link_config", size=8, offset=8, description="Received TS2 Link Configuration."),
+        ])
 
         # # #
 
@@ -352,9 +387,17 @@ class Gen2RXDebug(LiteXModule):
         ]
 
         # Status (quasi-static, rx -> sys).
-        status = Cat(rx_datapath.aligned, rx_datapath.locked, rx_datapath.polarity,
+        status     = Cat(rx_datapath.aligned, rx_datapath.locked, rx_datapath.polarity,
             rx_datapath.data_stream, Constant(0, 4), rx_datapath.link_config)
-        self.specials += MultiReg(status, self._status.status)
+        status_sys = Signal(16)
+        self.specials += MultiReg(status, status_sys)
+        self.comb += [
+            self._status.fields.aligned.eq(status_sys[0]),
+            self._status.fields.locked.eq(status_sys[1]),
+            self._status.fields.polarity.eq(status_sys[2]),
+            self._status.fields.data_stream.eq(status_sys[3]),
+            self._status.fields.link_config.eq(status_sys[8:16]),
+        ]
 
         # Counters (rx -> sys).
         for name, description in GEN2_RX_COUNTERS:

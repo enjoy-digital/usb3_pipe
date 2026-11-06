@@ -20,7 +20,7 @@ import os
 import common # Repository root on the path.
 
 from migen import *
-from migen.genlib.cdc import MultiReg, PulseSynchronizer
+from migen.genlib.cdc import MultiReg, PulseSynchronizer, BusSynchronizer
 
 from litex.gen import *
 
@@ -136,6 +136,13 @@ class RXRawSnapshot(LiteXModule):
                 self._data4.status.eq(rd.dat_r[128:]),
             ]
 
+class CountSync(LiteXModule):
+    """Counter of another clock domain read from sys: BusSynchronizer (a MultiReg on a changing
+    counter gives torn reads)."""
+    def __init__(self, i, o, idomain):
+        self.bs = bs = BusSynchronizer(len(o), idomain, "sys")
+        self.comb += [bs.i.eq(i), o.eq(bs.o)]
+
 def add_usb3_gen2_rx(soc, serdes, phy):
     """Gen 2 bring-up: Gen 2 RX monitor on the raw transceiver symbols (the PHY switches to 10Gbps
     once Gen 2 is negotiated in SuperSpeedPlus Polling, USB3PHY.add_gen2) with its debug CSRs
@@ -189,7 +196,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         for c, e in zip(counts[3:], [gp.rx.rx.ts1, gen2_rx.rx.ts1]):
             c_rx = Signal(32)
             soc.sync.rx_nr += If(u0_rx & e, c_rx.eq(c_rx + 1))
-            soc.specials += MultiReg(c_rx, c) # Quasi-static reads only.
+            soc.submodules += CountSync(c_rx, c, "rx_nr")
         soc.comb += soc.usb3_gen2_events.status.eq(Cat(*counts))
         # PHY Gen 2 RX Link Layer path: RX blocks buffer overflow (sticky), framing errors (unknown
         # packet starts).
@@ -242,7 +249,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             c_rx = Signal(32)
             soc.sync.rx_nr += If(~stop_rx & e, c_rx.eq(c_rx + 1))
             c = Signal(32)
-            soc.specials += MultiReg(c_rx, c)
+            soc.submodules += CountSync(c_rx, c, "rx_nr")
             counts.append(c)
         for e in sys_events:
             c = Signal(32)
@@ -417,7 +424,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
     gen2_capable = getattr(serdes, "gen2_capable", False)
-    assert (phy_cd is None) or not (with_debug or with_serdes_debug or with_profile)
+    assert (phy_cd is None) or not (with_serdes_debug or with_profile)
     soc.usb3_phy = usb3_phy = USB3PHY(
         serdes        = serdes,
         sys_clk_freq  = sys_clk_freq,
@@ -427,7 +434,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         pipe_cd       = phy_cd,
         pipe_clk_freq = phy_clk_freq,
         with_u1u2     = with_lpm or (phy_cd is None)) # U1/U2 only with LPM on slow fabrics.
-    if phy_cd is not None:
+    if (phy_cd is not None) and not with_debug:
         # Minimal PHY status (no USB3PHYDebug): LTSSM state (get_ltssm_states), U0, SerDes ready.
         usb3_phy.status = CSRStatus(fields=[
             CSRField("ltssm_state", size=len(usb3_phy.ltssm_state)),

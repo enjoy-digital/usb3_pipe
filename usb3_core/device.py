@@ -104,9 +104,26 @@ class USB3DeviceCore(LiteXModule):
         self._rx_lbad      = CSRStatus(16, description="LBAD sent (Header Packets RX errors).")
         self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets resent).")
         self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, errors).")
-        self._link_state   = CSRStatus(32, description="Link Layer state (debug): tx_seq, ack_seq, "
-            "send_seq, remote credits (Type 1/2), adv_received, pm_block, pm_accepted, "
-            "tx_hp valid/ready, lrty_pending, lbad_wait, ssp, tx_full, rx_seq.")
+        # Link Layer state (debug, link dbg_state order).
+        link_state_fields = [
+            ("tx_seq",          4, "Next Header Sequence Number to send."),
+            ("ack_seq",         4, "Header Sequence Number expected in the next LGOOD_n."),
+            ("send_seq",        4, "Header Sequence Number of the next Header Packet to retransmit."),
+            ("remote_credits",  3, "Remote Type 1 Rx Header Buffer credits."),
+            ("remote_credits2", 3, "Remote Type 2 Rx Header Buffer credits (SuperSpeedPlus)."),
+            ("adv_received",    1, "Header Sequence Number Advertisement received."),
+            ("pm_block",        1, "LAU sent: no transmission until the next U0 entry."),
+            ("pm_accepted",     1, "LGO_U1/LGO_U2 accepted: no new Header Packets until the next U0."),
+            ("tx_hp_valid",     1, "Header Packet to send."),
+            ("tx_hp_ready",     1, "Header Packet accepted."),
+            ("lrty_pending",    1, "LRTY to send."),
+            ("lbad_wait",       1, "LBAD sent, waiting for LRTY."),
+            ("ssp",             1, "SuperSpeedPlus operation."),
+            ("tx_full",         1, "Tx Header Buffers full."),
+            ("rx_seq",          4, "Next Header Sequence Number expected."),
+        ]
+        self._link_state   = CSRStatus(fields=[CSRField(name, size=size, description=description)
+            for name, size, description in link_state_fields])
         # Recovery causes (link dbg_recovery_cause, sampled on the dbg_recovery pulse): last cause
         # and 8-bit saturating counts per cause.
         causes = ["hp_seq", "lgood", "lcrd", "pending_hp", "credit_hp"]
@@ -147,5 +164,10 @@ class USB3DeviceCore(LiteXModule):
             self._rx_lbad.status.eq(self.link.rx_lbad),
             self._tx_retry.status.eq(self.link.tx_retry),
             self._recovery_req.status.eq(self.link.recovery_req),
-            self._link_state.status.eq(self.link.dbg_state),
+            *[getattr(self._link_state.fields, name).eq(
+                self.link.dbg_state[offset:offset + size])
+                for name, size, offset in zip(
+                    [f[0] for f in link_state_fields],
+                    [f[1] for f in link_state_fields],
+                    [sum(f[1] for f in link_state_fields[:i]) for i in range(len(link_state_fields))])],
         ]
