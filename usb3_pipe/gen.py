@@ -179,6 +179,9 @@ _LINK_CTRL_DESCRIPTIONS = {
     "exit_u1_req"       : "Request U1 exit.",
     "exit_u2_req"       : "Request U2 exit.",
     "wakeup_u3_req"     : "Request U3 wakeup (host only).",
+    "compliance_enable" : "Compliance mode migration path enable (host only, 7.5.4.3).",
+    "directed_loopback" : "Direct the LTSSM to Loopback as master (with loopback_capable).",
+    "loopback_capable"  : "Loopback master capability.",
 }
 
 def get_ports(config):
