@@ -8,3 +8,4 @@
 
 from usb3_pipe.crc import crc_equations, crc_xor, crc_next, crc_value
 from usb3_pipe.crc import CRCComb, CRC5, CRC16, CRC16Words, CRC32
+from usb3_pipe.crc import crc5, crc16, crc32

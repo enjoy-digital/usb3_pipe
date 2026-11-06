@@ -37,7 +37,7 @@ def _host_rx_words(out):
 def device_packets_crc_errors(out):
     """Device Header Packets (CRC-16/CRC-5) and Link Commands (CRC-5) received by the host model
     with errors: (packets checked, errors)."""
-    from usb3_core.host_model import crc16, crc5
+    from usb3_pipe.crc import crc16, crc5
     words, n, errors, i = _host_rx_words(out), 0, 0, 0
     while i < len(words):
         data, ctrl, _ = words[i]

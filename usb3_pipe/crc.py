@@ -11,7 +11,11 @@ the Link Layer (usb3_core.crc re-exports this module).
 Bits are transmitted LSB first (bytes in order), the remainder is inverted and bit-reversed. The
 parallel equations are generated from the polynom (symbolic serial computation), data bit i is bit
 i of the data Signal (byte k on data[8*k:8*(k+1)]).
+
+The pure Python reference models (crc5/crc16/crc32) are used by the host models and the tests.
 """
+
+import zlib
 
 from migen import *
 
@@ -204,3 +208,27 @@ class CRC32(LiteXModule):
             self.value.eq(crc_value(32, with_tail(state, tail_r, tail_data_r))),
             self.next_value.eq(crc_value(32, new)),
         ]
+
+# CRC Reference Models -----------------------------------------------------------------------------
+
+def _crc(data_bits, width, poly, init):
+    crc = init
+    for bit in data_bits:
+        msb = (crc >> (width - 1)) & 0x1
+        crc = (crc << 1) & ((1 << width) - 1)
+        if bit ^ msb:
+            crc ^= poly
+    crc ^= (1 << width) - 1
+    return int("{:0{}b}".format(crc, width)[::-1], 2)
+
+def crc5(value, nbits=11):
+    """CRC-5 of Link Commands/Link Control Words (x^5+x^2+1)."""
+    return _crc([(value >> i) & 0x1 for i in range(nbits)], 5, 0x05, 0x1f)
+
+def crc16(data):
+    """CRC-16 of Header Packets (x^16+x^12+x^3+x+1)."""
+    return _crc([(byte >> i) & 0x1 for byte in data for i in range(8)], 16, 0x100b, 0xffff)
+
+def crc32(data):
+    """CRC-32 of Data Packet Payloads."""
+    return zlib.crc32(bytes(data))
