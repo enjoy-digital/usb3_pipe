@@ -1,13 +1,17 @@
 # USB3-PIPE Hardware Debugging Guide
 
 Practical starting point to debug the USB3 PHY (PIPE + LTSSM) on hardware, without a USB3 protocol
-analyzer. Keep it current as new debug flows are added.
+analyzer.
 
 The approach: observe the LTSSM and the SerDes through small CSR counters first, capture with
 LiteScope only once the question is narrow, check the host side through the Linux kernel log, and
 turn every finding into a simulation test.
 
 ## Setup
+
+The examples below use the Acorn; the JTAG adapter, bridge, `litex_server` command and bitstream
+loading of the other boards (KC705, XCKU3P, Tang Mega 138K Pro) are in [targets.md](targets.md),
+the debug options are the same on all the targets.
 
 - LiteX Acorn Baseboard (Mini) with the SFP2USB adapter in the SFP cage, USB3 cable to the host.
 - JTAG through the baseboard FT4232H (channel A). If other FTDI boards are connected, always select
@@ -54,7 +58,11 @@ before reading them. Useful messages:
 - `can't set config #1, error -71`: transaction error on the control transfer (check the Status stage
   ACK TP SeqNum with a `datapath` capture).
 
-## PHY Debug CSRs (always built, `usb3_pipe/debug.py: USB3PHYDebug`)
+## PHY Debug CSRs (`usb3_debug_*`, `usb3_pipe/debug.py: USB3PHYDebug`)
+
+Built by default on all the targets (also with `pipe_cd` on the Tang Mega 138K Pro), left out with
+`--lean` (then only a minimal `usb3_phy_status` on the `pipe_cd` targets: LTSSM state, U0, SerDes
+ready).
 
 ```bash
 ./bench/usb3_debug.py --port 1240 --csr-csv build/acorn_dbg/csr.csv status   # State/counters.
@@ -109,8 +117,9 @@ Build-time overrides (GTP bring-up/debug): `bench/acorn.py --rxcdr-cfg`, `--gtp-
 Keep captures narrow (well below 128 bits), in the sys clock domain (captures in the 250MHz RX clock
 domain do not meet timing). Groups: `link` (LTSSM/TS/LFPS/RX status), `lfps`, `ts`, `datapath`
 (SerDes RX/TX words + Link Layer RX/TX words), `phase` (RX vs TX clocks phase, `--with-serdes-debug`),
-from `usb3_pipe/debug.py` (`usb3_analyzer_groups`): `--with-analyzer --analyzer-group <group>` on all
-the `bench/` targets.
+`u3` (U3 exit: LFPS TX/RX, TS1 detection, SerDes RX stream, RX vs TX clocks phase,
+`--with-serdes-debug`), from `usb3_pipe/debug.py` (`usb3_analyzer_groups`): `--with-analyzer
+--analyzer-group <group>` on all the `bench/` targets.
 
 `bench/usb3_analyzer.py` captures (retraining the PHY until the trigger fires) and analyzes:
 LTSSM states, RX errors per state and longest error-free runs, the partner's TSEQ reception (known
@@ -163,10 +172,10 @@ Full duplex bandwidth/soak with data checked on both sides (`--example bench`):
 
 ## USB3 Device Core: Header Packets trace
 
-`USB3DeviceCore.add_csr(with_trace=True)` (enabled in all the examples) records the received and
-transmitted Header Packets (TPs/DPHs/LMPs, ITPs skipped) with timestamps: the Protocol Layer exchanges
-with the host (control transfers, bursts, NRDY/ERDY flow control, retries) are visible without USB
-analyzer.
+`USB3DeviceCore.add_csr(with_trace=True)` (default in all the examples without `--lean`; on the Tang
+Mega 138K Pro with `pipe_cd`: `--with-trace`) records the received and transmitted Header Packets
+(TPs/DPHs/LMPs, ITPs skipped) with timestamps: the Protocol Layer exchanges with the host (control
+transfers, bursts, NRDY/ERDY flow control, retries) are visible without USB analyzer.
 
 ```sh
 ./bench/usb3_trace.py --port 1240 --csr-csv build/sqrl_acorn/csr.csv clear
@@ -179,9 +188,13 @@ analyzer.
 ```
 
 The core status CSRs (`usb3_core_status`: ready/configured/address, `rx_lbad`, `tx_retry`,
-`recovery_req`) count the Link Layer errors/Recovery requests (`usb3_soak.py` logs them). The prefix
-is `usb3_core` in the vendor Bulk/`composite` examples, `usb3_<class>_core` in the single class
-examples (ex: `usb3_uvc_core_status`); `usb3_trace.py` autodetects it (`--prefix`).
+`recovery_req`: Recovery requests counted once per request) count the Link Layer errors/Recovery
+requests (`usb3_soak.py` logs them); `usb3_core_recovery_cause` gives the last cause and saturating
+counts per cause (Header Sequence Number error, LGOOD_n, LCRD_x, PENDING_HP/CREDIT_HP timeouts),
+`usb3_core_rx_errors` the Link Command words rejected and the DPPs with a CRC-32 error,
+`usb3_core_recovery_request` (write) directs the link to Recovery. The prefix is `usb3_core` in
+the vendor Bulk/`composite` examples, `usb3_<class>_core` in the single class examples (ex:
+`usb3_uvc_core_status`); `usb3_trace.py` autodetects it (`--prefix`).
 
 `clear-ept --ept N` records only the Header Packets of endpoint N in a circular buffer, `stop --ept N`
 freezes it (ex: around a stalled transfer). The Link Layer events trace (`USB3LinkTrace`: Link
@@ -199,7 +212,9 @@ control below the Protocol Layer:
 ## Gen 2 (10Gbps)
 
 With `--gen2-capable` (`bench/alibaba_xcku3p.py`), `bench/usb3_soc.py` adds the Gen 2 bring-up CSRs
-(`add_usb3_gen2_rx`):
+(`add_usb3_gen2_rx`; SoC-level registers, `main_` prefix in `csr.csv`). With `pipe_cd` (Tang Mega
+138K Pro) only `usb3_gen2_capable`/`usb3_gen2_status` are added, the Gowin bring-up CSRs are
+listed below.
 
 | CSRs | Content |
 |---|---|
@@ -213,6 +228,22 @@ The bench example also has a throughput profile (`usb3_profile_control`/`usb3_pr
 [examples.md](examples.md)): where the Link Layer TX and the Bulk IN endpoint spend their cycles
 (Tx Header Buffers full, credits, host window, flow control) and the Little's law averages of the
 Header Packets round trip.
+
+### Gowin GTR12 bring-up (Tang Mega 138K Pro)
+
+The Tang Mega 138K Pro target has its own bring-up CSRs (options in [targets.md](targets.md); the
+wide ones are read 32-bit word by word through `<name>_sel`/`<name>_data`, layouts in the `add_*`
+docstrings of `bench/sipeed_tang_mega_138k_pro.py`):
+
+| Option | CSRs | Content |
+|---|---|---|
+| (always) | `usb3_serdes_gtr12_status`, `usb3_serdes_gtr12_upar_*` | GTR12 lane status, SerDes registers runtime access (UPAR, with `--with-gtr12-debug`, `--gen2-capable` or `sys` at 125MHz). |
+| `--gen2-capable` | `usb3_gen2_capable`, `usb3_gen2_status`, `usb3_rx_flow` | Gen 2 capability/status; Type 2 credits held by the host (4: no limit) and RX words buffer throttle level (runtime flow control). |
+| `--with-gen2-debug` | `usb3_gen2_rx_*` (`Gen2RXDebug`) | Gen 2 RX monitor on the raw RX words: alignment status, blocks/header errors/Ordered Sets counters (kept across the rate changes). |
+| `--with-tx-check`, `--with-tx-raw-check` | `usb3_tx_check_*`, `usb3_tx_raw_check_*`, `tx_raw_counts_*` | Transmitted Header Packets/Link Commands CRCs checked before/after the scrambling (bad packets from the TX logic vs corrupted on the line), snapshot of the first bad Header Packet, TX blocks counts. |
+| `--with-ltssm-history` | `usb3_tx_ffe`, `usb3_rx_eq`, `usb3_tx_reinit`; without `--with-gtr12-debug`: `lgood_latency_*`, `gen2_rx_probes_*`, `gen2_rx_counts_*`, `gen2_rx_framing_*`, `gen2_rx_error_*`, `usb3_gtr12_rx_invalid` | TX FFE/RX CTLE manual settings (applied at the next 10Gbps rate change), TX re-initialization; Header Packets acknowledgement latency histogram, Gen 2 RX backlog/counters/framing errors with the first unknown packet start, GTR12 RX_VLD_OUT low cycles. |
+| `--with-gtr12-debug` | `gtr12_transitions_*`, `rx_snapshot_*`, `tx_snapshot_*`, `tx_ring_*`, `ssp_status_*` | GTR12 lane status bits transitions (LFPS/Electrical Idle indicators identification), raw/decoded RX snapshots from a K28.5, SerDes TX words snapshot at the end of the Training Sequences, last 64 PIPE TX words frozen on the U0 exit, SuperSpeedPlus Polling state/LFPS bursts counters. |
+| `--with-gtr12-analyzer` | LiteScope `analyzer.csv` | Raw RX words, RX valid, alignment, CDR lock, electrical idle, analog status, 8b/10b decoders (rx clock domain). |
 
 ## Suspend/Resume (U3)
 
