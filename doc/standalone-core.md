@@ -7,19 +7,20 @@ integrated in designs not built with LiteX (Vivado projects, other HDLs).
 $ usb3_pipe_gen examples/a7_device.yml     --output-dir build/usb3_pipe_core # PHY only.
 $ usb3_pipe_gen examples/a7_usb_device.yml --output-dir build/usb3_device    # PHY + Device Core.
 $ usb3_pipe_gen examples/k7_device.yml     --output-dir build/usb3_k7        # Kintex7 (GTX).
-$ usb3_pipe_gen examples/usp_device.yml    --output-dir build/usb3_usp       # Ultrascale+ (GTY), + Device Core.
+$ usb3_pipe_gen examples/usp_device.yml    --output-dir build/usb3_usp       # UltraScale+ (GTY), + Device Core.
 ```
 
-`--name` sets the core/module name (default: `usb3_pipe_core`). Ultrascale+ (`USPUSB3SerDes`: GTY
-channel PLL, OOB clock from a `USPMMCM` instead of a `S7PLL`, `XilinxUSPPlatform`) is generated the
-same way (`examples/usp_device.yml`: xcku3p as the `bench/alibaba_xcku3p.py` target, but with a
-dedicated 156.25MHz transceiver reference clock).
+`--name` sets the core/module name (default: `usb3_pipe_core`); `--help` also lists the standard
+LiteX Builder options (the parser uses `builder_args`), only `--output-dir` and `--name` matter for
+the generator. UltraScale+ (`USPUSB3SerDes`: GTY channel PLL, OOB clock from a `USPMMCM` instead of
+a `S7PLL`, `XilinxUSPPlatform`) is generated the same way (`examples/usp_device.yml`: xcku3p as the
+`bench/alibaba_xcku3p.py` target, but with a dedicated 156.25MHz transceiver reference clock).
 
 ## Configuration (YAML)
 
 | Parameter | Default | Description |
 |---|---|---|
-| `phy` | (required) | Transceiver: `A7USB3SerDes` (Artix7 GTP), `K7USB3SerDes` (Kintex7 GTX), `USPUSB3SerDes` (Ultrascale+ GTY). |
+| `phy` | (required) | Transceiver: `A7USB3SerDes` (Artix7 GTP), `K7USB3SerDes` (Kintex7 GTX), `USPUSB3SerDes` (UltraScale+ GTY). |
 | `device` | PHY family | FPGA device (default: `xc7a`/`xc7k`/`xcku3p`). |
 | `speedgrade` | `-1` | FPGA speedgrade (OOB clock PLL/MMCM). |
 | `sys_clk_freq` | `125e6` | Core/user clock frequency (>= 125MHz). |
@@ -41,6 +42,9 @@ dedicated 156.25MHz transceiver reference clock).
   host -> device) AXI-Stream (32-bit data, first byte on `tdata[7:0]`, `tkeep` on the last word of a
   packet, `tlast`: end of packet), `usb_ready`, `usb_configured`. Host side: any libusb application.
 
+The generated `<name>.md` is the ports reference of the selected configuration (clocking, data
+format, link bring-up, integration notes).
+
 ## Outputs
 
 | File | Description |
@@ -53,3 +57,13 @@ dedicated 156.25MHz transceiver reference clock).
 | `<name>.md` | Documentation of the core for the selected configuration (ports, clocking, data format, link bring-up, integration notes). |
 
 The user project constrains `clk` (and `refclk_p/n`) and provides the transceiver/pin placement.
+
+## Limitations
+
+- Gen 1x1 (SuperSpeed, 5Gbps) only: no `gen2_capable`, `link_words` or `pipe_cd` configuration key,
+  32-bit AXI-Stream symbol/endpoint streams at `sys_clk_freq` (>= 125MHz).
+- Xilinx transceivers only (`A7USB3SerDes`, `K7USB3SerDes`, `USPUSB3SerDes`): no Gowin GW5 core.
+- `usb_core`: Bulk IN (EP1) and Bulk OUT (EP2) endpoints only, requires `with_endianness_swap`,
+  exclusive with `with_link_ctrl` (the Device Core drives the Link-Layer control).
+- Gen 2x1, 64/128-bit Link Layer words, Gowin GW5 or the other device classes: LiteX flow
+  ([integration.md](integration.md)).
