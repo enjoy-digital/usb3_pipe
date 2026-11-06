@@ -29,6 +29,7 @@ from litex.soc.cores.code_8b10b import Encoder, Decoder
 from usb3_pipe.common   import SKP
 from usb3_pipe.datapath import TXDatapath, RXDatapath, RXErrorMonitor
 from usb3_pipe.phy      import USB3PHY
+from usb3_pipe.serdes   import USB3SerDes
 from usb3_core.host_model import USB3HostModel, enumeration_script
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
@@ -52,8 +53,9 @@ class Platform(SimPlatform):
 
 # Simulation Serializer/Deserializer Model ---------------------------------------------------------
 
-class USB3SerDesModel(LiteXModule):
-    """SerDes model: 8b/10b, TX pattern/LFPS, polarity and RX word shift emulation.
+class USB3SerDesModel(USB3SerDes):
+    """SerDes model (USB3SerDes interface): 8b/10b, TX pattern/LFPS, polarity and RX word shift
+    emulation.
 
     The RX side (decoders, word aligner, SKP remover) runs in `rx_clock_domain`: the partner's TX
     clock, as recovered by the CDR of a real transceiver. The RX datapath's CDC then moves the data
@@ -65,37 +67,17 @@ class USB3SerDesModel(LiteXModule):
         assert (not gen2_capable) or (phy_dw == 40)
         gen2_dw = phy_dw if gen2_dw is None else gen2_dw
         line_dw = max(phy_dw, gen2_dw) # Line words (Gen 1 symbols on the phy_dw LSBs).
-        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.tx     = stream.Endpoint([("data", line_dw)])
-        self.rx     = stream.Endpoint([("data", line_dw)])
-
-        self.enable = Signal(reset=1) # i
-        self.ready  = Signal()        # o
-
-        self.tx_polarity = Signal()       # i
-        self.tx_idle     = Signal()       # i
-        self.tx_pattern  = Signal(phy_dw) # i
-        self.tx_lfps     = Signal()       # i
-
-        self.rx_polarity = Signal() # i
-        self.rx_idle     = Signal() # o
-        self.rx_errors   = Signal() # o
-
-        self.tx_skp_enable = Signal(reset=1) # i
-        self.rx_align      = Signal()        # i
-        self.rx_reset      = Signal()        # i: (Not modelled).
-        self.tx_skp        = Signal()        # i: Insert a SKP Ordered Set (2 symbols) on TX.
-
-        self.rx_idle_stretch = 0
-        self.xcvr_name       = None
+        USB3SerDes.__init__(self)
+        # Model specific: line words, pattern width, SKP insertion (rx_reset not modelled).
+        self.tx         = stream.Endpoint([("data", line_dw)])
+        self.rx         = stream.Endpoint([("data", line_dw)])
+        self.tx_pattern = Signal(phy_dw) # i
+        self.tx_skp     = Signal()       # i: Insert a SKP Ordered Set (2 symbols) on TX.
 
         # Gen 2 (raw words, same word rate as Gen 1 in the model: the 10Gbps line rate is not
         # modelled, the words carry 128b/132b blocks instead of 8b/10b symbols).
         self.gen2_capable    = gen2_capable
         self.gen2_data_width = gen2_dw         # Raw words width (USB3PHY Gen2PIPE).
-        self.rate_10g        = Signal()        # i
-        self.gen2_tx_enable  = Signal()        # i
         self.gen2_tx_data    = Signal(gen2_dw) # i
         self.gen2_rx_data    = Signal(gen2_dw) # o (rx clock domain).
 
