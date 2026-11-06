@@ -30,7 +30,7 @@ from usb3_pipe.common import SHP as _SHP, SDP as _SDP, EDB as _EDB, END as _END,
 from usb3_pipe.common import EPF as _EPF
 from usb3_pipe.common import GEN2_IDLE, GEN2_SHP, GEN2_DPHP, GEN2_SDP, GEN2_EDB, GEN2_END
 from usb3_pipe.common import GEN2_SLC, GEN2_EPF
-from usb3_pipe.common import Buffer, PipeReady, AsyncFIFOPipelinedRead
+from usb3_pipe.common import Buffer, AsyncFIFOPipelinedRead
 from usb3_pipe.crc    import CRC5
 
 # Gen 1 K Symbols (Link Layer words).
@@ -564,7 +564,7 @@ class Gen2RXFraming(LiteXModule):
         lc_fast   = Signal()
         out_ready = Signal()
         if nbytes >= 16:
-            self.out_buffer = out_buffer = PipeReady(cooked.description)
+            self.out_buffer = out_buffer = stream.PipeReady(cooked.description)
             fast = Signal()
             self.comb += [
                 cooked.valid.eq(r.valid),
