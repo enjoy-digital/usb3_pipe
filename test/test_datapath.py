@@ -481,6 +481,65 @@ class TestDatapath(unittest.TestCase):
         dut.run = True
         run_simulation(dut, [generator(dut), checker(dut)])
 
+    def test_tx_skip_inserter_first_from_last(self):
+        # TX stream with only an end of packet flag (ex: the standalone core AXI-Stream tlast): first
+        # derived from last (FirstFromLast), no SKP Ordered Set inside the packets and SKP Ordered
+        # Sets still inserted between them.
+        class DUT(LiteXModule):
+            def __init__(self):
+                self.first    = first    = FirstFromLast([("data", 32), ("ctrl", 4)])
+                self.inserter = inserter = TXSKPInserter()
+                self.sink     = first.sink
+                self.source   = inserter.source
+                self.comb += first.source.connect(inserter.sink)
+
+        def generator(dut):
+            yield dut.source.ready.eq(1)
+            yield
+            # 8 packets of 200 words (longer than the SKP interval), last on their last word only.
+            for p in range(8):
+                for i in range(200):
+                    yield dut.sink.valid.eq(1)
+                    yield dut.sink.data.eq(0x11220000 + (p << 8) + i)
+                    yield dut.sink.ctrl.eq(0)
+                    yield dut.sink.last.eq(1 if i == 199 else 0)
+                    yield
+                    while not (yield dut.sink.ready):
+                        yield
+                yield dut.sink.valid.eq(0)
+                for _ in range(8):
+                    yield
+            for _ in range(256):
+                yield
+            dut.run = False
+
+        def checker(dut):
+            dut.skp_in_packet = 0
+            dut.skp_total     = 0
+            dut.firsts        = 0
+            in_packet = 0
+            yield
+            while dut.run:
+                if (yield dut.source.valid) and (yield dut.source.ready):
+                    data, ctrl = (yield dut.source.data), (yield dut.source.ctrl)
+                    if (ctrl == 0b1111) and (data == 0x3c3c3c3c):
+                        dut.skp_total     += 1
+                        dut.skp_in_packet += in_packet
+                    else:
+                        if (yield dut.source.first):
+                            dut.firsts += 1
+                            in_packet = 1
+                        if (yield dut.source.last):
+                            in_packet = 0
+                yield
+
+        dut = DUT()
+        dut.run = True
+        run_simulation(dut, [generator(dut), checker(dut)])
+        self.assertEqual(dut.firsts, 8)
+        self.assertEqual(dut.skp_in_packet, 0)
+        self.assertGreater(dut.skp_total, 0)
+
     def test_datapath_loopback_with_skps(self, nwords=128):
         prng  = random.Random(42)
         datas = [prng.randrange(2**32) for _ in range(nwords)]

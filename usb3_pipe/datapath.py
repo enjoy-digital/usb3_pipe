@@ -304,8 +304,10 @@ class TXSKPInserter(LiteXModule):
 
     SKP Ordered Sets are inserted in the stream for clock compensation between partners with an
     average of 1 SKP Ordered Set every 354 symbols. This module inserts SKP Ordered Sets to the
-    TX stream. SKP Ordered Sets shall not be inserted inside a packet, so this packet delimiters
-    (first/last) should be used to ensure SKP are inserted only between packets and not inside.
+    TX stream. SKP Ordered Sets shall not be inserted inside a packet: the packets delimiters
+    (first/last) of the sink must be driven, SKP are then only inserted between the packets (a
+    stream without delimiters is a stream of single words: SKP inserted anywhere; a stream with
+    only the last flag: FirstFromLast).
 
     Note: To simplify implementation and keep alignment, 2 SKP Ordered Sets are inserted every 708
     symbols, which is a small deviation from the specification (good average, but 2x interval
