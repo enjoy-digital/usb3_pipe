@@ -97,7 +97,7 @@ class USB3SoC(USB3BaseSoC):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="USB3-PIPE on the Alibaba Cloud XCKU3P board (Kintex Ultrascale+ GTY).")
+        description="USB3-PIPE on the Alibaba Cloud XCKU3P board (Kintex UltraScale+ GTY).")
     parser.add_argument("--sfp",          default=0,     type=int, help="SFP cage (SFP2USB adapter, 0: NIC1).", choices=[0, 1])
     parser.add_argument("--refclk",       default="sfp", help="GTY reference clock: SFP MGT clock (156.25MHz) or 100MHz oscillator (fabric).", choices=["sfp", "clk100"])
     parser.add_argument("--gen2-capable", action="store_true", help="Gen 2 capable clocking (QPLL 10Gbps, 40-bit, Gen 1 at /2 rate).")

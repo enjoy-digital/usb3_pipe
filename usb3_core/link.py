@@ -67,7 +67,7 @@ class USB3LinkLayer(LiteXModule):
     recovery_req; dbg_* probes for the traces/throughput profile (bench/usb3_soc.py).
     """
     def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}, crc32_cascade=False):
-        # PHY Link Layer words (32-bit), words pairs (64-bit, USB3PHY link_words=2) or words quads
+        # PHY Link Layer words (32-bit), word pairs (64-bit, USB3PHY link_words=2) or word quads
         # (128-bit, USB3PHY link_words=4): DPP words of 32, 64 or 128 bits (4, 8 or 16 bytes per
         # cycle in the DPPs).
         lw = len(phy.sink.data)//32
@@ -147,7 +147,7 @@ class USB3LinkLayer(LiteXModule):
         rx_valid = Signal()
         rx_data  = Signal(32, reset_less=True)
         rx_ctrl  = Signal(4, reset_less=True)
-        rx_data1 = Signal(32) # Next word (words pairs: DPP data 8 bytes per cycle).
+        rx_data1 = Signal(32) # Next word (word pairs: DPP data 8 bytes per cycle).
         rx_two   = Signal()   # Words pairs: current and next words consumed (DPP data).
         rx_skip2 = Signal()   # Words pairs: two data words of a skipped DPP consumed.
         rx_hold  = Signal()   # Current word not consumed.

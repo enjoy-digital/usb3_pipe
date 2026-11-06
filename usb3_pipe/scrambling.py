@@ -69,7 +69,7 @@ def lfsr_xor(signal, mask):
 class ScramblerUnit(LiteXModule):
     """Scrambler Unit
 
-    This module generates the scrambling values of the 4 symbols of a USB3.0 link word (X^16 + X^5 +
+    This module generates the scrambling values of the 4 symbols of a USB3 link word (X^16 + X^5 +
     X^4 + X^3 + 1 polynom). The LFSR advances 8 serial shifts on each symbol except SKP and is
     initialized after each COM, including in the middle of a word (USB 3.2 6.3.1.3).
 

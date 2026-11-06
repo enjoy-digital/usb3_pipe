@@ -49,7 +49,7 @@ def byte_offset(n):
     return Cat(C(0, 3), n)
 
 def gen2_link_layout(n=2):
-    """Link words pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words (n words: 1-n, ex: quads
+    """Link word pairs (Symbol 0 on data[0:8]), words: 1 or 2 valid words (n words: 1-n, ex: quads
     with n=4)."""
     return [("data", 32*n), ("ctrl", 4*n), ("words", bits_for(n))]
 
@@ -88,7 +88,7 @@ class WordsNarrower(LiteXModule):
         )
 
 class WordsToPairs(LiteXModule):
-    """Link words -> words pairs (gen2_link_layout, one word per entry; n: words entries of n
+    """Link words -> word pairs (gen2_link_layout, one word per entry; n: words entries of n
     words)."""
     def __init__(self, n=2):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -130,8 +130,8 @@ class PairsToWords(LiteXModule):
         )
 
 class WordsPacker(LiteXModule):
-    """Link words -> full words pairs (gen2_link_layout, two words per entry; a lone word is output
-    alone when no word follows it): words pairs at the words rate/2 (ex: Link Layer in a clock
+    """Link words -> full word pairs (gen2_link_layout, two words per entry; a lone word is output
+    alone when no word follows it): word pairs at the words rate/2 (ex: Link Layer in a clock
     domain at half the PHY frequency)."""
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -259,7 +259,7 @@ class PacketsBuffer(LiteXModule):
         ]
 
 class WordsWindow(LiteXModule):
-    """Link words pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
+    """Link word pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
     w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n). nwords: entries and
     window of nwords words (w[i]/c[i]/f[i], n: 0-nwords).
 
@@ -349,7 +349,7 @@ class WordsWindow(LiteXModule):
 
 class Gen2RXFraming(LiteXModule):
     """Data Blocks bytes (nbytes per cycle: 8 or 16, descrambled, bytes in transmission order from
-    data[0:8]) to Link Layer words entries (gen2_link_layout(nbytes//4): words pairs at 8 bytes per
+    data[0:8]) to Link Layer words entries (gen2_link_layout(nbytes//4): word pairs at 8 bytes per
     cycle): Idle Symbols between packets dropped, packets re-aligned on words, framing
     Symbols as Gen 1 K Symbols (ctrl), DPHSTART as HPSTART and Length Field Replicas removed, DPP
     words with the CRC-32/DPPEND (padded to the word).
@@ -785,13 +785,13 @@ class Gen2TXUnitsWidener(LiteXModule):
         )
 
 class Gen2TXFramer(LiteXModule):
-    """Link Layer words pairs (gen2_link_layout: Symbol 0 on data[0:8], K Symbols with ctrl, framing
+    """Link Layer word pairs (gen2_link_layout: Symbol 0 on data[0:8], K Symbols with ctrl, framing
     Ordered Sets at word boundaries, 1 or 2 words per entry) to transmission units bytes (8 per
     entry): Gen 2 framing bytes, DPHSTART and Length Field Replicas for the DPHs (non-deferred: a
     device does not defer), bytes after the DPPEND/DPPABORT removed. Units: Header Packet, Link
     Command, DPH with its DPP (no spacing allowed between them, 7.2.1.2.3).
 
-    One word per cycle, two in the DPPs (data words): 8 bytes per cycle. nwords=4: words quads
+    One word per cycle, two in the DPPs (data words): 8 bytes per cycle. nwords=4: word quads
     entries, four words in the DPPs (16 bytes per cycle), units entries of 16 bytes."""
     def __init__(self, nwords=2):
         assert nwords in [2, 4]
@@ -1331,7 +1331,7 @@ class Gen2LinkTX(LiteXModule):
         assert link_words in [1, 2, 4]
         assert nbytes in [8, 32]
         assert (link_words != 4) or (nbytes == 32)
-        # Link Layer words (link_words=1), words pairs (link_words=2, gen2_link_layout) or quads
+        # Link Layer words (link_words=1), word pairs (link_words=2, gen2_link_layout) or quads
         # (link_words=4: framer on quads, 16 bytes per cycle in the DPPs).
         self.sink        = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
             else gen2_link_layout(link_words))
@@ -1470,7 +1470,7 @@ class Gen2LinkTX(LiteXModule):
 
 class Gen2LinkRX(LiteXModule):
     """Data Blocks (rx clock domain, one every 3.3 cycles at 40-bit, 1.65 at 80-bit, not held) ->
-    Gen2RXFraming -> Link Layer words or words pairs (sys clock domain, gated by rx_ready: U0).
+    Gen2RXFraming -> Link Layer words or word pairs (sys clock domain, gated by rx_ready: U0).
     LGOOD_n/LCRD_x Link Commands on source_lc with lc_enable.
 
     nbytes=8: blocks buffer -> 8 bytes per cycle -> Gen2RXFraming (rx, reset out of the Data
@@ -1486,7 +1486,7 @@ class Gen2LinkRX(LiteXModule):
         assert nbytes in [8, 32]
         assert (link_words != 4) or (nbytes == 32)
         self.sink        = sink   = stream.Endpoint([("data", 128)])         # rx clock domain.
-        # Link Layer words (link_words=1), words pairs (link_words=2, gen2_link_layout) or quads
+        # Link Layer words (link_words=1), word pairs (link_words=2, gen2_link_layout) or quads
         # (link_words=4).
         self.source      = source = stream.Endpoint([("data", 32), ("ctrl", 4)] if link_words == 1
             else gen2_link_layout(link_words))
@@ -1592,7 +1592,7 @@ class Gen2LinkRX(LiteXModule):
             lc_buffer.source.ready.eq(~self.rx_ready | self.source_lc.ready),
         ]
 
-        # Words entries -> words pairs/words, gated by rx_ready.
+        # Words entries -> word pairs/words, gated by rx_ready.
         words = buffer.source
         if (nbytes//4) != link_words:
             self.narrower = narrower = ResetInserter()(WordsNarrower(nbytes//4, link_words,

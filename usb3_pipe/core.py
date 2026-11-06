@@ -72,9 +72,9 @@ class IdleHandshake(LiteXModule):
 
 @ResetInserter()
 class USB3PIPE(LiteXModule):
-    """USB3.0 PIPE Core
+    """USB3 PIPE Core (Gen 1, 8b/10b)
 
-    Wrap an FPGA transceiver exposing 2 TX and RX data/ctrl streams into a USB3.0 PIPE by adding:
+    Wrap an FPGA transceiver exposing 2 TX and RX data/ctrl streams into a USB3 PIPE by adding:
     - LFPS detection/generation.
     - Training Sequence Ordered Sets detection/generation.
     - Clock compensation Ordered Sets removing/insertion.
@@ -356,8 +356,8 @@ class Gen2PIPE(LiteXModule):
             setattr(self, name, Signal(name=name))
         self.tx_data = Signal(data_width) # o: TX words (tx clock domain).
         self.rx_data = Signal(data_width) # i: RX words (rx clock domain).
-        self.sink    = stream.Endpoint(link_layout) # Link Layer TX words/words pairs (sys).
-        self.source  = stream.Endpoint(link_layout) # Link Layer RX words/words pairs (sys).
+        self.sink    = stream.Endpoint(link_layout) # Link Layer TX words/word pairs (sys).
+        self.source  = stream.Endpoint(link_layout) # Link Layer RX words/word pairs (sys).
         # Link Layer RX LGOOD_n/LCRD_x (sys).
         self.source_lc        = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source_lc_enable = Signal() # LGOOD_n/LCRD_x on source_lc (else in source).

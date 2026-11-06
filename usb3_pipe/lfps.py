@@ -13,7 +13,7 @@ Warm Reset LFPS generation/detection and SuperSpeedPlus LFPS signaling (6.9.4/6.
                               delimiter: tPWM LFPS + tPWM EI, LSb first, Table 6-33).
 """
 
-# LFPS is the first signaling to happen during the initialization of the USB3.0 link.
+# LFPS is the first signaling to happen during the initialization of the USB3 link.
 
 # LFPS allows partners to exchange Out Of Band (OOB) controls/commands and consists of bursts where
 # a "slow" clock is generated (between 10M-50MHz) for a specific duration and with a specific repeat

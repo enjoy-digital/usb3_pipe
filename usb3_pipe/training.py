@@ -295,7 +295,7 @@ class TSGenerator(LiteXModule):
 class TSUnit(LiteXModule):
     """Training Sequence Unit
 
-    Detect/generate the Training Sequence Ordered Sets required for a USB3.0 link with simple
+    Detect/generate the Training Sequence Ordered Sets required for a USB3 link with simple
     control/status signals.
 
     The detection is always enabled: TS1 must also be detected in U0 (partner entering Recovery,

@@ -869,7 +869,7 @@ def main():
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
-    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs), 4 (128-bit words quads: --dev-pipe-cd --gen2 --gen2-data-width 80).", choices=["1", "2", "4"])
+    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit word pairs), 4 (128-bit word quads: --dev-pipe-cd --gen2 --gen2-data-width 80).", choices=["1", "2", "4"])
     parser.add_argument("--host-burst-out", default=0, help="Host model rounds of 4 Bulk OUT DPs sent back to back after the script bulk transfers.")
     parser.add_argument("--host-burst-len", default=64, help="Host model burst DPs payload length (bytes).")
     parser.add_argument("--dev-link-ppm",   default=None, type=float, help="Device Link clock (--dev-pipe-cd) from its own phase accumulator with this frequency offset (asynchronous clock domain crossings).")

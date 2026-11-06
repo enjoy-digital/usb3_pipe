@@ -305,10 +305,10 @@ class A7USB3SerDes(USB3SerDes):
         # Timing constraints -----------------------------------------------------------------------
         self.add_timing_constraints(platform, sys_clk, gtp)
 
-# Xilinx Ultrascale+ USB3 Serializer/Deserializer --------------------------------------------------
+# Xilinx UltraScale+ USB3 Serializer/Deserializer --------------------------------------------------
 
 class USPUSB3SerDes(USB3SerDes):
-    """Ultrascale+ GTY USB3 SerDes (reference clock from dedicated pads or from the fabric).
+    """UltraScale+ GTY USB3 SerDes (reference clock from dedicated pads or from the fabric).
 
     gen2_capable: QPLL at 10Gbps, 40-bit transceiver data (4 symbols per cycle), Gen 1 (5Gbps) with
     the /2 TX/RX rate (125MHz transceiver clocks), 10Gbps selected with `rate_10g` (Gen 2, raw
@@ -369,7 +369,7 @@ class USPUSB3SerDes(USB3SerDes):
 
         # Override GTY RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings
-        # from the Xilinx Ultrascale+ Transceivers Wizard (SATA preset at 5Gbps, SSC) and PCIe Gen2
+        # from the Xilinx UltraScale+ Transceivers Wizard (SATA preset at 5Gbps, SSC) and PCIe Gen2
         # (pcie4_uscale_plus) GT wrappers:
         # - RXCDR_CFG2/3: SSC tolerant CDR settings.
         # - RX_SUM_*/RX_DEGEN_CTRL/RX_DFE_AGC_CFG1: 5Gbps settings (LiteICLink: high line rates
