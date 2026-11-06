@@ -228,8 +228,11 @@ class USB3SoC(USB3BaseSoC):
         """Wide (debug) value read 32-bit word by word: <name>_sel (word index), <name>_data (word,
         registered): small CSR bus read mux (timings)."""
         words = (len(value) + 31)//32
-        sel   = CSRStorage(bits_for(max(words - 1, 1)), name=f"{name}_sel")
-        data  = CSRStatus(32, name=f"{name}_data")
+        sel   = CSRStorage(bits_for(max(words - 1, 1)), name=f"{name}_sel",
+            description=f"{name}: 32-bit word index (0-{words - 1}).")
+        data  = CSRStatus(32, name=f"{name}_data",
+            description=f"{name}: selected 32-bit word (layout: the add_* docstrings of "
+            "bench/sipeed_tang_mega_138k_pro.py).")
         setattr(self, f"_{name}_sel",  sel)
         setattr(self, f"_{name}_data", data)
         cases = {i: data.status.eq(value[32*i:min(32*(i+1), len(value))]) for i in range(words)}
@@ -378,7 +381,7 @@ class USB3SoC(USB3BaseSoC):
         hist       = [Signal(36) for _ in range(8)]
         snap       = [Signal(36) for _ in range(8)]
         taken      = Signal()
-        snap_clear = CSR(name=f"{name}_snap_clear")
+        snap_clear = CSR(name=f"{name}_snap_clear") # Write: capture the next bad Header Packet.
         setattr(self, f"{name}_snap_clear", snap_clear)
         self.sync += [
             If(words.valid,
@@ -426,7 +429,7 @@ class USB3SoC(USB3BaseSoC):
         the RX framing output stalled (words buffer full), blocks pairs buffer overflow (sticky),
         cleared by gen2_rx_probes_clear."""
         lrx = phy.gen2_pipe.link_rx
-        self._gen2_rx_probes_clear = clear = CSR()
+        self._gen2_rx_probes_clear = clear = CSR() # Write: clear the max level/stalls.
         max_level = Signal(16)
         stalls    = Signal(32)
         overflow  = Signal()
@@ -452,7 +455,7 @@ class USB3SoC(USB3BaseSoC):
         # first).
         fr = phy.gen2_pipe.rx_framing
         self.add_indexed_status("gen2_rx_framing", Cat(fr.errors, fr.corrected))
-        self._gen2_rx_error_clear = CSR()
+        self._gen2_rx_error_clear = CSR() # Write: capture the next unknown packet start.
         error_window = Signal(len(fr.dbg_error_window))
         error_taken  = Signal()
         self.sync += [
@@ -479,7 +482,7 @@ class USB3SoC(USB3BaseSoC):
         (Header Packets sent, no LGOOD_n received), max and histogram (16 bins of 64 cycles, last:
         960+ cycles), 16-bit saturating, cleared by lgood_latency_clear."""
         link = self.usb3_core.link
-        self._lgood_latency_clear = clear = CSR()
+        self._lgood_latency_clear = clear = CSR() # Write: clear the max and the histogram.
         wait = link.t_pending_hp.wait
         cnt  = Signal(16)
         maxv = Signal(16)
@@ -503,7 +506,7 @@ class USB3SoC(USB3BaseSoC):
         """RX snapshots (bring-up, captured registers static when read): 8 cycles of GTR12 raw words
         and decoders outputs from a K28.5 in the raw words (rx clock domain), 16 SerDes RX words
         (cd clock domain). Re-armed on each rx_snapshot_arm write."""
-        self._rx_snapshot_arm = CSR()
+        self._rx_snapshot_arm = CSR() # Write: re-arm the snapshots (and the TX ring).
         def snapshot(domain, n, data, trigger):
             arm = PulseSynchronizer("sys", domain)
             self.submodules += arm

@@ -159,7 +159,7 @@ class USB3DeviceCore(LiteXModule):
                 for i, c in enumerate(causes)]
         )
         # Directed Recovery request (bring-up: Recovery without a link error).
-        self._recovery_request = CSR()
+        self._recovery_request = CSR() # Write: directed Recovery request.
         self.comb += self.link.dbg_recovery_request.eq(self._recovery_request.re)
         # RX errors (16-bit saturating counts): Link Command words rejected (CRC-5/copies), DPPs
         # with a CRC-32 error.

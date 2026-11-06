@@ -138,7 +138,8 @@ class USB3LinkTrace(LiteXModule):
         self._count   = CSRStatus(16, description="Recorded entries.")
         self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
         self._index   = CSRStorage(16, description="Entry to read.")
-        self._data    = CSRStatus(96,  description="Entry.")
+        self._data    = CSRStatus(96,  description="Entry (timestamp, events, RX/TX Link Command "
+            "and Header Packet fields, Recovery causes: see USB3LinkTrace).")
 
         # # #
 
