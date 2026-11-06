@@ -11,6 +11,7 @@ doc/gen2-x2-roadmap.md).
 
 from migen import *
 from migen.genlib.cdc import MultiReg, PulseSynchronizer
+from migen.fhdl.tools import insert_reset
 
 from litex.gen import *
 
@@ -90,7 +91,8 @@ LTSSM_PIPE_PULSES = [
     "lfps_rx_polling", "lfps_rx_ping", "ts_tx_done", "ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2",
 ]
 
-# sys only (the Gen2PIPE tx/rx clock domains: synchronized reset, see do_finalize).
+# sys only (Gen2PIPE tx/rx and pipe_cd clock domains: resynchronized resets, see do_finalize and
+# get_fragment).
 @ResetInserter(["sys"])
 class USB3PHY(LiteXModule):
     """USB3 PHY: USB3PIPE(s) + USB3LTSSM.
@@ -114,7 +116,9 @@ class USB3PHY(LiteXModule):
       with link_words=2 on FPGAs where the LTSSM/Link Layer can't reach 125MHz. pipe_rx_depth: RX
       CDC FIFO depth override (default: 256 words pairs with link_words=2, for Bulk OUT bursts).
       link_words=4 (pipe_cd, Gen 2 capable SerDes with raw words wider than 40 bits): Link Layer
-      words quads (128-bit, Gen 2 DPP data up to 16 bytes per cycle), Gen 1 words in pairs.
+      words quads (128-bit, Gen 2 DPP data up to 16 bytes per cycle), Gen 1 words in pairs. The
+      PHY reset is resynchronized to pipe_cd and resets the pipe_cd logic of the PHY (PIPE,
+      Gen2PIPE, CDC) as the sys one.
 
     Link interface (what a USB3 Link Layer needs from the PHY, the Link Layer does not have to know
     the PHY internals):
@@ -153,6 +157,9 @@ class USB3PHY(LiteXModule):
                 ssp                  = ssp)
             if pipe_cd is not None:
                 pipe = ClockDomainsRenamer({"sys": pipe_cd})(pipe)
+                # PHY reset resynchronized to pipe_cd (do_finalize), inserted on the pipe_cd
+                # statements of the PHY (get_fragment).
+                self.pipe_reset = Signal()
             self.pipe  = pipe
             self.pipes = [pipe]
             self.ltssm = ltssm = USB3LTSSM(sys_clk_freq=sys_clk_freq, timer_scale=timer_scale,
@@ -341,6 +348,19 @@ class USB3PHY(LiteXModule):
                 MultiReg(self.reset_sys, self.gen2_pipe.reset_tx, "tx"),
                 MultiReg(self.reset_sys, self.gen2_pipe.reset_rx, "rx"),
             ]
+        if self.pipe_cd is not None:
+            self.specials += MultiReg(self.reset_sys, self.pipe_reset, self.pipe_cd)
+
+    def get_fragment(self):
+        f = LiteXModule.get_fragment(self)
+        # The class ResetInserter only covers sys: with pipe_cd, the PIPE, the Gen2PIPE pipe_cd part,
+        # the pipe_cd sides of the Link words CDC (AsyncFIFOs, buffers, RX throttle counter) and the
+        # resynchronization registers kept their state across a PHY reset while their sys sides
+        # restarted (stale FIFO entries replayed, RX throttle level offset): same reset insertion on
+        # the pipe_cd statements, from the resynchronized reset.
+        if self.pipe_cd is not None:
+            f.sync[self.pipe_cd] = insert_reset(self.pipe_reset, f.sync[self.pipe_cd])
+        return f
 
     def add_pairs_adapters(self, pipe):
         """Words pairs (link_words=2) <-> Gen 1 PIPE words: returns the (sink, source) pairs
