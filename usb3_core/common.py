@@ -38,9 +38,6 @@ def framing_word(k):
     """Framing Ordered Set word (core order): 3 K symbols followed by EPF."""
     return (k << 0) | (k << 8) | (k << 16) | (EPF << 24)
 
-def seq_add(seq, n, width=3):
-    return (seq + n) & ((1 << width) - 1)
-
 # Byte enables (be): valid bytes of each word, contiguous from data[0:8], full (0b1111)
 # except on the last word of a packet.
 
@@ -83,10 +80,6 @@ LCMD_LXU   = 0x300
 LCMD_LPMA  = 0x380
 LCMD_LUP   = 0x400
 LCMD_LDN   = 0x580
-
-# Link Control Word (7.2.1.1.1) --------------------------------------------------------------------
-
-LCW_DL = (1 << 9) # Delayed.
 
 # Packet Types (8.2) -------------------------------------------------------------------------------
 

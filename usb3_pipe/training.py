@@ -305,7 +305,7 @@ class TSUnit(LiteXModule):
     Ordered Set is always completed (tx_active while transmitting), including when the requests come
     from a LTSSM in another clock domain and change after the end of a burst (tx_done).
     """
-    def __init__(self, serdes, drive_sink=True):
+    def __init__(self, serdes):
         self.source            = stream.Endpoint([("data", 32), ("ctrl", 4)]) # o: Ordered Sets.
         self.rx_ts1            = Signal()        # o (Pulse)
         self.rx_ts1_inv        = Signal()        # o (Pulse)
@@ -322,8 +322,7 @@ class TSUnit(LiteXModule):
         self.tx_ts2_loopback   = Signal()        # i (Level)
         self.tx_ts2_scrambling = Signal(reset=1) # i (Level)
         self.tx_done           = Signal()        # o (Pulse)
-        self.tx_active         = Signal()        # o (Level): Ordered Sets transmitted on
-                                                 #            serdes.sink.
+        self.tx_active         = Signal()        # o (Level): Ordered Sets transmitted.
 
         # # #
 
@@ -346,7 +345,7 @@ class TSUnit(LiteXModule):
 
         # Ordered Set Generators -------------------------------------------------------------------
         # Note: No arbitration between generators. Only one of tx_tseq/tx_ts1/tx_ts2 must be
-        # asserted at a time, otherwise multiple sources will connect to serdes.sink simultaneously.
+        # asserted at a time (one-hot selection of the source).
         self.tseq_generator = tseq_generator = TSGenerator(TSEQ, n_ordered_sets=TSEQ_COUNT)
         self.ts1_generator  = ts1_generator  = TSGenerator(TS1,  n_ordered_sets=16)
         self.ts2_generator  = ts2_generator  = TSGenerator(TS2,  n_ordered_sets=16)
@@ -369,8 +368,8 @@ class TSUnit(LiteXModule):
         # Generations are aborted when no longer requested (tx_enable deasserted or other TS
         # requested by the LTSSM): an interrupted burst restarts on an Ordered Set boundary (with
         # COM, 6.4.1.1) and with a full burst.
-        # Ordered Sets on source (one-hot selection: timings), on serdes.sink with drive_sink (else
-        # selected by the PIPE with its scrambled stream).
+        # Ordered Sets on source (one-hot selection: timings), selected by the PIPE with its
+        # scrambled stream.
         source = self.source
         for i, g in enumerate(generators):
             self.comb += [
@@ -388,8 +387,6 @@ class TSUnit(LiteXModule):
             source.data.eq(selected("data", 32)),
             source.ctrl.eq(selected("ctrl", 4)),
         ]
-        if drive_sink:
-            self.comb += If(self.tx_active, source.connect(serdes.sink))
         self.comb += [
             self.tx_done.eq(tseq_generator.done | ts1_generator.done | ts2_generator.done),
             # Link Functionality of the transmitted TS2 (Hot Reset/Loopback, 7.5.4.9.1).

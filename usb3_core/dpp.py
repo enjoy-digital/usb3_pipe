@@ -150,36 +150,6 @@ class DPPQuadSplitter(LiteXModule):
             tail.eq(~tail & split)
         )
 
-class DPPNarrower(LiteXModule):
-    """Data Packet Payload words (dw_in bits) -> words of dw_out bits (full words, the last one 1 to
-    dw_out/8 bytes, a zero-length DPP as one 0-byte word)."""
-    def __init__(self, dw_in=128, dw_out=64):
-        assert dw_in % dw_out == 0
-        self.sink   = sink   = stream.Endpoint(dpp_layout(dw_in))
-        self.source = source = stream.Endpoint(dpp_layout(dw_out))
-
-        # # #
-
-        steps = dw_in//dw_out
-        wb    = dw_out//8
-        index = Signal(max=max(steps, 2))
-        rem   = Signal(len(sink.bytes) + 1)
-        done  = Signal()
-        self.comb += [
-            rem.eq(sink.bytes - index*wb),
-            done.eq(rem <= wb),
-            source.valid.eq(sink.valid),
-            source.first.eq(sink.first & (index == 0)),
-            source.last.eq(sink.last & done),
-            source.bytes.eq(Mux(done, rem, wb)),
-            Case(index, {i: source.data.eq(sink.data[dw_out*i:dw_out*(i + 1)])
-                for i in range(steps)}),
-            sink.ready.eq(source.ready & done),
-        ]
-        self.sync += If(source.valid & source.ready,
-            If(done, index.eq(0)).Else(index.eq(index + 1))
-        )
-
 class DPPPacker(LiteXModule):
     """32-bit Data Packet Payload words -> 64-bit (or dw-bit) words (full words, the last one 0 to
     dw/8 bytes): 32-bit endpoints (Control Endpoint, ...) on a 64/128-bit Link Layer (lower rate,

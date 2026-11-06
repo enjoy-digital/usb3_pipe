@@ -128,9 +128,9 @@ class RXWordAligner(LiteXModule):
     """RX Word Aligner
 
     Align RX Words by analyzing the location of the alignment markers (COM by default, configurable
-    K-codes, or any K-code with check_ctrl_only) in the RX stream.
+    K-codes) in the RX stream.
     """
-    def __init__(self, check_ctrl_only=False, markers=(COM,)):
+    def __init__(self, markers=(COM,)):
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -147,10 +147,8 @@ class RXWordAligner(LiteXModule):
             buf.source.ready.eq(sink.valid & source.ready),
         ]
 
-        # Alignment markers (markers K-codes, or any K-code with check_ctrl_only).
+        # Alignment markers (markers K-codes).
         def is_marker(data, ctrl):
-            if check_ctrl_only:
-                return ctrl
             return ctrl & Reduce("OR", [data == m.value for m in markers])
         marker   = Signal(4)
         marker_d = Signal(4)
