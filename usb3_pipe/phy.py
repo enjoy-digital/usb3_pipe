@@ -84,6 +84,7 @@ USB3PHY_LINK_CTRL = [
     ("link_activity",     "i"),
     ("directed_recovery", "i"), ("hot_reset_req",  "i"), ("warm_reset_req", "i"),
     ("exit_u1_req",       "i"), ("exit_u2_req",    "i"), ("wakeup_u3_req",  "i"),
+    ("compliance_enable", "i"), ("directed_loopback", "i"), ("loopback_capable", "i"),
 ]
 
 # Link interface attributes always defined by USB3PHY (constants/ints when the feature is absent),
@@ -137,8 +138,9 @@ class USB3PHY(LiteXModule):
     - `sink`/`source`: data/ctrl symbol streams (Logical Idle sent when `sink` has no data).
     - Status (see USB3PHY_STATUS): mirrored from the LTSSM.
     - Link-Layer control (see USB3PHY_LINK_CTRL): PM handshake (LGO_Ux/LAU/LXU/LPMA decoded or to
-      send by the Link Layer), directed Recovery/Hot Reset/Warm Reset and Ux exit requests. The
-      signals are the LTSSM ones (same Signal objects); undriven inputs keep their reset values.
+      send by the Link Layer), directed Recovery/Hot Reset/Warm Reset and Ux exit requests,
+      Compliance (host) and Loopback master controls. The signals are the LTSSM ones (same Signal
+      objects); undriven inputs keep their reset values.
     - Capabilities and flow control (see USB3PHY_LINK_INTERFACE), always defined: `link_words`,
       `with_u1u2`, `ssp_capable`/`gen2_active` (Gen 2 operation), `source_lc` (fast Link Commands
       path with `source_lc_enable`, None without), `rx_throttle` (RX words buffered with pipe_cd:
