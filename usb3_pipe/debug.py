@@ -369,8 +369,13 @@ class Gen2RXDebug(LiteXModule):
     """
     def __init__(self, rx_datapath, clock_domain="rx"):
         self._clear  = CSR()
-        self._status = CSRStatus(16, description="Status: aligned [0], locked [1], polarity [2], "
-            "data_stream [3], link_config [15:8].")
+        self._status = CSRStatus(fields=[
+            CSRField("aligned",     size=1, description="Block aligned."),
+            CSRField("locked",      size=1, description="Block alignment locked."),
+            CSRField("polarity",    size=1, description="RX polarity inverted."),
+            CSRField("data_stream", size=1, description="Receiving the Data Stream."),
+            CSRField("link_config", size=8, offset=8, description="Received TS2 Link Configuration."),
+        ])
 
         # # #
 
@@ -382,9 +387,17 @@ class Gen2RXDebug(LiteXModule):
         ]
 
         # Status (quasi-static, rx -> sys).
-        status = Cat(rx_datapath.aligned, rx_datapath.locked, rx_datapath.polarity,
+        status     = Cat(rx_datapath.aligned, rx_datapath.locked, rx_datapath.polarity,
             rx_datapath.data_stream, Constant(0, 4), rx_datapath.link_config)
-        self.specials += MultiReg(status, self._status.status)
+        status_sys = Signal(16)
+        self.specials += MultiReg(status, status_sys)
+        self.comb += [
+            self._status.fields.aligned.eq(status_sys[0]),
+            self._status.fields.locked.eq(status_sys[1]),
+            self._status.fields.polarity.eq(status_sys[2]),
+            self._status.fields.data_stream.eq(status_sys[3]),
+            self._status.fields.link_config.eq(status_sys[8:16]),
+        ]
 
         # Counters (rx -> sys).
         for name, description in GEN2_RX_COUNTERS:
