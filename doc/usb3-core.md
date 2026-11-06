@@ -34,10 +34,13 @@ self.usb3_core.add_csr(with_trace=True) # Status/statistics CSRs, Header Packets
 # first byte on data[7:0], be: valid bytes (full except on the last word), last: end of packet).
 ```
 
-64-bit endpoints (with a `USB3PHY(link_words=2)`): `USB3BulkIN(ept, max_burst, data_width=64)`/
-`USB3BulkOUT(..., data_width=64)`, user streams in `endpoint_layout(64)` (64-bit words, 8-bit `be`).
-32-bit endpoints (the Control Endpoint, Isochronous IN, ...) are adapted by the Protocol Layer
-(`DPPPacker`/`DPPRXAdapter`, `dpp.py`) at their 32-bit rate.
+Parameters, descriptors helpers, endpoint stream layout, debug CSRs and the integration in a SoC:
+[integration.md](integration.md).
+
+64/128-bit endpoints (with a `USB3PHY(link_words=2|4)`): `USB3BulkIN(ept, max_burst,
+data_width=64|128)`/`USB3BulkOUT(..., data_width=64|128)`, user streams in `endpoint_layout(64|128)`
+(64/128-bit words, 8/16-bit `be`). 32-bit endpoints (the Control Endpoint, Isochronous IN, ...) are
+adapted by the Protocol Layer (`DPPPacker`/`DPPRXAdapter`, `dpp.py`) at their 32-bit rate.
 
 U1/U2 Link Power Management (`with_lpm=True`, off by default): the BOS advertises non-zero U1/U2
 exit latencies (10us/2047us, hosts only enable U1/U2 with non-zero latencies), the Link Layer accepts

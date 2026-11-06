@@ -61,34 +61,15 @@ same names on both sides, wired by `connect_ltssm_pipe()`.
 from usb3_pipe     import A7USB3SerDes
 from usb3_pipe.phy import USB3PHY
 
-self.usb3_serdes = A7USB3SerDes(platform,
-    sys_clk      = self.crg.cd_sys.clk,
-    sys_clk_freq = sys_clk_freq,
-    refclk_pads  = platform.request("refclk"), # Or a fabric clock (ClockSignal).
-    refclk_freq  = 125e6,
-    tx_pads      = platform.request("sfp_tx"),
-    rx_pads      = platform.request("sfp_rx"))
+self.usb3_serdes = A7USB3SerDes(platform, sys_clk=self.crg.cd_sys.clk, sys_clk_freq=sys_clk_freq,
+    refclk_pads=platform.request("refclk"), refclk_freq=125e6,
+    tx_pads=platform.request("sfp_tx"), rx_pads=platform.request("sfp_rx"))
 self.usb3_phy = USB3PHY(serdes=self.usb3_serdes, sys_clk_freq=sys_clk_freq, role="device")
 ```
 
-Gen 2x1 (UltraScale+ GTY, `bench/alibaba_xcku3p.py --gen2-capable`):
-
-```python
-from usb3_pipe     import USPUSB3SerDes
-from usb3_pipe.phy import USB3PHY
-
-self.usb3_serdes = USPUSB3SerDes(platform,
-    sys_clk      = self.crg.cd_sys.clk,
-    sys_clk_freq = sys_clk_freq,
-    refclk_pads  = platform.request("sfp_mgt_clk"),
-    refclk_freq  = 156.25e6,
-    tx_pads      = platform.request("sfp_tx"),
-    rx_pads      = platform.request("sfp_rx"),
-    gen2_capable = True)  # QPLL at 10Gbps, 40-bit raw words, Gen 1 at the /2 rate.
-self.usb3_phy = USB3PHY(serdes=self.usb3_serdes, sys_clk_freq=sys_clk_freq, role="device",
-    gen2_capable = True,  # Gen 2x1 advertised in the SuperSpeedPlus Polling.
-    link_words   = 2)     # Optional: 64-bit Link interface (Gen 2 bandwidth, 64-bit endpoints).
-```
+SerDes classes per transceiver, `USB3PHY` parameters (`gen2_capable`, `link_words`, `pipe_cd`,
+`with_u1u2`), the Link interface tables and the Gen 2x1/`pipe_cd` snippets:
+[integration.md](integration.md).
 
 With `link_words=2`, `sink`/`source` carry words pairs (`data` 64, `ctrl` 8, `words`: 1 or 2 valid
 words, word 0 first), adapted to the Gen 1 PIPE words at Gen 1; the Gen 2 framing then moves the DPP
