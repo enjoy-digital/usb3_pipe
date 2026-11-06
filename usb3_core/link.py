@@ -81,7 +81,7 @@ class USB3LinkLayer(LiteXModule):
         # Statistics.
         self.rx_lbad      = Signal(16) # o: LBAD sent (received Header Packets errors).
         self.tx_retry     = Signal(16) # o: LBAD received (Header Packets retransmissions).
-        self.recovery_req = Signal(16) # o: Recovery requests (timeouts, sequence/credit errors).
+        self.recovery_req = Signal(16) # o: Recovery requests count (timeouts, sequence/credit errors).
 
         # # #
 
@@ -116,12 +116,20 @@ class USB3LinkLayer(LiteXModule):
         ]
         self.sync += u0_d.eq(u0)
 
-        recovery = Signal() # Recovery request (pulse).
+        # Recovery request: level until the LTSSM leaves U0 (one or two cycles after the registered
+        # directed_recovery, the timers conditions are levels), counted/reported on its first cycle.
+        recovery      = Signal()
+        recovery_d    = Signal()
+        recovery_rise = Signal()
         self.dbg_recovery_request = Signal() # i: Directed Recovery request (pulse, bring-up).
-        self.sync += phy.directed_recovery.eq(recovery | (self.dbg_recovery_request & u0))
-        self.sync += If(recovery & u0 & (self.recovery_req != (2**16 - 1)),
-            self.recovery_req.eq(self.recovery_req + 1)
-        )
+        self.comb += recovery_rise.eq(recovery & ~recovery_d)
+        self.sync += [
+            recovery_d.eq(recovery),
+            phy.directed_recovery.eq(recovery | (self.dbg_recovery_request & u0)),
+            If(recovery_rise & (self.recovery_req != (2**16 - 1)),
+                self.recovery_req.eq(self.recovery_req + 1)
+            ),
+        ]
 
         # RX Words ---------------------------------------------------------------------------------
         # Registered (timings: the PHY RX datapath output is combinatorial).
@@ -1091,7 +1099,7 @@ class USB3LinkLayer(LiteXModule):
             remote_credits, remote_credits2, adv_received, pm_block, pm_accepted,
             self.tx_hp.valid, self.tx_hp.ready, lrty_pending, lbad_wait, ssp, tx_full,
             rx_seq[0:4] if sw == 4 else Cat(rx_seq, C(0, 1)))
-        self.dbg_recovery  = recovery
+        self.dbg_recovery  = recovery_rise # Pulse (first cycle of the request).
         self.dbg_recovery_cause = Cat(rx_hp_seqer, lc_lgood & adv_received & ~lgood_ok,
             lc_lcrd & ~lcrd_ok, pending_hp_done, t_credit_hp.done)
 

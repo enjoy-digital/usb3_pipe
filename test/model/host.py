@@ -95,9 +95,10 @@ FRAMING = {0xfbfbfbf7: "HP", 0xfefefef7: "LC", 0x5c5c5cf7: "DPP"}
 
 class PyHost:
     """Host Link Layer: sends packets (atomic), acknowledges the device Header Packets (LGOOD_n +
-    LCRD_x), records the received packets."""
-    def __init__(self, phy, corrupt_lgood=False):
+    LCRD_x, ack=False: no acknowledgement), records the received packets."""
+    def __init__(self, phy, corrupt_lgood=False, ack=True):
         self.phy     = phy
+        self.ack     = ack
         self.queue   = deque() # Packets (lists of words) to send.
         self.urgent  = deque() # Link Commands (sent first, between packets).
         self.tx_seq  = 0
@@ -163,7 +164,7 @@ class PyHost:
             elif state == "HP" and len(words) == 5:
                 packet = decode_packets(words)[0]
                 self.hps.append(packet[1:])
-                if packet[-1]:
+                if packet[-1] and self.ack:
                     self.urgent.append(link_command(LGOOD(packet[4])))
                     self.urgent.append(link_command(LCRD(self.lcrd)))
                     self.lcrd = (self.lcrd + 1) % 4
