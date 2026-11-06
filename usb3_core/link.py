@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Link Layer (USB 3.2 chapter 7, SuperSpeed Gen1, Upstream Port).
+"""USB3 Link Layer (USB 3.2 chapter 7, SuperSpeed and SuperSpeedPlus operation, Upstream Port).
 
 - RX: framing parser (Header Packets, Link Commands, Data Packet Payloads), CRCs checks.
 - Header Packets flow control (7.2.4.1): Header Sequence Numbers, Rx/Tx Header Buffers and credits

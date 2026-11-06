@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 PHY: USB3PIPE(s) + USB3LTSSM with the Link interface used by a USB3 Link Layer
-(doc/usb3-pipe.md), on one lane (Gen 1x1) or two lanes (Gen 1x2, USB 3.2 6.13, see
-doc/gen2-x2-roadmap.md).
+(doc/usb3-pipe.md): Gen 1x1 (5Gbps), Gen 2x1 (10Gbps on the Gen2PIPE with a gen2_capable SerDes)
+or Gen 1x2 (two lanes, simulation only, USB 3.2 6.13, see doc/gen2-x2-roadmap.md).
 """
 
 from migen import *
@@ -122,7 +122,7 @@ class USB3PHY(LiteXModule):
       Capability LBPM, also used with lanes=1), gen2 is the negotiated Gen 2 operation. With a
       gen2_capable SerDes (raw words, 10Gbps rate), the training continues at 10Gbps on the
       Gen2PIPE (add_gen2: Gen 2 TSEQ/TS1/TS2, SDS/Logical Idle, gen2_active), else at Gen 1 speed.
-      The SuperSpeedPlus Link Layer datapath is not integrated yet (doc/gen2-x2-roadmap.md).
+      The Link Layer switches to SuperSpeedPlus operation on gen2_active (usb3_core.link).
     - with_u1u2=False (Gen 1x1): no U1/U2 Link Power Management (less logic, see USB3LTSSM).
     - pipe_cd (Gen 1x1): USB3PIPE (and SerDes, renamed by the caller) in the pipe_cd clock domain at
       pipe_clk_freq (>= 125MHz), LTSSM and Link interface in sys (add_pipe_cdc): ex. sys at 62.5MHz

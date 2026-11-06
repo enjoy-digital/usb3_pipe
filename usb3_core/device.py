@@ -4,11 +4,13 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Device Core (SuperSpeed Gen1 Link and Protocol Layers, Control Endpoint, Bulk/Isochronous
-Endpoints).
+"""USB3 Device Core (USB 3.2 Gen 1x1/Gen 2x1: Link and Protocol Layers, Control Endpoint,
+Bulk/Isochronous Endpoints).
 
 Connects to a USB3 PHY through its Link interface (see usb3_pipe.phy.USB3PHY): any PHY providing the
-same interface can be used.
+same interface can be used. With a Gen 2 capable PHY (phy.ssp_capable), the Link Layer runs the
+SuperSpeedPlus operation when the link is at Gen 2 (phy.gen2_active) and the BOS advertises the
+SuperSpeedPlus USB Device Capability.
 
 Example:
     descriptors = bulk_descriptors(max_burst=8)

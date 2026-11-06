@@ -4,9 +4,10 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/Ultrascale+
-GTY) at 5Gbps with the TX/RX datapaths (usb3_pipe/datapath.py) and LFPS (TX pattern/electrical
-idle, filtered RX electrical idle, RX decode errors).
+"""USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/UltraScale+
+GTY/Gowin GW5AST/GW5AT GTR12) at 5Gbps, 10Gbps on the GTY and the GTR12 with gen2_capable (Gen 2,
+raw transceiver words), with the TX/RX datapaths (usb3_pipe/datapath.py) and LFPS (TX
+pattern/electrical idle, filtered RX electrical idle, RX decode errors).
 """
 
 from migen import *

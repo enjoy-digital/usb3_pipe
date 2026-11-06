@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 Device Core example designs, shared by the targets (bench/acorn.py, bench/kc705.py,
-bench/alibaba_xcku3p.py).
+bench/alibaba_xcku3p.py, bench/sipeed_tang_mega_138k_pro.py), see doc/examples.md.
 
 - loopback     : Vendor Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1) (bench/usb3_bulk.py).
 - wishbone     : loopback + EP0 Wishbone bridge (litex_server --usb --usb-vid 0x1d50
@@ -15,8 +15,8 @@ bench/alibaba_xcku3p.py).
                  /dev/ttyACMx).
 - console      : CDC-ACM SoC console, BIOS (litex_term /dev/ttyACMx), requires a CPU.
 - uvc          : UVC camera, YUY2 test pattern (ffplay/VLC /dev/videoX).
-- uvc_iso      : UVC camera, YUY2 test pattern, Isochronous streaming (not yet validated on
-                 hardware).
+- uvc_iso      : UVC camera, YUY2 test pattern, Isochronous streaming (480p60/720p30/720p60/
+                 1080p30).
 - msc          : Mass Storage 512KB FAT RAM disk (/dev/sdX).
 - msc_dram     : Mass Storage DRAM disk (upper half of the DRAM, /dev/sdX, mkfs.vfat needed),
                  requires a DRAM controller (soc.sdram) initialized by the BIOS (CPU).
