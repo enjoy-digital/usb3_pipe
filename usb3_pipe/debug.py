@@ -217,7 +217,7 @@ class USB3RXErrorsDebug(LiteXModule):
     Counters are synchronized to the sys clock domain (BusSynchronizer) and cleared with `clear`.
     """
     def __init__(self, decoders, checker, clock_domain="rx"):
-        self._clear = CSR()
+        self._clear = CSR() # Clear the RX counters (write).
 
         # # #
 
@@ -368,7 +368,7 @@ class Gen2RXDebug(LiteXModule):
     LiteScope probes: gen2_rx_analyzer_signals().
     """
     def __init__(self, rx_datapath, clock_domain="rx"):
-        self._clear  = CSR()
+        self._clear  = CSR() # Clear the counters (write).
         self._status = CSRStatus(fields=[
             CSRField("aligned",     size=1, description="Block aligned."),
             CSRField("locked",      size=1, description="Block alignment locked."),

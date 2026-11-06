@@ -132,7 +132,7 @@ def dpp_layout(data_width=32):
     return [("data", data_width), ("bytes", bits_for(data_width//8))]
 
 def link_pairs_layout(n=2):
-    """PHY Link Layer words pairs (USB3PHY link_words=2): words: 1 or 2 valid words, word 0 first
+    """PHY Link Layer word pairs (USB3PHY link_words=2): words: 1 or 2 valid words, word 0 first
     (data[0:32]/ctrl[0:4]). n: words entries (USB3PHY link_words=4: 1-4 valid words)."""
     return [("data", 32*n), ("ctrl", 4*n), ("words", bits_for(n))]
 

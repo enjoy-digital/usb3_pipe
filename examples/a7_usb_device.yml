@@ -1,4 +1,5 @@
-# Artix7 GTP, USB3.0 device with Bulk IN/OUT AXI-Stream endpoints (USB3 Device Core).
+# Artix7 GTP, USB 3.2 Gen 1x1 (5Gbps) device with Bulk IN/OUT AXI-Stream endpoints (USB3 Device
+# Core).
 phy           : A7USB3SerDes
 sys_clk_freq  : 125e6
 refclk        : pads

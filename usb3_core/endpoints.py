@@ -30,6 +30,14 @@ MAX_PACKET_WORDS = MAX_PACKET_SIZE//4
 # USB3 Endpoint Base -------------------------------------------------------------------------------
 
 class USB3Endpoint(LiteXModule):
+    """Endpoint base with the Protocol Layer interface (see the module docstring).
+
+    - ept: Endpoint Number; direction: 0 (OUT) or 1 (IN).
+    - data_width: DPP words (32/64/128-bit), equal to the Link Layer data_width, or 32 (adapted by
+      the Protocol Layer).
+    The subclasses implement the transfer type (USB3BulkIN/USB3BulkOUT, USB3IsoIN,
+    USB3EndpointControl).
+    """
     def __init__(self, ept, direction, data_width=32):
         self.ept        = ept
         self.direction  = direction  # 0: OUT, 1: IN.

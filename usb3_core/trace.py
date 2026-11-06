@@ -26,6 +26,12 @@ from usb3_core.common import TYPE_ITP
 # USB3 Core Trace ----------------------------------------------------------------------------------
 
 class USB3CoreTrace(LiteXModule):
+    """Header Packets trace of a USB3LinkLayer (link): depth entries of 64 bits (see the module
+    docstring) in a block RAM.
+
+    CSRs: control (enable, clear, circular, ept_filter/ept), count, pointer, index/data (entry read
+    back); decoded by bench/usb3_trace.py (clear/dump/clear-ept/stop).
+    """
     def __init__(self, link, depth=512):
         self._control = CSRStorage(fields=[
             CSRField("enable",     size=1, reset=1, description="Trace enable (stops when full)."),
@@ -133,7 +139,8 @@ class USB3LinkTrace(LiteXModule):
         self._count   = CSRStatus(16, description="Recorded entries.")
         self._pointer = CSRStatus(16, description="Write pointer (circular: oldest entry).")
         self._index   = CSRStorage(16, description="Entry to read.")
-        self._data    = CSRStatus(96,  description="Entry.")
+        self._data    = CSRStatus(96,  description="Entry (timestamp, events, RX/TX Link Command "
+            "and Header Packet fields, Recovery causes: see USB3LinkTrace).")
 
         # # #
 

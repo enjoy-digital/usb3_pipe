@@ -4,7 +4,8 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 SoC shared by the bench targets (acorn.py, kc705.py, alibaba_xcku3p.py).
+"""USB3 SoC shared by the bench targets (acorn.py, kc705.py, alibaba_xcku3p.py,
+sipeed_tang_mega_138k_pro.py), see doc/targets.md.
 
 - USB3BaseSoC     : SoCCore (no CPU by default), UARTBone/JTAGBone.
 - add_usb3_device : USB3PHY + debug (USB3PHYDebug, USB3SerDesDebug), USB3 Device Core example
@@ -74,17 +75,20 @@ class RXRawSnapshot(LiteXModule):
     trigger (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs
     (oldest word at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
     def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr", write_enable=1, post=None):
-        self._arm     = CSR()
-        self._trigger = CSRStorage(bits_for(len(flags) - 1))
-        self._done    = CSRStatus()
-        self._index   = CSRStorage(bits_for(depth - 1))
-        self._data0   = CSRStatus(32)
-        self._data1   = CSRStatus(32)
+        self._arm     = CSR() # Write: arm the capture (stopped depth//2 words after the trigger).
+        self._trigger = CSRStorage(bits_for(len(flags) - 1),
+            description="Trigger: flags bit index.")
+        self._done    = CSRStatus(description="Capture done (triggered after arm, post-trigger "
+            "entries stored).")
+        self._index   = CSRStorage(bits_for(depth - 1),
+            description="Entry to read (0: oldest): the raw word then the flags, in data0..data4.")
+        self._data0   = CSRStatus(32, description="Entry bits [31:0].")
+        self._data1   = CSRStatus(32, description="Entry bits [63:32].")
         wide = (len(rx_raw) + len(flags)) > 64
         if wide:
-            self._data2 = CSRStatus(32)
-            self._data3 = CSRStatus(32)
-            self._data4 = CSRStatus(32)
+            self._data2 = CSRStatus(32, description="Entry bits [95:64].")
+            self._data3 = CSRStatus(32, description="Entry bits [127:96].")
+            self._data4 = CSRStatus(32, description="Entry bits [159:128].")
 
         # # #
 
@@ -229,7 +233,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         bsink = lrx.buffer.sink
         bsrc  = lrx.buffer.source
         src   = phy.source # PHY order: Symbol 0 on data[24:32].
-        soc.usb3_gen2_lc_rearm = CSR()
+        soc.usb3_gen2_lc_rearm = CSR() # Write: counts running again after a LCRD_x out of order.
         stop    = Signal()
         stop_rx = Signal()
         soc.sync += If(soc.usb3_gen2_lc_rearm.re,
@@ -304,7 +308,7 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     if link is not None:
         soc.usb3_gen2_link_max = CSRStatus(32*3,
             description="Max cycles: LGOOD pending, LCRD pending, DPP stall.")
-        soc.usb3_gen2_link_max_clear = CSR()
+        soc.usb3_gen2_link_max_clear = CSR() # Write: clear the maximums.
         maxes = []
         for e in [link.dbg_lgood_pending, link.dbg_lcrd_pending, link.dbg_dpp_stall]:
             cnt = Signal(32)
@@ -437,9 +441,10 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     if (phy_cd is not None) and not with_debug:
         # Minimal PHY status (no USB3PHYDebug): LTSSM state (get_ltssm_states), U0, SerDes ready.
         usb3_phy.status = CSRStatus(fields=[
-            CSRField("ltssm_state", size=len(usb3_phy.ltssm_state)),
-            CSRField("u0",          size=1, offset=8),
-            CSRField("ready",       size=1, offset=9),
+            CSRField("ltssm_state", size=len(usb3_phy.ltssm_state),
+                description="LTSSM state (usb3_pipe.gen.get_ltssm_states)."),
+            CSRField("u0",          size=1, offset=8, description="LTSSM in U0."),
+            CSRField("ready",       size=1, offset=9, description="SerDes ready."),
         ])
         soc.comb += [
             usb3_phy.status.fields.ltssm_state.eq(usb3_phy.ltssm_state),

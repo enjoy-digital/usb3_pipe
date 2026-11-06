@@ -3,8 +3,9 @@
 Migen/LiteX USB 3.2 Gen 1x1 (SuperSpeed, 5Gbps) and Gen 2x1 (SuperSpeedPlus, 10Gbps) device core:
 Link Layer, Protocol Layer, Control Endpoint, Bulk/Isochronous Endpoints and device classes (CDC-ACM,
 UVC, Mass Storage). It runs in the `sys` clock domain of the PHY ([usb3-pipe.md](usb3-pipe.md)) on
-32-bit Link Layer words at 125MHz (~500MB/s per direction), or 64-bit words with a PHY in words pairs
-(`USB3PHY(link_words=2)`, Gen 2 bandwidth). With a Gen 2 capable PHY (`phy.gen2_active`), the Link
+32-bit Link Layer words at 125MHz (~500MB/s per direction), or 64/128-bit words with a PHY in word
+pairs/quads (`USB3PHY(link_words=2|4)`, Gen 2 bandwidth, [usb3-pipe.md](usb3-pipe.md) "Link Layer
+words"). With a Gen 2 capable PHY (`phy.gen2_active`), the Link
 Layer switches to SuperSpeedPlus operation at Gen 2 and the BOS advertises the SuperSpeedPlus USB
 Device Capability.
 
@@ -34,10 +35,14 @@ self.usb3_core.add_csr(with_trace=True) # Status/statistics CSRs, Header Packets
 # first byte on data[7:0], be: valid bytes (full except on the last word), last: end of packet).
 ```
 
-64-bit endpoints (with a `USB3PHY(link_words=2)`): `USB3BulkIN(ept, max_burst, data_width=64)`/
-`USB3BulkOUT(..., data_width=64)`, user streams in `endpoint_layout(64)` (64-bit words, 8-bit `be`).
-32-bit endpoints (the Control Endpoint, Isochronous IN, ...) are adapted by the Protocol Layer
-(`DPPPacker`/`DPPRXAdapter`, `dpp.py`) at their 32-bit rate.
+Parameters, descriptors helpers, endpoint stream layout, debug CSRs and the integration in a SoC:
+[integration.md](integration.md).
+
+64/128-bit endpoints (with a `USB3PHY(link_words=2|4)`): `USB3BulkIN(ept, max_burst,
+data_width=64|128)`/`USB3BulkOUT(..., data_width=64|128)`, user streams in
+`endpoint_layout(64|128)` (64/128-bit words, 8/16-bit `be`). 32-bit endpoints (the Control
+Endpoint, Isochronous IN, ...) are adapted by the Protocol Layer (`DPPPacker`/`DPPRXAdapter`,
+`dpp.py`) at their 32-bit rate.
 
 U1/U2 Link Power Management (`with_lpm=True`, off by default): the BOS advertises non-zero U1/U2
 exit latencies (10us/2047us, hosts only enable U1/U2 with non-zero latencies), the Link Layer accepts
@@ -61,10 +66,10 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB
 
 | Module | File | Description |
 |---|---|---|
-| `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function, U2 Inactivity Timeout), LGO_U3 accepted, LGO_U1/U2 accepted when idle with `with_lpm` (else LXU), LPMA forwarded, U1/U2 exit on pending packets. SuperSpeedPlus operation at Gen 2 (7.2.4.1): 4-bit Header Sequence Numbers, Type 1/Type 2 Tx Header Buffers (4 + 4) and Rx Buffer credits (LCRD1_x/LCRD2_x), Transfer Type in the ACK TPs/DPHs, nullified DPP after a retransmitted DPH, LGOOD_n/LCRD_x from the PHY `source_lc`. 32 or 64-bit DPP words (`data_width` from the PHY: RX words window, TX `DPPSplitter`). |
-| `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order, 32-bit endpoints on a 64-bit Link Layer through `DPPPacker`/`DPPRXAdapter`. |
-| `DPPReader`/`DPPSplitter`/`DPPPacker`/`DPPRXAdapter` | `dpp.py` | Endpoints memories to continuous DPP streams (prefetched), 64-bit DPP words splitting (Link Layer TX), 32 <-> 64-bit DPP adapters. |
-| `USB3BulkIN`/`USB3BulkOUT` | `bulk.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`, 32/64-bit words (`data_width`). |
+| `USB3LinkLayer` | `link.py` | Framing (HP/LC/DPP), CRCs, header flow control: 3-bit Header Sequence Numbers, 4 Rx/Tx Header Buffers, LGOOD_n/LCRD_x, LBAD/LRTY retries (DL bit on resent DPHs), Advertisements on each U0 entry (state kept across Recovery), PENDING_HP/CREDIT_HP timers (Recovery), LUP keep-alive, LMPs (Port Capability/Configuration, Set Link Function, U2 Inactivity Timeout), LGO_U3 accepted, LGO_U1/U2 accepted when idle with `with_lpm` (else LXU), LPMA forwarded, U1/U2 exit on pending packets. SuperSpeedPlus operation at Gen 2 (7.2.4.1): 4-bit Header Sequence Numbers, Type 1/Type 2 Tx Header Buffers (4 + 4) and Rx Buffer credits (LCRD1_x/LCRD2_x), Transfer Type in the ACK TPs/DPHs, nullified DPP after a retransmitted DPH, LGOOD_n/LCRD_x from the PHY `source_lc`. 32, 64 or 128-bit DPP words (`data_width` from the PHY `link_words`: RX words window, TX `DPPSplitter`/`DPPQuadSplitter`). |
+| `USB3ProtocolLayer` | `protocol.py` | Received headers dispatch (in order, broadcast to the endpoints), DPP status pairing/routing, TP responses (with the Device Address of their generation), PING_RESPONSE, TX arbitration, DPPs sent in DPH order, 32-bit endpoints on a 64/128-bit Link Layer through `DPPPacker`/`DPPRXAdapter`. |
+| `DPPReader`/`DPPSplitter`/`DPPQuadSplitter`/`DPPPacker`/`DPPRXAdapter` | `dpp.py` | Endpoints memories to continuous DPP streams (prefetched), 64/128-bit DPP words splitting (Link Layer TX), 32 <-> 64/128-bit DPP adapters. |
+| `USB3BulkIN`/`USB3BulkOUT` | `bulk.py` | Bulk endpoints with bursts (MaxBurst 2-16, packet slots rings), NumP flow control, retries, EOB/NRDY/ERDY, short packets ending bursts, `flush`, 32/64/128-bit words (`data_width`). |
 | `USB3IsoIN` | `iso.py` | Isochronous IN endpoint (MaxBurst 1-16, Mult 0): one transfer per service interval, sent on the host ACK TPs (Seq Num 0, then Seq Num + NumP), LPF on the last packet, zero-length DP when no data, no retry/flow control, `flush`. |
 | `USB3PacketSlots`/`USB3PacketWriter` | `slots.py` | Packet slots of the Bulk/Iso endpoints (n x 1024-byte slots memory, per-slot lengths, slot addressing) and the IN endpoints user-side writer (packets split at Max Packet Size, `flush`, optional `enable` gating and per-transfer LPF). |
 | `USB3EndpointControl` | `control.py` | EP0: standard requests and constant class requests from a table (descriptors ROM), U1/U2 Enable (SET/CLEAR_FEATURE, GET_STATUS), SET/GET_INTERFACE (alternate settings), class/vendor request handler (`with_ep0_handler`). |
@@ -74,11 +79,11 @@ from usb3_core.msc     import USB3MSC    # Mass Storage RAM disk (or storage=USB
 | `USB3ByteUnpacker`/`USB3BytePacker` | `bridge.py` | 32-bit endpoint words (`be`/`last`) to/from byte streams (CDC-ACM). |
 | `USB3UVC(Function)` | `uvc.py` | UVC 1.1 camera: PROBE/COMMIT, payload headers (FID/EOF/PTS/SCR), YUY2 test pattern, several modes, Bulk (default) or Isochronous (`transfer="iso"`) streaming. |
 | `USB3MSC` | `msc.py` | Mass Storage Bulk-Only Transport, SCSI command engine (`USB3MSCSCSI`) on a storage (`USB3MSCStorage` stream interface, `msc_storage.py`): block RAM disk (FAT image, `USB3MSCRAMStorage`) or DRAM disk (LiteDRAM DMAs, `USB3MSCDRAM`). |
-| `USB3Bench` | `bench.py` | Bandwidth benchmark source/checker. |
+| `USB3Bench` | `bench.py` | Bandwidth benchmark counter source/checker (32/64/128-bit words), `bench/usb3_bench.py`. |
 | `USB3CoreTrace`/`USB3LinkTrace` | `trace.py` | Header Packets trace (endpoint filter, circular mode) and Link Layer events trace (Link Commands, Header Packets, U0 entry/exit, Recovery requests with causes), debug. |
-| `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Parallel CRCs (equations generated from the polynoms), CRC-32 on 32 or 64-bit words. |
+| `CRC5/CRC16/CRC16Words/CRC32` | `crc.py` | Re-export of `usb3_pipe/crc.py` (also used by the PHY): parallel CRCs (equations generated from the polynoms), CRC-32 on 32/64/128-bit words (`crc32_cascade`: chained 1-byte stages), Python reference models `crc5`/`crc16`/`crc32`. |
 | Host models | `host_model.py` | Scripted Host gateware model (`sim.py`), Python host models for Migen tests. |
-| Example designs | `examples.py` | `add_usb3_example()`/`USB3_EXAMPLES`: example designs shared by the targets (`bench/acorn.py`, `bench/kc705.py`, `bench/alibaba_xcku3p.py`), [examples.md](examples.md). |
+| Example designs | `examples.py` | `add_usb3_example()`/`USB3_EXAMPLES`: example designs shared by the targets (`bench/acorn.py`, `bench/kc705.py`, `bench/alibaba_xcku3p.py`, `bench/sipeed_tang_mega_138k_pro.py`), [examples.md](examples.md), [targets.md](targets.md). |
 
 ## Control requests handler
 
@@ -182,7 +187,8 @@ Gen 2x1 (Alibaba XCKU3P, UltraScale+ GTY, SFP2USB, Linux xHCI host, `bench` exam
 At Gen 2, Bulk OUT with 64-bit words uses ~87% of the Link Layer bandwidth (8 bytes per cycle at
 125MHz), Bulk IN waits for the host requests (ACK TPs behind the received DPPs). The same Gen 2
 capable design (64-bit) also runs at Gen 1: 441 MB/s IN/OUT with the Gen 2 capability cleared
-(`usb3_gen2_capable` bench CSR).
+(`usb3_gen2_capable` bench CSR). Gen 1 on the Tang Mega 138K Pro (64-bit Link Layer at 62.5MHz,
+`pipe_cd`): README status table and [targets.md](targets.md).
 
 ## Resources
 
@@ -202,9 +208,9 @@ A complete Acorn design (PHY + core + debug + bench) uses ~6000 LUTs (4.5% of th
 
 - Gen 1x1 and Gen 2x1 (SuperSpeedPlus device: no hub/deferred/arbitration weight handling), no
   Gen 1x2/Gen 2x2 Link Layer yet ([gen2-x2-roadmap.md](gen2-x2-roadmap.md)).
-- 64-bit words for the Bulk endpoints only (`link_words=2`): the other endpoints/device classes are
-  32-bit (adapted by the Protocol Layer, at their 32-bit rate); the `cdc_*`/`console`/`uvc*`/`msc*`/
-  `composite` examples use the 32-bit Link Layer.
+- 64/128-bit words for the Bulk endpoints only (`link_words=2|4`): the other endpoints/device
+  classes are 32-bit (adapted by the Protocol Layer, at their 32-bit rate); the `cdc_*`/`console`/
+  `uvc*`/`msc*`/`composite` examples use the 32-bit Link Layer.
 - Bulk/Control endpoints, Isochronous IN (Mult of 0): no Isochronous OUT, no Streams. Interrupt IN
   endpoints can be declared with a Bulk IN endpoint (ex: CDC-ACM notifications, never sent).
 - U1/U2 rejected by default (descriptors advertise 0 exit latencies: hosts disable LPM). With

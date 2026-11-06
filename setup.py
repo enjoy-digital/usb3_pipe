@@ -11,7 +11,7 @@ with open("README.md", "r", encoding="utf-8") as fp:
 setup(
     name                          = "usb3_pipe",
     version                       = "0.1.dev0",
-    description                   = "USB3.0 SuperSpeed PHY (FPGA transceivers) and USB3 Device Core for LiteX",
+    description                   = "USB 3.2 Gen 1x1/Gen 2x1 PHY (FPGA transceivers) and USB3 Device Core for LiteX",
     long_description              = long_description,
     long_description_content_type = "text/markdown",
     author                        = "Florent Kermarrec",

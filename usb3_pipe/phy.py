@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 PHY: USB3PIPE(s) + USB3LTSSM with the Link interface used by a USB3 Link Layer
-(doc/usb3-pipe.md), on one lane (Gen 1x1) or two lanes (Gen 1x2, USB 3.2 6.13, see
-doc/gen2-x2-roadmap.md).
+(doc/usb3-pipe.md): Gen 1x1 (5Gbps), Gen 2x1 (10Gbps on the Gen2PIPE with a gen2_capable SerDes)
+or Gen 1x2 (two lanes, simulation only, USB 3.2 6.13, see doc/gen2-x2-roadmap.md).
 """
 
 from migen import *
@@ -122,14 +122,14 @@ class USB3PHY(LiteXModule):
       Capability LBPM, also used with lanes=1), gen2 is the negotiated Gen 2 operation. With a
       gen2_capable SerDes (raw words, 10Gbps rate), the training continues at 10Gbps on the
       Gen2PIPE (add_gen2: Gen 2 TSEQ/TS1/TS2, SDS/Logical Idle, gen2_active), else at Gen 1 speed.
-      The SuperSpeedPlus Link Layer datapath is not integrated yet (doc/gen2-x2-roadmap.md).
+      The Link Layer switches to SuperSpeedPlus operation on gen2_active (usb3_core.link).
     - with_u1u2=False (Gen 1x1): no U1/U2 Link Power Management (less logic, see USB3LTSSM).
     - pipe_cd (Gen 1x1): USB3PIPE (and SerDes, renamed by the caller) in the pipe_cd clock domain at
       pipe_clk_freq (>= 125MHz), LTSSM and Link interface in sys (add_pipe_cdc): ex. sys at 62.5MHz
       with link_words=2 on FPGAs where the LTSSM/Link Layer can't reach 125MHz. pipe_rx_depth: RX
-      CDC FIFO depth override (default: 256 words pairs with link_words=2, for Bulk OUT bursts).
+      CDC FIFO depth override (default: 256 word pairs with link_words=2, for Bulk OUT bursts).
       link_words=4 (pipe_cd, Gen 2 capable SerDes with raw words wider than 40 bits): Link Layer
-      words quads (128-bit, Gen 2 DPP data up to 16 bytes per cycle), Gen 1 words in pairs. The
+      word quads (128-bit, Gen 2 DPP data up to 16 bytes per cycle), Gen 1 words in pairs. The
       PHY reset is resynchronized to pipe_cd and resets the pipe_cd logic of the PHY (PIPE,
       Gen2PIPE, CDC) as the sys one.
 
@@ -442,7 +442,7 @@ class USB3PHY(LiteXModule):
             self.specials += MultiReg(pipe_s, ltssm_s)
 
     def add_pipe_cdc(self, pipe, pipe_cd, fifo_depth=32, rx_depth=None):
-        """Link words (link_words=1), words pairs (link_words=2) or quads (link_words=4: Gen 2 words
+        """Link words (link_words=1), word pairs (link_words=2) or quads (link_words=4: Gen 2 words
         quads, Gen 1 words in pairs) sys <-> pipe_cd through AsyncFIFOs
         (registered FIFO writes: timings): returns the (sink, source) streams.
 
@@ -501,7 +501,7 @@ class USB3PHY(LiteXModule):
             sync += tx_skid.reset.eq(~pipe.tx_ready)
             pipe_sink, pipe_source = tx_packets.sink, to_pairs.source
 
-            # Gen 2 (Gen2PIPE, words pairs) or Gen 1 words, selected by gen2_active.
+            # Gen 2 (Gen2PIPE, word pairs) or Gen 1 words, selected by gen2_active.
             if hasattr(self, "gen2_pipe"):
                 pipe_source = self.add_gen2_pipe_cdc(pipe, pipe_cd, ext_layout, tx_packets,
                     to_words, to_pairs)
@@ -538,7 +538,7 @@ class USB3PHY(LiteXModule):
         # RX: pipe_cd -> sys.
         self.rx_cdc_buffer = rx_buffer = ClockDomainsRenamer(pipe_cd)(Buffer(layout,
             pipe_ready=True))
-        # Deep (block RAM, read side at the Link Layer frequency): with words pairs at half the PIPE
+        # Deep (block RAM, read side at the Link Layer frequency): with word pairs at half the PIPE
         # frequency, the Link Layer consumes the Header Packets/DPP tails one word per cycle and
         # back-to-back DPH+DPPs (Bulk OUT bursts) accumulate words (~11 per 1024-byte DPP).
         # Gen 2: the Link Layer (64-bit at half the PIPE frequency) reads at about half the received
@@ -616,7 +616,7 @@ class USB3PHY(LiteXModule):
 
     def add_gen2_datapath(self, pipe):
         """Link Layer words: Gen2PIPE (Gen 2 packet framing) while gen2_active, else Gen 1 PIPE
-        (words or words pairs: link_words)."""
+        (words or word pairs: link_words)."""
         layout = [("data", 32), ("ctrl", 4)] if self.link_words == 1 else gen2_link_layout()
         self.sink   = sink   = stream.Endpoint(layout)
         self.source = source = stream.Endpoint(layout)
@@ -724,8 +724,8 @@ class USB3PHY(LiteXModule):
                     Mux(gen2_active, getattr(gen2_pipe, name), getattr(pipe, name)))
 
     def add_gen2_pipe_cdc(self, pipe, pipe_cd, layout, tx_packets, to_words, to_pairs):
-        """Gen 2 words pairs with pipe_cd (see add_pipe_cdc): TX packets to the Gen2PIPE or the
-        Gen 1 words, RX words pairs from the Gen2PIPE or the Gen 1 words (returned), LGOOD_n/LCRD_x
+        """Gen 2 word pairs with pipe_cd (see add_pipe_cdc): TX packets to the Gen2PIPE or the
+        Gen 1 words, RX word pairs from the Gen2PIPE or the Gen 1 words (returned), LGOOD_n/LCRD_x
         Link Commands (source_lc) through their own AsyncFIFO."""
         gen2_pipe = self.gen2_pipe
         gen2      = self.gen2_active_pipe

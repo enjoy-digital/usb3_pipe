@@ -6,6 +6,22 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3-PIPE Verilator simulation (doc/usb3-pipe.md "Simulation", ./sim.py --help).
+
+Two USB3PHYs connected through SerDes models (USB3SerDesModel: 8b/10b, LFPS, polarity, RX word
+shift, ppm offset/SSC, SKP insertion):
+- Host: scripted Link/Protocol Layer model (usb3_core.host_model: link initialization,
+  enumeration, Bulk transfers).
+- Device: USB3 Device Core with a Bulk loopback (--no-core: PRBS Link-Layer stand-ins on both
+  sides).
+
+Options: Gen 1x1 (default), Gen 2x1 (--gen2-capable/--gen2, --link-words 2|4, raw words width),
+Gen 1x2 (--lanes 2), Device LTSSM/Link Layer/Core at half the PIPE frequency (--dev-pipe-cd), Link
+Power Management, Recovery and bursts scenarios of the Host model, VCD trace (--trace).
+
+Build in build/sim; run by test/test_phy.py and test/test_sim_host.py (pytest marker sim).
+"""
+
 import os
 import argparse
 
@@ -857,7 +873,7 @@ def main():
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
-    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit words pairs), 4 (128-bit words quads: --dev-pipe-cd --gen2 --gen2-data-width 80).", choices=["1", "2", "4"])
+    parser.add_argument("--link-words",    default=1,           help="Device Link Layer words: 1 (32-bit), 2 (64-bit word pairs), 4 (128-bit word quads: --dev-pipe-cd --gen2 --gen2-data-width 80).", choices=["1", "2", "4"])
     parser.add_argument("--host-burst-out", default=0, help="Host model rounds of 4 Bulk OUT DPs sent back to back after the script bulk transfers.")
     parser.add_argument("--host-burst-len", default=64, help="Host model burst DPs payload length (bytes).")
     parser.add_argument("--dev-link-ppm",   default=None, type=float, help="Device Link clock (--dev-pipe-cd) from its own phase accumulator with this frequency offset (asynchronous clock domain crossings).")

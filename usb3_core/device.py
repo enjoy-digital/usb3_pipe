@@ -4,11 +4,13 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Device Core (SuperSpeed Gen1 Link and Protocol Layers, Control Endpoint, Bulk/Isochronous
-Endpoints).
+"""USB3 Device Core (USB 3.2 Gen 1x1/Gen 2x1: Link and Protocol Layers, Control Endpoint,
+Bulk/Isochronous Endpoints).
 
 Connects to a USB3 PHY through its Link interface (see usb3_pipe.phy.USB3PHY): any PHY providing the
-same interface can be used.
+same interface can be used. With a Gen 2 capable PHY (phy.ssp_capable), the Link Layer runs the
+SuperSpeedPlus operation when the link is at Gen 2 (phy.gen2_active) and the BOS advertises the
+SuperSpeedPlus USB Device Capability.
 
 Example:
     descriptors = bulk_descriptors(max_burst=8)
@@ -44,6 +46,27 @@ from usb3_core.trace     import USB3CoreTrace, USB3LinkTrace
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
+    """USB3 Device Core: Link Layer + Protocol Layer + Control Endpoint + endpoints on a USB3 PHY.
+
+    Parameters:
+    - phy: USB3PHY (or any module with its Link interface).
+    - sys_clk_freq: Link interface clock frequency (timers).
+    - descriptors: USB3Descriptors (bulk_descriptors(), iso_in_descriptors(), or built from
+      interfaces).
+    - endpoints: USB3BulkIN/USB3BulkOUT/USB3IsoIN list (EP0 is built in); data_width equal to the
+      Link Layer words width (32*link_words), or 32 (adapted by the Protocol Layer).
+    - timer_scale: Link Layer timers scaling (simulation).
+    - with_ep0_handler: class/vendor requests delegated to user logic on ep0 (req_*,
+      doc/usb3-core.md).
+    - with_lpm, crc32_cascade: see the module docstring.
+
+    Interface:
+    - endpoints[i].sink/source: user streams (endpoint_layout(data_width): data, be, last).
+    - ep0: dev_addr, set_interface/interface/alt_setting, requests handler.
+    - ready (U0, link initialized), configured (SET_CONFIGURATION), u1_enable/u2_enable (U1/U2
+      Enable features).
+    - add_csr(): status/statistics CSRs and the optional Header Packets/Link Layer traces.
+    """
     def __init__(self, phy, sys_clk_freq, descriptors, endpoints=None, timer_scale=1,
         with_ep0_handler=False, with_lpm=False, crc32_cascade=False):
         endpoints      = [] if endpoints is None else endpoints
@@ -142,7 +165,7 @@ class USB3DeviceCore(LiteXModule):
                 for i, c in enumerate(causes)]
         )
         # Directed Recovery request (bring-up: Recovery without a link error).
-        self._recovery_request = CSR()
+        self._recovery_request = CSR() # Write: directed Recovery request.
         self.comb += self.link.dbg_recovery_request.eq(self._recovery_request.re)
         # RX errors (16-bit saturating counts): Link Command words rejected (CRC-5/copies), DPPs
         # with a CRC-32 error.

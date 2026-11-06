@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 Link Layer (USB 3.2 chapter 7, SuperSpeed Gen1, Upstream Port).
+"""USB3 Link Layer (USB 3.2 chapter 7, SuperSpeed and SuperSpeedPlus operation, Upstream Port).
 
 - RX: framing parser (Header Packets, Link Commands, Data Packet Payloads), CRCs checks.
 - Header Packets flow control (7.2.4.1): Header Sequence Numbers, Rx/Tx Header Buffers and credits
@@ -55,8 +55,23 @@ PORT_CFG_RESP_DW0 = TYPE_LMP | (LMP_SUB_PORT_CFG_RESP << 5) | (1 << 9)
 # USB3 Link Layer ----------------------------------------------------------------------------------
 
 class USB3LinkLayer(LiteXModule):
+    """USB3 Link Layer on a USB3PHY Link interface (see the module docstring).
+
+    Parameters:
+    - phy: the PHY (sink/source words: data_width = 32*link_words, 32/64/128-bit DPP words).
+    - sys_clk_freq, timer_scale: timers.
+    - ssp_tt: {ept: Transfer Type} of the endpoints for the SuperSpeedPlus ACK TPs/DPHs.
+    - crc32_cascade: cascaded CRC-32 stages (small FPGAs).
+
+    Protocol Layer interface:
+    - rx_hp: received Header Packets (in order); rx_dpp: received DPP words (with ept/setup),
+      rx_dpp_done/rx_dpp_ok.
+    - tx_hp: Header Packets to send; tx_dpp: DPP words to send.
+    - Control/status: lpm_enable, pm_busy, ready, reset; statistics: rx_lbad, tx_retry,
+      recovery_req; dbg_* probes for the traces/throughput profile (bench/usb3_soc.py).
+    """
     def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}, crc32_cascade=False):
-        # PHY Link Layer words (32-bit), words pairs (64-bit, USB3PHY link_words=2) or words quads
+        # PHY Link Layer words (32-bit), word pairs (64-bit, USB3PHY link_words=2) or word quads
         # (128-bit, USB3PHY link_words=4): DPP words of 32, 64 or 128 bits (4, 8 or 16 bytes per
         # cycle in the DPPs).
         lw = len(phy.sink.data)//32
@@ -136,7 +151,7 @@ class USB3LinkLayer(LiteXModule):
         rx_valid = Signal()
         rx_data  = Signal(32, reset_less=True)
         rx_ctrl  = Signal(4, reset_less=True)
-        rx_data1 = Signal(32) # Next word (words pairs: DPP data 8 bytes per cycle).
+        rx_data1 = Signal(32) # Next word (word pairs: DPP data 8 bytes per cycle).
         rx_two   = Signal()   # Words pairs: current and next words consumed (DPP data).
         rx_skip2 = Signal()   # Words pairs: two data words of a skipped DPP consumed.
         rx_hold  = Signal()   # Current word not consumed.
