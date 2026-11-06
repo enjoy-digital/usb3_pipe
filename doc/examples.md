@@ -2,7 +2,8 @@
 
 Example designs (`usb3_core/examples.py`: `loopback`, `wishbone`, `bench`, `cdc_uartbone`, `console`, `uvc`,
 `uvc_iso`, `msc`, `msc_dram`, `composite`) and their host tools, on `bench/acorn.py` (LiteX Acorn
-Baseboard, Acorn CLE-215+, SFP2USB). Build and load (JTAG, SRAM) with:
+Baseboard, Acorn CLE-215+, SFP2USB); the other targets build the same examples
+([targets.md](targets.md)). Build and load (JTAG, SRAM) with:
 
 ```sh
 $ ./bench/acorn.py --build --load --with-jtagbone --example <name> [--cpu-type vexriscv] [--with-lpm]
@@ -46,10 +47,13 @@ $ ./bench/usb3_soak.py --bench 20 --duration 300 --csr-csv build/sqrl_acorn/csr.
 transfers per direction), `--no-check`. With 1MB transfers the host itself limits the Bulk IN rate at
 Gen 2 (~330MB/s): use `--transfer-size 65536` to measure the device.
 
-Build options of the vendor Bulk examples (`loopback`, `bench`):
+Build options of the vendor Bulk examples (`loopback`, `wishbone`, `bench`):
 - `--max-burst 2|4|8|16`: Bulk endpoints Max Burst (default 8).
-- `--link-words 1|2`: Link Layer words, 2: 64-bit Link Layer and Bulk endpoints/`USB3Bench`
-  (`USB3PHY(link_words=2)`, Gen 2 bandwidth).
+- `--link-words 1|2|4`: Link Layer words: 32-bit (default), 64-bit (`USB3PHY(link_words=2)`, Gen 2
+  bandwidth, `pipe_cd` targets) or 128-bit (Gowin Gen 2 builds), with the Bulk endpoints/`USB3Bench`
+  at the same width ([usb3-pipe.md](usb3-pipe.md) "Link Layer words").
+- `--lean` (all the examples): no PHY debug CSRs, throughput profile and core trace (timings on
+  small/slow FPGAs, [debugging-guide.md](debugging-guide.md)).
 
 With the `bench` example, the SoC also has a throughput profile (`usb3_profile_control`: clear/run,
 `usb3_profile`: cycles counters of `USB3_PROFILE_EVENTS` in `bench/usb3_soc.py`: Link Layer TX
@@ -79,7 +83,7 @@ after a `usb3_debug` PHY reset), RX/TX snapshots and counters ([debugging-guide.
 
 ## `--with-lpm`: U1/U2 Link Power Management
 
-With `--with-lpm`, the vendor Bulk examples (`loopback`, `bench`) are built with
+With `--with-lpm`, the vendor Bulk examples (`loopback`, `wishbone`, `bench`) are built with
 `USB3DeviceCore(..., with_lpm=True)`: the BOS advertises non-zero U1/U2 exit latencies and the device
 accepts the host U1/U2 entries when idle (see [usb3-core.md](usb3-core.md)). Off by default (U1/U2
 rejected, hosts disable LPM); validated in simulation (`./sim.py --host-lpm`), not on hardware yet.
@@ -195,11 +199,14 @@ ffplay/VLC while using `litex_term /dev/ttyACM0`.
 
 ## Other targets
 
-`bench/kc705.py` (KC705, Kintex7 GTX, `--connector sfp|sma`) and `bench/alibaba_xcku3p.py` (Alibaba
-Cloud XCKU3P, Kintex Ultrascale+ GTY, `--sfp 0|1`, `--refclk sfp|clk100`) share the SoC
-(`bench/usb3_soc.py`: example designs and common options `--example`, `--cpu-type`, `--with-lpm`,
-`--max-burst`, `--link-words`, `--with-serdes-debug`, `--with-analyzer`). Results above are from the
-Acorn, except the Gen 2 section (XCKU3P).
+`bench/kc705.py` (KC705, Kintex7 GTX, `--connector sfp|sma`), `bench/alibaba_xcku3p.py` (Alibaba
+Cloud XCKU3P, Kintex UltraScale+ GTY, `--sfp 0|1`, `--refclk sfp|clk100`, `--gen2-capable`) and
+`bench/sipeed_tang_mega_138k_pro.py` (Sipeed Tang Mega 138K Pro, Gowin GW5AST-138B GTR12, `--sfp
+0|1`, `--refclk 100M|125M`, Gen 2 bring-up options) share the SoC (`bench/usb3_soc.py`: example
+designs and common options `--example`, `--cpu-type`, `--with-lpm`, `--max-burst`, `--link-words`,
+`--lean`, `--with-serdes-debug`, `--with-analyzer`). Per-board guide (adapter position, JTAG,
+bridge, loading, options): [targets.md](targets.md). Results above are from the Acorn, except the
+Gen 2 section (XCKU3P).
 
 - XCKU3P: validated on hardware with the SFP2USB adapter in the NIC1 SFP cage (`--sfp 0`, default),
   GTY reference clock from the SFP MGT clock (156.25MHz, `--refclk sfp`, default): bench example IN
@@ -207,6 +214,9 @@ Acorn, except the Gen 2 section (XCKU3P).
   on this board, detected by the LTSSM). Gen 2 (10Gbps) with `--gen2-capable`, see above. JTAG:
   Digilent JTAG-HS2 (`openFPGALoader -c digilent_hs2`,
   OpenOCD `cpld/xilinx-xcu.cfg` with `CHIP XCKU3P` for JTAGBone).
+- Tang Mega 138K Pro: validated at Gen 1 with the SFP2USB adapter in SFP0 (`bench` example, 64-bit
+  Link Layer at 62.5MHz: IN 372MB/s, OUT 433MB/s, full duplex 262 + 383MB/s, 0 errors, README
+  status table); bitstream loaded with openFPGALoader (`--load` expects a `.bit`).
 - KC705: build-tested, hardware validation in progress.
 
 | Target | Build directory | Not available |
@@ -214,3 +224,4 @@ Acorn, except the Gen 2 section (XCKU3P).
 | `bench/acorn.py` | `build/sqrl_acorn` | |
 | `bench/kc705.py` | `build/xilinx_kc705` | `msc_dram` (no DRAM controller) |
 | `bench/alibaba_xcku3p.py` | `build/alibaba_xcku3p` | `msc_dram` (no DRAM controller), UARTBone (JTAGBone only) |
+| `bench/sipeed_tang_mega_138k_pro.py` | `build/sipeed_tang_mega_138k_pro` | `msc_dram` (no DRAM controller), `--load` (Gowin `.fs`: openFPGALoader), throughput profile and 32-bit Link Layer with `pipe_cd` (default 62.5MHz `sys`) |
