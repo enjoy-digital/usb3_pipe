@@ -317,6 +317,23 @@ class Buffer(LiteXModule):
             pipeline.reverse()
         self.pipeline = stream.Pipeline(sink, *pipeline, source)
 
+class FirstFromLast(LiteXModule):
+    """Stream first flag derived from the last flag (first: the first word, then the word after a
+    last): for sources with only an end of packet flag (ex: AXI-Stream tlast), to a sink using the
+    packets delimiters (ex: TXSKPInserter, SKP Ordered Sets only between the packets)."""
+    def __init__(self, layout):
+        self.sink   = sink   = stream.Endpoint(layout)
+        self.source = source = stream.Endpoint(layout)
+
+        # # #
+
+        in_packet = Signal()
+        self.comb += [
+            sink.connect(source, omit={"first"}),
+            source.first.eq(~in_packet),
+        ]
+        self.sync += If(sink.valid & sink.ready, in_packet.eq(~sink.last))
+
 # Endianness Swap ----------------------------------------------------------------------------------
 
 class EndiannessSwap(LiteXModule):
