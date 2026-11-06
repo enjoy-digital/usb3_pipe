@@ -25,6 +25,12 @@ from usb3_core.common import endpoint_layout
 # USB3 Bench ---------------------------------------------------------------------------------------
 
 class USB3Bench(LiteXModule):
+    """Bulk bandwidth benchmark streams (see the module docstring): source (counter words to a Bulk
+    IN endpoint, source_enable), sink (words from a Bulk OUT endpoint, checked against the expected
+    counter), source_words/sink_words/sink_errors counters cleared by clear. data_width: 32/64/128-
+    bit endpoint words, with_csr: control (source_enable, clear) and counters CSRs read by
+    bench/usb3_bench.py.
+    """
     def __init__(self, with_csr=True, data_width=32):
         assert data_width in [32, 64, 128]
         n = data_width//32 # Counter words per word.

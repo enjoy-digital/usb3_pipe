@@ -46,6 +46,21 @@ from usb3_core.trace     import USB3CoreTrace, USB3LinkTrace
 # USB3 Device Core ---------------------------------------------------------------------------------
 
 class USB3DeviceCore(LiteXModule):
+    """USB3 Device Core: Link Layer + Protocol Layer + Control Endpoint + endpoints on a USB3 PHY.
+
+    phy: USB3PHY (or any module with its Link interface), sys_clk_freq: Link interface clock
+    frequency (timers), descriptors: USB3Descriptors (bulk_descriptors(), iso_in_descriptors(), or
+    built from interfaces), endpoints: USB3BulkIN/USB3BulkOUT/USB3IsoIN list (EP0 is built in;
+    data_width equal to the Link Layer words width, 32*link_words, or 32: adapted by the Protocol
+    Layer), timer_scale: Link Layer timers scaling (simulation), with_ep0_handler: class/vendor
+    requests delegated to user logic on ep0 (req_*, doc/usb3-core.md), with_lpm/crc32_cascade: see
+    the module docstring.
+
+    Interface: endpoints[i].sink/source user streams (endpoint_layout(data_width): data, be, last),
+    ep0 (dev_addr, set_interface/interface/alt_setting, requests handler), ready (U0, link
+    initialized), configured (SET_CONFIGURATION), u1_enable/u2_enable (U1/U2 Enable features).
+    add_csr(): status/statistics CSRs and the optional Header Packets/Link Layer traces.
+    """
     def __init__(self, phy, sys_clk_freq, descriptors, endpoints=None, timer_scale=1,
         with_ep0_handler=False, with_lpm=False, crc32_cascade=False):
         endpoints      = [] if endpoints is None else endpoints

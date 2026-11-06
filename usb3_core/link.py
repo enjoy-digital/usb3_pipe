@@ -55,6 +55,17 @@ PORT_CFG_RESP_DW0 = TYPE_LMP | (LMP_SUB_PORT_CFG_RESP << 5) | (1 << 9)
 # USB3 Link Layer ----------------------------------------------------------------------------------
 
 class USB3LinkLayer(LiteXModule):
+    """USB3 Link Layer on a USB3PHY Link interface (see the module docstring).
+
+    phy: the PHY (sink/source words: data_width = 32*link_words, 32/64/128-bit DPP words),
+    sys_clk_freq/timer_scale: timers, ssp_tt: {ept: Transfer Type} of the endpoints for the
+    SuperSpeedPlus ACK TPs/DPHs, crc32_cascade: cascaded CRC-32 stages (small FPGAs).
+
+    Protocol Layer interface: rx_hp (received Header Packets, in order), rx_dpp (received DPP words
+    with ept/setup) with rx_dpp_done/rx_dpp_ok, tx_hp (Header Packets to send), tx_dpp (DPP words
+    to send). Control/status: lpm_enable, pm_busy, ready, reset; statistics: rx_lbad, tx_retry,
+    recovery_req; dbg_* probes for the traces/throughput profile (bench/usb3_soc.py).
+    """
     def __init__(self, phy, sys_clk_freq, timer_scale=1, ssp_tt={}, crc32_cascade=False):
         # PHY Link Layer words (32-bit), words pairs (64-bit, USB3PHY link_words=2) or words quads
         # (128-bit, USB3PHY link_words=4): DPP words of 32, 64 or 128 bits (4, 8 or 16 bytes per
