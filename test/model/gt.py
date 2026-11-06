@@ -12,13 +12,13 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.serdes   import USB3SerDes
 from usb3_pipe.datapath import RXIdleFilter
 
 # Transceiver Model --------------------------------------------------------------------------------
 
-class GTModel(LiteXModule):
-    """Transceiver model: SerDes interface (usb3_pipe.serdes.USB3SerDes attributes) of
-    USB3PIPE/USB3PHY/LFPSUnit.
+class GTModel(USB3SerDes):
+    """Transceiver model: the USB3SerDes interface (no transceiver) of USB3PIPE/USB3PHY/LFPSUnit.
 
     tx_ready: TX always ready (like the GT, which also transmits the last presented word again when
               the stream is not valid, see wire_monitor), RX only models leave it low.
@@ -28,27 +28,9 @@ class GTModel(LiteXModule):
     rx_errors is held at 1 (no decode errors model: Warm Reset LFPS detected on the electrical idle
     only)."""
     def __init__(self, tx_ready=True):
-        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
-        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
-
-        self.enable = Signal(reset=1) # i
-        self.ready  = Signal(reset=1) # o
-
-        self.tx_polarity = Signal()   # i
-        self.tx_idle     = Signal()   # i
-        self.tx_pattern  = Signal(20) # i
-        self.tx_lfps     = Signal()   # i
-
-        self.rx_polarity = Signal()        # i
-        self.rx_idle     = Signal()        # o
-        self.rx_errors   = Signal(reset=1) # o
-
-        self.tx_skp_enable = Signal(reset=1) # i
-        self.rx_align      = Signal()        # i
-        self.rx_reset      = Signal()        # i
-
-        self.rx_idle_stretch = 0
-        self.xcvr_name       = None
+        USB3SerDes.__init__(self)
+        self.ready     = Signal(reset=1) # o
+        self.rx_errors = Signal(reset=1) # o
 
         # # #
 

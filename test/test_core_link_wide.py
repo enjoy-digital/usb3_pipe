@@ -30,6 +30,7 @@ LENGTHS = [0, 1, 3, 4, 5, 7, 8, 9, 12, 13, 64, 1023, 1024]
 class LinkDUT(LiteXModule):
     def __init__(self, link_words):
         self.phy = phy = PHYStandIn()
+        phy.ssp_capable = True
         phy.gen2_active = Signal(reset=1)
         if link_words > 1:
             phy.sink   = stream.Endpoint(link_pairs_layout(link_words))

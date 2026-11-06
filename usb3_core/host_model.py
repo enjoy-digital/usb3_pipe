@@ -31,6 +31,7 @@ from litex.gen.genlib.misc import WaitTimer
 from litex.soc.interconnect import stream
 
 from usb3_pipe.crc    import CRC5, crc5, crc16, crc32
+from usb3_pipe.phy    import USB3PHY_STATUS, USB3PHY_LINK_CTRL
 from usb3_core.common import phy_layout, SHP, SDP, SLC, END, EPF
 
 # Symbols <-> Link Layer Words ---------------------------------------------------------------------
@@ -982,12 +983,19 @@ def parse_sim_output(output, script):
 # (bench/usb3_resources.py).
 
 class PHYStandIn:
-    """USB3PHY Link interface stand-in."""
+    """USB3PHY Link interface stand-in: the status/control signals (USB3PHY_STATUS,
+    USB3PHY_LINK_CTRL) and the capabilities of a Gen 1 PHY without pipe_cd
+    (USB3PHY_LINK_INTERFACE)."""
     def __init__(self):
         self.source = stream.Endpoint(phy_layout())
         self.sink   = stream.Endpoint(phy_layout())
-        for name in ["u0", "u1", "u2", "polling_idle", "hot_reset", "recovery", "lgo_u1", "lgo_u2",
-            "lgo_u3", "lpma", "tx_lau", "tx_lxu", "exit_u1_req", "exit_u2_req", "directed_recovery",
-            "link_activity"]:
+        for name in USB3PHY_STATUS + [name for name, _ in USB3PHY_LINK_CTRL]:
             setattr(self, name, Signal(name=name))
-        self.u2_timeout = Signal(8, name="u2_timeout")
+        self.u2_timeout    = Signal(8, name="u2_timeout")
+        self.link_words    = 1
+        self.with_u1u2     = True
+        self.ssp_capable   = False
+        self.gen2_active   = Constant(0, 1)
+        self.source_lc     = None
+        self.rx_throttle   = Constant(0, 1)
+        self.rx_t2_credits = 4
