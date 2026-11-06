@@ -39,6 +39,8 @@ from usb3_pipe.lfps   import rounded_cycles
 # - 20ns gap rule / electrical parameters are not modelled. Concurrent U1 exit is modelled
 #   (both partners send a full 900ns burst).
 # - U3 DS failure retry limited to 2 retries then eSS.Inactive.
+# - eSS.Inactive exits to Polling after teSSInactiveQuietTimeout (12ms): automatic re-training,
+#   without waiting for a Warm Reset (benign: an xHCI host issues one on an inactive port).
 
 @ResetInserter()
 class USB3LTSSM(LiteXModule):
