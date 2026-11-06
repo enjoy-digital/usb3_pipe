@@ -11,8 +11,7 @@ from migen import *
 
 from litex.gen import *
 
-from usb3_core.crc        import CRC5, CRC16, CRC16Words, CRC32
-from usb3_core.host_model import crc5, crc16, crc32
+from usb3_pipe.crc import CRC5, CRC16, CRC16Words, CRC32, crc5, crc16, crc32
 
 class TestCoreCRC(unittest.TestCase):
     def test_crc5(self):

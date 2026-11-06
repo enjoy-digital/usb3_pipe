@@ -7,9 +7,9 @@
 """USB3 byte streams helpers: 32-bit endpoint words (last/be) to/from bytes (CDC-ACM...)."""
 
 from migen import *
-from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
+from litex.gen.genlib.misc import WaitTimer
 
 from litex.soc.interconnect import stream
 

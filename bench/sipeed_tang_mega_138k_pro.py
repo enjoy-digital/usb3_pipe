@@ -29,7 +29,7 @@ from usb3_pipe.common   import COM, K, BLOCK_HEADER_DATA
 from usb3_pipe.datapath import Gen2RX, Gen2RXDatapath, GEN2_IDLE_BLOCK, GEN2_RX_COUNTERS
 from usb3_pipe.framing  import Gen2LinkRX, SHP, SLC
 from usb3_pipe.debug    import Gen2RXDebug
-from usb3_core.crc      import CRC16Words, CRC5
+from usb3_pipe.crc      import CRC16Words, CRC5
 
 from usb3_soc import USB3BaseSoC, add_usb3_device, usb3_analyzer
 from usb3_soc import usb3_soc_args, usb3_soc_argdict, usb3_soc_build

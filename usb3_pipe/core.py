@@ -162,7 +162,7 @@ class USB3PIPE(LiteXModule):
             ]
 
         # TS ---------------------------------------------------------------------------------------
-        self.ts = ts = TSUnit(serdes=serdes, drive_sink=False)
+        self.ts = ts = TSUnit(serdes=serdes)
         self.comb += [
             # TS Control.
             ts.tx_enable.eq(self.ts_tx_enable),

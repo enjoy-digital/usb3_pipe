@@ -22,49 +22,18 @@ tests are in test/model/host.py.
 """
 
 import random
-import zlib
 
 from migen import *
-from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
+from litex.gen.genlib.misc import WaitTimer
 
 from litex.soc.interconnect import stream
 
-from usb3_core.common import phy_layout
-from usb3_core.crc    import CRC5
-
-# CRCs (USB 3.2 7.2.1/7.2.2: bits transmitted LSB first, inverted remainder) -----------------------
-
-def _crc(data_bits, width, poly, init):
-    crc = init
-    for bit in data_bits:
-        msb = (crc >> (width - 1)) & 0x1
-        crc = (crc << 1) & ((1 << width) - 1)
-        if bit ^ msb:
-            crc ^= poly
-    crc ^= (1 << width) - 1
-    return int("{:0{}b}".format(crc, width)[::-1], 2)
-
-def crc5(value, nbits=11):
-    """CRC-5 of Link Commands/Link Control Words (x^5+x^2+1)."""
-    return _crc([(value >> i) & 0x1 for i in range(nbits)], 5, 0x05, 0x1f)
-
-def crc16(data):
-    """CRC-16 of Header Packets (x^16+x^12+x^3+x+1)."""
-    return _crc([(byte >> i) & 0x1 for byte in data for i in range(8)], 16, 0x100b, 0xffff)
-
-def crc32(data):
-    """CRC-32 of Data Packet Payloads."""
-    return zlib.crc32(bytes(data))
+from usb3_pipe.crc    import CRC5, crc5, crc16, crc32
+from usb3_core.common import phy_layout, SHP, SDP, SLC, END, EPF
 
 # Symbols <-> Link Layer Words ---------------------------------------------------------------------
-
-SHP = 0xfb # K27.7.
-SDP = 0x5c # K28.2.
-SLC = 0xfe # K30.7.
-END = 0xfd # K29.7.
-EPF = 0xf7 # K23.7.
 
 # Byte order: Link Layer words, first symbol in data[31:24]/ctrl[3] (USB3PHY source/sink, after
 # USB3PIPE's EndiannessSwap). test/common.py's words_to_symbols/symbols_to_words use the PIPE/SerDes

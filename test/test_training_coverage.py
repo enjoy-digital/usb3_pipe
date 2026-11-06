@@ -67,6 +67,8 @@ def ts_unit(loopback=False):
     serdes = SerDesStub(loopback)
     dut    = TSUnit(serdes)
     dut.submodules += serdes
+    # Ordered Sets on the SerDes sink while transmitted (as the USB3PIPE TX selection).
+    dut.comb += If(dut.tx_active, dut.source.connect(serdes.sink))
     return dut, serdes
 
 def tx_record(dut, serdes, steps, ready_rate=1.0, seed=0):

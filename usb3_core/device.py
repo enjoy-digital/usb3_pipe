@@ -25,7 +25,7 @@ when packets are to be transmitted. Device initiated U1/U2 entry is not supporte
 tracked/reported). Without, LGO_U1/LGO_U2 are rejected (U1/U2 not used by the host).
 
 crc32_cascade: Link Layer CRC-32s with the 1 to 4 bytes results from chained 1-byte stages (less
-logic, deeper paths, see usb3_core.crc.CRC32): for small FPGAs.
+logic, deeper paths, see usb3_pipe.crc.CRC32): for small FPGAs.
 """
 
 from migen import *
