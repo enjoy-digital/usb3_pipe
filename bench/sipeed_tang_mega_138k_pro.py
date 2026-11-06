@@ -31,7 +31,7 @@ from usb3_pipe.framing  import Gen2LinkRX, SHP, SLC
 from usb3_pipe.debug    import Gen2RXDebug
 from usb3_pipe.crc      import CRC16Words, CRC5
 
-from usb3_soc import USB3BaseSoC, add_usb3_device, usb3_analyzer
+from usb3_soc import USB3BaseSoC, add_usb3_device, usb3_analyzer, CountSync
 from usb3_soc import usb3_soc_args, usb3_soc_argdict, usb3_soc_build
 
 class _CRG(LiteXModule):
@@ -302,7 +302,7 @@ class USB3SoC(USB3BaseSoC):
             c  = Signal(32)
             cs = Signal(32)
             self.sync.tx += If(e, c.eq(c + 1))
-            self.specials += MultiReg(c, cs) # Quasi-static reads only.
+            self.submodules += CountSync(c, cs, "tx")
             counts.append(cs)
         self.add_indexed_status("tx_raw_counts", Cat(*counts))
 
@@ -436,7 +436,7 @@ class USB3SoC(USB3BaseSoC):
         counts = []
         for name, _ in GEN2_RX_COUNTERS:
             c = Signal(32)
-            self.specials += MultiReg(getattr(phy.gen2_pipe.rx, f"{name}_count"), c)
+            self.submodules += CountSync(getattr(phy.gen2_pipe.rx, f"{name}_count"), c, "rx")
             counts.append(c)
         self.add_indexed_status("gen2_rx_counts", Cat(*counts))
         # PHY Gen 2 RX framing (sys): errors (unknown packet starts), corrected starts (RESYNC), and
@@ -464,7 +464,7 @@ class USB3SoC(USB3BaseSoC):
         self.sync.rx += If(~gtr12.rx_valid, count.eq(count + 1))
         self.usb3_gtr12_rx_invalid = CSRStatus(32,
             description="GTR12 RX_VLD_OUT low cycles (rx clock).")
-        self.specials += MultiReg(count, self.usb3_gtr12_rx_invalid.status)
+        self.submodules += CountSync(count, self.usb3_gtr12_rx_invalid.status, "rx")
 
     def add_lgood_latency(self):
         """Header Packets acknowledgement latency (bring-up): durations of the PENDING_HP_TIMER runs
