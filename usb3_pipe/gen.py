@@ -288,6 +288,12 @@ class _CRG(LiteXModule):
 # Core ---------------------------------------------------------------------------------------------
 
 class USB3PIPECore(SoCMini):
+    """Standalone core (SoCMini, no CPU): CRG (sys from the clk port, OOB clock PLL), SerDes
+    (PHYS[config["phy"]]) and USB3PHY, with the Device Core when config["usb_core"]
+    (add_usb_core), on a bare platform whose IOs are the core ports. ports (get_ports(config)) lists
+    the top-level ports: AXI-Stream symbol streams or Bulk IN/OUT AXI-Stream endpoints, LTSSM
+    status, optional Link-Layer control, documented in the generated <name>.md
+    (doc/standalone-core.md)."""
     def __init__(self, platform, config):
         self.ports = ports = get_ports(config)
         platform.add_extension(get_ios(ports))

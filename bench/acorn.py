@@ -6,6 +6,14 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3-PIPE on the SQRL Acorn CLE-215+ (Artix7 GTP) in a LiteX Acorn Baseboard (Mini by default,
+--variant standard), SFP2USB adapter in the SFP cage: Gen 1x1 (5Gbps), main validation target
+(doc/targets.md). GTP reference clock from the 200MHz oscillator (GTGREFCLK0, no PCIe host clock:
+doc/debugging-guide.md), sys at 125MHz, UARTBone by default or JTAGBone (--with-jtagbone, baseboard
+FT4232H), optional DDR3 (--with-dram, msc_dram example) with a VexRiscv CPU. Build and load (JTAG,
+volatile): ./bench/acorn.py --build --load [--example <name>], shared options: bench/usb3_soc.py.
+"""
+
 import argparse
 
 import common # Repository root on the path.

@@ -32,6 +32,9 @@ def link_layout():
 # Lane Striper -------------------------------------------------------------------------------------
 
 class LaneStriper(LiteXModule):
+    """TX data striping (6.13.4): sink (64-bit link words, link_layout) -> sources[0]/sources[1]
+    (32-bit lane words, lane_layout): even symbols on Lane 0, odd symbols on Lane 1, both lanes
+    accepting the words in lockstep (sink.ready = both sources ready)."""
     def __init__(self):
         self.sink    = sink    = stream.Endpoint(link_layout())
         self.sources = sources = [stream.Endpoint(lane_layout()) for _ in range(2)]
@@ -52,6 +55,9 @@ class LaneStriper(LiteXModule):
 # Lane Destriper -----------------------------------------------------------------------------------
 
 class LaneDestriper(LiteXModule):
+    """RX data destriping (6.13.4): sinks[0]/sinks[1] (32-bit lane words, deskewed: a word is
+    consumed on both lanes together) -> source (64-bit link words, link_layout, Lane 0 symbols on
+    the even positions)."""
     def __init__(self):
         self.sinks  = sinks  = [stream.Endpoint(lane_layout()) for _ in range(2)]
         self.source = source = stream.Endpoint(link_layout())

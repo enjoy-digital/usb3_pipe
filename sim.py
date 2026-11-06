@@ -6,6 +6,18 @@
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3-PIPE Verilator simulation (doc/usb3-pipe.md "Simulation", ./sim.py --help).
+
+Two USB3PHYs connected through SerDes models (USB3SerDesModel: 8b/10b, LFPS, polarity, RX word
+shift, ppm offset/SSC, SKP insertion): the Host runs the scripted Link/Protocol Layer model
+(usb3_core.host_model: link initialization, enumeration, Bulk transfers), the Device the USB3 Device
+Core with a Bulk loopback (or PRBS Link-Layer stand-ins on both sides with --no-core). Options:
+Gen 1x1 (default), Gen 2x1 (--gen2-capable/--gen2, --link-words 2|4, raw words width), Gen 1x2
+(--lanes 2), Device LTSSM/Link Layer/Core at half the PIPE frequency (--dev-pipe-cd), Link Power
+Management, Recovery and bursts scenarios of the Host model, VCD trace (--trace). Build in
+build/sim; run by test/test_phy.py and test/test_sim_host.py (pytest marker sim).
+"""
+
 import os
 import argparse
 

@@ -6,6 +6,14 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+"""USB3-PIPE on the Alibaba Cloud XCKU3P board (Kintex UltraScale+ GTY): Gen 1x1 (5Gbps) and
+Gen 2x1 (10Gbps, --gen2-capable: QPLL at 10Gbps, Gen 2 negotiated on a USB 3.2 Gen 2 host port)
+through a SFP cage (SFP2USB adapter, --sfp 0: NIC1), GTY reference clock from the SFP MGT clock
+(156.25MHz) or the 100MHz oscillator (--refclk), sys at 125MHz, JTAGBone only (no UART). Main Gen 2
+validation target (doc/targets.md). Build and load (JTAG, volatile): ./bench/alibaba_xcku3p.py
+--build --load [--example <name>], shared options: bench/usb3_soc.py.
+"""
+
 import argparse
 
 import common # Repository root on the path.
