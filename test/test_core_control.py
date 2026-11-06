@@ -49,11 +49,13 @@ class DUT(LiteXModule):
             )
         ]
         self.comb += [
-            ep0.req_stall.eq(ep0.req_valid & (ep0.req_request != GET_CUR) & (ep0.req_request != SET_CUR)),
+            ep0.req_stall.eq(ep0.req_valid & (ep0.req_request != GET_CUR) &
+                (ep0.req_request != SET_CUR)),
             ep0.req_in.valid.eq(active),
             ep0.req_in.data.eq(Array(words)[index]),
             ep0.req_in.last.eq(index == len(words) - 1),
-            ep0.req_in.be.eq(Mux(index == len(words) - 1, 0b0011, 0b1111)), # 34 bytes: 2 bytes in the last word.
+            # 34 bytes: 2 bytes in the last word.
+            ep0.req_in.be.eq(Mux(index == len(words) - 1, 0b0011, 0b1111)),
             ep0.req_out.ready.eq(1),
         ]
 
@@ -99,7 +101,8 @@ class TestCoreControl(unittest.TestCase):
         # Class SET_CUR with a 7 bytes Data stage: data forwarded to the handler.
         payload = [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70]
         def scenario(host, out):
-            ok = yield from pyhost_control_out(host, setup_packet(0x21, SET_CUR, 0x0100, 1, 7), payload)
+            ok = yield from pyhost_control_out(host,
+                setup_packet(0x21, SET_CUR, 0x0100, 1, 7), payload)
             self.assertTrue(ok)
             self.assertEqual(out, payload)
         self.run_scenario(scenario)

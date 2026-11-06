@@ -47,11 +47,11 @@ class USB3Endpoint(LiteXModule):
         self.tx_hp        = stream.Endpoint(tx_header_layout()) # o
         self.tx_dpp       = stream.Endpoint(dpp_layout(data_width)) # o
         self.rx_dpp       = stream.Endpoint(dpp_layout(data_width)) # i
-        self.rx_dpp_done  = Signal() # i
-        self.rx_dpp_ok    = Signal() # i
-        self.rx_dpp_setup = Signal() # i: Received DPP is a SETUP DP (Control Endpoint).
-        self.landed       = Signal() # o: rx DPP landed in a slot (with rx_dpp_done).
-        self.pm_busy      = Signal() # o: U1/U2 entry rejected (ex: ACK TP expected, 7.2.4.2.2).
+        self.rx_dpp_done  = Signal()   # i
+        self.rx_dpp_ok    = Signal()   # i
+        self.rx_dpp_setup = Signal()   # i: Received DPP is a SETUP DP (Control Endpoint).
+        self.landed       = Signal()   # o: rx DPP landed in a slot (with rx_dpp_done).
+        self.pm_busy      = Signal()   # o: U1/U2 entry rejected (ex: ACK TP expected, 7.2.4.2.2).
 
         # Control.
         self.reset_seq = Signal() # i: Seq Numbers reset (SET_CONFIGURATION, CLEAR_FEATURE(HALT)).

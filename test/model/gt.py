@@ -8,13 +8,15 @@
 
 from migen import *
 
+from litex.gen import *
+
 from litex.soc.interconnect import stream
 
 from usb3_pipe.datapath import RXIdleFilter
 
 # Transceiver Model --------------------------------------------------------------------------------
 
-class GTModel(Module):
+class GTModel(LiteXModule):
     """Transceiver model: SerDes interface (usb3_pipe.serdes.USB3SerDes attributes) of
     USB3PIPE/USB3PHY/LFPSUnit.
 
@@ -72,9 +74,9 @@ class LFPSSerDesStub(GTModel):
     """LFPS face of the SerDes (LFPSUnit serdes interface): GTModel with the RX electrical idle
     driven by the test.
 
-    with_rx_idle_filter: raw transceiver electrical idle (rx_elecidle) through the RX idle filter, as
-                         in the K7/A7 SerDes (RXELECIDLE + RXIdleFilter), rx_idle driven directly
-                         otherwise.
+    with_rx_idle_filter: raw transceiver electrical idle (rx_elecidle) through the RX idle filter,
+                         as in the K7/A7 SerDes (RXELECIDLE + RXIdleFilter), rx_idle driven
+                         directly otherwise.
     with_rx_errors     : rx_errors driven by the test (8b/10b errors, Warm Reset detection), else
                          held at 1 (electrical idle detection only)."""
     def __init__(self, with_rx_idle_filter=False, with_rx_errors=False):

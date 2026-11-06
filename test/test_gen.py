@@ -34,7 +34,7 @@ def get_verilog_ports(filename, module):
 
 class TestGen(unittest.TestCase):
     def generate(self, config, name="usb3_pipe_core", *subdir):
-        output_dir = str(get_output_dir(self, *subdir))
+        output_dir  = str(get_output_dir(self, *subdir))
         config_file = os.path.join(output_dir, "config.yml")
         with open(config_file, "w") as f:
             yaml.dump(config, f)

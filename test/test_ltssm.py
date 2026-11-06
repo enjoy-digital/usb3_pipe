@@ -14,7 +14,6 @@ from usb3_pipe.ltssm import USB3LTSSM
 
 from test.model.ltssm import LTSSMTestCase
 
-
 class TestLTSSM(LTSSMTestCase):
     def test_polling_lfps_requires_minimum_bursts(self):
         def generator(dut):

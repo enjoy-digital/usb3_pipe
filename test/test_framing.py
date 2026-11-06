@@ -87,7 +87,7 @@ def random_units(rng, n, short=False):
 
 # Loopback -----------------------------------------------------------------------------------------
 
-class Gen2FramingLoopback(Module):
+class Gen2FramingLoopback(LiteXModule):
     """Gen2TXFramer -> units FIFO (store and forward) -> Gen2TXPacker -> Data Blocks (Gen2TX model:
     a block every 3 cycles at most, Idle Data Blocks when no block) -> Gen2RXFraming.
 
@@ -115,7 +115,8 @@ class Gen2FramingLoopback(Module):
         units_written = Signal(16)
         units_started = Signal(16)
         self.sync += [
-            If(fifo.sink.valid & fifo.sink.ready & fifo.sink.last, units_written.eq(units_written + 1)),
+            If(fifo.sink.valid & fifo.sink.ready & fifo.sink.last,
+                units_written.eq(units_written + 1)),
             If(packer.unit_end, units_started.eq(units_started + 1)),
         ]
         self.comb += packer.units_available.eq(units_written != units_started)
@@ -151,7 +152,7 @@ class Gen2FramingLoopback(Module):
         # Gen2TX model: block every 3 cycles (1.65 with 16/32 bytes), idle block when none.
         self.block       = block = Signal(128)
         self.block_valid = block_valid = Signal()
-        self.slot = slot = Signal()
+        self.slot        = slot = Signal()
         if nbytes >= 16:
             # 132-bit blocks from 80-bit words: a block when the bits count reaches 132.
             acc = Signal(8)
@@ -208,13 +209,13 @@ class Gen2FramingLoopback(Module):
 class TestGen2Framing(unittest.TestCase):
     def loopback_test(self, seed, n_units=24, slots=False, short=False, pairs=False, nbytes=8,
         gaps=0.2, nwords=2):
-        rng   = random.Random(seed)
-        units = random_units(rng, n_units, short=short)
-        words = [w for u in units for w in u]
-        out   = []
-        lcs   = []
+        rng      = random.Random(seed)
+        units    = random_units(rng, n_units, short=short)
+        words    = [w for u in units for w in u]
+        out      = []
+        lcs      = []
         overflow = []
-        dut   = Gen2FramingLoopback(slots=slots, nbytes=nbytes, nwords=nwords)
+        dut      = Gen2FramingLoopback(slots=slots, nbytes=nbytes, nwords=nwords)
         # Words pairs: 1 or 2 words per entry (pairs=True), else 1 (nwords=4: 1-4 words).
         entries = []
         i = 0
@@ -241,8 +242,8 @@ class TestGen2Framing(unittest.TestCase):
         def checker(dut):
             for i in range(len(words)*8 + 2000):
                 if (yield dut.rx.source.valid):
-                    data  = (yield dut.rx.source.data)
-                    ctrl  = (yield dut.rx.source.ctrl)
+                    data   = (yield dut.rx.source.data)
+                    ctrl   = (yield dut.rx.source.ctrl)
                     nwords = (yield dut.rx.source.words)
                     for w in range(nwords):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
@@ -265,7 +266,6 @@ class TestGen2Framing(unittest.TestCase):
         self.assertEqual((out, lcs), split_units(units))
         self.assertEqual(overflow, [])
 
-
     def test_loopback(self):
         self.loopback_test(0)
 
@@ -287,8 +287,8 @@ class TestGen2Framing(unittest.TestCase):
             self.loopback_test(seed, pairs=True, nbytes=32, gaps=1)
 
     def test_loopback_32_bytes_short(self):
-        # Short units back to back (many unit boundaries/chains), long units in the slow test and the
-        # Gen 2 80-bit system simulation (Verilator, test_phy).
+        # Short units back to back (many unit boundaries/chains), long units in the slow test and
+        # the Gen 2 80-bit system simulation (Verilator, test_phy).
         self.loopback_test(0, n_units=40, pairs=True, short=True, nbytes=32, gaps=0)
 
     def test_loopback_32_bytes_quads(self):
@@ -301,13 +301,14 @@ class TestGen2Framing(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-# Gen2LinkTX (sys -> tx clock domains) ---------------------------------------------------------------
+# Gen2LinkTX (sys -> tx clock domains) -------------------------------------------------------------
 
 UNITS_DELAY = 8
 
-class Gen2LinkTXLoopback(Module):
-    """Gen2LinkTX (sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx clock domain,
-    a block every 3 or 4 cycles, Idle Data Blocks when no block) -> Gen2RXFraming (tx clock domain)."""
+class Gen2LinkTXLoopback(LiteXModule):
+    """Gen2LinkTX (sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx clock
+    domain, a block every 3 or 4 cycles, Idle Data Blocks when no block) -> Gen2RXFraming (tx clock
+    domain)."""
     def __init__(self):
         from usb3_pipe.framing import Gen2LinkTX
         self.link_tx = link_tx = Gen2LinkTX(units_delay=UNITS_DELAY)
@@ -317,7 +318,8 @@ class Gen2LinkTXLoopback(Module):
         timer = Signal(4)
         slot  = Signal()
         self.sync.tx += If(timer == 9, timer.eq(0)).Else(timer.eq(timer + 1))
-        self.comb += slot.eq((timer == 2) | (timer == 5) | (timer == 9)) # 3/3/4 cycles: 40-bit gearbox.
+        # 3/3/4 cycles: 40-bit gearbox.
+        self.comb += slot.eq((timer == 2) | (timer == 5) | (timer == 9))
         idle  = int.from_bytes(bytes([GEN2_IDLE])*16, "little")
         block = Signal(128)
         block_valid = Signal()
@@ -380,13 +382,14 @@ class TestGen2LinkTX(unittest.TestCase):
             clocks={"sys": 8, "tx": 4})
         self.assertEqual((out, lcs), split_units(units))
 
-class Gen2LinkLoopback32(Module):
+class Gen2LinkLoopback32(LiteXModule):
     """Gen2LinkTX (32 bytes, sys at half the tx clock rate) -> Data Blocks (Gen2TX model in the tx
-    clock domain: a block every 1.65 cycles, Idle Data Blocks when no block) -> Gen2LinkRX (32 bytes,
-    rx = tx clock domain, words pairs in sys; link_words=4: words quads)."""
+    clock domain: a block every 1.65 cycles, Idle Data Blocks when no block) -> Gen2LinkRX (32
+    bytes, rx = tx clock domain, words pairs in sys; link_words=4: words quads)."""
     def __init__(self, link_words=2):
         from usb3_pipe.framing import Gen2LinkTX, Gen2LinkRX
-        self.link_tx = link_tx = Gen2LinkTX(units_delay=UNITS_DELAY, link_words=link_words, nbytes=32)
+        self.link_tx = link_tx = Gen2LinkTX(units_delay=UNITS_DELAY, link_words=link_words,
+            nbytes=32)
         self.link_rx = link_rx = ClockDomainsRenamer({"rx": "tx"})(Gen2LinkRX(link_words=link_words,
             nbytes=32))
         self.submodules += link_tx, link_rx
@@ -465,7 +468,8 @@ class TestGen2Link32(unittest.TestCase):
         def timeout(dut):
             for _ in range(len(words)*4 + 1500):
                 yield
-        run_simulation(dut, {"sys": [generator(dut), timeout(dut), checker(dut)], "tx": [writes(dut)]},
+        run_simulation(dut,
+            {"sys": [generator(dut), timeout(dut), checker(dut)], "tx": [writes(dut)]},
             clocks={"sys": 8, "tx": 4})
         self.assertEqual((out, lcs), split_units(units))
         self.assertLess(count["backlog"], 16)
@@ -476,7 +480,7 @@ class TestGen2Link32(unittest.TestCase):
 
 # Gen2TXBlocksPacker/Gen2TXBlocksReader: random block requests, no Idle Symbols inside a unit ---
 
-class Gen2TXBlocksBench(Module):
+class Gen2TXBlocksBench(LiteXModule):
     def __init__(self):
         self.submodules.packer = packer = Gen2TXBlocksPacker()
         self.submodules.fifo   = fifo   = stream.SyncFIFO(gen2_tx_blocks_layout(2), 128, buffered=True)
@@ -515,15 +519,16 @@ class TestGen2TXBlocks(unittest.TestCase):
     def test_random_requests(self):
         rng   = random.Random(0)
         # Units bytes (no Idle Symbol value), 32 bytes entries (entries before the last one full).
-        units = [[rng.randrange(GEN2_IDLE) for _ in range(rng.choice([1, 4, 8, 12, 16, 20, 24, 40, 100]))]
-            for _ in range(80)]
+        units = [[rng.randrange(GEN2_IDLE)
+            for _ in range(rng.choice([1, 4, 8, 12, 16, 20, 24, 40, 100]))] for _ in range(80)]
         entries = [(u[i:i+32], (i + 32) >= len(u)) for u in units for i in range(0, len(u), 32)]
         dut    = Gen2TXBlocksBench()
         blocks = []
         def generator(dut):
             for data, last in entries:
                 yield dut.packer.sink.valid.eq(1)
-                yield dut.packer.sink.data.eq(int.from_bytes(bytes(data + [GEN2_IDLE]*(32 - len(data))), "little"))
+                yield dut.packer.sink.data.eq(int.from_bytes(
+                    bytes(data + [GEN2_IDLE]*(32 - len(data))), "little"))
                 yield dut.packer.sink.bytes.eq(len(data))
                 yield dut.packer.sink.last.eq(last)
                 yield
@@ -556,11 +561,11 @@ class TestGen2TXBlocks(unittest.TestCase):
             idle = False
             k += 1
 
-# Gen2RXFraming: packets at any byte position, random Idle Symbols between them ----------------------
+# Gen2RXFraming: packets at any byte position, random Idle Symbols between them --------------------
 
 def gen2_unit_bytes(unit):
-    """Gen 2 bytes of a unit of Link Layer words (as transmitted by a host: framing bytes, DPHSTART +
-    Length Field Replicas for the DPHs, bytes after DPPEND/DPPABORT removed)."""
+    """Gen 2 bytes of a unit of Link Layer words (as transmitted by a host: framing bytes, DPHSTART
+    + Length Field Replicas for the DPHs, bytes after DPPEND/DPPABORT removed)."""
     from usb3_pipe.framing import GEN2_FRAMING_BYTES, GEN2_DPHP
     symbols = []
     for data, ctrl in unit:
@@ -633,7 +638,7 @@ class TestGen2RXFraming(unittest.TestCase):
         stream_bytes += [GEN2_IDLE]*((-len(stream_bytes)) % nbytes)
         words = [int.from_bytes(bytes(stream_bytes[i:i+nbytes]), "little")
             for i in range(0, len(stream_bytes), nbytes)]
-        dut = Gen2RXFraming(nbytes)
+        dut   = Gen2RXFraming(nbytes)
         out   = []
         stall = []
         def generator(dut):
@@ -662,7 +667,8 @@ class TestGen2RXFraming(unittest.TestCase):
             yield dut.lc_enable.eq(0)
             while True:
                 if (yield dut.source.valid):
-                    data, ctrl, n = (yield dut.source.data), (yield dut.source.ctrl), (yield dut.source.words)
+                    data, ctrl, n = ((yield dut.source.data), (yield dut.source.ctrl),
+                        (yield dut.source.words))
                     for w in range(n):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
                 yield
@@ -736,7 +742,8 @@ class TestGen2RXFraming(unittest.TestCase):
             yield dut.lc_enable.eq(lc_enable)
             while True:
                 if (yield dut.source.valid):
-                    data, ctrl, n = (yield dut.source.data), (yield dut.source.ctrl), (yield dut.source.words)
+                    data, ctrl, n = ((yield dut.source.data), (yield dut.source.ctrl),
+                        (yield dut.source.words))
                     for w in range(n):
                         out.append(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf))
                 if (yield dut.source_lc.valid):
@@ -782,7 +789,8 @@ class TestWordsNarrower(unittest.TestCase):
                     n = (yield dut.source.words) if words else 1
                     self.assertTrue(1 <= n <= n_out)
                     data, ctrl = (yield dut.source.data), (yield dut.source.ctrl)
-                    out.extend(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf) for w in range(n))
+                    out.extend(((data >> (32*w)) & 0xffffffff, (ctrl >> (4*w)) & 0xf)
+                        for w in range(n))
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(out, [w for e in entries for w in e])
 
@@ -796,8 +804,9 @@ class TestWordsNarrower(unittest.TestCase):
 class TestGen2FramingVerilog(unittest.TestCase):
     @unittest.skipIf(__import__("shutil").which("yosys") is None, "yosys not found")
     def test_byte_offset_verilog(self):
-        # Byte shifts by a variable amount in the generated Verilog (a shift amount is self-determined
-        # in Verilog: 8*n was truncated, not reproduced by the Migen simulator), with yosys.
+        # Byte shifts by a variable amount in the generated Verilog (a shift amount is
+        # self-determined in Verilog: 8*n was truncated, not reproduced by the Migen simulator),
+        # with yosys.
         import os, re, subprocess, tempfile
         from migen.fhdl import verilog
         from usb3_pipe.framing import byte_offset
@@ -810,19 +819,20 @@ class TestGen2FramingVerilog(unittest.TestCase):
             f = os.path.join(d, "shift.v")
             verilog.convert(m, ios={w, n, o}, name="shift").write(f)
             script = f"read_verilog {f}; prep -top shift; " + "; ".join(
-                f"eval -set {w.backtrace[-1][0]} 128'h0f0e0d0c0b0a09080706050403020100 -set {n.backtrace[-1][0]} {v} "
-                f"-show {o.backtrace[-1][0]}" for v in range(8))
-            log = subprocess.run(["yosys", "-p", script], capture_output=True, text=True, check=True).stdout
-        self.assertEqual([int(x, 2) for x in re.findall(r"Eval result: .* = 8'([01]+)", log)], list(range(8)))
+                f"eval -set {w.backtrace[-1][0]} 128'h0f0e0d0c0b0a09080706050403020100 "
+                f"-set {n.backtrace[-1][0]} {v} -show {o.backtrace[-1][0]}" for v in range(8))
+            log = subprocess.run(["yosys", "-p", script],
+                capture_output=True, text=True, check=True).stdout
+        self.assertEqual([int(x, 2) for x in re.findall(r"Eval result: .* = 8'([01]+)", log)],
+            list(range(8)))
 
-
-class WordsWindowRate(Module):
+class WordsWindowRate(LiteXModule):
     """WordsWindow with a continuous producer (an entry of first_words words then full entries of
     consecutive words) and a consumer taking nwords words whenever nwords are available (DPP data),
     both synchronous (no generator latency)."""
     def __init__(self, nwords, first_words):
         self.submodules.window = window = WordsWindow(nwords=nwords)
-        self.taken  = Signal()
+        self.taken = Signal()
         count = Signal(32)
         first = Signal(reset=1)
         self.comb += [

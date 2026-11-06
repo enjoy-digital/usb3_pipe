@@ -111,11 +111,13 @@ def get_config(core_config):
         if config["role"] != "device":
             raise ConfigError("usb_core requires role: device.")
         if config["with_link_ctrl"]:
-            raise ConfigError("usb_core and with_link_ctrl are exclusive (the core drives the Link-Layer control).")
+            raise ConfigError("usb_core and with_link_ctrl are exclusive (the core drives the "
+                "Link-Layer control).")
         if not config["with_endianness_swap"]:
             raise ConfigError("usb_core requires with_endianness_swap: True.")
         if config["usb_max_burst"] not in [2, 4, 8, 16]:
-            raise ConfigError(f"Unsupported usb_max_burst: {config['usb_max_burst']} (supported: 2, 4, 8, 16).")
+            raise ConfigError(f"Unsupported usb_max_burst: {config['usb_max_burst']} "
+                "(supported: 2, 4, 8, 16).")
     return config
 
 # LTSSM States -------------------------------------------------------------------------------------
@@ -127,7 +129,8 @@ def get_ltssm_states():
     return ltssm.fsm.encoding
 
 def get_ltssm_state_localparam(name, state):
-    """Return the Verilog localparam name of an LTSSM state (ex: USB3_PIPE_CORE_LTSSM_POLLING_LFPS)."""
+    """Return the Verilog localparam name of an LTSSM state
+    (ex: USB3_PIPE_CORE_LTSSM_POLLING_LFPS)."""
     return re.sub(r"[^A-Z0-9]+", "_", f"{name}_LTSSM_{state}".upper())
 
 # Ports --------------------------------------------------------------------------------------------
@@ -288,7 +291,8 @@ class USB3PIPECore(SoCMini):
         sys_clk_freq = config["sys_clk_freq"]
 
         # CRG --------------------------------------------------------------------------------------
-        self.crg = _CRG(platform, sys_clk_freq, config["speedgrade"], pll_cls=PHYS[config["phy"]][3])
+        self.crg = _CRG(platform, sys_clk_freq, config["speedgrade"],
+            pll_cls = PHYS[config["phy"]][3])
 
         # SoCMini ----------------------------------------------------------------------------------
         SoCMini.__init__(self, platform, clk_freq=sys_clk_freq,

@@ -43,7 +43,7 @@ def fake_phy():
     )
     return phy, serdes
 
-class DUT(Module):
+class DUT(LiteXModule):
     def __init__(self):
         self.phy, self.serdes = fake_phy()
         self.submodules.debug = USB3PHYDebug(self.phy, self.serdes, sys_clk_freq=4e6)

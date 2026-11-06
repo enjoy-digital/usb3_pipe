@@ -24,8 +24,8 @@ the BOS, LGO_U1/LGO_U2 accepted by the Link Layer when idle (else rejected with 
 when packets are to be transmitted. Device initiated U1/U2 entry is not supported (U1/U2 Enable only
 tracked/reported). Without, LGO_U1/LGO_U2 are rejected (U1/U2 not used by the host).
 
-crc32_cascade: Link Layer CRC-32s with the 1 to 4 bytes results from chained 1-byte stages (less logic,
-deeper paths, see usb3_core.crc.CRC32): for small FPGAs.
+crc32_cascade: Link Layer CRC-32s with the 1 to 4 bytes results from chained 1-byte stages (less
+logic, deeper paths, see usb3_core.crc.CRC32): for small FPGAs.
 """
 
 from migen import *
@@ -105,26 +105,30 @@ class USB3DeviceCore(LiteXModule):
         self._tx_retry     = CSRStatus(16, description="LBAD received (Header Packets resent).")
         self._recovery_req = CSRStatus(16, description="Recovery requests (timeouts, errors).")
         self._link_state   = CSRStatus(32, description="Link Layer state (debug): tx_seq, ack_seq, "
-            "send_seq, remote credits (Type 1/2), adv_received, pm_block, pm_accepted, tx_hp valid/ready, "
-            "lrty_pending, lbad_wait, ssp, tx_full, rx_seq.")
-        # Recovery causes (link dbg_recovery_cause): last cause and 8-bit saturating counts per cause.
+            "send_seq, remote credits (Type 1/2), adv_received, pm_block, pm_accepted, "
+            "tx_hp valid/ready, lrty_pending, lbad_wait, ssp, tx_full, rx_seq.")
+        # Recovery causes (link dbg_recovery_cause): last cause and 8-bit saturating counts per
+        # cause.
         causes = ["hp_seq", "lgood", "lcrd", "pending_hp", "credit_hp"]
         self._recovery_cause = CSRStatus(fields=
-            [CSRField("last", size=len(causes), description="Last Recovery cause: " + ", ".join(causes))] +
-            [CSRField(c, size=8, offset=8*(i + 1), description=f"{c} Recovery requests (saturating).")
+            [CSRField("last", size=len(causes),
+                description="Last Recovery cause: " + ", ".join(causes))] +
+            [CSRField(c, size=8, offset=8*(i + 1),
+                description=f"{c} Recovery requests (saturating).")
                 for i, c in enumerate(causes)])
         cause = self.link.dbg_recovery_cause
         self.sync += If(self.link.dbg_recovery,
             self._recovery_cause.fields.last.eq(cause),
             *[If(cause[i] & (getattr(self._recovery_cause.fields, c) != 255),
-                getattr(self._recovery_cause.fields, c).eq(getattr(self._recovery_cause.fields, c) + 1))
+                getattr(self._recovery_cause.fields, c).eq(
+                    getattr(self._recovery_cause.fields, c) + 1))
                 for i, c in enumerate(causes)]
         )
         # Directed Recovery request (bring-up: Recovery without a link error).
         self._recovery_request = CSR()
         self.comb += self.link.dbg_recovery_request.eq(self._recovery_request.re)
-        # RX errors (16-bit saturating counts): Link Command words rejected (CRC-5/copies), DPPs with
-        # a CRC-32 error.
+        # RX errors (16-bit saturating counts): Link Command words rejected (CRC-5/copies), DPPs
+        # with a CRC-32 error.
         self._rx_errors = CSRStatus(fields=[
             CSRField("lc_bad",  size=16, offset=0,  description="Link Command words rejected (CRC-5/copies)."),
             CSRField("dpp_bad", size=16, offset=16, description="DPPs received with a CRC-32 error."),

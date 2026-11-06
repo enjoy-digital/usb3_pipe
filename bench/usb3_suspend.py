@@ -26,7 +26,8 @@ import time
 import argparse
 import subprocess
 
-from common import add_remote_args, open_remote, add_kern_log_args, KernLog # First: repository root on the path.
+from common import add_remote_args, open_remote # First: repository root on the path.
+from common import add_kern_log_args, KernLog
 
 from usb3_debug import USB3DebugClient
 

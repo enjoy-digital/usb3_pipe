@@ -63,8 +63,9 @@ def popcount(bits):
     return sum(bits)
 
 class Gen2ReferenceDecoder:
-    """Decodes an aligned Gen 2 bit stream with the 6.3.2.3 scrambling rules and checks the Ordered
-    Sets: TS identifiers, DC Balance Symbols (6.4.1.2.2 algorithm), SKP LFSR Symbols (Table 6-13)."""
+    """Decodes an aligned Gen 2 bit stream with the 6.3.2.3 scrambling rules and checks the
+    Ordered Sets: TS identifiers, DC Balance Symbols (6.4.1.2.2 algorithm), SKP LFSR Symbols
+    (Table 6-13)."""
     def __init__(self, test):
         self.test   = test
         self.model  = Gen2ScramblerModel()
@@ -75,7 +76,8 @@ class Gen2ReferenceDecoder:
         pos = 0
         while pos + 36 <= len(bits):
             header = bits_to_int(bits[pos:pos+4])
-            syms   = [bits_to_int(bits[pos+4+8*i:pos+12+8*i]) for i in range((len(bits) - pos - 4)//8)][:40]
+            syms   = [bits_to_int(bits[pos+4+8*i:pos+12+8*i])
+                for i in range((len(bits) - pos - 4)//8)][:40]
             if header == BLOCK_HEADER_CONTROL and syms[0] in [GEN2_SKP, GEN2_SKPEND]:
                 n = 0
                 while n < len(syms) and syms[n] == GEN2_SKP:
@@ -123,7 +125,8 @@ class Gen2ReferenceDecoder:
                 self.test.assertEqual(payload[:4] + payload[6:], [identifier]*14)
                 self.test.assertEqual(payload[4], 0)
                 self.dc = max(-511, min(511, self.dc + 2*popcount(block_bits) - 132))
-                self.blocks.append(({GEN2_TSEQ: "TSEQ", GEN2_TS1: "TS1", GEN2_TS2: "TS2"}[identifier],
+                self.blocks.append((
+                    {GEN2_TSEQ: "TSEQ", GEN2_TS1: "TS1", GEN2_TS2: "TS2"}[identifier],
                     pos, 132, payload[5]))
             else:
                 self.test.assertEqual(header, BLOCK_HEADER_DATA)

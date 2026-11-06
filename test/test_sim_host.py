@@ -28,9 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class TestSimHost(unittest.TestCase):
     def run_sim(self, *args):
-        cmd = [sys.executable, str(ROOT / "sim.py"), "--output-dir", str(get_output_dir(self))] + list(args)
-        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            timeout=600)
+        cmd = [sys.executable, str(ROOT / "sim.py"),
+            "--output-dir", str(get_output_dir(self))] + list(args)
+        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=600)
         out = p.stdout or ""
         self.assertEqual(p.returncode, 0, out[-4000:])
         self.assertIn("HOST script done", out, out[-4000:])
@@ -45,7 +46,8 @@ class TestSimHost(unittest.TestCase):
         check_core_enumeration(self, sections)
 
     def test_enumeration(self):
-        # SKP Ordered Sets between packets (2 symbols: the framing is shifted in the received words).
+        # SKP Ordered Sets between packets (2 symbols: the framing is shifted in the received
+        # words).
         self.check_enumeration(self.run_sim())
 
     def test_enumeration_no_skp(self):
@@ -72,9 +74,9 @@ class TestSimHost(unittest.TestCase):
         self.assertEqual(dpps(packets), [bulk_descriptors().device()])
 
     def test_lpm_u1_u2(self):
-        # Device Core with LPM: SET_FEATURE(U1_ENABLE/U2_ENABLE) reported by GET_STATUS, LGO_U1/LGO_U2
-        # accepted (LAU), U1/U2 entered by both LTSSMs, Host initiated exit (LFPS handshake, Recovery),
-        # Advertisements on U0 re-entry, then control transfers.
+        # Device Core with LPM: SET_FEATURE(U1_ENABLE/U2_ENABLE) reported by GET_STATUS,
+        # LGO_U1/LGO_U2 accepted (LAU), U1/U2 entered by both LTSSMs, Host initiated exit (LFPS
+        # handshake, Recovery), Advertisements on U0 re-entry, then control transfers.
         sections = self.run_sim("--host-lpm")
         self.check_enumeration(sections)
         self.assertEqual(dpps(sections["get_status"]), [[0x0c, 0x00]])

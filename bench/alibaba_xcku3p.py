@@ -67,7 +67,10 @@ class USB3SoC(USB3BaseSoC):
         usb3_serdes = USPUSB3SerDes(platform,
             sys_clk      = self.crg.cd_sys.clk,
             sys_clk_freq = sys_clk_freq,
-            refclk_pads  = {"sfp": platform.request("sfp_mgt_clk"), "clk100": ClockSignal("clk100")}[refclk],
+            refclk_pads  = {
+                "sfp"    : platform.request("sfp_mgt_clk"),
+                "clk100" : ClockSignal("clk100"),
+            }[refclk],
             refclk_freq  = {"sfp": 156.25e6, "clk100": 100e6}[refclk],
             tx_pads      = platform.request("sfp_tx", sfp),
             rx_pads      = platform.request("sfp_rx", sfp),
@@ -85,11 +88,13 @@ class USB3SoC(USB3BaseSoC):
 # Build --------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="USB3-PIPE on the Alibaba Cloud XCKU3P board (Kintex Ultrascale+ GTY).")
+    parser = argparse.ArgumentParser(
+        description="USB3-PIPE on the Alibaba Cloud XCKU3P board (Kintex Ultrascale+ GTY).")
     parser.add_argument("--sfp",          default=0,     type=int, help="SFP cage (SFP2USB adapter, 0: NIC1).", choices=[0, 1])
     parser.add_argument("--refclk",       default="sfp", help="GTY reference clock: SFP MGT clock (156.25MHz) or 100MHz oscillator (fabric).", choices=["sfp", "clk100"])
     parser.add_argument("--gen2-capable", action="store_true", help="Gen 2 capable clocking (QPLL 10Gbps, 40-bit, Gen 1 at /2 rate).")
-    usb3_soc_args(parser, output_dir="build/alibaba_xcku3p", with_uartbone=False) # No UART: JTAGBone.
+    # No UART: JTAGBone.
+    usb3_soc_args(parser, output_dir="build/alibaba_xcku3p", with_uartbone=False)
     args = parser.parse_args()
 
     platform = alibaba_xcku3p.Platform()

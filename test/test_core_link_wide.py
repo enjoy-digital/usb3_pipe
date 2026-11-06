@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 Link Layer on PHY words pairs (64-bit, USB3PHY link_words=2) or quads (128-bit,
-link_words=4) vs words (32-bit): Data Packet Payloads received 8 or 16 bytes per cycle, transmitted 8
-bytes per cycle, same Link Layer words on the PHY."""
+link_words=4) vs words (32-bit): Data Packet Payloads received 8 or 16 bytes per cycle, transmitted
+8 bytes per cycle, same Link Layer words on the PHY."""
 
 import random
 import unittest
@@ -157,12 +157,14 @@ class TestCoreLinkWide(unittest.TestCase):
 
         @passive
         def dpps():
-            # DPP words in the DPHs order, random gaps before each DPP (prefetched by the endpoints).
+            # DPP words in the DPHs order, random gaps before each DPP (prefetched by the
+            # endpoints).
             for payload in payloads:
                 words = [payload[i:i+dw//8] for i in range(0, len(payload), dw//8)] or [[]]
                 for i, w in enumerate(words):
                     yield link.tx_dpp.valid.eq(1)
-                    yield link.tx_dpp.data.eq(int.from_bytes(bytes(w + [0]*(dw//8 - len(w))), "little"))
+                    yield link.tx_dpp.data.eq(int.from_bytes(bytes(w + [0]*(dw//8 - len(w))),
+                        "little"))
                     yield link.tx_dpp.bytes.eq(len(w))
                     yield link.tx_dpp.first.eq(i == 0)
                     yield link.tx_dpp.last.eq(i == len(words) - 1)
@@ -189,8 +191,8 @@ class TestCoreLinkWide(unittest.TestCase):
         self.assertEqual([p[2] for p in dpps_rx], [True]*len(payloads))
 
     def test_rx_throttle(self):
-        # PHY rx_throttle: LGOOD_n still sent for the received DPHs, their LCRD_x held while throttled
-        # and sent once released (the host stops on its credits: RX flow control).
+        # PHY rx_throttle: LGOOD_n still sent for the received DPHs, their LCRD_x held while
+        # throttled and sent once released (the host stops on its credits: RX flow control).
         rng  = random.Random(0)
         dut  = LinkDUT(link_words=2)
         dut.phy.rx_throttle = rx_throttle = Signal()
@@ -231,7 +233,8 @@ class TestCoreLinkWide(unittest.TestCase):
             return [p for p in packets if p[0] == "LC" and (p[1] & 0x780) == cmd]
         throttled, released = counts["throttled"], counts["released"]
         self.assertEqual(len(lcs(throttled, 0x000)), 1 + 2) # LGOOD_n: advertisement + 2 DPHs.
-        # LCRD_x/LCRD2_x: the Advertisement (4 + 4, not throttled), none for the 2 DPHs while throttled.
+        # LCRD_x/LCRD2_x: the Advertisement (4 + 4, not throttled), none for the 2 DPHs while
+        # throttled.
         self.assertEqual(len(lcs(throttled, 0x080)), 4 + 4)
         self.assertGreaterEqual(len(lcs(released, 0x080)), 2)
 

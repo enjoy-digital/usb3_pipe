@@ -60,7 +60,8 @@ BLOCKS = {
 # Ports --------------------------------------------------------------------------------------------
 
 def interface_signals(obj, depth=0):
-    """Signals of the block interface (Signals/Records/stream Endpoints attributes, PHY stand-in)."""
+    """Signals of the block interface (Signals/Records/stream Endpoints attributes, PHY
+    stand-in)."""
     signals = set()
     for name, value in vars(obj).items():
         if name.startswith("_"):
@@ -121,7 +122,8 @@ def parse_reports(name, build_dir):
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--blocks",       nargs="+", default=list(BLOCKS), choices=list(BLOCKS))
     parser.add_argument("--sys-clk-freq", default=125e6, type=float, help="Target frequency (Hz).")
     parser.add_argument("--part",         default="xc7a200tfbg484-3",  help="FPGA part.")

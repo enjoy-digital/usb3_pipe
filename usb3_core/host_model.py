@@ -32,6 +32,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.common import phy_layout
+from usb3_core.crc    import CRC5
 
 # CRCs (USB 3.2 7.2.1/7.2.2: bits transmitted LSB first, inverted remainder) -----------------------
 
@@ -116,15 +117,18 @@ def link_command(info):
 # Header Packets (USB 3.2 7.2.1, 8.3) --------------------------------------------------------------
 
 def header_packet(dw0, dw1, dw2, seq):
-    """Header Packet: SHP framing, 3 DWords, CRC-16 and Link Control Word (Header Sequence Number)."""
+    """Header Packet: SHP framing, 3 DWords, CRC-16 and Link Control Word (Header Sequence
+    Number)."""
     header = le_bytes(dw0, 4) + le_bytes(dw1, 4) + le_bytes(dw2, 4)
     lcw    = (seq & 0xf) | (crc5(seq & 0xf) << 11)
-    return words_from_symbols(framing(SHP) + [(b, 0) for b in header + le_bytes(crc16(header), 2) + le_bytes(lcw, 2)])
+    return words_from_symbols(framing(SHP) +
+        [(b, 0) for b in header + le_bytes(crc16(header), 2) + le_bytes(lcw, 2)])
 
 def data_packet_payload(payload):
     """Data Packet Payload: SDP framing, payload, CRC-32 and END framing."""
     payload = list(payload)
-    return words_from_symbols(framing(SDP) + [(b, 0) for b in payload + le_bytes(crc32(payload), 4)] + framing(END))
+    return words_from_symbols(framing(SDP) +
+        [(b, 0) for b in payload + le_bytes(crc32(payload), 4)] + framing(END))
 
 # LMPs (USB 3.2 8.4).
 LMP_SUB_PORT_CAP      = 4
@@ -169,8 +173,9 @@ def itp(seq, timestamp=0):
 # Received Packets Decoding ------------------------------------------------------------------------
 
 def decode_packets(words, positions=None):
-    """Decode received Link Layer words into packets: ("LC", info), ("HP", dw0, dw1, dw2, seq, crc_ok),
-    ("DPP", payload, crc_ok). The index of the first word of each packet is appended to positions."""
+    """Decode received Link Layer words into packets: ("LC", info), ("HP", dw0, dw1, dw2, seq,
+    crc_ok), ("DPP", payload, crc_ok). The index of the first word of each packet is appended to
+    positions."""
     symbols = [s for s in symbols_from_words(words)]
     packets = []
     def append(packet, i):
@@ -205,28 +210,30 @@ def decode_packets(words, positions=None):
 
 # USB3 Host Model (gateware) -----------------------------------------------------------------------
 
-OP_SEND = 0 # Send data/ctrl word (first/last packet delimiters).
-OP_WAIT = 1 # Wait a received word matching data (under mask)/ctrl.
-OP_SKP  = 2 # Request a SKP Ordered Set insertion (SerDes model).
-OP_MARK = 3 # Display a step marker.
-OP_END  = 4 # End of script.
-OP_IDLE = 5 # Logical Idle for data cycles.
-OP_PM   = 6 # Pulse the Host LTSSM PM controls (data: PM_* flags).
-OP_U0   = 7 # Wait the Host LTSSM U0 (re-)entry.
-OP_ACK  = 8 # Reactive acknowledges from here (data: rx_seq [3:0], lcrd [9:8], lcrd2 [13:12], ssp [16]):
-            # LGOOD_n + LCRD_x/LCRD2_x sent for each device Header Packet as soon as received,
-            # between the script packets (as a host Link Layer, 7.2.4.1).
-OP_WAITN = 9 # Wait data device Header Packets received since OP_ACK (reactive acknowledges).
-OP_WAITCRED = 10 # Wait a device Type 2 credit (LCRD2_x received since OP_ACK, 4 at OP_ACK), consumed.
+OP_SEND     = 0  # Send data/ctrl word (first/last packet delimiters).
+OP_WAIT     = 1  # Wait a received word matching data (under mask)/ctrl.
+OP_SKP      = 2  # Request a SKP Ordered Set insertion (SerDes model).
+OP_MARK     = 3  # Display a step marker.
+OP_END      = 4  # End of script.
+OP_IDLE     = 5  # Logical Idle for data cycles.
+OP_PM       = 6  # Pulse the Host LTSSM PM controls (data: PM_* flags).
+OP_U0       = 7  # Wait the Host LTSSM U0 (re-)entry.
+OP_ACK      = 8  # Reactive acknowledges from here (data: rx_seq [3:0], lcrd [9:8], lcrd2 [13:12],
+                 # ssp [16]): LGOOD_n + LCRD_x/LCRD2_x sent for each device Header Packet as soon as
+                 # received, between the script packets (as a host Link Layer, 7.2.4.1).
+OP_WAITN    = 9  # Wait data device Header Packets received since OP_ACK (reactive acknowledges).
+OP_WAITCRED = 10 # Wait a device Type 2 credit (LCRD2_x received since OP_ACK, 4 at OP_ACK),
+                 # consumed.
 OP_WAITLBAD = 11 # Wait data device LBADs received since OP_ACK.
 
 # Host LTSSM PM controls (OP_PM).
-PM_REQ_U1  = 0b00001
-PM_REQ_U2  = 0b00010
-PM_LAU     = 0b00100
-PM_EXIT_U1 = 0b01000
-PM_EXIT_U2 = 0b10000
-PM_RECOVERY = 0b100000 # Directed Recovery from U0 (script kept running, Advertisement in reactive mode).
+PM_REQ_U1   = 0b00001
+PM_REQ_U2   = 0b00010
+PM_LAU      = 0b00100
+PM_EXIT_U1  = 0b01000
+PM_EXIT_U2  = 0b10000
+# Directed Recovery from U0 (script kept running, Advertisement in reactive mode).
+PM_RECOVERY = 0b100000
 
 class USB3HostModel(LiteXModule):
     """Scripted USB3 Host Link/Protocol Layer model.
@@ -258,7 +265,8 @@ class USB3HostModel(LiteXModule):
                 value  |= (v & ((1 << w) - 1)) << offset
                 offset += w
             return value
-        mem  = Memory(width, len(script) + 1, init=[encode(s) for s in script] + [encode((OP_END, 0, 0, 0, 0, 0))])
+        mem  = Memory(width, len(script) + 1,
+            init = [encode(s) for s in script] + [encode((OP_END, 0, 0, 0, 0, 0))])
         port = mem.get_port(async_read=True)
         self.specials += mem, port
         step  = Signal(max=len(script) + 1)
@@ -283,10 +291,12 @@ class USB3HostModel(LiteXModule):
                 (source.data == 0xfbfbfbf7),
                 Display("HOST_HPTX %d", cycles)
             ),
-            If(self.enable & ~self.done & sink.valid & (sink.ctrl == 0b1111) & (sink.data == 0xfefefef7),
+            If(self.enable & ~self.done & sink.valid & (sink.ctrl == 0b1111) &
+                (sink.data == 0xfefefef7),
                 Display("HOST_LCRX %d", cycles)
             ),
-            If(self.enable & ~self.done & sink.valid & (sink.ctrl == 0b1111) & (sink.data == 0xfbfbfbf7),
+            If(self.enable & ~self.done & sink.valid & (sink.ctrl == 0b1111) &
+                (sink.data == 0xfbfbfbf7),
                 Display("HOST_HPRX %d", cycles)
             ),
         ]
@@ -338,8 +348,7 @@ class USB3HostModel(LiteXModule):
             ],
             "default": []
         }))
-        # Reactive acknowledges (OP_ACK) ----------------------------------------------------------
-        from usb3_core.crc import CRC5
+        # Reactive acknowledges (OP_ACK) -----------------------------------------------------------
         ack_enable = Signal()
         ack_ssp    = Signal()
         ack_seq    = Signal(4)
@@ -351,7 +360,8 @@ class USB3HostModel(LiteXModule):
         rx_hdr     = Signal()  # Word after HPSTART (DW0) expected.
         hp_count   = Signal(16) # Device Header Packets received since OP_ACK.
         credits2   = Signal(8)  # Device Type 2 credits available (LCRD2_x received - DPs sent).
-        credits1   = Signal(8)  # Gen 1: device Rx Header Buffer credits (LCRD_x received - HPs sent).
+        # Gen 1: device Rx Header Buffer credits (LCRD_x received - HPs sent).
+        credits1   = Signal(8)
         rx_lcrd1   = Signal()
         tx_hp      = Signal()   # Host Header Packet sent (HPSTART).
         credits_ok = Signal()
@@ -411,11 +421,13 @@ class USB3HostModel(LiteXModule):
         # by any Header Packet sent.
         self.comb += [
             rx_lcrd1.eq(ack_enable & sink.valid & rx_lc & ((lc_rx_info & 0x7fc) == 0x080)),
-            tx_hp.eq(source.valid & source.ready & (source.ctrl == 0b1111) & (source.data == 0xfbfbfbf7)),
+            tx_hp.eq(source.valid & source.ready & (source.ctrl == 0b1111) &
+                (source.data == 0xfbfbfbf7)),
             credits_ok.eq(Mux(ack_ssp, credits2 != 0, credits1 != 0)),
         ]
         # Device LCRD2_x (Link Command Word: first symbol in data[31:24]).
-        self.comb += cred_take.eq(self.enable & ~self.error & (fields["op"] == OP_WAITCRED) & (credits2 != 0))
+        self.comb += cred_take.eq(self.enable & ~self.error & (fields["op"] == OP_WAITCRED) &
+            (credits2 != 0))
         self.comb += [
             lc_rx_info.eq(Cat(sink.data[24:32], sink.data[16:19])),
             rx_lcrd2.eq(ack_enable & sink.valid & rx_lc & ((lc_rx_info & 0x7fc) == 0x084)),
@@ -594,7 +606,8 @@ class HostScript:
         return tt if self.ssp else 0
 
     def send(self, words):
-        # Packets offset by the SKP Ordered Sets accounting (Logical Idle symbols before the packet).
+        # Packets offset by the SKP Ordered Sets accounting (Logical Idle symbols before the
+        # packet).
         if self.offset:
             words = words_from_symbols([(0x00, 0)]*self.offset + symbols_from_words(words))
         for i, (data, ctrl) in enumerate(words):
@@ -705,9 +718,9 @@ class HostScript:
         self.wait_hp()                                                # ACK TP.
 
     def bulk_in(self, ept, dp_seq, name, latency=256, erdy=False):
-        # ACK TP (NumP=1) requesting a data packet, DPH + DPP from the device, ACK TP acknowledging it.
-        # With erdy: the window closed by the host (NumP=0) with more data available, the device sends
-        # an ERDY (as Linux xHCI hosts, the next request waits for it).
+        # ACK TP (NumP=1) requesting a data packet, DPH + DPP from the device, ACK TP acknowledging
+        # it. With erdy: the window closed by the host (NumP=0) with more data available, the device
+        # sends an ERDY (as Linux xHCI hosts, the next request waits for it).
         self.mark(name)
         blk = self.tt(TT_BULK)
         self.send_hp(tp, TP_SUB_ACK, ept=ept, direction=1, nump=1, tp_seq=dp_seq, pp=1, tt=blk)
@@ -750,11 +763,12 @@ class HostScript:
         self.steps.append((OP_END, 0, 0, 0, 0, 0))
 
 def setup_packet(bmRequestType, bRequest, wValue, wIndex, wLength):
-    return [bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) + le_bytes(wLength, 2)
+    return ([bmRequestType, bRequest] + le_bytes(wValue, 2) + le_bytes(wIndex, 2) +
+        le_bytes(wLength, 2))
 
 def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False, lpm=False,
-    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False, burst_duplex=0,
-    recovery_mid=False, recovery_cut=False, burst_duplex_skp=False):
+    ssp=False, itp=False, burst_out=0, burst_len=64, burst_stream=0, lbad_test=False,
+    burst_duplex=0, recovery_mid=False, recovery_cut=False, burst_duplex_skp=False):
     """Link initialization + enumeration-like control transfers (as Linux on an xHCI host).
     itp: Isochronous Timestamp Packets (sent periodically by a host in U0) between the transfers.
     burst_out: rounds of 4 Bulk OUT DPs sent back to back (as an xHCI host with queued transfers),
@@ -764,11 +778,11 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
     burst_duplex: rounds of 4 Bulk OUT DPs streamed (device Type 2 credits) while the device sends 4
     Bulk IN DPs (EP1 requests with NumP=4: the data looped back from the previous round), as a full
     duplex benchmark.
-    recovery_mid: host directed Recovery between Bulk OUT DPs (reactive mode: Advertisements on the U0
-    re-entry, as soon as U0 is entered on the host side), then Bulk OUT DPs and Bulk IN DPs.
+    recovery_mid: host directed Recovery between Bulk OUT DPs (reactive mode: Advertisements on the
+    U0 re-entry, as soon as U0 is entered on the host side), then Bulk OUT DPs and Bulk IN DPs.
     recovery_cut: with recovery_mid, the Recovery cuts a Bulk OUT DP (DPH acknowledged, DPP
-    incomplete, as a Recovery during an OUT DP on hardware): the device completes the DPP as missing,
-    requests the retry (ACK TP) and the DP is sent again after the U0 re-entry."""
+    incomplete, as a Recovery during an OUT DP on hardware): the device completes the DPP as
+    missing, requests the retry (ACK TP) and the DP is sent again after the U0 re-entry."""
     s = HostScript(ssp=ssp)
     def send_itp():
         if itp:
@@ -780,12 +794,15 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
         # SKP Ordered Set (2 symbols) between packets: the framing is then shifted by 2 symbols in
         # the received words (re-aligned by the PHY).
         s.skp()
-    s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor", latency, status_gap)
+    s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor",
+        latency, status_gap)
     if skp:
         s.skp()
-    s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor", latency, status_gap)
+    s.control_read(setup_packet(0x80, 0x06, 0x0200, 0,  9), "get_configuration_descriptor",
+        latency, status_gap)
     send_itp()
-    s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor", latency, status_gap)
+    s.control_read(setup_packet(0x80, 0x06, 0x0301, 0x0409, 255), "get_string_descriptor",
+        latency, status_gap)
     send_itp()
     s.control_write(setup_packet(0x00, 0x09, 0x0001, 0, 0), "set_configuration")
     send_itp()
@@ -813,9 +830,9 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
                 s.wait_hp()                                           # ACK TPs.
             seq += 4
     if bulk and lbad_test:
-        # Bulk OUT burst with a DPH CRC error (second DP): the device sends LBAD and ignores the next
-        # Header Packets (and their DPPs) until LRTY, then the host retransmits from the bad DPH
-        # (7.2.4.1.4): 4 ACK TPs expected, no Recovery.
+        # Bulk OUT burst with a DPH CRC error (second DP): the device sends LBAD and ignores the
+        # next Header Packets (and their DPPs) until LRTY, then the host retransmits from the bad
+        # DPH (7.2.4.1.4): 4 ACK TPs expected, no Recovery.
         payload = [(11*i + 5) & 0xff for i in range(burst_len)]
         seq     = len(bulk_payloads()) + 4*burst_out
         if not getattr(s, "auto", False):
@@ -874,9 +891,9 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
             s.wait_hp()                                               # ACK TPs.
         for r in range(burst_duplex):
             if burst_duplex_skp:
-                # As a host at full rate: each IN DP requested by an ACK TP behind an OUT DP, 0-3 SKP
-                # Ordered Sets at the packets boundaries (the next packets then shifted by 2 symbols
-                # when odd), the Link Commands sent in between.
+                # As a host at full rate: each IN DP requested by an ACK TP behind an OUT DP, 0-3
+                # SKP Ordered Sets at the packets boundaries (the next packets then shifted by 2
+                # symbols when odd), the Link Commands sent in between.
                 rng = random.Random(r)
                 for i in range(4):
                     out_dps(1)
@@ -888,7 +905,8 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
                         s.skp()
             else:
                 # IN request (acknowledging the previous round DPs), OUT DPs during the IN DPs.
-                s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=4, tp_seq=in_seq % 32, pp=1, tt=blk)
+                s.send_hp(tp, TP_SUB_ACK, ept=1, direction=1, nump=4, tp_seq=in_seq % 32,
+                    pp=1, tt=blk)
                 out_dps(4)
             for i in range(8):
                 s.wait_hp()                                           # IN DPHs + OUT ACK TPs.
@@ -948,16 +966,18 @@ def enumeration_script(skp=True, latency=256, status_gap=64, bulk=True, pm=False
         # U1/U2 requests (rejected by the device: LXU, link stays in U0), then a control transfer.
         s.lgo(1, LXU(), "lgo_u1")
         s.lgo(2, LXU(), "lgo_u2")
-        s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor_after_pm", latency)
+        s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), "get_device_descriptor_after_pm",
+            latency)
     if lpm:
-        # U1/U2 enabled (SET_FEATURE(U1_ENABLE/U2_ENABLE), GET_STATUS), U1 and U2 entries accepted by
-        # the device (LAU) and exits, then control transfers.
+        # U1/U2 enabled (SET_FEATURE(U1_ENABLE/U2_ENABLE), GET_STATUS), U1 and U2 entries accepted
+        # by the device (LAU) and exits, then control transfers.
         s.control_write(setup_packet(0x00, 0x03, 48, 0, 0), "set_u1_enable")
         s.control_write(setup_packet(0x00, 0x03, 49, 0, 0), "set_u2_enable")
         s.control_read(setup_packet(0x80, 0x00, 0, 0, 2), "get_status", latency)
         for n in [1, 2]:
             s.ux(n, f"u{n}")
-            s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18), f"get_device_descriptor_after_u{n}", latency)
+            s.control_read(setup_packet(0x80, 0x06, 0x0100, 0, 18),
+                f"get_device_descriptor_after_u{n}", latency)
     s.end()
     return s
 
@@ -968,9 +988,9 @@ def bulk_payloads():
 # Simulation Output Parsing ------------------------------------------------------------------------
 
 def parse_sim_output(output, script):
-    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output), a packet
-    belongs to the section in which it starts (the script can move to the next section while the
-    end of a packet is received)."""
+    """Received packets per script section (from the "HOST_MARK"/"HOST_RX" simulation output), a
+    packet belongs to the section in which it starts (the script can move to the next section while
+    the end of a packet is received)."""
     words, sections_at = [], []
     section = None
     for line in output.splitlines():
@@ -988,8 +1008,9 @@ def parse_sim_output(output, script):
     return sections
 
 # PHY Stand-in -------------------------------------------------------------------------------------
-# USB3PHY Link interface stand-in: USB3 Device Core directly connected to a host model (no PHY) in a
-# Migen simulation (see test/model/host.py) or in a standalone elaboration (bench/usb3_resources.py).
+# USB3PHY Link interface stand-in: USB3 Device Core directly connected to a host model (no PHY) in
+# a Migen simulation (see test/model/host.py) or in a standalone elaboration
+# (bench/usb3_resources.py).
 
 class PHYStandIn:
     """USB3PHY Link interface stand-in."""

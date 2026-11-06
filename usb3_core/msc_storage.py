@@ -24,8 +24,8 @@ MSC_BLOCK_SIZE = 512
 
 # Storage command: read/write blocks (MSC_BLOCK_SIZE) from lba.
 msc_storage_cmd_layout = [
-    ("write",  1),
-    ("lba",   32),
+    ("write",   1),
+    ("lba",    32),
     ("blocks", 16),
 ]
 

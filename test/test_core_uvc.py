@@ -70,31 +70,43 @@ class TestCoreUVC(unittest.TestCase):
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x00, 0x09, 1, 0, 0))))
             if with_requests:
                 # GET_CUR PROBE: mode 1, GET_MAX: mode 2.
-                probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+                probe = yield from pyhost_control_in(host,
+                    setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
                 self.assertEqual(probe, uvc_probe(MODES, 0, PAYLOAD_SIZE, CLK_FREQ))
-                probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_MAX, VS_PROBE_CONTROL << 8, 1, 34))
+                probe = yield from pyhost_control_in(host,
+                    setup_packet(0xa1, UVC_GET_MAX, VS_PROBE_CONTROL << 8, 1, 34))
                 self.assertEqual(probe, uvc_probe(MODES, 2, PAYLOAD_SIZE, CLK_FREQ))
                 # GET_LEN, GET_INFO.
-                self.assertEqual((yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_LEN, VS_PROBE_CONTROL << 8, 1, 2))), [34, 0])
-                self.assertEqual((yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_INF, VS_PROBE_CONTROL << 8, 1, 1))), [3])
+                self.assertEqual((yield from pyhost_control_in(host,
+                    setup_packet(0xa1, UVC_GET_LEN, VS_PROBE_CONTROL << 8, 1, 2))), [34, 0])
+                self.assertEqual((yield from pyhost_control_in(host,
+                    setup_packet(0xa1, UVC_GET_INF, VS_PROBE_CONTROL << 8, 1, 1))), [3])
                 # Unsupported request (VideoControl interface): stalled.
-                self.assertIsNone((yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, 0x0200, 0, 1))))
-                # SET_CUR PROBE: mode selected by bFrameIndex + dwFrameInterval (64x8@50000: mode 2).
+                self.assertIsNone((yield from pyhost_control_in(host,
+                    setup_packet(0xa1, UVC_GET_CUR, 0x0200, 0, 1))))
+                # SET_CUR PROBE: mode selected by bFrameIndex + dwFrameInterval (64x8@50000:
+                # mode 2).
                 probe3 = uvc_probe(MODES, 2, PAYLOAD_SIZE, CLK_FREQ)
-                self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe3)))
-                probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+                self.assertTrue((yield from pyhost_control_out(host,
+                    setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe3)))
+                probe = yield from pyhost_control_in(host,
+                    setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
                 self.assertEqual(probe, probe3)
             if not n_frames:
                 return
             # SET_CUR PROBE (mode 1), GET_CUR PROBE, SET_CUR COMMIT.
             probe2 = uvc_probe(MODES, 1, PAYLOAD_SIZE, CLK_FREQ)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
-            probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
+            probe = yield from pyhost_control_in(host,
+                setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
             self.assertEqual(probe, probe2)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_COMMIT_CONTROL << 8, 1, 34), probe2)))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x21, UVC_SET_CUR, VS_COMMIT_CONTROL << 8, 1, 34), probe2)))
 
             # Frames of 64x8 (1024 bytes): 5 payloads of 244 bytes of data per frame.
             width, height, _ = MODES[1]
@@ -117,9 +129,11 @@ class TestCoreUVC(unittest.TestCase):
                     y_ref = [235, 210, 170, 145, 106, 81, 41, 16][x//8]
                     y0 = 235 if x == 4*frame else y_ref
                     y1 = 235 if x + 1 == 4*frame else y_ref
-                    self.assertEqual((pixels[2*x], pixels[2*x + 2]), (y0, y1), f"frame {frame} x {x}")
+                    self.assertEqual((pixels[2*x], pixels[2*x + 2]), (y0, y1),
+                        f"frame {frame} x {x}")
             # FID toggles per frame.
-            self.assertEqual(fids, sum([[fids[0] ^ (frame % 2)]*n for frame in range(n_frames)], []))
+            self.assertEqual(fids,
+                sum([[fids[0] ^ (frame % 2)]*n for frame in range(n_frames)], []))
         run_pyhost(dut, host, scenario())
 
     def test_probe_requests(self):
@@ -180,8 +194,8 @@ class TestCoreUVCIso(unittest.TestCase):
             self.assertEqual(alts, [1])
 
     def test_memories_initialized(self):
-        # Initialized memories with write ports (EP0 descriptors ROM + request handler buffer) must be
-        # initialized over their whole depth: on hardware, the handler buffer read back the
+        # Initialized memories with write ports (EP0 descriptors ROM + request handler buffer) must
+        # be initialized over their whole depth: on hardware, the handler buffer read back the
         # isochronous probes with bit 31 set (never written to 1, undefined init resolved to 1).
         for transfer in ["bulk", "iso"]:
             dut = ISODUT() if transfer == "iso" else DUT()
@@ -191,28 +205,35 @@ class TestCoreUVCIso(unittest.TestCase):
                     self.assertEqual(len(mem.init), mem.depth, f"{transfer}: {mem.name_override}")
 
     def iso_stream_test(self, n_frames):
-        # 1 packet per service interval (1024 bytes payloads): 64x8 frames (1024 bytes) in 2 payloads
-        # (1012 + 12 bytes of data), zero-length packets between frames.
+        # 1 packet per service interval (1024 bytes payloads): 64x8 frames (1024 bytes) in 2
+        # payloads (1012 + 12 bytes of data), zero-length packets between frames.
         dut  = ISODUT(max_burst=1)
         host = PyHost(dut.phy)
         payload_size = 1024
         def scenario():
             yield from pyhost_link_init(host)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x00, 0x09, 1, 0, 0))))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x00, 0x09, 1, 0, 0))))
             # GET_CUR PROBE: dwMaxPayloadTransferSize = wBytesPerInterval.
-            probe = yield from pyhost_control_in(host, setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
+            probe = yield from pyhost_control_in(host,
+                setup_packet(0xa1, UVC_GET_CUR, VS_PROBE_CONTROL << 8, 1, 34))
             self.assertEqual(probe, uvc_probe(MODES, 0, payload_size, CLK_FREQ))
             # SET_CUR PROBE/COMMIT (mode 1): no streaming on alternate setting 0.
             probe2 = uvc_probe(MODES, 1, payload_size, CLK_FREQ)
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x21, UVC_SET_CUR, VS_COMMIT_CONTROL << 8, 1, 34), probe2)))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x21, UVC_SET_CUR, VS_PROBE_CONTROL << 8, 1, 34), probe2)))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x21, UVC_SET_CUR, VS_COMMIT_CONTROL << 8, 1, 34), probe2)))
             for _ in range(512):
                 yield
             self.assertEqual((yield dut.uvc.function.stream.frames), 0)
             # SET_INTERFACE(1, 1): stream start.
-            self.assertEqual((yield from pyhost_control_in(host, setup_packet(0x81, 0x0a, 0, 1, 1))), [0])
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x01, 0x0b, 1, 1, 0))))
-            self.assertEqual((yield from pyhost_control_in(host, setup_packet(0x81, 0x0a, 0, 1, 1))), [1])
+            self.assertEqual((yield from pyhost_control_in(host,
+                setup_packet(0x81, 0x0a, 0, 1, 1))), [0])
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x01, 0x0b, 1, 1, 0))))
+            self.assertEqual((yield from pyhost_control_in(host,
+                setup_packet(0x81, 0x0a, 0, 1, 1))), [1])
             # Service intervals until n_frames frames received.
             payloads = []
             zlps     = 0
@@ -246,7 +267,8 @@ class TestCoreUVCIso(unittest.TestCase):
                     frames.append((fids[-1], pixels))
                     pixels = []
             self.assertEqual(len(frames), n_frames)
-            self.assertEqual([len(p) for p in payloads], [payload_size, UVC_HEADER_SIZE + 12]*n_frames)
+            self.assertEqual([len(p) for p in payloads],
+                [payload_size, UVC_HEADER_SIZE + 12]*n_frames)
             for frame, (fid, pixels) in enumerate(frames):
                 self.assertEqual(len(pixels), frame_size(width, height))
                 self.assertEqual(fid, (frames[0][0] + frame) % 2)
@@ -255,9 +277,11 @@ class TestCoreUVCIso(unittest.TestCase):
                     y_ref = [235, 210, 170, 145, 106, 81, 41, 16][x//8]
                     y0 = 235 if x == 4*frame else y_ref
                     y1 = 235 if x + 1 == 4*frame else y_ref
-                    self.assertEqual((pixels[2*x], pixels[2*x + 2]), (y0, y1), f"frame {frame} x {x}")
+                    self.assertEqual((pixels[2*x], pixels[2*x + 2]), (y0, y1),
+                        f"frame {frame} x {x}")
             # SET_INTERFACE(1, 0): stream stop, zero-length packets.
-            self.assertTrue((yield from pyhost_control_out(host, setup_packet(0x01, 0x0b, 0, 1, 0))))
+            self.assertTrue((yield from pyhost_control_out(host,
+                setup_packet(0x01, 0x0b, 0, 1, 0))))
             frames_stop = (yield dut.uvc.function.stream.frames)
             for _ in range(2):
                 dps = yield from pyhost_iso_in(host, ept=1, bursts=[1], ping=False)

@@ -217,11 +217,11 @@ class LFPSChecker(LiteXModule):
         # Exit, Warm Reset) or continuous traffic never qualify (burst or gap out of window).
         burst  = lfps_pattern.burst
         repeat = lfps_pattern.repeat
-        bmin = scaled_cycles(sys_clk_freq, burst.t_min, timer_scale, floor=2)
-        bmax = scaled_cycles(sys_clk_freq, burst.t_max, timer_scale) + stretch_cycles
-        gmin = scaled_cycles(sys_clk_freq, repeat.t_min - burst.t_max, timer_scale, floor=2)
-        gmin = max(2, gmin - stretch_cycles)
-        gmax = scaled_cycles(sys_clk_freq, repeat.t_max - burst.t_min, timer_scale)
+        bmin   = scaled_cycles(sys_clk_freq, burst.t_min, timer_scale, floor=2)
+        bmax   = scaled_cycles(sys_clk_freq, burst.t_max, timer_scale) + stretch_cycles
+        gmin   = scaled_cycles(sys_clk_freq, repeat.t_min - burst.t_max, timer_scale, floor=2)
+        gmin   = max(2, gmin - stretch_cycles)
+        gmax   = scaled_cycles(sys_clk_freq, repeat.t_max - burst.t_min, timer_scale)
 
         # Count saturated after the largest window (sized counter: timings).
         cmax     = max(bmax, gmax) + 1
@@ -660,9 +660,9 @@ class LFPSRXFrontEnd(LiteXModule):
 # SCD Generator ------------------------------------------------------------------------------------
 
 class SCDGenerator(LiteXModule):
-    """Polling.LFPS bursts (tBurst 1us) with tRepeat encoding the bits of SCD1/SCD2 (7.5us: 0, 12.5us:
-    1) or non varying tRepeat (10us, mode 0). count increments after each complete SCD (4 bursts,
-    mode 1/2) or each burst (mode 0)."""
+    """Polling.LFPS bursts (tBurst 1us) with tRepeat encoding the bits of SCD1/SCD2 (7.5us: 0,
+    12.5us: 1) or non varying tRepeat (10us, mode 0). count increments after each complete SCD (4
+    bursts, mode 1/2) or each burst (mode 0)."""
     def __init__(self, sys_clk_freq, timer_scale=1):
         self.mode    = Signal(2)  # i: 0: Polling.LFPS, 1: SCD1, 2: SCD2.
         self.enable  = Signal()   # i
@@ -714,9 +714,10 @@ class SCDGenerator(LiteXModule):
 # SCD Checker --------------------------------------------------------------------------------------
 
 class SCDChecker(LiteXModule):
-    """Polling.LFPS binary representation decoding (Table 6-32, burst start to burst start): scd1/scd2
-    pulse when the last 4 received bits are a SCD1/SCD2, polling pulses on each Polling.LFPS burst
-    (period 6-14us, valid burst 0.6-1.4us), plain pulses on bursts with a non-SCD period (guard band)."""
+    """Polling.LFPS binary representation decoding (Table 6-32, burst start to burst start):
+    scd1/scd2 pulse when the last 4 received bits are a SCD1/SCD2, polling pulses on each
+    Polling.LFPS burst (period 6-14us, valid burst 0.6-1.4us), plain pulses on bursts with a non-SCD
+    period (guard band)."""
     def __init__(self, frontend, sys_clk_freq, timer_scale=1):
         self.scd1    = Signal() # o
         self.scd2    = Signal() # o
@@ -820,8 +821,8 @@ class LBPMGenerator(LiteXModule):
 
 class LBPMChecker(LiteXModule):
     """LBPM reception (receive windows of Table 6-33): bursts of 0.45-0.85us: 0, 1.28-1.85us: 1, a
-    delimiter (>= 1.9us burst) starts/ends the LBPMs. received pulses with data after 8 bits followed
-    by a delimiter."""
+    delimiter (>= 1.9us burst) starts/ends the LBPMs. received pulses with data after 8 bits
+    followed by a delimiter."""
     def __init__(self, frontend, sys_clk_freq, timer_scale=1):
         self.received = Signal()  # o
         self.data     = Signal(8) # o

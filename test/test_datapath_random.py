@@ -108,7 +108,8 @@ class TestScramblingRandom(unittest.TestCase):
             dut.done = True
 
         def checker(dut):
-            dut.words = yield from handshake_monitor(dut.source, random.Random(1), 0.7, lambda: dut.done)
+            dut.words = yield from handshake_monitor(dut.source, random.Random(1), 0.7,
+                lambda: dut.done)
 
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(len(dut.words), n)
@@ -138,7 +139,8 @@ class TestScramblingRandom(unittest.TestCase):
             dut.done = True
 
         def checker(dut):
-            dut.words = yield from handshake_monitor(dut.source, random.Random(3), 0.7, lambda: dut.done)
+            dut.words = yield from handshake_monitor(dut.source, random.Random(3), 0.7,
+                lambda: dut.done)
 
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.words, plain)
@@ -149,7 +151,7 @@ class TestScramblingRandom(unittest.TestCase):
         rng   = random.Random(0x7007)
         words = [random_word(rng, k_rate=0.1) for _ in range(int(400*SCALE))]
 
-        class DUT(Module):
+        class DUT(LiteXModule):
             def __init__(self):
                 self.submodules.scr = Scrambler(reset=0xffff)
                 self.submodules.des = Descrambler(reset=0xffff)
@@ -163,7 +165,8 @@ class TestScramblingRandom(unittest.TestCase):
             dut.done = True
 
         def checker(dut):
-            dut.words = yield from handshake_monitor(dut.source, random.Random(5), 0.7, lambda: dut.done)
+            dut.words = yield from handshake_monitor(dut.source, random.Random(5), 0.7,
+                lambda: dut.done)
 
         dut = DUT()
         run_simulation(dut, [generator(dut), checker(dut)])
@@ -178,7 +181,8 @@ class TestScramblingRandom(unittest.TestCase):
         def generator(dut):
             yield from stream_driver(dut.sink, words)
         def checker(dut):
-            dut.words = yield from handshake_monitor(dut.source, random.Random(0), 1.0, lambda: True)
+            dut.words = yield from handshake_monitor(dut.source, random.Random(0), 1.0,
+                lambda: True)
         run_simulation(dut, [generator(dut), checker(dut)])
         return dut.words
 
@@ -304,7 +308,8 @@ class TestRXSKPRemoverRandom(unittest.TestCase):
             dut.done = True
 
         def checker(dut):
-            dut.words = yield from handshake_monitor(dut.source, random.Random(8), 0.75, lambda: dut.done)
+            dut.words = yield from handshake_monitor(dut.source, random.Random(8), 0.75,
+                lambda: dut.done)
 
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.words, expected)
@@ -345,7 +350,8 @@ class TestRXWordAlignerRandom(unittest.TestCase):
             dut.done = True
 
         def checker(dut):
-            dut.words = yield from handshake_monitor(dut.source, random.Random(10), 0.75, lambda: dut.done)
+            dut.words = yield from handshake_monitor(dut.source, random.Random(10), 0.75,
+                lambda: dut.done)
 
         run_simulation(dut, [generator(dut), checker(dut)])
 
@@ -363,8 +369,8 @@ class TestRXWordAlignerRandom(unittest.TestCase):
 # USB3PIPE End-to-End ------------------------------------------------------------------------------
 
 class SerDesLoopModel(GTModel):
-    """SerDes loop model: TXDatapath (SKP insertion, CDC, 32->16-bit) looped to RXDatapath (16->32-bit,
-    SKP removal, CDC, word alignment)."""
+    """SerDes loop model: TXDatapath (SKP insertion, CDC, 32->16-bit) looped to RXDatapath
+    (16->32-bit, SKP removal, CDC, word alignment)."""
     def __init__(self):
         GTModel.__init__(self, tx_ready=False)
 
@@ -403,7 +409,7 @@ class TestUSB3PIPELoopRandom(unittest.TestCase):
                     d = 1
                 words.append((d, c, int(i == 0), int(i == len(p) - 1)))
 
-        class Top(Module):
+        class Top(LiteXModule):
             def __init__(self):
                 self.submodules.serdes = SerDesLoopModel()
                 self.submodules.pipe   = USB3PIPE(serdes=self.serdes, sys_clk_freq=int(125e6))

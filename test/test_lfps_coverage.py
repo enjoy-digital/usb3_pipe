@@ -246,7 +246,8 @@ class TestLFPSPollingChecker(unittest.TestCase):
         ]:
             with self.subTest(name):
                 detections, starts = polling_detections(f, segments)
-                detected_bursts = [max(i for i, s in enumerate(starts) if s <= d) for d in detections]
+                detected_bursts = [max(i for i, s in enumerate(starts) if s <= d)
+                    for d in detections]
                 self.assertEqual(detected_bursts, expected)
 
     def test_single_cycle_glitches_filtered(self):
@@ -274,7 +275,7 @@ class TestLFPSPollingChecker(unittest.TestCase):
             with self.subTest(sys_clk_freq=f):
                 self.assertEqual(polling_detections(f, [], tail=2000)[0], [])
 
-# Ping / U1 / U2 / U3 / Warm Reset detection boundaries (Table 6-30/6-31, 6.9.2/6.9.3) -----------
+# Ping / U1 / U2 / U3 / Warm Reset detection boundaries (Table 6-30/6-31, 6.9.2/6.9.3) -------------
 
 def burst_responses(f, bursts, gap=64, timer_scale=1):
     """Send single bursts to a LFPSUnit, return per burst (pings, u1, u2, u3, reset) seen."""
@@ -391,12 +392,14 @@ class TestLFPSBurstDetection(unittest.TestCase):
             with self.subTest(sys_clk_freq=f):
                 reset_min = lfps.scaled_cycles(f, lfps.ResetDetectDelay, scale)
                 rise, fall = assertion_delays(f, reset_min + 64, timer_scale=scale)
-                threshold = lfps.exit_u1_min_cycles(f, scale) + rise["rx_reset"] - rise["rx_exit_u1"]
+                threshold = (lfps.exit_u1_min_cycles(f, scale) + rise["rx_reset"] -
+                    rise["rx_exit_u1"])
                 self.assertEqual(threshold, reset_min)
                 self.assertTrue(18e-3 <= threshold*scale/f <= 50e-3)
                 self.assertTrue(0 <= fall["rx_reset"] <= lfps.RX_DETECT_LATENCY)
                 # Longest U3 Wakeup burst (10ms) is not a Warm Reset.
-                results = burst_responses(f, [lfps.scaled_cycles(f, 10e-3, scale)], timer_scale=scale)
+                results = burst_responses(f, [lfps.scaled_cycles(f, 10e-3, scale)],
+                    timer_scale=scale)
                 self.assertEqual(results[0][4], 0)
 
 # LFPSUnit TX arbitration (Table 6-30, 6.9) --------------------------------------------------------
@@ -418,7 +421,8 @@ class TestLFPSUnitArbitration(unittest.TestCase):
         return dut.trace
 
     def test_no_request_follows_tx_idle(self):
-        trace = self.record(125e6, [(32, {"tx_idle": 1}), (32, {"tx_idle": 0}), (32, {"tx_idle": 1})])
+        trace = self.record(125e6, [(32, {"tx_idle": 1}), (32, {"tx_idle": 0}),
+            (32, {"tx_idle": 1})])
         self.assertEqual([t[0] for t in trace], [1]*32 + [0]*32 + [1]*32)
         self.assertEqual({t[1] for t in trace}, {0})
 
@@ -477,8 +481,8 @@ class TestLFPSUnitArbitration(unittest.TestCase):
         f       = 125e6
         scale   = 100 # Polling.LFPS timings divided by 10.
         repeat  = lfps.scaled_cycles(f, 10e-6, lfps.polling_scale_of(scale)) + 2
-        trace   = self.record(f, [(5*repeat + 16, {"tx_polling": 1}), (2*repeat, {"tx_polling": 0})],
-            timer_scale=scale)
+        trace   = self.record(f, [(5*repeat + 16, {"tx_polling": 1}),
+            (2*repeat, {"tx_polling": 0})], timer_scale=scale)
         bursts  = runs([t[0] for t in trace[:5*repeat + 16]], 0)
         # Incremented at the end of each repeat period: the 6th period is still ongoing.
         self.assertEqual(len(bursts), 6)

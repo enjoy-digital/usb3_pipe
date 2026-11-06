@@ -8,7 +8,7 @@ import unittest
 
 from migen import *
 from migen.fhdl.specials import Instance
-from migen.fhdl.tools import list_targets
+from migen.fhdl.tools    import list_targets
 
 from litex.build.xilinx import XilinxPlatform
 

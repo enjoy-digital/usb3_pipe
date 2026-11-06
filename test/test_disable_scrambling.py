@@ -27,8 +27,8 @@ NORMAL             = LinkConfig()
 
 class TestDisableScrambling(unittest.TestCase):
     def run_pipe(self, ts2_link_config, disable_scrambling=0):
-        """Receive TS2s, then (Polling.Idle) Idle, then U0 data, all unscrambled. Return the received
-        data and the transmitted wire words."""
+        """Receive TS2s, then (Polling.Idle) Idle, then U0 data, all unscrambled. Return the
+        received data and the transmitted wire words."""
         rng  = random.Random(0)
         data = [(rng.randrange(1, 2**32), 0) for _ in range(32)]
         rx   = ordered_set_words(TS2, link_config=ts2_link_config)*8 + [(0, 0)]*8 + data
@@ -103,8 +103,8 @@ class TestDisableScrambling(unittest.TestCase):
     def test_phy_connects_ts2_decode(self):
         dut  = USB3PHY(serdes=GTModel(), sys_clk_freq=int(125e6), with_endianness_swap=False)
         comb = dut.get_fragment().comb
-        self.assertTrue(any(getattr(s, "l", None) is dut.pipe.ts2_decode and s.r is dut.ltssm.ts2_decode
-            for s in comb))
+        self.assertTrue(any(getattr(s, "l", None) is dut.pipe.ts2_decode and
+            s.r is dut.ltssm.ts2_decode for s in comb))
 
 if __name__ == "__main__":
     unittest.main()

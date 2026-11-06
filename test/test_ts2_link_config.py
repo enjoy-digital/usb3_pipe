@@ -111,14 +111,15 @@ class TestTS2LinkConfig(unittest.TestCase):
         def probe():
             return ((yield dut.ltssm.ts_rx_ts2_reset), (yield dut.ltssm.ts_rx_ts2_loopback))
         def generator(dut):
-            dut.rx_reset = yield from drive_rx(gt, rx_words((TS2, RESET, 8)), probe)
+            dut.rx_reset    = yield from drive_rx(gt, rx_words((TS2, RESET, 8)), probe)
             dut.rx_loopback = yield from drive_rx(gt, rx_words((TS2, LOOPBACK, 8)), probe)
         run_simulation(dut, generator(dut))
         self.assertEqual(dut.rx_reset,    (1, 0))
         self.assertEqual(dut.rx_loopback, (0, 1))
 
         # TX: the ts_tx_ts2_reset/loopback PIPE inputs must be driven by the LTSSM outputs.
-        dut  = USB3PHY(serdes=GTModel(tx_ready=False), sys_clk_freq=int(125e6), with_endianness_swap=False)
+        dut  = USB3PHY(serdes=GTModel(tx_ready=False), sys_clk_freq=int(125e6),
+            with_endianness_swap=False)
         comb = dut.get_fragment().comb
         for name in ["reset", "loopback"]:
             pipe_input   = getattr(dut.pipe,  "ts_tx_ts2_" + name)

@@ -9,15 +9,13 @@ errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug), 
 groups (usb3_analyzer_groups).
 """
 
-from functools import reduce
-from operator import xor
-
 from migen import *
 from migen.genlib.cdc import BusSynchronizer, GrayCounter, MultiReg, PulseSynchronizer
 
 from litex.gen import *
 
 from litex.soc.interconnect.csr import *
+
 from litex.soc.cores.freqmeter import FreqMeter
 
 from liteiclink.serdes.common import DRPControl
@@ -30,7 +28,7 @@ from usb3_pipe.datapath import GEN2_RX_COUNTERS
 def gray_decode(gray):
     """Gray to binary decoding (combinatorial)."""
     n = len(gray)
-    return Cat(*[reduce(xor, [gray[j] for j in range(i, n)]) for i in range(n)])
+    return Cat(*[Reduce("XOR", [gray[j] for j in range(i, n)]) for i in range(n)])
 
 # USB3 PHY Debug -----------------------------------------------------------------------------------
 
@@ -446,5 +444,6 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
             pipe.lfps_rx_wakeup_u3, pipe.ts_rx_ts1, pipe.ts_tx_ts1,
             serdes.source.valid, serdes.source.data, serdes.source.ctrl,
             serdes_debug.rx_tx_phase,
-        ] + [getattr(serdes, name) for name in ["rx_realign", "rx_buferror"] if hasattr(serdes, name)]
+        ] + [getattr(serdes, name) for name in ["rx_realign", "rx_buferror"]
+            if hasattr(serdes, name)]
     return groups

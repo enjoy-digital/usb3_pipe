@@ -13,7 +13,7 @@ from litex.gen import *
 from usb3_pipe.gw5    import gw5_usb3_rate_writes
 from usb3_pipe.serdes import GW5RateSequencer
 
-class FakeUPAR(Module):
+class FakeUPAR(LiteXModule):
     """GTR12UPAR user port model: a write takes 3 cycles once granted."""
     def __init__(self):
         self.addr   = Signal(24)

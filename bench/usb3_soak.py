@@ -85,7 +85,8 @@ def bench_run(duration, csr_csv, host, port):
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     add_remote_args(parser)
     parser.add_argument("--duration",        default=3600, type=float,           help="Test duration (s).")
     parser.add_argument("--period",          default=10,   type=float,           help="Logging period (s).")
@@ -100,15 +101,16 @@ def main():
     dbg    = USB3DebugClient(bus)
     klog   = KernLog(args.kern_log)
     totals = {k: 0 for k in KERNEL_EVENTS}
-    totals.update({"periods": 0, "enumerated": 0, "bulk_packets": 0, "bulk_errors": 0, "bench_runs": 0,
-        "bench_errors": 0, "reconnects": 0})
+    totals.update({"periods": 0, "enumerated": 0, "bulk_packets": 0, "bulk_errors": 0,
+        "bench_runs": 0, "bench_errors": 0, "reconnects": 0})
     dbg.clear()
     t0 = last_reconnect = time.time()
     try:
         soak(args, bus, dbg, klog, totals, t0, last_reconnect)
     except KeyboardInterrupt:
         print("Interrupted.")
-    totals["phy"] = {k: v for k, v in dbg.status().items() if k in ["u0", "recovery", "u1", "u2", "u3", "lfps_reset"]}
+    totals["phy"]  = {k: v for k, v in dbg.status().items()
+        if k in ["u0", "recovery", "u1", "u2", "u3", "lfps_reset"]}
     totals["core"] = core_counters(bus)
     print(json.dumps({"summary": totals}))
     bus.close()
@@ -116,8 +118,8 @@ def main():
 
 def core_counters(bus):
     # USB3 Device Core statistics (when present).
-    return {k: getattr(bus.regs, "usb3_core_" + k).read() for k in ["rx_lbad", "tx_retry", "recovery_req"]
-        if hasattr(bus.regs, "usb3_core_" + k)}
+    return {k: getattr(bus.regs, "usb3_core_" + k).read()
+        for k in ["rx_lbad", "tx_retry", "recovery_req"] if hasattr(bus.regs, "usb3_core_" + k)}
 
 def soak(args, bus, dbg, klog, totals, t0, last_reconnect):
     with open(args.log, "a") as log:
@@ -141,11 +143,13 @@ def soak(args, bus, dbg, klog, totals, t0, last_reconnect):
                 entry["reconnect"] = True
             status  = dbg.status()
             host    = host_status(lines=0, kern_log=None)
-            devices = [d for d in host["devices"] if (d["idVendor"], d["idProduct"]) == ("1d50", "605a")]
-            entry["phy"]  = {k: status[k] for k in ["ltssm_state", "u0", "recovery", "u1", "u2", "u3",
-                "lfps_reset", "rx_max_good_run", "rx_tx_ppm"] if k in status}
+            devices = [d for d in host["devices"]
+                if (d["idVendor"], d["idProduct"]) == ("1d50", "605a")]
+            entry["phy"]  = {k: status[k] for k in ["ltssm_state", "u0", "recovery", "u1", "u2",
+                "u3", "lfps_reset", "rx_max_good_run", "rx_tx_ppm"] if k in status}
             if hasattr(bus.regs, "xadc_temperature"):
-                entry["temperature"] = round(bus.regs.xadc_temperature.read()*503.975/4096 - 273.15, 1)
+                entry["temperature"] = round(
+                    bus.regs.xadc_temperature.read()*503.975/4096 - 273.15, 1)
             entry["host"] = devices[0] if devices else None
             kernel = usb_kernel_messages(klog.new_lines())
             entry["kernel"] = {k: sum(v in l for l in kernel) for k, v in KERNEL_EVENTS.items()}
@@ -165,8 +169,8 @@ def soak(args, bus, dbg, klog, totals, t0, last_reconnect):
                 totals[k] += entry["kernel"][k]
             log.write(json.dumps(entry) + "\n")
             log.flush()
-            print(json.dumps({k: entry[k] for k in ["t", "phy", "core", "bench", "temperature"] if k in entry} |
-                {"enumerated": bool(devices)}), flush=True)
+            print(json.dumps({k: entry[k] for k in ["t", "phy", "core", "bench", "temperature"]
+                if k in entry} | {"enumerated": bool(devices)}), flush=True)
 
 if __name__ == "__main__":
     main()

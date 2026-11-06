@@ -32,10 +32,19 @@ from common import add_remote_args, open_remote # First: repository root on the 
 from usb3_pipe.gen import get_ltssm_states
 
 # Gen1 TSEQ Ordered Set (USB 3.2 Table 6-3).
-TSEQ = [0xbc, 0xff, 0x17, 0xc0, 0x14, 0xb2, 0xe7, 0x02, 0x82, 0x72, 0x6e, 0x28, 0xa6, 0xbe, 0x6d, 0xbf] + [0x4a]*16
+TSEQ = [
+    0xbc, 0xff, 0x17, 0xc0, 0x14, 0xb2, 0xe7, 0x02,
+    0x82, 0x72, 0x6e, 0x28, 0xa6, 0xbe, 0x6d, 0xbf,
+] + [0x4a]*16
 
 # Link Layer framing (Link Layer view, first symbol on data[31:24]).
-FRAMING = {0xfefefef7: "SLC", 0xfbfbfbf7: "SHP", 0x5c5c5cf7: "SDP", 0xfdfdfdf7: "END", 0x7c7c7cf7: "EDB"}
+FRAMING = {
+    0xfefefef7 : "SLC",
+    0xfbfbfbf7 : "SHP",
+    0x5c5c5cf7 : "SDP",
+    0xfdfdfdf7 : "END",
+    0x7c7c7cf7 : "EDB",
+}
 
 # Link Commands (USB 3.2 Table 7-?), 11-bit Link Command Information (class/type/subtype).
 def link_command_name(word):
@@ -157,8 +166,10 @@ def analyze(filename, ns_per_sample=8, ppm_window=32):
         if starts:
             good  = sum(data[i:i+32] == TSEQ for i in starts)
             match = sum(sum(a == b for a, b in zip(data[i:i+32], TSEQ)) for i in starts)
-            pos   = collections.Counter(j for i in starts for j in range(32) if data[i + j] != TSEQ[j])
-            print(f"TSEQ: {good}/{len(starts)} fully correct, {100*match/(32*len(starts)):.1f}% symbols, "
+            pos   = collections.Counter(j for i in starts for j in range(32)
+                if data[i + j] != TSEQ[j])
+            print(f"TSEQ: {good}/{len(starts)} fully correct, "
+                  f"{100*match/(32*len(starts)):.1f}% symbols, "
                   f"errors per symbol position: {dict(sorted(pos.items()))}")
 
     # Link Layer packets (RX: PHY source, TX: PHY sink).
@@ -206,8 +217,8 @@ def capture(args):
     from litescope import LiteScopeAnalyzerDriver
     from usb3_debug import USB3DebugClient
 
-    states = get_ltssm_states()
-    bus    = open_remote(args)
+    states   = get_ltssm_states()
+    bus      = open_remote(args)
     dbg      = USB3DebugClient(bus)
     analyzer = LiteScopeAnalyzerDriver(bus.regs, "analyzer", config_csv=args.analyzer_csv)
     analyzer.configure_group(0)

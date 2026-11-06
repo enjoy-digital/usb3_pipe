@@ -33,7 +33,7 @@ def detections(t_burst, t_repeat, n=4):
     run_simulation(dut, generator(dut))
     return dut.detections
 
-# Polling.LFPS reception (USB 3.2 6.9, Table 6-30: tBurst 0.6-1.4us, tRepeat 6-14us) --------------
+# Polling.LFPS reception (USB 3.2 6.9, Table 6-30: tBurst 0.6-1.4us, tRepeat 6-14us) ---------------
 
 class TestLFPSPollingRX(unittest.TestCase):
     def test_polling_lfps_spec_corners_detected(self):

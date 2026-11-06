@@ -17,8 +17,8 @@ from usb3_core.bench import USB3Bench
 class TestUSB3Bench(unittest.TestCase):
     def check(self, data_width, n=64):
         # Source looped to the sink: consecutive 32-bit counter words, no checker errors.
-        dut   = USB3Bench(with_csr=False, data_width=data_width)
-        nw    = data_width//32
+        dut    = USB3Bench(with_csr=False, data_width=data_width)
+        nw     = data_width//32
         words  = []
         errors = []
         def generator():

@@ -13,8 +13,8 @@ from litex.gen import *
 
 from usb3_pipe.datapath import RXSKPRemover
 
-from test.common import (words_to_symbols, symbols_to_words, strip_skp, random_symbols,
-    stream_driver, stream_monitor)
+from test.common import words_to_symbols, symbols_to_words, strip_skp, random_symbols
+from test.common import stream_driver, stream_monitor
 
 # SKP Ordered Sets handling (USB 3.2 6.4.3) --------------------------------------------------------
 
@@ -29,7 +29,8 @@ class TestSKP(unittest.TestCase):
                 rng=random.Random(seed + 1), ready_rate=ready_rate, timeout=20*len(words))
 
         dut = RXSKPRemover()
-        run_simulation(dut, [stream_driver(dut.sink, words, rng=rng, valid_rate=valid_rate), checker(dut)])
+        run_simulation(dut, [stream_driver(dut.sink, words, rng=rng, valid_rate=valid_rate),
+            checker(dut)])
         return dut.words, expected
 
     def test_rx_skp_remover_backpressure(self):

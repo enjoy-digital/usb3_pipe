@@ -36,8 +36,8 @@ class TestCoreLinkSSP(unittest.TestCase):
 
     def test_tx_header_buffers_types(self):
         # The host advertises its credits but never acknowledges (no LGOOD_n): the Port Capability
-        # LMP and 3 ACK TPs fill the Type 1 buffers, 4 DPHs (TT Bulk) are still accepted in the Type 2
-        # buffers, the 5th Type 1/Type 2 Header Packets are not.
+        # LMP and 3 ACK TPs fill the Type 1 buffers, 4 DPHs (TT Bulk) are still accepted in the
+        # Type 2 buffers, the 5th Type 1/Type 2 Header Packets are not.
         dut  = LinkDUT(self.link_words)
         link = dut.link
         phy  = dut.phy
@@ -97,11 +97,12 @@ class TestCoreLinkSSP(unittest.TestCase):
             accepted.append(("dph", (yield from push(TYPE_DP, dph, dpp=1))))
 
         run_simulation(dut, [host(), dpps(), scenario()])
-        self.assertEqual(accepted, [("ack", True)]*3 + [("dph", True)]*4 + [("ack", False), ("dph", False)])
+        self.assertEqual(accepted,
+            [("ack", True)]*3 + [("dph", True)]*4 + [("ack", False), ("dph", False)])
 
     def test_tx_header_buffers_burst(self):
-        # DPHs (Type 2) offered on every cycle, never acknowledged: exactly 4 accepted (Type 2 buffers
-        # full flags including the previous pushes, ex: registered with 64-bit words).
+        # DPHs (Type 2) offered on every cycle, never acknowledged: exactly 4 accepted (Type 2
+        # buffers full flags including the previous pushes, ex: registered with 64-bit words).
         dut  = LinkDUT(self.link_words)
         link = dut.link
         phy  = dut.phy

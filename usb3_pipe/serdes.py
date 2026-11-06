@@ -25,11 +25,11 @@ from usb3_pipe.datapath import TXDatapath, RXDatapath
 class USB3SerDes(LiteXModule):
     """USB3 SerDes on a LiteICLink transceiver.
 
-    Common part of the transceivers: 5Gbps, 20-bit (or 40-bit) with 8b/10b, TX/RX buffers (no clock aligner, word
-    alignment done in the RX datapath), TX/RX datapaths (SKP insertion/removal, CDC, word alignment),
-    LFPS (TX pattern/electrical idle, filtered RX electrical idle), RX decode errors (Warm Reset LFPS
-    detection) and timing constraints. Transceivers specific parts (PLL, USB3 parameters overrides,
-    electrical idle/OOB signals) are done by the subclasses.
+    Common part of the transceivers: 5Gbps, 20-bit (or 40-bit) with 8b/10b, TX/RX buffers (no clock
+    aligner, word alignment done in the RX datapath), TX/RX datapaths (SKP insertion/removal, CDC,
+    word alignment), LFPS (TX pattern/electrical idle, filtered RX electrical idle), RX decode
+    errors (Warm Reset LFPS detection) and timing constraints. Transceivers specific parts (PLL,
+    USB3 parameters overrides, electrical idle/OOB signals) are done by the subclasses.
     """
     def __init__(self):
         # SerDes interface (used by USB3PIPE/USB3PHY/LFPSUnit/debug, also implemented by the
@@ -52,8 +52,10 @@ class USB3SerDes(LiteXModule):
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align      = Signal()        # i
         self.rx_reset      = Signal()        # i: RX re-initialization (PMA/CDR/PCS reset sequence).
-        self.rx_reinit     = Signal()        # RX re-initialization request of the SerDes itself (ex: rate change).
-        self.tx_reinit     = Signal()        # TX re-initialization request of the SerDes itself (ex: lane reconfiguration).
+        self.rx_reinit     = Signal()        # RX re-initialization request of the SerDes itself
+                                             # (ex: rate change).
+        self.tx_reinit     = Signal()        # TX re-initialization request of the SerDes itself
+                                             # (ex: lane reconfiguration).
 
         self.rx_idle_stretch = 0    # rx_idle stretch (cycles) of the RX idle filter (add_lfps).
         self.xcvr_name       = None # Transceiver submodule name (add_transceiver).
@@ -64,8 +66,9 @@ class USB3SerDes(LiteXModule):
         self.gen2_tx_enable = Signal()   # i: Transmit gen2_tx_data (raw words, 8b/10b bypassed).
         self.gen2_tx_data   = Signal(40) # i: Raw TX words (tx clock domain, bit 0 first).
         self.gen2_rx_data   = Signal(40) # o: Raw RX words (rx clock domain, bit 0 first).
-        self.gen2_rx_errors = Signal()   # i: Gen 2 RX errors (block alignment lost, sys clock domain),
-                                         #    rx_errors at 10Gbps (no 8b/10b decode errors).
+        self.gen2_rx_errors = Signal()   # i: Gen 2 RX errors (block alignment lost, sys clock
+                                         #    domain), rx_errors at 10Gbps (no 8b/10b decode
+                                         #    errors).
 
     def get_refclk(self, refclk_pads, buffer="IBUFDS_GTE2"):
         """Transceiver reference clock: from dedicated pads (buffer) or a fabric clock."""
@@ -130,19 +133,20 @@ class USB3SerDes(LiteXModule):
         return xcvr
 
     def add_lfps(self, xcvr, rx_idle):
-        """LFPS: TX pattern, filtered RX electrical idle (from the transceiver's OOB detector) and RX
-        decode errors (Warm Reset LFPS detection)."""
+        """LFPS: TX pattern, filtered RX electrical idle (from the transceiver's OOB detector) and
+        RX decode errors (Warm Reset LFPS detection)."""
         self.comb += [
             xcvr.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
-            xcvr.tx_pattern.eq(Replicate(self.tx_pattern[0], len(xcvr.tx_pattern))), # Constant words.
+            # Constant words.
+            xcvr.tx_pattern.eq(Replicate(self.tx_pattern[0], len(xcvr.tx_pattern))),
         ]
         self.rx_idle_filter  = RXIdleFilter(rx_idle)
         self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
         self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
         self.rx_error_monitor = RXErrorMonitor(xcvr.decoders, clock_domain="rx")
         # At 10Gbps (Gen 2, raw 128b/132b words), the 8b/10b decode errors are always set: Gen 2 RX
-        # errors (block alignment lost) instead (a Warm Reset LFPS on a Gen 2 link would otherwise be
-        # detected after tResetDelay in U0).
+        # errors (block alignment lost) instead (a Warm Reset LFPS on a Gen 2 link would otherwise
+        # be detected after tResetDelay in U0).
         self.comb += self.rx_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
             self.rx_error_monitor.errors))
 
@@ -167,11 +171,12 @@ class K7USB3SerDes(USB3SerDes):
         gtx = self.add_transceiver("gtx", GTX, pll, tx_pads, rx_pads, sys_clk_freq)
 
         # Override GTX RX settings for USB3 --------------------------------------------------------
-        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
-        # the Xilinx 7-Series Transceivers Wizard (SATA, SSC) and PCIe Gen2 (pcie_7x) GT wrappers:
+        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings
+        # from the Xilinx 7-Series Transceivers Wizard (SATA, SSC) and PCIe Gen2 (pcie_7x) GT
+        # wrappers:
         # - RXCDR_CFG: SSC tolerant CDR settings (RXOUT_DIV=1).
-        # - RXCDR_HOLD_DURING_EIDLE/RX_DFE_LPM_HOLD_DURING_EIDLE: the CDR/LPM keep their state during
-        #   Electrical Idle/LFPS.
+        # - RXCDR_HOLD_DURING_EIDLE/RX_DFE_LPM_HOLD_DURING_EIDLE: the CDR/LPM keep their state
+        #   during Electrical Idle/LFPS.
         # - LPM mode (as PCIe Gen1/Gen2).
         # - RX_CM_SEL/RX_CM_TRIM: Programmable, 800mV.
         assert pll.config['d'] == 1 # 5Gbps.
@@ -241,9 +246,10 @@ class A7USB3SerDes(USB3SerDes):
 
         # Override GTP RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):
-        # - RXCDR_CFG: UG482 Table 4-14 (CDR Recommended Settings for Protocols with SSC, RXOUT_DIV=1).
-        #   The 8B/10B (no SSC) settings (Table 4-15, +-1250ppm) saturate the CDR frequency tracking
-        #   (recovered clock pinned at ~-1465ppm) and slip a bit every few hundred bits on hardware.
+        # - RXCDR_CFG: UG482 Table 4-14 (CDR Recommended Settings for Protocols with SSC,
+        #   RXOUT_DIV=1). The 8B/10B (no SSC) settings (Table 4-15, +-1250ppm) saturate the CDR
+        #   frequency tracking (recovered clock pinned at ~-1465ppm) and slip a bit every few
+        #   hundred bits on hardware.
         # - RXCDR_HOLD_DURING_EIDLE/RXCDR_LOCK_CFG: Xilinx 7-Series PCIe Gen2 GTP wrapper settings
         #   (pcie_7x gt_wrapper): the CDR keeps its frequency during Electrical Idle/LFPS.
         assert pll.config['d'] == 1 # 5Gbps.
@@ -277,8 +283,8 @@ class A7USB3SerDes(USB3SerDes):
         self.add_lfps(gtp, rx_idle)
 
         # RX status (debug: comma realignment, elastic buffer), synchronized to sys ----------------
-        rx_realign    = Signal()
-        rx_bufstatus  = Signal(3)
+        rx_realign       = Signal()
+        rx_bufstatus     = Signal(3)
         self.rx_realign  = Signal()
         self.rx_buferror = Signal()
         gtp.gtp_params.update(
@@ -320,8 +326,10 @@ class USPUSB3SerDes(USB3SerDes):
         refclk_from_fabric = isinstance(refclk_pads, (Signal, ClockSignal))
         refclk = self.get_refclk(refclk_pads, buffer="IBUFDS_GTE4")
         if gen2_capable:
-            self.pll = pll = GTYQuadPLL(refclk, refclk_freq, 10e9, refclk_from_fabric=refclk_from_fabric)
-            gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq, data_width=40)
+            self.pll = pll = GTYQuadPLL(refclk, refclk_freq, 10e9,
+                refclk_from_fabric = refclk_from_fabric)
+            gty = self.add_transceiver("gty", GTY, pll, tx_pads, rx_pads, sys_clk_freq,
+                data_width = 40)
             # TX/RX rate: /2 (5Gbps, Gen 1) or /1 (10Gbps, Gen 2) from the 10Gbps QPLL.
             self.comb += [
                 gty.tx_rate.eq(Mux(self.rate_10g, 0b001, 0b010)),
@@ -359,11 +367,12 @@ class USPUSB3SerDes(USB3SerDes):
             )
 
         # Override GTY RX settings for USB3 --------------------------------------------------------
-        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings from
-        # the Xilinx Ultrascale+ Transceivers Wizard (SATA preset at 5Gbps, SSC) and PCIe Gen2
+        # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz), settings
+        # from the Xilinx Ultrascale+ Transceivers Wizard (SATA preset at 5Gbps, SSC) and PCIe Gen2
         # (pcie4_uscale_plus) GT wrappers:
         # - RXCDR_CFG2/3: SSC tolerant CDR settings.
-        # - RX_SUM_*/RX_DEGEN_CTRL/RX_DFE_AGC_CFG1: 5Gbps settings (LiteICLink: high line rates ones).
+        # - RX_SUM_*/RX_DEGEN_CTRL/RX_DFE_AGC_CFG1: 5Gbps settings (LiteICLink: high line rates
+        #   ones).
         # - RX/TX_CLK25_DIV: from the reference clock (also clocks the OOB detector).
         # - RXCDRHOLD: the CDR keeps its state during Electrical Idle/LFPS (as pcie4_uscale_plus).
         # - LPM mode (as PCIe Gen1/Gen2, LiteICLink default).
@@ -515,12 +524,12 @@ class GW5TXElectricalIdle(LiteXModule):
 
 class GW5USB3SerDes(USB3SerDes):
     """Gowin GW5AST-138B/GW5AT-15 GTR12 USB3 SerDes (GW5AST-138B: Q1 lane 0/1, SFP0/SFP1 of the Tang
-    Mega 138K Pro dock, 100 MHz REFCLK1 or 125 MHz REFCLK0; GW5AT-15: Q0 lane 0, 125 MHz REFCLK0, single
-    quad devices).
+    Mega 138K Pro dock, 100 MHz REFCLK1 or 125 MHz REFCLK0; GW5AT-15: Q0 lane 0, 125 MHz REFCLK0,
+    single quad devices).
 
-    5Gbps, raw 20-bit PMA with 40-bit fabric words (125MHz, 4 symbols per cycle), 8b/10b and polarity
-    in the fabric (LiteICLink GTR12), comma alignment by the PCS. The register configuration is
-    generated from usb3_pipe/gw5 TOML files with Gowin's tools.
+    5Gbps, raw 20-bit PMA with 40-bit fabric words (125MHz, 4 symbols per cycle), 8b/10b and
+    polarity in the fabric (LiteICLink GTR12), comma alignment by the PCS. The register
+    configuration is generated from usb3_pipe/gw5 TOML files with Gowin's tools.
 
     gen2_capable: 10Gbps selected with `rate_10g` (Gen 2, GW5AST-138B Q1 lanes): the rate dependent
     registers (CDR, QPLL1 output divider, TX lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) are
@@ -602,9 +611,9 @@ class GW5USB3SerDes(USB3SerDes):
             rate_port = GW5UPARPort()
             writes = gw5_usb3_rate_writes(lane, refclk, pll=pll,
                 clk_freq=sys_clk_freq if xcvr_clk_freq is None else xcvr_clk_freq)
-            # TX FFE at 10Gbps (runtime, bring-up: applied at the next rate change, lane 0 registers):
-            # tx_ffe_manual: amplitude (txlev), post-cursor (c1) and pre-cursor (cm) values, else the
-            # configuration defaults (5G values, as read on hardware).
+            # TX FFE at 10Gbps (runtime, bring-up: applied at the next rate change, lane 0
+            # registers): tx_ffe_manual: amplitude (txlev), post-cursor (c1) and pre-cursor (cm)
+            # values, else the configuration defaults (5G values, as read on hardware).
             self.tx_ffe_manual = Signal()  # i
             self.tx_ffe_txlev  = Signal(4) # i
             self.tx_ffe_c1     = Signal(4) # i
@@ -615,7 +624,8 @@ class GW5USB3SerDes(USB3SerDes):
                 ffe   = Signal(32)
                 self.comb += [
                     txlev.eq(Mux(self.tx_ffe_manual, Cat(C(0, 12), self.tx_ffe_txlev), 0xe000)),
-                    c1cm.eq(Mux(self.tx_ffe_manual, Cat(self.tx_ffe_cm, C(0, 4), self.tx_ffe_c1), 0xb00)),
+                    c1cm.eq(Mux(self.tx_ffe_manual,
+                        Cat(self.tx_ffe_cm, C(0, 4), self.tx_ffe_c1), 0xb00)),
                     ffe.eq(Mux(self.tx_ffe_manual, 0x110, 0)),
                 ]
                 writes = writes[:1] + [(0x908234, 0xe000, txlev), (0x908238, 0xb00, c1cm),
@@ -706,10 +716,10 @@ class GW5USB3SerDes(USB3SerDes):
             assert len(words_10g) == len(words_5g)
             words.append(words_10g)
 
-        lfps_tx    = Signal()
-        rate_10g   = Signal()
-        index      = Signal(max=len(words_5g))
-        lfps_word  = Signal(raw_width)
+        lfps_tx   = Signal()
+        rate_10g  = Signal()
+        index     = Signal(max=len(words_5g))
+        lfps_word = Signal(raw_width)
         self.specials += [
             MultiReg(self.tx_lfps | self.tx_idle, lfps_tx, "tx"),
             MultiReg(self.rate_10g, rate_10g, "tx"),

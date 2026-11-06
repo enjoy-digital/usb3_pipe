@@ -31,12 +31,13 @@ class TestUSB3PIPERX(unittest.TestCase):
         rng   = random.Random(0)
         words = [(rng.randrange(1, 2**32), 0) for _ in range(64)] # Non-zero data words.
 
-        partner = ScramblerModel()
-        ts2     = partner.process(words_to_symbols(ordered_set_words(TS2)*16), enable=False)
-        idle    = partner.process([(0x00, 0)]*4*32)
-        data    = partner.process(words_to_symbols(words))
-        idle_end = partner.process([(0x00, 0)]*4*4) # Logical Idle after the data (RX alignment latency).
-        wire    = symbols_to_words(ts2 + idle + data + idle_end)
+        partner  = ScramblerModel()
+        ts2      = partner.process(words_to_symbols(ordered_set_words(TS2)*16), enable=False)
+        idle     = partner.process([(0x00, 0)]*4*32)
+        data     = partner.process(words_to_symbols(words))
+        # Logical Idle after the data (RX alignment latency).
+        idle_end = partner.process([(0x00, 0)]*4*4)
+        wire     = symbols_to_words(ts2 + idle + data + idle_end)
         rx_ready_delay = len(ordered_set_words(TS2))*16 + 16 # rx_ready set while receiving Idle.
 
         gt  = GTModel(tx_ready=False)

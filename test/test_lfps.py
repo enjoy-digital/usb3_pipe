@@ -127,7 +127,6 @@ class TestLFPS(unittest.TestCase):
         ]
         run_simulation(dut, generators)
 
-
     def test_lfps_burst_generator_short_long(self):
         def burst_generator(dut):
             lengths = [8, 16, 32, 64, 128, 256, 512]
@@ -175,7 +174,6 @@ class TestLFPS(unittest.TestCase):
         ]
         run_simulation(dut, generators)
 
-
     def test_lfps_burst_generator_ignored_while_busy(self):
         def burst_generator(dut, burst_length):
             yield dut.length.eq(burst_length)
@@ -213,7 +211,6 @@ class TestLFPS(unittest.TestCase):
             burst_count_checker(dut),
         ]
         run_simulation(dut, generators)
-
 
     def test_lfps_generator(self):
         def lfps_generator(dut):
@@ -253,7 +250,6 @@ class TestLFPS(unittest.TestCase):
         ]
         run_simulation(dut, generators)
 
-
     def test_lfps_generator_disable_mid_run(self):
         def lfps_generator(dut):
             yield dut.generate.eq(1)
@@ -291,7 +287,6 @@ class TestLFPS(unittest.TestCase):
             lfps_burst_counter(dut),
         ]
         run_simulation(dut, generators)
-
 
     def test_lfps_generator_different_sys_clk(self):
         def lfps_generator(dut):

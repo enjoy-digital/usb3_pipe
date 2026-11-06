@@ -109,7 +109,7 @@ def main():
     platform = xilinx_kc705.Platform()
     platform.add_extension(_usb3_io)
     soc = USB3SoC(platform,
-        connector   = args.connector,
+        connector = args.connector,
         **usb3_soc_argdict(args))
     usb3_soc_build(parser, args, soc)
 

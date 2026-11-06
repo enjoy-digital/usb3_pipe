@@ -43,8 +43,8 @@ KIND_DPP  = 3 # Data Packet Payload (DPPSTART).
 KIND_EDB  = 4 # Nullified DPP (DPPABORT).
 
 def byte_offset(n):
-    """n bytes in bits (n*8) as a sized expression: in Verilog, a shift amount is self-determined and
-    8*n would be evaluated on max(width(8), width(n)) bits (truncated)."""
+    """n bytes in bits (n*8) as a sized expression: in Verilog, a shift amount is self-determined
+    and 8*n would be evaluated on max(width(8), width(n)) bits (truncated)."""
     return Cat(C(0, 3), n)
 
 def gen2_link_layout(n=2):
@@ -87,7 +87,8 @@ class WordsNarrower(LiteXModule):
         )
 
 class WordsToPairs(LiteXModule):
-    """Link words -> words pairs (gen2_link_layout, one word per entry; n: words entries of n words)."""
+    """Link words -> words pairs (gen2_link_layout, one word per entry; n: words entries of n
+    words)."""
     def __init__(self, n=2):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint(gen2_link_layout(n))
@@ -129,8 +130,8 @@ class PairsToWords(LiteXModule):
 
 class WordsPacker(LiteXModule):
     """Link words -> full words pairs (gen2_link_layout, two words per entry; a lone word is output
-    alone when no word follows it): words pairs at the words rate/2 (ex: Link Layer in a clock domain
-    at half the PHY frequency)."""
+    alone when no word follows it): words pairs at the words rate/2 (ex: Link Layer in a clock
+    domain at half the PHY frequency)."""
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint(gen2_link_layout())
@@ -159,11 +160,12 @@ class WordsPacker(LiteXModule):
         ]
 
 class LogicalIdleFilter(LiteXModule):
-    """Gen 1 Link words: Logical Idle words (00h data symbols) between the packets dropped, the packets
-    words kept (Header Packet: SHP framing word and 4 words, Link Command: SLC framing word and 1 word,
-    DPP: from the SDP framing word to the EPF of its END/EDB framing). Ex: Link Layer in a clock domain
-    at half the PHY frequency, consuming one word per cycle outside of the DPP data. The framing
-    Symbols/Logical Idle are decoded in a register stage (timings, one cycle of latency)."""
+    """Gen 1 Link words: Logical Idle words (00h data symbols) between the packets dropped, the
+    packets words kept (Header Packet: SHP framing word and 4 words, Link Command: SLC framing word
+    and 1 word, DPP: from the SDP framing word to the EPF of its END/EDB framing). Ex: Link Layer in
+    a clock domain at half the PHY frequency, consuming one word per cycle outside of the DPP data.
+    The framing Symbols/Logical Idle are decoded in a register stage (timings, one cycle of
+    latency)."""
     def __init__(self):
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -174,7 +176,8 @@ class LogicalIdleFilter(LiteXModule):
         flags = ["idle", "shp", "slc", "sdp", "epf"]
         self.decode = decode = stream.Buffer([("data", 32), ("ctrl", 4)] + [(f, 1) for f in flags])
         def has(symbol):
-            return Reduce("OR", [sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == symbol) for i in range(4)])
+            return Reduce("OR", [sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == symbol)
+                for i in range(4)])
         self.comb += [
             sink.connect(decode.sink),
             decode.sink.idle.eq((sink.data == 0) & (sink.ctrl == 0)),
@@ -268,11 +271,11 @@ class WordsWindow(LiteXModule):
     (the words consumed this cycle not counted: full rate kept with the level at any phase)."""
     def __init__(self, decode=None, nflags=0, nwords=2):
         self.sink    = sink = stream.Endpoint(gen2_link_layout(nwords))
-        self.n       = Signal(bits_for(nwords))                       # o
-        self.w       = [Signal(32) for _ in range(nwords)]            # o
-        self.c       = [Signal(4)  for _ in range(nwords)]            # o
+        self.n       = Signal(bits_for(nwords))                        # o
+        self.w       = [Signal(32) for _ in range(nwords)]             # o
+        self.c       = [Signal(4)  for _ in range(nwords)]             # o
         self.f       = [Signal(max(nflags, 1)) for _ in range(nwords)] # o
-        self.consume = Signal(bits_for(nwords))                       # i
+        self.consume = Signal(bits_for(nwords))                        # i
         self.w0, self.c0, self.f0 = self.w[0], self.c[0], self.f[0]
         self.w1, self.c1, self.f1 = self.w[1], self.c[1], self.f[1]
 
@@ -356,8 +359,8 @@ class Gen2RXFraming(LiteXModule):
     bytes per cycle for wider transceiver words (ex: 80-bit at 125MHz, a Data Block every 1.65
     cycles).
 
-    With lc_enable, LGOOD_n/LCRD_x/LBAD Link Commands (16+ bytes per cycle: a copy with a valid CRC-5,
-    8 bytes: both copies identical) are output on source_lc
+    With lc_enable, LGOOD_n/LCRD_x/LBAD Link Commands (16+ bytes per cycle: a copy with a valid
+    CRC-5, 8 bytes: both copies identical) are output on source_lc
     (Link Command word, Symbol 0 on data[0:8]) instead of source: they only concern the transmitter
     (Header Packets acknowledgements, credits and retransmission requests), the Link Layer gets them
     without waiting behind the received packets (RX buffering, 7.2.4.1: Header Packets held in the
@@ -374,8 +377,10 @@ class Gen2RXFraming(LiteXModule):
         self.errors    = Signal(16) # o: Unknown packet starts (skipped bytes).
         self.corrected = Signal(16) # o: Packet starts with a framing Symbol 0 error (3/4 valid).
         self.lc_enable = Signal()   # i: LGOOD_n/LCRD_x on source_lc.
-        self.dbg_error        = Signal()         # o: Unknown packet start skipped (pulse, bring-up).
-        self.dbg_error_window = Signal(8*nbytes) # o: Its bytes (the skipped byte first), with dbg_error.
+        self.dbg_error        = Signal()         # o: Unknown packet start skipped (pulse,
+                                                 #    bring-up).
+        self.dbg_error_window = Signal(8*nbytes) # o: Its bytes (the skipped byte first), with
+                                                 #    dbg_error.
 
         # # #
 
@@ -385,7 +390,7 @@ class Gen2RXFraming(LiteXModule):
         in_data  = Signal(8*nbytes, reset_less=True)
         in_codes = Signal(3*nbytes, reset_less=True)
         in_ready = Signal()
-        codes = Signal(3*nbytes)
+        codes    = Signal(3*nbytes)
         for i in range(nbytes):
             b = sink.data[8*i:8*(i+1)]
             self.comb += Case(b, {
@@ -464,27 +469,28 @@ class Gen2RXFraming(LiteXModule):
         ]
 
         # Packet -----------------------------------------------------------------------------------
-        kind      = Signal(3)
-        rem       = Signal(11) # Packet bytes remaining (from the current chunk).
-        start     = Signal()   # First chunk of the packet.
-        last      = Signal()
-        dpp_len12 = Signal(11, reset=12) # Last DPH Length Field Replica + 12 (DPP length).
-        dpp_len_sel = Signal(11)         # DPP length for the DPP start (set_rem, see below).
-        out       = Signal(8*nbytes)
-        out_edb   = Signal(nbytes)
+        kind        = Signal(3)
+        rem         = Signal(11) # Packet bytes remaining (from the current chunk).
+        start       = Signal()   # First chunk of the packet.
+        last        = Signal()
+        dpp_len12   = Signal(11, reset=12) # Last DPH Length Field Replica + 12 (DPP length).
+        dpp_len_sel = Signal(11)           # DPP length for the DPP start (set_rem, see below).
+        out         = Signal(8*nbytes)
+        out_edb     = Signal(nbytes)
         self.comb += [
             out.eq((win >> byte_offset(p_out))[0:8*nbytes]),
             out_edb.eq((Cat(r_edb, in_edb) >> p_out)[0:nbytes]),
             last.eq(rem <= nbytes),
         ]
 
-        # Output words (registered with 16+ bytes per cycle, see the Link Commands): framing Symbols as
-        # K Symbols, bytes after the packet end padded (00h).
+        # Output words (registered with 16+ bytes per cycle, see the Link Commands): framing Symbols
+        # as K Symbols, bytes after the packet end padded (00h).
         if nbytes >= 16:
             # Chunk registered first (PipeValid: the window shift), the framing Symbols/padding then
             # applied from the registers and the Link Command decoded (PipeReady registers after):
             # timings (the shift and the Symbols selection in two stages).
-            raw = stream.Endpoint([("data", 8*nbytes), ("edb", nbytes), ("words", bits_for(nbytes//4)),
+            raw = stream.Endpoint([
+                ("data", 8*nbytes), ("edb", nbytes), ("words", bits_for(nbytes//4)),
                 ("rem", 11), ("start", 1), ("kind", 3), ("fin", 1)])
             self.out_pipe_valid = out_pipe_valid = stream.PipeValid(raw.description)
             cooked = stream.Endpoint(gen2_link_layout(nbytes//4) + [("lc", 1)])
@@ -511,7 +517,8 @@ class Gen2RXFraming(LiteXModule):
             KIND_DPP : start_k.eq(SDP),
             KIND_EDB : start_k.eq(EDB),
         })
-        # Byte j of the chunk is packet byte i: i >= length <-> j >= rem (comparisons with constants).
+        # Byte j of the chunk is packet byte i: i >= length <-> j >= rem (comparisons with
+        # constants).
         for j in range(nbytes):
             byte   = s_data[8*j:8*(j+1)]
             data   = dst.data[8*j:8*(j+1)]
@@ -532,12 +539,13 @@ class Gen2RXFraming(LiteXModule):
                 data.eq(byte),
             )
 
-        # LGOOD_n/LCRD_x/LBAD Link Commands (7.2.2): source_lc. Fast Link Commands: identical copies,
-        # or a copy of a fast kind with a valid CRC-5 (the Link Layer votes between the copies): a
-        # Link Command with a bit error in one copy is not sent behind the RX words, where the
-        # following fast Link Commands would overtake it (LGOOD_n/LCRD_x out of order: Recovery,
-        # seen on hardware at 10Gbps). With 16+ bytes per cycle, decoded on the registered chunk
-        # (timings).
+        # LGOOD_n/LCRD_x/LBAD Link Commands (7.2.2): source_lc. Fast Link Commands: identical
+        # copies, or a copy of a fast kind with a valid CRC-5 (the Link Layer votes between the
+        # copies): a Link Command with a bit error in one copy is not sent behind the RX words,
+        # where the following fast Link Commands would overtake it (LGOOD_n/LCRD_x out of order:
+        # Recovery, seen on hardware at 10Gbps). With 16+ bytes per cycle, decoded on the registered
+        # chunk (timings).
+        # Imported here: the PHY package does not depend on usb3_core.
         from usb3_core.crc import CRC5
         def fast_kind(c):
             return (((c[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
@@ -550,7 +558,8 @@ class Gen2RXFraming(LiteXModule):
         self.comb += [
             crc5[0].data.eq(lc_w[0:11]),
             crc5[1].data.eq(lc_w[16:27]),
-            fast_lc.eq((fast_kind(lc_w[0:16])  & ((lc_w[0:16] == lc_w[16:32]) | (crc5[0].value == lc_w[11:16]))) |
+            fast_lc.eq((fast_kind(lc_w[0:16])  & ((lc_w[0:16] == lc_w[16:32]) |
+                                                  (crc5[0].value == lc_w[11:16]))) |
                        (fast_kind(lc_w[16:32]) & (crc5[1].value == lc_w[27:32]))),
         ]
         lc_fast   = Signal()
@@ -590,9 +599,9 @@ class Gen2RXFraming(LiteXModule):
                 KIND_DPP + 1 : NextValue(rem, dpp_len_sel),
                 KIND_EDB + 1 : NextValue(rem, 4),
             })
-        # Unknown packet start at p (Symbol 0 of a framing Ordered Set with a bit error?): Symbols 1/2
-        # identical start Symbols and Symbol 3 EPF (3 of the 4 framing Symbols valid) -> packet start
-        # at p, else the byte is skipped (error).
+        # Unknown packet start at p (Symbol 0 of a framing Ordered Set with a bit error?): Symbols
+        # 1/2 identical start Symbols and Symbol 3 EPF (3 of the 4 framing Symbols valid) -> packet
+        # start at p, else the byte is skipped (error).
         resync_code = Signal(3)
         self.comb += Case(out[8:16], {
             GEN2_SHP  : resync_code.eq(KIND_HP  + 1),
@@ -637,9 +646,9 @@ class Gen2RXFraming(LiteXModule):
                 )
             )
         )
-        # DPP length: the DPH Length Field Replicas (packet bytes 20-21 and 22-23) when identical, else
-        # the DPH Data Length field (packet bytes 10-11, checked later by the Header Packet CRC-16):
-        # a bit error in a replica does not lose the DPP framing.
+        # DPP length: the DPH Length Field Replicas (packet bytes 20-21 and 22-23) when identical,
+        # else the DPH Data Length field (packet bytes 10-11, checked later by the Header Packet
+        # CRC-16): a bit error in a replica does not lose the DPP framing.
         hlen_rem   = 24 - nbytes*(10//nbytes)  # rem of the chunk with the DPH bytes 10-11.
         hlen       = Signal(16, reset_less=True)
         dph_len12  = Signal(11) # DPP length + 12: candidates +12, selected (timings).
@@ -653,7 +662,9 @@ class Gen2RXFraming(LiteXModule):
             r_dph_last = Signal()
             self.comb += r_dph_last.eq(r.valid & (r.kind == KIND_DPH) & r.fin)
             self.sync += [
-                If(r.valid & r.ready & (r.kind == KIND_DPH) & (r.rem == hlen_rem), hlen.eq(hlen_now)),
+                If(r.valid & r.ready & (r.kind == KIND_DPH) & (r.rem == hlen_rem),
+                    hlen.eq(hlen_now)
+                ),
                 If(r_dph_last & r.ready, dpp_len12.eq(dph_len12)),
             ]
             self.comb += dpp_len_sel.eq(Mux(r_dph_last, dph_len12, dpp_len12))
@@ -665,7 +676,8 @@ class Gen2RXFraming(LiteXModule):
             self.sync += If(fsm.ongoing("PACKET") & avail & out_ready & (kind == KIND_DPH) &
                 (rem == hlen_rem), hlen.eq(hlen_now))
         hlen_sel = hlen_now if hlen_rem <= nbytes else hlen
-        self.comb += dph_len12.eq(Mux(replica0 == replica1, replica0[0:11] + 12, hlen_sel[0:11] + 12))
+        self.comb += dph_len12.eq(Mux(replica0 == replica1, replica0[0:11] + 12,
+            hlen_sel[0:11] + 12))
         p_next = Signal(pw + 1)
         fsm.act("IDLE",
             If(avail,
@@ -814,7 +826,7 @@ class Gen2TXFramer(LiteXModule):
             window.consume.eq(Mux(four, 4, Mux(two, 2, Mux(valid0 & ready0, 1, 0)))),
         ]
 
-        # Words -> bytes chunks (4 bytes, last chunk 1-4, 8 or 16 bytes in the DPPs) --------------
+        # Words -> bytes chunks (4 bytes, last chunk 1-4, 8 or 16 bytes in the DPPs) ---------------
         chunk_layout = [("data", 8*eb), ("bytes", bits_for(eb))]
         chunk = stream.Endpoint(chunk_layout)
 
@@ -832,17 +844,17 @@ class Gen2TXFramer(LiteXModule):
                 r.append(Mux(ctrl[j], k, b))
             return Cat(*r)
 
-        is_dph   = Signal()
-        dph_len  = Signal(16)
-        n        = Signal(3) # Word index in the Header Packet.
-        word0    = Signal(32)
-        word0_c  = Signal(4)
-        hpstart  = window.f0[0]
-        lcstart  = window.f0[1]
+        is_dph    = Signal()
+        dph_len   = Signal(16)
+        n         = Signal(3) # Word index in the Header Packet.
+        word0     = Signal(32)
+        word0_c   = Signal(4)
+        hpstart   = window.f0[0]
+        lcstart   = window.f0[1]
         # DPPEND/DPPABORT end: EPF K Symbol after the DPPSTART word.
-        epf      = window.f0[2:6]
-        edb0     = window.f0[6] # Symbol 0 EDB.
-        type_dp  = window.f0[7] # DW0 Type: DP.
+        epf       = window.f0[2:6]
+        edb0      = window.f0[6] # Symbol 0 EDB.
+        type_dp   = window.f0[7] # DW0 Type: DP.
         epf_bytes = Signal(3)
         self.comb += If(epf[0], epf_bytes.eq(1)).Elif(epf[1], epf_bytes.eq(2)).Elif(epf[2],
             epf_bytes.eq(3)).Else(epf_bytes.eq(4))
@@ -1033,8 +1045,8 @@ class Gen2TXFramer(LiteXModule):
         )
 
 class Gen2TXPacker(LiteXModule):
-    """Transmission units bytes (nbytes per entry: 8 or 16) to Data Blocks payloads (16 bytes, bytes in
-    transmission order from data[0:8]) for Gen2TX: units packed back to back, Idle Symbols (5Ah)
+    """Transmission units bytes (nbytes per entry: 8 or 16) to Data Blocks payloads (16 bytes, bytes
+    in transmission order from data[0:8]) for Gen2TX: units packed back to back, Idle Symbols (5Ah)
     after a unit when the next one is not available (last: Data Block ending a unit, SKP Ordered
     Sets allowed after it). A unit must be fully available when started (units_available: the
     Data Blocks of a unit are transmitted without Idle Symbols, 7.2.1.2.2).
@@ -1049,8 +1061,9 @@ class Gen2TXPacker(LiteXModule):
         self.unit_end        = Signal() # o: A unit is read (pulse, last entry).
         self.flush           = Signal() # i: Discard the sink entries (link not in U0).
         self.skp_pending     = Signal() # i: SKP Ordered Set pending (Gen2TX): the Data Block ending
-                                        #    a unit ends there (Idle Symbols, last) instead of packing
-                                        #    the next unit (SKP Ordered Sets only between packets).
+                                        #    a unit ends there (Idle Symbols, last) instead of
+                                        #    packing the next unit (SKP Ordered Sets only between
+                                        #    packets).
 
         # # #
 
@@ -1058,7 +1071,8 @@ class Gen2TXPacker(LiteXModule):
         fill    = Signal(bits_for(16 + nbytes)) # Bytes in buf (0-(16 + nbytes)).
         in_unit = Signal()     # Reading a unit.
         ending  = Signal()     # Block with a unit end and Idle Symbols.
-        hold    = Signal()     # Unit ended with a SKP Ordered Set pending: next unit after the block.
+        # Unit ended with a SKP Ordered Set pending: next unit after the block.
+        hold    = Signal()
 
         # Output: a block when 16 bytes are buffered, or a unit end padded with Idle Symbols.
         out_fire = Signal()
@@ -1088,14 +1102,15 @@ class Gen2TXPacker(LiteXModule):
         # block (Idle Symbols) is sent first.
         # Both cases (output block taken this cycle or not) computed from the registered state, then
         # selected with out_fire (timings: placement/read decisions not after the output handshake).
-        fill_eff = Signal(len(fill))
-        start_ok = Signal()
-        rd       = Signal()
+        fill_eff  = Signal(len(fill))
+        start_ok  = Signal()
+        rd        = Signal()
         fill_fire = Signal(len(fill)) # Fill level after an output block.
         self.comb += fill_fire.eq(Mux(fill >= 16, fill - 16, 0))
         def read_ok(f):
             start = (f == 0) | ((f + sink.bytes) >= 16)
-            return sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold & start)) & (f <= 16)
+            return (sink.valid & ~self.flush & (in_unit | (self.units_available & ~hold & start)) &
+                (f <= 16))
         rd_keep = Signal()
         rd_fire = Signal()
         self.comb += [
@@ -1113,8 +1128,8 @@ class Gen2TXPacker(LiteXModule):
         self.comb += [
             Case(fill, {f: placed_keep.eq((buf & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
                 for f in range(17)}),
-            Case(fill_fire, {f: placed_fire.eq(((buf >> 128) & ((1 << (8*f)) - 1)) | (sink.data << (8*f)))
-                for f in range(17)}),
+            Case(fill_fire, {f: placed_fire.eq(((buf >> 128) & ((1 << (8*f)) - 1)) |
+                (sink.data << (8*f))) for f in range(17)}),
         ]
         placed = Signal(len(buf))
         self.comb += placed.eq(Mux(out_fire, placed_fire, placed_keep))
@@ -1162,9 +1177,9 @@ class Gen2TXBlocksPacker(LiteXModule):
     Units are packed in chains: a unit is started in the partial block of the previous one (unit end
     in the block) when available, else the partial block is output padded with Idle Symbols and ends
     the chain (last). Chains also end at a unit end with a SKP Ordered Set pending (Gen2TX) or after
-    max_chain blocks (the reader waits for complete chains: bounded buffering). The fill level of the
-    partial block only changes at the units ends: blocks are a byte selection of the partial block
-    and the entry by the registered fill level. Registered output."""
+    max_chain blocks (the reader waits for complete chains: bounded buffering). The fill level of
+    the partial block only changes at the units ends: blocks are a byte selection of the partial
+    block and the entry by the registered fill level. Registered output."""
     def __init__(self, max_chain=32):
         self.sink            = sink   = stream.Endpoint(gen2_tx_unit_layout(32))
         self.source          = source = stream.Endpoint(gen2_tx_blocks_layout(2))

@@ -14,9 +14,6 @@
   (Gen2TXDatapath/Gen2RXDatapath, 40-bit at 250MHz for 10Gbps), see doc/gen2-x2-roadmap.md.
 """
 
-from functools import reduce
-from operator import or_, and_
-
 from migen import *
 from migen.genlib.cdc import MultiReg
 
@@ -26,7 +23,8 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common     import K, COM, SKP, AsyncFIFO, Buffer
 from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
-from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ, GEN2_IDLE
+from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ
+from usb3_pipe.common     import GEN2_IDLE
 from usb3_pipe.common     import gen2_sync_payload, gen2_sds_payload, symbols_to_int
 from usb3_pipe.coding     import RX8b10bChecker
 from usb3_pipe.coding     import GEN2_DC_REDUCE_ONES, GEN2_DC_REDUCE_ZEROS, popcount
@@ -98,8 +96,8 @@ class RXSKPRemover(LiteXModule):
                 sr_data.eq(Cat(sr_data[8*i:], frag_data[0:8*i])),
                 sr_ctrl.eq(Cat(sr_ctrl[1*i:], frag_ctrl[0:1*i])),
             ]
-        # Accept a fragment (up to 4 bytes) only if it fits in the Shift Register, taking into account
-        # the word output on the same cycle.
+        # Accept a fragment (up to 4 bytes) only if it fits in the Shift Register, taking into
+        # account the word output on the same cycle.
         self.comb += pipe.source.ready.eq((sr_bytes <= 4) | (source.ready & (sr_bytes <= 8)))
         self.sync += [
             If(pipe.source.valid & pipe.source.ready,
@@ -123,7 +121,6 @@ class RXSKPRemover(LiteXModule):
                 source.ctrl.eq(sr_ctrl[1*(8-i):1*(8-i+4)]),
             ]
         self.comb += Case(sr_bytes, cases)
-
 
 # RX Aligner ---------------------------------------------------------------------------------------
 
@@ -154,7 +151,7 @@ class RXWordAligner(LiteXModule):
         def is_marker(data, ctrl):
             if check_ctrl_only:
                 return ctrl
-            return ctrl & reduce(or_, [data == m.value for m in markers])
+            return ctrl & Reduce("OR", [data == m.value for m in markers])
         marker   = Signal(4)
         marker_d = Signal(4)
         for i in range(4):
@@ -165,16 +162,16 @@ class RXWordAligner(LiteXModule):
         for i in reversed(range(4)):
             self.comb += If(marker[i], alignment.eq(i))
 
-        # Alignment update: only at the start of a marker run (markers in the word and no marker on the
-        # last symbol of the previous word), so that alignment is kept on non-marker K-codes (ex: Link
-        # Layer framing in U0) and on marker runs spanning 2 words. The word output on this cycle ends
-        # before the run:
+        # Alignment update: only at the start of a marker run (markers in the word and no marker on
+        # the last symbol of the previous word), so that alignment is kept on non-marker K-codes
+        # (ex: Link Layer framing in U0) and on marker runs spanning 2 words. The word output on
+        # this cycle ends before the run:
         # - Run earlier in its word than the current alignment: new alignment on this cycle (the
         #   output word is the buffered word, the next one starts on the run).
         # - Run later in its word: new alignment on the next cycle (the word output with the current
         #   alignment is complete, the new alignment on this cycle would drop its first symbols: end
-        #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run word
-        #   before the run (Logical Idle) are skipped.
+        #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run
+        #   word before the run (Logical Idle) are skipped.
         run_start     = Signal()
         alignment_sel = Signal(2)
         self.comb += [
@@ -313,8 +310,9 @@ class TXSKPInserter(LiteXModule):
     (first/last) should be used to ensure SKP are inserted only between packets and not inside.
 
     Note: To simplify implementation and keep alignment, 2 SKP Ordered Sets are inserted every 708
-    symbols, which is a small deviation from the specification (good average, but 2x interval between
-    SKPs). More tests need to be done to ensure this deviation is acceptable with all hardwares.
+    symbols, which is a small deviation from the specification (good average, but 2x interval
+    between SKPs). More tests need to be done to ensure this deviation is acceptable with all
+    hardwares.
 
     Up to 4 SKP Ordered Sets (2 SKP words) are buffered (6.4.3). When disabled (TSEQ: SKP are only
     transmitted after TS1/TS2, packets and Logical Idle, 6.4.3.1), no SKP is scheduled and the count
@@ -530,12 +528,13 @@ class Gen2TX(LiteXModule):
 
     SKP Ordered Sets (6.4.3.3): Y counts the non SKP blocks (reset while sending TSEQ: Y restarts on
     Polling.Active entry), Z = Y/skp_interval accumulated (2 max) and inserted after SYNC, TS1, TS2,
-    SDS, Logical Idle and the last Data Block of a packet (sink.last), never inside a packet. SYNC has
-    priority over SKP.
+    SDS, Logical Idle and the last Data Block of a packet (sink.last), never inside a packet. SYNC
+    has priority over SKP.
 
     registered: controls (enable, tx_tseq/tx_ts1/tx_ts2/tx_data, link_config) and their decodes
     registered, blocks selection/payloads registered before the scrambling (timings: the selection
-    logic not on the scrambler/output paths, +2 cycles of latency, controls applied one cycle later).
+    logic not on the scrambler/output paths, +2 cycles of latency, controls applied one cycle
+    later).
     """
     def __init__(self, seed=GEN2_LFSR_SEED, skp_interval=GEN2_SKP_INTERVAL, sync_interval_ts=32,
         sync_interval_tseq=16384, registered=False, sync_on_tseq_change=True):
@@ -807,12 +806,12 @@ class Gen2TXDCBalance(LiteXModule):
     the end of Symbol 11: > 31: DC Balance Symbols 14 and 15, > 15: Symbol 15 only (the Gen2TX LFSR
     still advances on them).
 
-    Pipelined over 3 cycles per block (popcounts, balance, output/update): the gearbox accepts a block
-    every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a small adder
-    and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex: 80-bit at
-    125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then the
-    balance increments of the possible DC Balance Symbols precomputed: the running balance loop is
-    then adders from registers and a one-hot selection, the decisions comparisons of a register
+    Pipelined over 3 cycles per block (popcounts, balance, output/update): the gearbox accepts a
+    block every 3 cycles at most at 40-bit (132-bit blocks), the running balance loop is then a
+    small adder and saturation. one_per_cycle: one block per cycle (wider transceiver words, ex:
+    80-bit at 125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then
+    the balance increments of the possible DC Balance Symbols precomputed: the running balance loop
+    is then adders from registers and a one-hot selection, the decisions comparisons of a register
     with constants (12-bit balance saturated at +-1915 one cycle late).
     """
     def __init__(self, one_per_cycle=False):
@@ -924,7 +923,8 @@ class Gen2TXDCBalance(LiteXModule):
         # level, copies for the stages registers enables: fanout), the output buffer absorbs the
         # blocks in flight when the gearbox is not ready (one block per 1.65 cycles on average).
         self.out_buffer = out_buffer = stream.SyncFIFO(gen2_block_layout(), 8, buffered=True)
-        self.out_reg    = out_reg    = stream.PipeValid(gen2_block_layout()) # Registers to the gearbox.
+        # Registers to the gearbox.
+        self.out_reg    = out_reg    = stream.PipeValid(gen2_block_layout())
         self.comb += [
             out_buffer.source.connect(out_reg.sink),
             out_reg.source.connect(source),
@@ -1073,8 +1073,10 @@ class Gen2TXDCBalance(LiteXModule):
             balance.eq(balance_next),
             If(gos[3], mid.eq(mid_next)),
         ]
-        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]), data2[112:120])
-        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]), data2[120:128])
+        sym14 = Mux(fix_14, Mux(positive, GEN2_DC_REDUCE_ONES[0], GEN2_DC_REDUCE_ZEROS[0]),
+            data2[112:120])
+        sym15 = Mux(fix_15, Mux(positive, GEN2_DC_REDUCE_ONES[1], GEN2_DC_REDUCE_ZEROS[1]),
+            data2[120:128])
         self.comb += [
             out_buffer.sink.valid.eq(advance2),
             out_buffer.sink.header.eq(header2),
@@ -1091,12 +1093,12 @@ class Gen2TXDCBalance(LiteXModule):
 class Gen2RX(LiteXModule):
     """Gen 2 block receiver (from Gen2BlockAligner).
 
-    Descrambling (6.3.2.3): Data Blocks advance/descramble, control blocks advance the LFSR (Symbol 0
-    bypass), SYNC Ordered Sets re-initialize it (SKP Ordered Sets are removed by the aligner and do not
-    advance it). TSEQ/TS1/TS2 detection on Symbols 0-13 (Symbols 14/15 not checked, 6.4.1.2.2, Link
-    Functionality excluded): rx_tseq/rx_ts1/rx_ts2 pulse every n_ts consecutive Ordered Sets (SKP and
-    SYNC Ordered Sets are not interruptions), tseq/ts1/ts2/sync/sds/unknown pulse on each received
-    control block. The Data Blocks following an SDS are output on source.
+    Descrambling (6.3.2.3): Data Blocks advance/descramble, control blocks advance the LFSR (Symbol
+    0 bypass), SYNC Ordered Sets re-initialize it (SKP Ordered Sets are removed by the aligner and
+    do not advance it). TSEQ/TS1/TS2 detection on Symbols 0-13 (Symbols 14/15 not checked,
+    6.4.1.2.2, Link Functionality excluded): rx_tseq/rx_ts1/rx_ts2 pulse every n_ts consecutive
+    Ordered Sets (SKP and SYNC Ordered Sets are not interruptions), tseq/ts1/ts2/sync/sds/unknown
+    pulse on each received control block. The Data Blocks following an SDS are output on source.
 
     Pipeline (250MHz with one block every 3.3 cycles): descrambling, then the Ordered Sets matching
     (registered), the outputs follow the input blocks by 1 (source, rx_sync, rx_sds) to 3 cycles.
@@ -1187,7 +1189,7 @@ class Gen2RX(LiteXModule):
             checks.append(sym[4] == 0)
             if not with_link_config:
                 checks.append(sym[5] == 0)
-            return reduce(and_, checks)
+            return Reduce("AND", checks)
         valid_d = Signal()
         sync_d  = Signal()
         lc_d    = Signal(8)
@@ -1219,7 +1221,7 @@ class Gen2RX(LiteXModule):
             if name != "tseq":
                 self.sync += If(m, self.link_config.eq(lc_d))
             matches.append(match)
-        self.sync += self.unknown.eq(valid & ctl & ~sync & ~sds & ~reduce(or_, matches))
+        self.sync += self.unknown.eq(valid & ctl & ~sync & ~sds & ~Reduce("OR", matches))
 
 # Gen 2 TX/RX Datapaths ----------------------------------------------------------------------------
 

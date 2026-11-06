@@ -20,17 +20,20 @@ import os
 import common # Repository root on the path.
 
 from migen import *
+from migen.genlib.cdc import MultiReg, PulseSynchronizer
 
 from litex.gen import *
 
+from litex.soc.interconnect.csr     import *
 from litex.soc.integration.soc_core import *
-from litex.soc.integration.builder import *
+from litex.soc.integration.builder  import *
 
 from litescope import LiteScopeAnalyzer
 
-from usb3_pipe.phy   import USB3PHY
-from usb3_pipe.debug import USB3PHYDebug, USB3SerDesDebug
-from usb3_pipe.debug import usb3_analyzer_groups, USB3_ANALYZER_GROUPS
+from usb3_pipe.phy      import USB3PHY
+from usb3_pipe.datapath import Gen2RXDatapath
+from usb3_pipe.debug    import USB3PHYDebug, USB3SerDesDebug, Gen2RXDebug
+from usb3_pipe.debug    import usb3_analyzer_groups, USB3_ANALYZER_GROUPS
 
 from usb3_core.examples import add_usb3_example, USB3_EXAMPLES
 
@@ -66,13 +69,11 @@ class USB3BaseSoC(SoCCore):
 # USB3 Device --------------------------------------------------------------------------------------
 
 class RXRawSnapshot(LiteXModule):
-    """Raw RX words snapshot (bring-up): circular capture of the raw words (rx_nr: reset-less rx clock, kept
-    across RX re-initializations) with their flags, stopped `depth//2` words after a trigger
-    (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs (oldest word
-    at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
+    """Raw RX words snapshot (bring-up): circular capture of the raw words (rx_nr: reset-less rx
+    clock, kept across RX re-initializations) with their flags, stopped `depth//2` words after a
+    trigger (flags bit selected by the trigger CSR) once armed; read back with index/data CSRs
+    (oldest word at index 0, 40-bit word in data0/data1[:8], flags in data1[8:])."""
     def __init__(self, rx_raw, flags, depth=1024, clock_domain="rx_nr", write_enable=1, post=None):
-        from migen.genlib.cdc import MultiReg, PulseSynchronizer
-        from litex.soc.interconnect.csr import CSR, CSRStorage, CSRStatus
         self._arm     = CSR()
         self._trigger = CSRStorage(bits_for(len(flags) - 1))
         self._done    = CSRStatus()
@@ -139,9 +140,6 @@ def add_usb3_gen2_rx(soc, serdes, phy):
     """Gen 2 bring-up: Gen 2 RX monitor on the raw transceiver symbols (the PHY switches to 10Gbps
     once Gen 2 is negotiated in SuperSpeedPlus Polling, USB3PHY.add_gen2) with its debug CSRs
     (usb3_gen2_rx_*: alignment status, blocks/Ordered Sets counters) and a raw RX snapshot."""
-    from litex.soc.interconnect.csr import CSR, CSRStatus, CSRStorage
-    from usb3_pipe.datapath import Gen2RXDatapath
-    from usb3_pipe.debug import Gen2RXDebug
     # Gen 2 RX datapath/counters in a reset-less RX clock domain: kept across the RX
     # re-initializations (rate changes), counters accumulated over the 10Gbps periods.
     soc.cd_rx_nr = ClockDomain(reset_less=True)
@@ -172,16 +170,19 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         blocks = phy.gen2_pipe.tx_blocks
         soc.usb3_gen2_tx_snapshot = RXRawSnapshot(phy.gen2_pipe.tx_data, clock_domain="tx_nr",
             flags=Cat(blocks.valid & blocks.ready, blocks.last))
-    # PHY Gen2PIPE events (sys): TS1/TS2 (8 consecutive) pulses at the Gen2PIPE and LTSSM inputs, PHY
-    # Gen 2 RX aligner status.
+    # PHY Gen2PIPE events (sys): TS1/TS2 (8 consecutive) pulses at the Gen2PIPE and LTSSM inputs,
+    # PHY Gen 2 RX aligner status.
     if hasattr(phy, "gen2_pipe"):
-        from migen.genlib.cdc import MultiReg
         gp = phy.gen2_pipe
         soc.usb3_gen2_events = CSRStatus(32*5, description="In U0: ts_rx_ts1 (LTSSM), ts_rx_ts2, "
             "ts_rx_ts2_reset cycles, PHY Gen2RX TS1 blocks, monitor TS1 blocks.")
         counts = [Signal(32) for _ in range(5)]
         u0 = phy.ltssm.u0
-        for c, e in zip(counts[:3], [phy.ltssm.ts_rx_ts1, phy.ltssm.ts_rx_ts2, phy.ltssm.ts_rx_ts2_reset]):
+        for c, e in zip(counts[:3], [
+            phy.ltssm.ts_rx_ts1,
+            phy.ltssm.ts_rx_ts2,
+            phy.ltssm.ts_rx_ts2_reset,
+        ]):
             soc.sync += If(u0 & e, c.eq(c + 1))
         u0_rx = Signal()
         soc.specials += MultiReg(u0, u0_rx, "rx_nr")
@@ -192,12 +193,15 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         soc.comb += soc.usb3_gen2_events.status.eq(Cat(*counts))
         # PHY Gen 2 RX Link Layer path: RX blocks buffer overflow (sticky), framing errors (unknown
         # packet starts).
-        soc.usb3_gen2_rx_link = CSRStatus(32, description="RX overflow [0], framing errors [31:16].")
+        soc.usb3_gen2_rx_link = CSRStatus(32,
+            description="RX overflow [0], framing errors [31:16].")
         soc.specials += MultiReg(Cat(gp.rx_overflow, C(0, 15), gp.rx_framing.errors),
             soc.usb3_gen2_rx_link.status)
         aligner = gp.rx.aligner
-        soc.usb3_gen2_phy_rx_status = CSRStatus(8, description="PHY Gen 2 RX: aligned, locked, polarity, data_stream.")
-        soc.specials += MultiReg(Cat(aligner.aligned, aligner.locked, aligner.polarity, gp.rx.data_stream),
+        soc.usb3_gen2_phy_rx_status = CSRStatus(8,
+            description="PHY Gen 2 RX: aligned, locked, polarity, data_stream.")
+        soc.specials += MultiReg(
+            Cat(aligner.aligned, aligner.locked, aligner.polarity, gp.rx.data_stream),
             soc.usb3_gen2_phy_rx_status.status[0:4])
     # RX Data Blocks snapshot (monitor, descrambled, rx_nr): trigger 0: Link Layer Recovery request.
     link = getattr(getattr(soc, "usb3_core", None), "link", None)
@@ -210,19 +214,22 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             lcrd_count.eq(lcrd_count - 1))
         soc.comb += lcrd_err.eq(lcrd_count != 0)
         soc.specials += MultiReg(lcrd_err, lcrd_err_rx, "rx_nr")
-        # Link Commands counts along the RX path (frozen on a LCRD_x out of order, rearm with the CSR):
-        # framing output / words buffer writes (rx), words buffer reads / Link Layer input / checked
-        # (sys).
+        # Link Commands counts along the RX path (frozen on a LCRD_x out of order, rearm with the
+        # CSR): framing output / words buffer writes (rx), words buffer reads / Link Layer input /
+        # checked (sys).
         lrx   = phy.gen2_pipe.link_rx
         fr    = lrx.framing.source
         bsink = lrx.buffer.sink
         bsrc  = lrx.buffer.source
         src   = phy.source # PHY order: Symbol 0 on data[24:32].
-        from litex.soc.interconnect.csr import CSR
         soc.usb3_gen2_lc_rearm = CSR()
         stop    = Signal()
         stop_rx = Signal()
-        soc.sync += If(soc.usb3_gen2_lc_rearm.re, stop.eq(0)).Elif(link.dbg_recovery_cause[2], stop.eq(1))
+        soc.sync += If(soc.usb3_gen2_lc_rearm.re,
+            stop.eq(0)
+        ).Elif(link.dbg_recovery_cause[2],
+            stop.eq(1)
+        )
         soc.specials += MultiReg(stop, stop_rx, "rx_nr")
         def is_lc(ep, swap=False):
             return ep.valid & ep.ready & (ep.ctrl[0:4] == 0b1111) & (
@@ -241,8 +248,8 @@ def add_usb3_gen2_rx(soc, serdes, phy):
             c = Signal(32)
             soc.sync += If(~stop & e, c.eq(c + 1))
             counts.append(c)
-        soc.usb3_gen2_lc_counts = CSRStatus(32*7, description="rx: LC framing, LC buffer written, entries "
-            "written; sys: LC buffer read, entries read, LC Link Layer input, LC checked.")
+        soc.usb3_gen2_lc_counts = CSRStatus(32*7, description="rx: LC framing, LC buffer written, "
+            "entries written; sys: LC buffer read, entries read, LC Link Layer input, LC checked.")
         soc.comb += soc.usb3_gen2_lc_counts.status.eq(Cat(*counts))
 
         # PHY Gen 2 RX Data Blocks (Gen2PIPE), flags: trigger, PHY data_stream, framing output.
@@ -266,14 +273,13 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         ]
         # Optional trigger: LBAD received (Header Packet received with errors by the partner).
         if link is not None:
-            from litex.soc.interconnect.csr import CSRStorage
             soc.usb3_gen2_txblocks_lbad = CSRStorage(1, description="TX Data Blocks snapshot also "
                 "stopped on a LBAD received.")
             soc.sync += If(soc.usb3_gen2_txblocks_lbad.storage & link.dbg_lbad_rx, u0_count.eq(7))
         soc.comb += u0_exit.eq(u0_count != 0)
         soc.specials += MultiReg(u0_exit, u0_exit_tx, "tx_nr")
-        # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets, with
-        # the unscrambled sink data.
+        # Gen2TX blocks: data (sink data blocks), idle (Logical Idle blocks) and SKP Ordered Sets,
+        # with the unscrambled sink data.
         g2tx = phy.gen2_pipe.tx.tx
         pk   = phy.gen2_pipe.tx_blocks
         soc.usb3_gen2_txblocks_snapshot = RXRawSnapshot(
@@ -289,7 +295,8 @@ def add_usb3_gen2_rx(soc, serdes, phy):
         xcvr.gty_params.update(i_RXLPMEN=soc.usb3_gen2_rx_lpmen.storage)
     # Link Layer max durations (sys cycles): LGOOD_n pending, LCRD_x pending, TX DPP data stall.
     if link is not None:
-        soc.usb3_gen2_link_max = CSRStatus(32*3, description="Max cycles: LGOOD pending, LCRD pending, DPP stall.")
+        soc.usb3_gen2_link_max = CSRStatus(32*3,
+            description="Max cycles: LGOOD pending, LCRD pending, DPP stall.")
         soc.usb3_gen2_link_max_clear = CSR()
         maxes = []
         for e in [link.dbg_lgood_pending, link.dbg_lcrd_pending, link.dbg_dpp_stall]:
@@ -322,7 +329,6 @@ USB3_PROFILE_EVENTS = [
 def add_usb3_profile(soc, phy):
     """Throughput profile: cycles counters (sys) of the Link Layer TX and of the bench Bulk IN
     endpoint states (USB3_PROFILE_EVENTS), cleared/frozen by usb3_profile_control (clear, run)."""
-    from litex.soc.interconnect.csr import CSRStorage, CSRStatus, CSRField
     link = soc.usb3_core.link
     ep_in, ep_out = soc.usb3_core.endpoints[0:2]
     events = {
@@ -345,11 +351,11 @@ def add_usb3_profile(soc, phy):
         "hp_occupancy"   : link.dbg_tx_count,
         "in_inflight_sum": ep_in.dbg_inflight,
     }
-    # Header Packet round trip: transmission start (send_seq) -> LGOOD_n received (per sequence number
-    # timestamps, retransmissions overwrite them).
-    time  = Signal(32)
+    # Header Packet round trip: transmission start (send_seq) -> LGOOD_n received (per sequence
+    # number timestamps, retransmissions overwrite them).
+    time   = Signal(32)
     stamps = Array(Signal(32) for _ in range(16))
-    rtt   = Signal(32)
+    rtt    = Signal(32)
     soc.sync += [
         time.eq(time + 1),
         If(link.dbg_tx_hp, stamps[link.dbg_tx_hp_info[0:4]].eq(time)),
@@ -368,7 +374,11 @@ def add_usb3_profile(soc, phy):
     for name in USB3_PROFILE_EVENTS:
         c = Signal(32, name=f"usb3_profile_{name}")
         if name == "lgood_rtt_max":
-            soc.sync += If(ctrl.clear, c.eq(0)).Elif(ctrl.run & link.dbg_lgood_rx & (rtt > c), c.eq(rtt))
+            soc.sync += If(ctrl.clear,
+                c.eq(0)
+            ).Elif(ctrl.run & link.dbg_lgood_rx & (rtt > c),
+                c.eq(rtt)
+            )
         else:
             # Counts (1-bit events) or sums (values), sized first (Verilog: operands extended to the
             # sum width before the event logic).
@@ -390,8 +400,8 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     with_trace        = True,
     phy_cd            = None,
     phy_clk_freq      = None):
-    """Add a USB3 device on serdes to soc: USB3PHY + debug, USB3 Device Core example design (with_core)
-    and LEDs (SerDes ready, U0, Recovery).
+    """Add a USB3 device on serdes to soc: USB3PHY + debug, USB3 Device Core example design
+    (with_core) and LEDs (SerDes ready, U0, Recovery).
 
     phy_cd: USB3PIPE (and serdes, renamed by the caller) in the phy_cd clock domain at phy_clk_freq,
     LTSSM/Link Layer/Core in sys (USB3PHY pipe_cd, ex: PIPE at 125MHz, Core at 62.5MHz with
@@ -419,7 +429,6 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         with_u1u2     = with_lpm or (phy_cd is None)) # U1/U2 only with LPM on slow fabrics.
     if phy_cd is not None:
         # Minimal PHY status (no USB3PHYDebug): LTSSM state (get_ltssm_states), U0, SerDes ready.
-        from litex.soc.interconnect.csr import CSRStatus, CSRField
         usb3_phy.status = CSRStatus(fields=[
             CSRField("ltssm_state", size=len(usb3_phy.ltssm_state)),
             CSRField("u0",          size=1, offset=8),
@@ -450,7 +459,6 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     if gen2_capable and phy_cd is None:
         add_usb3_gen2_rx(soc, serdes, usb3_phy)
     elif gen2_capable:
-        from litex.soc.interconnect.csr import CSRStorage, CSRStatus
         soc.usb3_gen2_capable = CSRStorage(1, reset=1, description="Gen 2 capability advertised.")
         soc.comb += usb3_phy.ssp.gen2_capable.eq(soc.usb3_gen2_capable.storage)
         soc.usb3_gen2_status = CSRStatus(2, description="Gen 2 negotiated [0], 10Gbps rate [1].")
@@ -482,8 +490,8 @@ def usb3_analyzer(soc, group="link", csv="analyzer.csv"):
 # Arguments / Build --------------------------------------------------------------------------------
 
 def usb3_soc_args(parser, output_dir, with_uartbone=True):
-    """Common bench target arguments (with_uartbone: target with a UART, --no-uartbone/--with-jtagbone;
-    JTAGBone only otherwise)."""
+    """Common bench target arguments (with_uartbone: target with a UART,
+    --no-uartbone/--with-jtagbone; JTAGBone only otherwise)."""
     parser.add_argument("--build",             action="store_true", help="Build bitstream.")
     parser.add_argument("--load",              action="store_true", help="Load bitstream.")
     parser.add_argument("--output-dir",        default=output_dir,  help=f"Build directory (default: {output_dir}).")

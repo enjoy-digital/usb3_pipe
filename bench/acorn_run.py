@@ -128,13 +128,15 @@ def main():
             time.sleep(args.wait)
             count, history = dbg.history()
             record("attempt", n=attempt, status=dbg.status(), transitions=count, history=history,
-                kern=usb_kern_lines(kern), ports=usb_ports_state(), ss_devices=usb_superspeed_devices())
+                kern=usb_kern_lines(kern), ports=usb_ports_state(),
+                ss_devices=usb_superspeed_devices())
         if args.soak:
             dbg.clear()
             t0 = time.time()
             while time.time() - t0 < args.soak:
                 time.sleep(min(10.0, args.soak))
-                record("soak", status=dbg.status(), kern=usb_kern_lines(kern), ss_devices=usb_superspeed_devices())
+                record("soak", status=dbg.status(), kern=usb_kern_lines(kern),
+                    ss_devices=usb_superspeed_devices())
     finally:
         bus.close()
         os.killpg(server.pid, signal.SIGTERM)

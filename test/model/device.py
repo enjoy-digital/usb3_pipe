@@ -42,12 +42,13 @@ class PairsPHY:
 
 class BulkLoopbackDUT(LiteXModule):
     """USB3 Device Core (PHY stand-in) with Bulk IN/OUT endpoints (bulk_descriptors), EP2 OUT looped
-    to EP1 IN. link_words=2/4: core on PHY words pairs/quads, 64/128-bit Bulk endpoints. crc32_cascade: see
-    USB3DeviceCore."""
+    to EP1 IN. link_words=2/4: core on PHY words pairs/quads, 64/128-bit Bulk endpoints.
+    crc32_cascade: see USB3DeviceCore."""
     def __init__(self, max_burst=8, link_words=1, crc32_cascade=False):
         self.phy = phy = PHYStandIn()
         dw = 32*link_words
-        self.core = core = USB3DeviceCore(phy if link_words == 1 else PairsPHY(phy, self, link_words),
+        self.core = core = USB3DeviceCore(
+            phy if link_words == 1 else PairsPHY(phy, self, link_words),
             sys_clk_freq = 125e6,
             descriptors  = bulk_descriptors(max_burst=max_burst),
             endpoints    = [
@@ -72,18 +73,19 @@ def check_core_enumeration(test, sections):
 
     # Link initialization: Advertisements, Port Capability, Port Configuration Response.
     link_init = sections["link_init"]
-    lcs = [p[1] for p in link_init if p[0] == "LC"]
+    lcs       = [p[1] for p in link_init if p[0] == "LC"]
     test.assertEqual(lcs[:5], [LGOOD(7)] + [LCRD(x) for x in range(4)])
     test.assertEqual(lmps(link_init), [LMP_SUB_PORT_CAP, LMP_SUB_PORT_CFG_RESP])
 
     # GET_DESCRIPTOR (Device).
     descriptors = bulk_descriptors()
-    packets = sections["get_device_descriptor"]
+    packets     = sections["get_device_descriptor"]
     test.assertEqual(tps(packets), [(TP_SUB_ACK, 1, 1), (TP_SUB_ACK, 0, 1)])
     test.assertEqual(dpps(packets), [descriptors.device()])
 
     # GET_DESCRIPTOR (Configuration, 9 bytes).
-    test.assertEqual(dpps(sections["get_configuration_descriptor"]), [descriptors.configuration()[:9]])
+    test.assertEqual(dpps(sections["get_configuration_descriptor"]),
+        [descriptors.configuration()[:9]])
 
     # GET_DESCRIPTOR (String 1).
     test.assertEqual(dpps(sections["get_string_descriptor"]), [descriptors.string(1)])

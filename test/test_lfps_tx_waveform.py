@@ -27,7 +27,8 @@ class TestLFPSTXWaveform(unittest.TestCase):
         bursts = [w for w in wire if w is not None]
         self.assertTrue(len(bursts) > 0)
         self.assertEqual(set(bursts) - {0x00000, 0xfffff}, set())
-        # Full periods (from half periods in 8ns cycles) within each burst, excluding the burst edges.
+        # Full periods (from half periods in 8ns cycles) within each burst, excluding the burst
+        # edges.
         runs, last, n = [], None, 0
         for w in wire:
             if w != last:
@@ -69,7 +70,11 @@ class TestLFPSTXWaveform(unittest.TestCase):
 
     @pytest.mark.slow
     def test_lfps_square_wave_all(self):
-        self.square_wave_test([("lfps_tx_polling", 400), ("lfps_tx_ping", 64), ("lfps_tx_exit_u1", 200)])
+        self.square_wave_test([
+            ("lfps_tx_polling", 400),
+            ("lfps_tx_ping",     64),
+            ("lfps_tx_exit_u1", 200),
+        ])
 
 if __name__ == "__main__":
     unittest.main()

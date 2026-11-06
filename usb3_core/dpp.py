@@ -66,10 +66,10 @@ class DPPReader(LiteXModule):
             prefetch.source.connect(source),
         ]
 
-
 class DPPSplitter(LiteXModule):
-    """64-bit Data Packet Payload words -> full 8-byte words (two: not last) or 32-bit words (data[0:32],
-    1-4 bytes) for the last bytes: the Link Layer appends the CRC-32/END on 32-bit words."""
+    """64-bit Data Packet Payload words -> full 8-byte words (two: not last) or 32-bit words
+    (data[0:32], 1-4 bytes) for the last bytes: the Link Layer appends the CRC-32/END on 32-bit
+    words."""
     def __init__(self):
         self.sink   = sink   = stream.Endpoint(dpp_layout(64))
         self.source = source = stream.Endpoint(dpp_layout(64) + [("two", 1)])
@@ -107,7 +107,6 @@ class DPPSplitter(LiteXModule):
         self.sync += If(source.valid & source.ready,
             half.eq(~half & split)
         )
-
 
 class DPPQuadSplitter(LiteXModule):
     """128-bit Data Packet Payload words -> full 16-byte words (words=4: not last), the full 4-byte
@@ -151,7 +150,6 @@ class DPPQuadSplitter(LiteXModule):
             tail.eq(~tail & split)
         )
 
-
 class DPPNarrower(LiteXModule):
     """Data Packet Payload words (dw_in bits) -> words of dw_out bits (full words, the last one 1 to
     dw_out/8 bytes, a zero-length DPP as one 0-byte word)."""
@@ -174,18 +172,18 @@ class DPPNarrower(LiteXModule):
             source.first.eq(sink.first & (index == 0)),
             source.last.eq(sink.last & done),
             source.bytes.eq(Mux(done, rem, wb)),
-            Case(index, {i: source.data.eq(sink.data[dw_out*i:dw_out*(i + 1)]) for i in range(steps)}),
+            Case(index, {i: source.data.eq(sink.data[dw_out*i:dw_out*(i + 1)])
+                for i in range(steps)}),
             sink.ready.eq(source.ready & done),
         ]
         self.sync += If(source.valid & source.ready,
             If(done, index.eq(0)).Else(index.eq(index + 1))
         )
 
-
 class DPPPacker(LiteXModule):
-    """32-bit Data Packet Payload words -> 64-bit (or dw-bit) words (full words, the last one 0 to dw/8
-    bytes): 32-bit endpoints (Control Endpoint, ...) on a 64/128-bit Link Layer (lower rate, stored
-    and forwarded at Gen 2, Gen 1 PIPE at the same rate)."""
+    """32-bit Data Packet Payload words -> 64-bit (or dw-bit) words (full words, the last one 0 to
+    dw/8 bytes): 32-bit endpoints (Control Endpoint, ...) on a 64/128-bit Link Layer (lower rate,
+    stored and forwarded at Gen 2, Gen 1 PIPE at the same rate)."""
     def __init__(self, dw=64):
         assert dw in [64, 128]
         n = dw//32
@@ -217,7 +215,6 @@ class DPPPacker(LiteXModule):
             )
         )
 
-
 class DPPRXAdapter(LiteXModule):
     """64-bit (or dw-bit) received Data Packet Payload words (Link Layer, not held) -> 32-bit words
     for a 32-bit endpoint (Control Endpoint, ...), buffered, with the DPP done/ok status after its
@@ -240,8 +237,9 @@ class DPPRXAdapter(LiteXModule):
 
         # # #
 
-        # Buffered: synchronous RAM read (block RAMs; asynchronous reads are silently mis-implemented in
-        # block RAMs by the Gowin toolchain, the DPP words then read back as zeros on hardware).
+        # Buffered: synchronous RAM read (block RAMs; asynchronous reads are silently
+        # mis-implemented in block RAMs by the Gowin toolchain, the DPP words then read back as
+        # zeros on hardware).
         layout = dpp_layout(dw) + [("setup", 1), ("done", 1), ("ok", 1)]
         self.fifo = fifo = stream.SyncFIFO(layout, depth, buffered=True)
         self.comb += [

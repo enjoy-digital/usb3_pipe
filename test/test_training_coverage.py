@@ -25,7 +25,7 @@ from usb3_pipe.training import TSUnit
 
 from test.common import ordered_set_words, stream_driver, symbols_to_words, words_to_symbols
 
-# Spec reference Ordered Sets (Table 6-4 TSEQ, Table 6-5 TS1/TS2), written independently ----------
+# Spec reference Ordered Sets (Table 6-4 TSEQ, Table 6-5 TS1/TS2), written independently -----------
 
 def D(x, y):
     return (y << 5) | x
@@ -46,10 +46,13 @@ def spec_words(name, link_functionality=0):
 
 # Helpers ------------------------------------------------------------------------------------------
 
-class SerDesStub(Module):
+class SerDesStub(LiteXModule):
     def __init__(self, loopback=False):
         self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
         if loopback:
             self.comb += [
                 self.sink.ready.eq(1),
@@ -162,8 +165,8 @@ class TestTSUnitTX(unittest.TestCase):
                 self.assertLess(remaining, 64)
             dut.result["remaining"] = remaining
             dut.result["sent"]      = len(words) + skipped + remaining
-            dut.result["first"] = (yield serdes.sink.first)
-            dut.result["last"]  = (yield serdes.sink.last)
+            dut.result["first"]     = (yield serdes.sink.first)
+            dut.result["last"]      = (yield serdes.sink.last)
             yield
             # Request held: a new TSEQ sequence starts with a COM.
             dut.result["next"] = ((yield serdes.sink.data), (yield serdes.sink.ctrl),

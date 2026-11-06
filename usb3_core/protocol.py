@@ -46,7 +46,7 @@ class USB3ProtocolLayer(LiteXModule):
 
         # DPP words width: Link Layer data_width (32/64/128-bit), 32-bit endpoints on a 64/128-bit
         # Link Layer through DPPPacker/DPPRXAdapter (Control Endpoint, ...: always landed DPPs).
-        dw = getattr(link, "data_width", 32)
+        dw      = getattr(link, "data_width", 32)
         adapted = {ep: ep.data_width != dw for ep in endpoints}
         for ep in endpoints:
             assert (ep.data_width == dw) or (ep.data_width == 32 and dw in [64, 128])
@@ -167,7 +167,7 @@ class USB3ProtocolLayer(LiteXModule):
         # TX Header Packets arbitration ------------------------------------------------------------
         self.jobs = jobs = stream.SyncFIFO(dpp_job_layout(len(endpoints)), 8)
         sources = [(None, resp.source)] + [(i, ep.tx_hp) for i, ep in enumerate(endpoints)]
-        cases = None
+        cases   = None
         for i, source in reversed(sources):
             if i is None:
                 grant = [

@@ -17,7 +17,10 @@ The SVG stays editable by hand (Inkscape or XML): the generator only keeps the g
 Layout rules: arrows leave and enter boxes at their centre lines, boxes of one column share their
 edges, every label has room (Carlito/Calibri metrics) between the things it sits between.
 """
-import argparse, base64, os
+
+import os
+import base64
+import argparse
 
 FONT = "Calibri, Carlito, 'Liberation Sans', Arial, Helvetica, sans-serif"
 STROKE, TEXT, ARROW, THICK = "#7f7f7f", "#1a1a1a", "#595959", "#8c8c8c"
@@ -112,11 +115,12 @@ def finish(path):
     print(path, len("\n".join(out)))
 
 DESC = ("USB3-PIPE on the Acorn CLE-215+: the USB3 host connects through an SFP2USB adapter to an "
-        "Artix7 GTP transceiver (reference clock from the 200 MHz oscillator on GTGREFCLK). The USB3 PHY "
-        "(usb3_pipe: SerDes datapath, PIPE, LTSSM) provides link-trained 32-bit symbols to the USB3 Device "
-        "Core (usb3_core: Link and Protocol layers, Control endpoint, Bulk/Isochronous endpoints), which "
-        "serves the device classes: vendor Bulk, UVC camera, CDC-ACM (LiteX BIOS console on a VexRiscv) and "
-        "Mass Storage (block RAM or DDR3 through LiteDRAM). Standard Linux drivers on the host.")
+        "Artix7 GTP transceiver (reference clock from the 200 MHz oscillator on GTGREFCLK). The USB3 "
+        "PHY (usb3_pipe: SerDes datapath, PIPE, LTSSM) provides link-trained 32-bit symbols to the "
+        "USB3 Device Core (usb3_core: Link and Protocol layers, Control endpoint, Bulk/Isochronous "
+        "endpoints), which serves the device classes: vendor Bulk, UVC camera, CDC-ACM (LiteX BIOS "
+        "console on a VexRiscv) and Mass Storage (block RAM or DDR3 through LiteDRAM). Standard "
+        "Linux drivers on the host.")
 
 # Diagram ------------------------------------------------------------------------------------------
 #
@@ -136,8 +140,8 @@ def draw(logos):
     text(430, 644, "LiteX SoC · 125 MHz", 15, anchor="start", style="italic")
 
     # The USB3 host.
-    box(10, 238, 170, 358, lines=[("USB3 Host", 18, "bold"), ("Linux xHCI", 14), ("usbfs · cdc_acm", 13),
-                                   ("uvcvideo · usb-storage", 13)])
+    box(10, 238, 170, 358, lines=[("USB3 Host", 18, "bold"), ("Linux xHCI", 14),
+        ("usbfs · cdc_acm", 13), ("uvcvideo · usb-storage", 13)])
     arrow([(170, 298), (245, 298)], double=True, thick=True)
     text(207, 286, "USB3", 13, style="italic")
     text(207, 318, "5 Gb/s", 13, style="italic")
@@ -192,8 +196,9 @@ def draw(logos):
     arrow([(1330, 450), (1390, 450)], double=True, thick=True)
 
     # Standalone core.
-    box(590, 545, 975, 600, dash=True, shadow=False, lines=[("usb3_pipe_gen: standalone Verilog core", 15, "bold"),
-                                                             ("PHY (+ Device Core) for any Verilog/VHDL design", 13)])
+    box(590, 545, 975, 600, dash=True, shadow=False, lines=[
+        ("usb3_pipe_gen: standalone Verilog core", 15, "bold"),
+        ("PHY (+ Device Core) for any Verilog/VHDL design", 13)])
 
     # Caption and logos.
     cx = 780

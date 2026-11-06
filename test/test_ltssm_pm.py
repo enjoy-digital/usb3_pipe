@@ -28,7 +28,7 @@ from test.model.ltssm import LTSSMTestCase, LTSSMLinkHarness
 # Configurations -----------------------------------------------------------------------------------
 
 # PM handshake: unscaled timers, PM_LC_TIMER = 8 cycles, PM_ENTRY_TIMER = 16 cycles.
-PM_CLK_FREQ   = int(2e6)
+PM_CLK_FREQ     = int(2e6)
 PM_LC_CYCLES    = int(4e-6*PM_CLK_FREQ)
 PM_ENTRY_CYCLES = int(8e-6*PM_CLK_FREQ)
 
@@ -50,7 +50,8 @@ def burst_cycles(kind, sys_clk_freq, timer_scale):
         2: (U2ExitLFPSBurst,   exit_u2_min_cycles),
         3: (U3WakeupLFPSBurst, exit_u3_min_cycles),
     }[kind]
-    return exit_burst_cycles(sys_clk_freq, timer_scale, timing, min_cycles(sys_clk_freq, timer_scale))
+    return exit_burst_cycles(sys_clk_freq, timer_scale, timing,
+        min_cycles(sys_clk_freq, timer_scale))
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -136,7 +137,8 @@ class TestLTSSMPMInitiator(PMTestCase):
                 def generator(dut):
                     yield from self.go_u0(dut, ds_port=1)
                     yield self.req(dut, kind).eq(1)
-                    self.assertTrue((yield from self.wait_for(dut, self.lgo_out(dut, kind), timeout=4)))
+                    self.assertTrue((yield from self.wait_for(dut, self.lgo_out(dut, kind),
+                        timeout=4)))
                     yield self.req(dut, kind).eq(0)
                     # Only the requested LGO, a single pulse.
                     for other in {1, 2, 3} - {kind}:
@@ -180,9 +182,11 @@ class TestLTSSMPMInitiator(PMTestCase):
                     self.assertEqual((yield dut.recovery), 0)
                     # New request accepted.
                     yield from self.pulse(self.req(dut, kind))
-                    self.assertTrue((yield from self.wait_for(dut, self.lgo_out(dut, kind), timeout=4)))
+                    self.assertTrue((yield from self.wait_for(dut, self.lgo_out(dut, kind),
+                        timeout=4)))
                     yield from self.pulse(dut.lau)
-                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind), timeout=4)))
+                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind),
+                        timeout=4)))
 
                 dut = self.make_dut()
                 run_simulation(dut, generator(dut))
@@ -194,7 +198,8 @@ class TestLTSSMPMInitiator(PMTestCase):
                 def generator(dut):
                     yield from self.go_u0(dut, ds_port=1)
                     yield self.req(dut, kind).eq(1)
-                    self.assertTrue((yield from self.wait_for(dut, self.lgo_out(dut, kind), timeout=4)))
+                    self.assertTrue((yield from self.wait_for(dut, self.lgo_out(dut, kind),
+                        timeout=4)))
                     yield self.req(dut, kind).eq(0)
                     for _ in range(PM_LC_CYCLES - 2):
                         yield
@@ -245,11 +250,13 @@ class TestLTSSMPMInitiator(PMTestCase):
                 yield from self.pulse(dut.req_u3)
                 self.assertTrue((yield from self.wait_for(dut, dut.tx_lgo_u3, timeout=4)))
                 if attempt < 2:
-                    self.assertTrue((yield from self.wait_for(dut, dut.recovery, timeout=2*PM_LC_CYCLES)))
+                    self.assertTrue((yield from self.wait_for(dut, dut.recovery,
+                        timeout=2*PM_LC_CYCLES)))
                     self.assertEqual((yield dut.ess_inactive), 0)
                     yield from self.recover_to_u0(dut)
                 else:
-                    self.assertTrue((yield from self.wait_for(dut, dut.ess_inactive, timeout=2*PM_LC_CYCLES)))
+                    self.assertTrue((yield from self.wait_for(dut, dut.ess_inactive,
+                        timeout=2*PM_LC_CYCLES)))
                     self.assertEqual((yield dut.u3), 0)
 
         dut = self.make_dut()
@@ -264,7 +271,8 @@ class TestLTSSMPMInitiator(PMTestCase):
                     yield from self.go_u0(dut, ds_port=1)
                     def fail_u3():
                         yield from self.pulse(dut.req_u3)
-                        self.assertTrue((yield from self.wait_for(dut, dut.recovery, timeout=2*PM_LC_CYCLES)))
+                        self.assertTrue((yield from self.wait_for(dut, dut.recovery,
+                            timeout=2*PM_LC_CYCLES)))
                         yield from self.recover_to_u0(dut)
                     # 2 failures.
                     yield from fail_u3()
@@ -277,10 +285,12 @@ class TestLTSSMPMInitiator(PMTestCase):
                         self.assertTrue((yield from self.wait_for(dut, dut.u3, timeout=4)))
                         # DS wakeup, partner responds.
                         yield from self.pulse(dut.wakeup_u3_req)
-                        self.assertTrue((yield from self.wait_for(dut, dut.lfps_tx_wakeup_u3, timeout=4)))
+                        self.assertTrue((yield from self.wait_for(dut, dut.lfps_tx_wakeup_u3,
+                            timeout=4)))
                         yield from self.partner_burst(dut, dut.lfps_rx_wakeup_u3,
                             burst_cycles(3, PM_CLK_FREQ, 1))
-                        yield from self.recover_to_u0(dut, timeout=4*burst_cycles(3, PM_CLK_FREQ, 1))
+                        yield from self.recover_to_u0(dut,
+                            timeout=4*burst_cycles(3, PM_CLK_FREQ, 1))
                     else:
                         for _ in range(4):
                             yield
@@ -311,7 +321,8 @@ class TestLTSSMPMAcceptor(PMTestCase):
                         self.assertEqual((yield dut.u0), 1)
                         yield
                     self.assertEqual(lau, 1) # single LAU pulse.
-                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind), timeout=6)))
+                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind),
+                        timeout=6)))
                     self.assertEqual((yield dut.recovery), 0)
                     self.assertEqual((yield dut.lfps_tx_idle), 1)
 
@@ -353,7 +364,8 @@ class TestLTSSMPMAcceptor(PMTestCase):
                         yield
                     self.assertEqual((yield dut.u0), 1)
                     yield from self.pulse(dut.lpma)
-                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind), timeout=4)))
+                    self.assertTrue((yield from self.wait_for(dut, self.ux_signal(dut, kind),
+                        timeout=4)))
                     self.assertEqual((yield dut.recovery), 0)
 
                 dut = self.make_dut(sys_clk_freq=sys_clk_freq, with_timers=True)
@@ -424,8 +436,8 @@ class TestLTSSMPMConcurrency(PMTestCase):
 
     def test_ufp_concurrent_lgo_u3_accepted(self):
         # 7.2.4.2.4/7.2.4.2.5: an upstream port with its own LGO_Ux outstanding that receives an
-        # LGO_U3 shall wait until the reception of an LXU (the DS rejecting its request) and then send
-        # an LAU (an upstream port shall not reject U3) -> U3.
+        # LGO_U3 shall wait until the reception of an LXU (the DS rejecting its request) and then
+        # send an LAU (an upstream port shall not reject U3) -> U3.
         def generator(dut):
             yield from self.go_u0(dut, ds_port=0)
             yield from self.pulse(dut.req_u1)
@@ -449,7 +461,7 @@ class TestLTSSMPMConcurrency(PMTestCase):
         dut = self.make_dut()
         run_simulation(dut, generator(dut))
 
-# Ux Exit (6.9.2, 7.2.4.2.7, 7.5.7.2/7.5.8.2/7.5.9.2) ------------------------------------------------
+# Ux Exit (6.9.2, 7.2.4.2.7, 7.5.7.2/7.5.8.2/7.5.9.2) ----------------------------------------------
 
 class TestLTSSMUxExit(PMTestCase):
     def make_exit_dut(self, **kwargs):
@@ -466,7 +478,8 @@ class TestLTSSMUxExit(PMTestCase):
                     for _ in range(8): # U1_MIN_RESIDENCY (UFP).
                         yield
                     yield from self.pulse(self.exit_req(dut, kind))
-                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind), timeout=4)))
+                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind),
+                        timeout=4)))
                     # Late partner response: own LFPS still ongoing.
                     for _ in range(2*burst):
                         yield
@@ -490,7 +503,8 @@ class TestLTSSMUxExit(PMTestCase):
                     yield from self.go_u0(dut, ds_port=ds_port)
                     yield from self.enter_ux_as_acceptor(dut, kind)
                     yield self.lfps_rx(dut, kind).eq(1)
-                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind), timeout=8)))
+                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind),
+                        timeout=8)))
                     yield self.lfps_rx(dut, kind).eq(0)
                     self.assertTrue((yield from self.wait_for(dut, dut.recovery, timeout=4*burst)))
                     yield from self.recover_to_u0(dut)
@@ -516,7 +530,8 @@ class TestLTSSMUxExit(PMTestCase):
                     for _ in range(4):
                         yield
                     yield from self.partner_burst(dut, self.lfps_rx(dut, kind), 4)
-                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind), timeout=8)))
+                    self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind),
+                        timeout=8)))
 
                 dut = self.make_exit_dut()
                 run_simulation(dut, generator(dut))
@@ -583,7 +598,8 @@ class TestLTSSMUxExit(PMTestCase):
                     yield from self.enter_ux_as_acceptor(dut, kind)
                     if initiator:
                         yield from self.pulse(self.exit_req(dut, kind))
-                        self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind), timeout=4)))
+                        self.assertTrue((yield from self.wait_for(dut, self.lfps_tx(dut, kind),
+                            timeout=4)))
                         yield from self.partner_burst(dut, self.lfps_rx(dut, kind), burst)
                     else:
                         yield from self.partner_burst(dut, self.lfps_rx(dut, kind), burst)
@@ -592,7 +608,8 @@ class TestLTSSMUxExit(PMTestCase):
                     for _ in range(ux_exit - 6*burst):
                         self.assertEqual((yield dut.ess_inactive), 0)
                         yield
-                    self.assertTrue((yield from self.wait_for(dut, dut.ess_inactive, timeout=8*burst)))
+                    self.assertTrue((yield from self.wait_for(dut, dut.ess_inactive,
+                        timeout=8*burst)))
 
                 dut = self.make_exit_dut()
                 run_simulation(dut, generator(dut))
@@ -665,7 +682,7 @@ class TestLTSSMUxExit(PMTestCase):
         dut = self.make_exit_dut()
         run_simulation(dut, generator(dut))
 
-# U3 Wakeup retries (7.2.4.2.4, tU3WakeupRetryDelay) ------------------------------------------------
+# U3 Wakeup retries (7.2.4.2.4, tU3WakeupRetryDelay) -----------------------------------------------
 
 class TestLTSSMU3WakeupRetry(PMTestCase):
     def test_ds_wakeup_retries_stays_u3(self):
@@ -715,7 +732,8 @@ class TestLTSSMU3WakeupRetry(PMTestCase):
             self.assertEqual((yield dut.u3), 1)
             self.assertEqual((yield dut.lfps_tx_wakeup_u3), 0)
             # 2nd attempt after tU3WakeupRetryDelay.
-            self.assertTrue((yield from self.wait_for(dut, dut.lfps_tx_wakeup_u3, timeout=delay + 8)))
+            self.assertTrue((yield from self.wait_for(dut, dut.lfps_tx_wakeup_u3,
+                timeout=delay + 8)))
             yield from self.partner_burst(dut, dut.lfps_rx_wakeup_u3, burst)
             self.assertTrue((yield from self.wait_for(dut, dut.recovery, timeout=4*burst)))
             yield from self.recover_to_u0(dut)
@@ -820,7 +838,7 @@ class TestLTSSMU1Timers(PMTestCase):
         dut = self.make_dut(sys_clk_freq=LONG_CLK_FREQ, timer_scale=LONG_SCALE)
         run_simulation(dut, generator(dut))
 
-# Two LTSSMs back-to-back ---------------------------------------------------------------------------
+# Two LTSSMs back-to-back --------------------------------------------------------------------------
 
 class LTSSMPMLinkHarness(LTSSMLinkHarness):
     """LTSSMLinkHarness + LCMD (LGO/LAU/LXU) and exit/wakeup/Ping LFPS cross connections.
@@ -846,29 +864,33 @@ class LTSSMPMLinkHarness(LTSSMLinkHarness):
                 b.lfps_rx_ping.eq(a.lfps_tx_ping),
             ]
 
-
 class TestLTSSMPMLink(LTSSMTestCase):
     def both(self, dut, name):
         return getattr(dut.host, name) & getattr(dut.dev, name)
 
     def test_link_u0_u1_u0(self):
-        for initiator, exiter in [("host", "host"), ("host", "dev"), ("dev", "host"), ("dev", "dev")]:
+        for initiator, exiter in [
+            ("host", "host"), ("host", "dev"), ("dev", "host"), ("dev", "dev")]:
             with self.subTest(pm_initiator=initiator, exit_initiator=exiter):
                 dut = LTSSMPMLinkHarness()
                 def generator():
-                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u0"), timeout=256)))
+                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u0"),
+                        timeout=256)))
                     yield getattr(dut, initiator).req_u1.eq(1)
                     yield
                     yield getattr(dut, initiator).req_u1.eq(0)
-                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u1"), timeout=4*PM_ENTRY_CYCLES)))
+                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u1"),
+                        timeout=4*PM_ENTRY_CYCLES)))
                     self.assertEqual((yield dut.host.recovery | dut.dev.recovery), 0)
                     for _ in range(16): # U1_MIN_RESIDENCY.
                         yield
                     yield getattr(dut, exiter).exit_u1_req.eq(1)
                     yield
                     yield getattr(dut, exiter).exit_u1_req.eq(0)
-                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "recovery"), timeout=256)))
-                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u0"), timeout=256)))
+                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "recovery"),
+                        timeout=256)))
+                    self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u0"),
+                        timeout=256)))
                     self.assertEqual((yield dut.host.ess_inactive | dut.dev.ess_inactive), 0)
 
                 run_simulation(dut, generator())
@@ -881,11 +903,13 @@ class TestLTSSMPMLink(LTSSMTestCase):
             yield dut.dev.req_u2.eq(1)
             yield
             yield dut.dev.req_u2.eq(0)
-            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u2"), timeout=4*PM_ENTRY_CYCLES)))
+            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u2"),
+                timeout=4*PM_ENTRY_CYCLES)))
             yield dut.host.exit_u2_req.eq(1)
             yield
             yield dut.host.exit_u2_req.eq(0)
-            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "recovery"), timeout=4*burst)))
+            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "recovery"),
+                timeout=4*burst)))
             self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u0"), timeout=256)))
 
         run_simulation(dut, generator())
@@ -898,11 +922,13 @@ class TestLTSSMPMLink(LTSSMTestCase):
             yield dut.host.req_u3.eq(1)
             yield
             yield dut.host.req_u3.eq(0)
-            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u3"), timeout=4*PM_ENTRY_CYCLES)))
+            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u3"),
+                timeout=4*PM_ENTRY_CYCLES)))
             yield dut.host.wakeup_u3_req.eq(1)
             yield
             yield dut.host.wakeup_u3_req.eq(0)
-            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "recovery"), timeout=4*burst)))
+            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "recovery"),
+                timeout=4*burst)))
             self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u0"), timeout=256)))
             self.assertEqual((yield dut.host.ess_inactive | dut.dev.ess_inactive), 0)
 
@@ -916,7 +942,8 @@ class TestLTSSMPMLink(LTSSMTestCase):
             yield dut.host.req_u1.eq(1)
             yield
             yield dut.host.req_u1.eq(0)
-            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u1"), timeout=4*PM_ENTRY_CYCLES)))
+            self.assertTrue((yield from self.wait_for(dut, self.both(dut, "u1"),
+                timeout=4*PM_ENTRY_CYCLES)))
             for _ in range(16):
                 yield
             yield dut.host.exit_u1_req.eq(1)

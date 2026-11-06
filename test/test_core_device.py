@@ -31,7 +31,8 @@ class TestCoreDevice(unittest.TestCase):
             for _ in range(64):
                 yield
             self.assertEqual(host.lcs[:5], [LGOOD(7)] + [LCRD(x) for x in range(4)])
-            self.assertEqual([(hp[0] >> 5) & 0xf for hp in host.hps[:2]], [LMP_SUB_PORT_CAP, LMP_SUB_PORT_CFG_RESP])
+            self.assertEqual([(hp[0] >> 5) & 0xf for hp in host.hps[:2]],
+                [LMP_SUB_PORT_CAP, LMP_SUB_PORT_CFG_RESP])
         run_pyhost(dut, host, scenario())
 
     @pytest.mark.slow
