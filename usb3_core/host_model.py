@@ -31,15 +31,9 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_pipe.crc    import CRC5, crc5, crc16, crc32
-from usb3_core.common import phy_layout
+from usb3_core.common import phy_layout, SHP, SDP, SLC, END, EPF
 
 # Symbols <-> Link Layer Words ---------------------------------------------------------------------
-
-SHP = 0xfb # K27.7.
-SDP = 0x5c # K28.2.
-SLC = 0xfe # K30.7.
-END = 0xfd # K29.7.
-EPF = 0xf7 # K23.7.
 
 # Byte order: Link Layer words, first symbol in data[31:24]/ctrl[3] (USB3PHY source/sink, after
 # USB3PIPE's EndiannessSwap). test/common.py's words_to_symbols/symbols_to_words use the PIPE/SerDes

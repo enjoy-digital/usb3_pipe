@@ -17,6 +17,12 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.common  import SHP as _SHP
+from usb3_pipe.common  import SDP as _SDP
+from usb3_pipe.common  import EDB as _EDB
+from usb3_pipe.common  import SLC as _SLC
+from usb3_pipe.common  import END as _END
+from usb3_pipe.common  import EPF as _EPF
 from usb3_pipe.framing import WordsWindow as _WordsWindow
 
 # Helpers ------------------------------------------------------------------------------------------
@@ -54,12 +60,10 @@ def bytes_to_be(nbytes):
 
 # Symbols (6.3.5) ----------------------------------------------------------------------------------
 
-SHP = 0xfb # K27.7: Start Header Packet.
-SDP = 0x5c # K28.2: Start Data Packet Payload.
-EDB = 0x7c # K28.3: End Bad.
-SLC = 0xfe # K30.7: Start Link Command.
-END = 0xfd # K29.7: End.
-EPF = 0xf7 # K23.7: End Packet Framing.
+# Values of the usb3_pipe.common Symbols: SHP K27.7 Start Header Packet, SDP K28.2 Start Data
+# Packet Payload, EDB K28.3 End Bad, SLC K30.7 Start Link Command, END K29.7 End, EPF K23.7 End
+# Packet Framing.
+SHP, SDP, EDB, SLC, END, EPF = [s.value for s in [_SHP, _SDP, _EDB, _SLC, _END, _EPF]]
 
 FRAMING_SHP = framing_word(SHP)
 FRAMING_SDP = framing_word(SDP)
