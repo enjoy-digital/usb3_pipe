@@ -112,7 +112,8 @@ class TestPHYPipeCD(unittest.TestCase):
             self.assertEqual((yield dut.phy.u0), 0)
             self.assertEqual((yield dut.phy.rx_throttle), 0,      "RX throttle level not reset")
             self.assertEqual((yield dut.phy.source.valid), 0,     "stale RX words after the reset")
-            self.assertEqual((yield dut.phy.tx_cdc.source.valid), 0, "stale TX words after the reset")
+            self.assertEqual((yield dut.phy.link_cdc.tx_cdc.source.valid), 0,
+                "stale TX words after the reset")
             # New U0 entry, new RX words: the first received words are the new ones.
             yield from self.force_u0(dut)
             dut.phase = 2
