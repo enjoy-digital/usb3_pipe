@@ -86,6 +86,18 @@ USB3PHY_LINK_CTRL = [
     ("exit_u1_req",       "i"), ("exit_u2_req",    "i"), ("wakeup_u3_req",  "i"),
 ]
 
+# Link interface attributes always defined by USB3PHY (constants/ints when the feature is absent),
+# with the sink/source streams and the status/control signals above: (name, description).
+USB3PHY_LINK_INTERFACE = [
+    ("link_words",    "Link words per cycle: 1 (32-bit), 2 (64-bit pairs) or 4 (128-bit quads)."),
+    ("with_u1u2",     "U1/U2 Link Power Management supported (LGO_U1/LGO_U2 accepted)."),
+    ("ssp_capable",   "Gen 2 operation possible (SuperSpeedPlus Link Layer rules on gen2_active)."),
+    ("gen2_active",   "Gen 2 (10Gbps) operation (0 if not ssp_capable)."),
+    ("source_lc",     "LGOOD_n/LCRD_x Link Commands words not behind the RX words, enabled by source_lc_enable (None without)."),
+    ("rx_throttle",   "RX words buffered (pipe_cd): Rx Header Buffer credits held (0 without)."),
+    ("rx_t2_credits", "Type 2 credits the partner may hold: 4 (no limit) or a Signal (runtime)."),
+]
+
 # PIPE -> LTSSM status pulses (LTSSM_PIPE_INTERFACE inputs, others are levels).
 LTSSM_PIPE_PULSES = [
     "lfps_rx_polling", "lfps_rx_ping", "ts_tx_done", "ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2",
@@ -127,6 +139,10 @@ class USB3PHY(LiteXModule):
     - Link-Layer control (see USB3PHY_LINK_CTRL): PM handshake (LGO_Ux/LAU/LXU/LPMA decoded or to
       send by the Link Layer), directed Recovery/Hot Reset/Warm Reset and Ux exit requests. The
       signals are the LTSSM ones (same Signal objects); undriven inputs keep their reset values.
+    - Capabilities and flow control (see USB3PHY_LINK_INTERFACE), always defined: `link_words`,
+      `with_u1u2`, `ssp_capable`/`gen2_active` (Gen 2 operation), `source_lc` (fast Link Commands
+      path with `source_lc_enable`, None without), `rx_throttle` (RX words buffered with pipe_cd:
+      Rx Header Buffer credits held), `rx_t2_credits` (Type 2 credits the partner may hold).
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
         timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8, link_words=1,
@@ -146,6 +162,13 @@ class USB3PHY(LiteXModule):
         self.pipe_cd    = pipe_cd
         self.with_u1u2  = with_u1u2 # U1/U2 Link Power Management (USB3LTSSM with_u1u2).
         assert with_u1u2 or (lanes == 1)
+        # Link interface defaults (USB3PHY_LINK_INTERFACE), overridden by add_gen2 (ssp_capable,
+        # gen2_active) and add_pipe_cdc (rx_throttle, rx_t2_credits).
+        self.ssp_capable   = False
+        self.gen2_active   = Constant(0, 1)
+        self.source_lc     = None
+        self.rx_throttle   = Constant(0, 1)
+        self.rx_t2_credits = 4 # Type 2 credits (SuperSpeedPlus) the partner may hold, 4: no limit.
 
         # PIPE(s) / LTSSM --------------------------------------------------------------------------
         if lanes == 1:
@@ -650,6 +673,7 @@ class USB3PHY(LiteXModule):
         if pipe_cd is not None:
             gen2_pipe = ClockDomainsRenamer({"sys": pipe_cd, "gen2_link": "sys"})(gen2_pipe)
         self.gen2_pipe = gen2_pipe
+        self.ssp_capable = True
         self.gen2_active = gen2_active = Signal() # o: Gen 2 operation (10Gbps).
         self.sync += gen2_active.eq(self.gen2 & ~ltssm.ssp_polling)
         # gen2_active in the PIPE/SerDes clock domain.

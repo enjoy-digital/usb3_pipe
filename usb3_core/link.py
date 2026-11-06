@@ -25,8 +25,10 @@
 - TX: framer (Link Commands, Header Packets, Data Packet Payloads with CRC-32/END framing).
 
 The PHY is only accessed through its Link interface (see usb3_pipe.phy.USB3PHY): sink/source data/
-ctrl words, u0/u1/u2/polling_idle/hot_reset status, lgo_u1/lgo_u2/lgo_u3/tx_lau/tx_lxu/lpma PM
-handshake, exit_u1_req/exit_u2_req, u2_timeout, directed_recovery and link_activity.
+ctrl words, u0/u1/u2/polling_idle/hot_reset/rx_keep status, lgo_u1/lgo_u2/lgo_u3/tx_lau/tx_lxu/lpma
+PM handshake, exit_u1_req/exit_u2_req, u2_timeout, directed_recovery, link_activity and the
+capabilities/flow control attributes (USB3PHY_LINK_INTERFACE: ssp_capable/gen2_active/source_lc,
+with_u1u2, rx_throttle, rx_t2_credits).
 """
 
 from migen import *
@@ -89,12 +91,12 @@ class USB3LinkLayer(LiteXModule):
         # SuperSpeed/SuperSpeedPlus operation ------------------------------------------------------
         # SuperSpeedPlus (Gen 2x1) when the PHY operates at Gen 2: 4-bit Header Sequence Numbers
         # (masked to 3 bits in SuperSpeed operation), Type 1/Type 2 credits.
-        ssp_capable = hasattr(phy, "gen2_active")
+        ssp_capable = phy.ssp_capable
         sw          = 4 if ssp_capable else 3 # Header Sequence Numbers width.
         ssp         = Signal()
         seq_mask    = Signal(sw)
         self.comb += [
-            ssp.eq(phy.gen2_active if ssp_capable else 0),
+            ssp.eq(phy.gen2_active),
             seq_mask.eq(Mux(ssp, 0xf, 0x7)),
         ]
         def is_type2(dw0, dw1):
@@ -106,7 +108,7 @@ class USB3LinkLayer(LiteXModule):
         u0      = Signal()
         u0_d    = Signal()
         u0_rise = Signal()
-        rx_keep = getattr(phy, "rx_keep", Constant(0, 1)) # RX words kept until U0 (Recovery.Idle).
+        rx_keep = phy.rx_keep # RX words kept until U0 (Recovery.Idle).
         self.comb += [
             u0.eq(phy.u0),
             u0_rise.eq(u0 & ~u0_d),
@@ -232,7 +234,7 @@ class USB3LinkLayer(LiteXModule):
         lc_ok1   = Signal()
         lc_diff  = Signal(16)
         lc_close = Signal() # Copies differing by 3 bits at most.
-        if hasattr(phy, "source_lc"):
+        if phy.source_lc is not None:
             self.comb += [
                 lc_fast.eq(phy.source_lc.valid & ~lc_main),
                 phy.source_lc.ready.eq((lc_fast & u0) | (~u0 & ~rx_keep)),
@@ -601,7 +603,7 @@ class USB3LinkLayer(LiteXModule):
         lgo_u12 = Signal()
         lgo_fwd = Signal()
         lgo_u12_accept = force_pm_accept | (self.lpm_enable & lpm_idle)
-        if not getattr(phy, "with_u1u2", True):
+        if not phy.with_u1u2:
             lgo_u12_accept = 0 # No PHY U1/U2 support: LGO_U1/LGO_U2 always rejected (LXU).
         self.comb += [
             lgo_u12.eq(lc_lgo & (lc_info[0:2] != 3)),
@@ -785,13 +787,13 @@ class USB3LinkLayer(LiteXModule):
         # RX throttling (PHY rx_throttle, ex: RX words buffered for a Link Layer at half the PHY
         # words rate): Rx Header Buffer credits (LCRD_x) held, the partner stops sending Header
         # Packets (and their DPPs) once its credits are used (Link Layer flow control, 7.2.4.1).
-        rx_throttle = getattr(phy, "rx_throttle", Constant(0, 1))
+        rx_throttle = phy.rx_throttle
         # Type 2 credits held by the partner limited to rx_t2_credits (PHY rx_t2_credits, ex: Link
         # Layer slower than the line rate: the received DPPs are buffered and a DPH is checked, its
         # LGOOD_n sent, once the DPPs before it are consumed: the DPPs the partner can send ahead
         # are limited to bound this latency, PENDING_HP_TIMER of the partner).
         # The Advertisement (U0 entry: all the credits, 7.2.4.1.1) is not limited.
-        rx_t2_credits = getattr(phy, "rx_t2_credits", LINK_HP_BUFFERS) # int or Signal (runtime).
+        rx_t2_credits = phy.rx_t2_credits # int or Signal (runtime).
         lcrd2_allowed = Signal()
         # Rx Header Buffer Credit Advertisement in progress (U0 entry until the advertised credits
         # are sent): not throttled/limited (7.2.4.1.1: all the free buffers advertised on the U0

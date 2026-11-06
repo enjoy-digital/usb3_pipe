@@ -149,7 +149,7 @@ class USB3SoC(USB3BaseSoC):
         # Gen 2 RX flow control (runtime-adjustable): Type 2 credits held by the host (4: no limit),
         # RX words buffer throttle level (entries of 32 bytes).
         phy = getattr(self, "usb3_phy", None)
-        if phy is not None and hasattr(phy, "gen2_rx_throttle_level"):
+        if phy is not None and isinstance(phy.rx_t2_credits, Signal):
             self.usb3_rx_flow = CSRStorage(fields=[
                 CSRField("t2_credits",     size=3, offset=0, reset=4,  description="Type 2 credits held by the host (4: no limit)."),
                 CSRField("throttle_level", size=8, offset=8, reset=16, description="RX throttle level (32-byte entries)."),

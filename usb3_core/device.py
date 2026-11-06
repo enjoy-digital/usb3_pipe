@@ -55,7 +55,7 @@ class USB3DeviceCore(LiteXModule):
         if with_lpm:
             descriptors.enable_lpm()
         # SuperSpeedPlus (Gen 2 capable PHY): SuperSpeedPlus USB Device Capability in the BOS.
-        if hasattr(phy, "gen2_active"):
+        if phy.ssp_capable:
             descriptors.enable_ssp()
 
         # Link Layer (Transfer Types of the endpoints for SuperSpeedPlus operation).

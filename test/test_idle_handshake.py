@@ -136,6 +136,16 @@ class TestIdleHandshake(unittest.TestCase):
         for name, direction in USB3PHY_LINK_CTRL:
             self.assertIs(getattr(dut, name), getattr(dut.ltssm, name))
         self.assertEqual(dut.link_activity.reset.value, 1)
+        # Capabilities/flow control attributes always defined (constants without the feature),
+        # also on the Link Layer tests stand-in.
+        from usb3_pipe.phy import USB3PHY_LINK_INTERFACE
+        from usb3_core.host_model import PHYStandIn
+        stand_in = PHYStandIn()
+        for name, _ in USB3PHY_LINK_INTERFACE:
+            self.assertTrue(hasattr(dut,      name), name)
+            self.assertTrue(hasattr(stand_in, name), name)
+        self.assertFalse(dut.ssp_capable)
+        self.assertEqual(dut.rx_t2_credits, 4)
 
 if __name__ == "__main__":
     unittest.main()

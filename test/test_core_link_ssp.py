@@ -25,6 +25,7 @@ class LinkDUT(LiteXModule):
     def __init__(self, link_words=1):
         from test.model.device import PairsPHY
         self.phy = phy = PHYStandIn()
+        phy.ssp_capable = True
         phy.gen2_active = Signal(reset=1)
         link_phy = phy if link_words == 1 else PairsPHY(phy, self)
         self.link = USB3LinkLayer(link_phy, sys_clk_freq=125e6, ssp_tt={1: TT_BULK})
