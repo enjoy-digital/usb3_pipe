@@ -135,7 +135,7 @@ Options (`--help`):
 | `--with-trace` | USB3 Device Core Header Packets trace (`usb3_core_trace_*`, `bench/usb3_trace.py`), off by default with `pipe_cd`. |
 | `--with-gen2-debug` | Gen 2 RX monitor on the raw RX words (`usb3_gen2_rx_*`: alignment status, blocks/Ordered Sets counters). |
 | `--with-tx-check`, `--with-tx-raw-check` | Gen 2 TX self-checks: transmitted Header Packets/Link Commands CRCs before (`usb3_tx_check_*`) and after (`usb3_tx_raw_check_*`, `tx_raw_counts_*`) the scrambling. |
-| `--with-ltssm-history` | Gen 2 bring-up probes: TX FFE/RX CTLE/TX re-initialization CSRs (`usb3_tx_ffe`, `usb3_rx_eq`, `usb3_tx_reinit`) and, without `--with-gtr12-debug`, the LGOOD latency histogram, Gen 2 RX backlog/counters/framing probes and GTR12 RX valid probe. |
+| `--with-ltssm-history` | Gen 2 bring-up probes: TX FFE/RX CTLE/TX re-initialization CSRs (`usb3_tx_ffe`, `usb3_rx_eq`, `usb3_tx_reinit`, with `--gen2-capable`) and, without `--with-gtr12-debug`, the LGOOD latency histogram, Gen 2 RX backlog/counters/framing probes and GTR12 RX valid probe. |
 | `--with-gtr12-debug` | GTR12/PIPE bring-up: lane status transitions (`gtr12_transitions_*`), raw/words RX snapshots and TX snapshot/ring (`rx_snapshot_*`, `tx_snapshot_*`, `tx_ring_*`), SuperSpeedPlus Polling status (`ssp_status_*`), UPAR CSRs. |
 | `--with-gtr12-analyzer` | LiteScope analyzer on the GTR12 raw RX words (rx clock domain). |
 | `--place-option 0\|1\|2`, `--route-option 0\|1\|2` | Gowin place/route algorithms (defaults 2/1, timing driven). |
