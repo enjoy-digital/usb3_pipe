@@ -37,6 +37,7 @@ from litex.soc.cores.clock import S7PLL, USPMMCM
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.builder import *
 
+from usb3_pipe.common import FirstFromLast
 from usb3_pipe.serdes import A7USB3SerDes, K7USB3SerDes, USPUSB3SerDes
 from usb3_pipe.ltssm  import USB3LTSSM
 from usb3_pipe.phy    import USB3PHY, USB3PHY_STATUS, USB3PHY_LINK_CTRL
@@ -217,7 +218,7 @@ def get_ports(config):
         # AXI-Stream Sink (TX symbols).
         add("sink_tvalid", "i",  1, "sys", "TX symbols valid.")
         add("sink_tready", "o",  1, "sys", "TX symbols accepted.")
-        add("sink_tlast",  "i",  1, "sys", "Unused (ignored).")
+        add("sink_tlast",  "i",  1, "sys", "TX end of packet (required: SKP Ordered Sets are only inserted between the packets).")
         add("sink_tdata",  "i", 32, "sys", "TX symbols (4 x 8-bit).")
         add("sink_tuser",  "i",  4, "sys", "TX K-symbol flags (1 bit per symbol).")
 
@@ -327,12 +328,16 @@ class USB3PIPECore(SoCMini):
             self.add_usb_core(platform, config, phy, sys_clk_freq)
         else:
             # AXI-Stream Sink (TX) -----------------------------------------------------------------
+            # Packets first flag from tlast: the PHY only inserts SKP Ordered Sets between the
+            # packets (first/last delimiters).
+            self.tx_first = tx_first = FirstFromLast([("data", 32), ("ctrl", 4)])
             self.comb += [
-                phy.sink.valid.eq(platform.request("sink_tvalid")),
-                platform.request("sink_tready").eq(phy.sink.ready),
-                phy.sink.last.eq(platform.request("sink_tlast")),
-                phy.sink.data.eq(platform.request("sink_tdata")),
-                phy.sink.ctrl.eq(platform.request("sink_tuser")),
+                tx_first.sink.valid.eq(platform.request("sink_tvalid")),
+                platform.request("sink_tready").eq(tx_first.sink.ready),
+                tx_first.sink.last.eq(platform.request("sink_tlast")),
+                tx_first.sink.data.eq(platform.request("sink_tdata")),
+                tx_first.sink.ctrl.eq(platform.request("sink_tuser")),
+                tx_first.source.connect(phy.sink),
             ]
 
             # AXI-Stream Source (RX) ---------------------------------------------------------------
