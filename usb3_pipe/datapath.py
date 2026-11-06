@@ -812,7 +812,8 @@ class Gen2TXDCBalance(LiteXModule):
     80-bit at 125MHz: a block every 1.65 cycles), the block registered with partial popcounts, then
     the balance increments of the possible DC Balance Symbols precomputed: the running balance loop
     is then adders from registers and a one-hot selection, the decisions comparisons of a register
-    with constants (12-bit balance saturated at +-1915 one cycle late).
+    with constants (11-bit balance saturated at +-511, from a registered comparison: up to two
+    blocks late).
     """
     def __init__(self, one_per_cycle=False):
         self.sink   = sink   = stream.Endpoint(gen2_tx_block_layout())
@@ -916,8 +917,8 @@ class Gen2TXDCBalance(LiteXModule):
         source = self.source
         ones   = lambda v: bin(v).count("1")
         keys   = ["none", "15p", "15n", "14p", "14n"]
-        W      = 12                     # Running balance bits (at least +-511, 6.4.1.2.2).
-        LIMIT  = 2**(W - 1) - 1 - 132   # Saturation (a block changes the balance by 132 at most).
+        W      = 11  # Running balance bits (511 + 3 blocks of 132 at most, decisions included).
+        LIMIT  = 511 # Saturation (6.4.1.2.2).
 
         # Pipeline control: the stages advance together (go: registered, from the output buffer
         # level, copies for the stages registers enables: fanout), the output buffer absorbs the
@@ -1009,8 +1010,9 @@ class Gen2TXDCBalance(LiteXModule):
         # of Symbol 11 of the block in stage 2): the DC Balance Symbols decisions are comparisons of
         # a register with constants, the updates one-hot selections of candidates computed from the
         # registers (the choices of the block as carry-save 3-operand sums with the next block
-        # inc_11). Saturation (+-LIMIT) from registered comparisons of the balance: applied one
-        # cycle late (the balance overshoots the limit by one block at most).
+        # inc_11). Saturation (+-LIMIT) from registered comparisons of the balance: applied late
+        # (the balance overshoots the limit by two blocks at most, the DC Balance Symbols are the
+        # same there: magnitude above 31).
         def sx(v, w):
             return Cat(v, Replicate(v[-1], w - len(v)))
         def add3(x, y, z):

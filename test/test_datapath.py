@@ -22,7 +22,8 @@ from litex.gen import *
 from usb3_pipe.common   import *
 from usb3_pipe.datapath import RXWordAligner, RXSKPRemover, TXSKPInserter, RXDatapath, TXDatapath
 from usb3_pipe.datapath import Gen2TXDatapath, Gen2RXDatapath, GEN2_DATA_WIDTH, GEN2_RX_COUNTERS
-from usb3_pipe.datapath import GEN2_IDLE_BLOCK
+from usb3_pipe.datapath import GEN2_IDLE_BLOCK, Gen2TXDCBalance
+from usb3_pipe.coding   import GEN2_DC_REDUCE_ONES, GEN2_DC_REDUCE_ZEROS
 
 from test.common import ordered_set_words, words_to_symbols, symbols_to_words, stream_monitor
 from test.model.gen2 import Gen2ReferenceDecoder, int_to_bits, bits_from_words, words_from_bits
@@ -745,6 +746,65 @@ class TestGen2Datapath(unittest.TestCase):
                 dc += 2*popcount(bits[pos:pos+length]) - length
                 worst = max(worst, abs(dc))
         self.assertLess(worst, 64)
+
+    def test_dc_balance_saturation(self):
+        for one_per_cycle in [False, True]:
+            with self.subTest(one_per_cycle=one_per_cycle):
+                self.dc_balance_saturation_test(one_per_cycle)
+
+    def dc_balance_saturation_test(self, one_per_cycle, n=40):
+        # Biased blocks (all 1s then all 0s) saturate the running DC Balance at +511 (6.4.1.2.2):
+        # the DC Balance Symbols follow the saturated balance: on the 0s, the Symbols to reduce the
+        # 1s stop when a reference model with the same saturation says so. The one block per cycle
+        # variant applies its saturation one or two blocks late: tolerance of 2 blocks.
+        blocks = [(1 << 128) - 1]*n + [0]*n
+        header = BLOCK_HEADER_CONTROL
+        def reference():
+            dc, out = 0, []
+            for data in blocks:
+                syms    = data.to_bytes(16, "little")
+                ones_11 = bin(header).count("1") + sum(bin(s).count("1") for s in syms[:12])
+                balance = dc + 2*ones_11 - 100
+                sym14, sym15 = syms[14], syms[15]
+                reduce = GEN2_DC_REDUCE_ONES if balance > 0 else GEN2_DC_REDUCE_ZEROS
+                if abs(balance) > 15:
+                    sym15 = reduce[1]
+                if abs(balance) > 31:
+                    sym14 = reduce[0]
+                tail = [syms[12], syms[13], sym14, sym15]
+                dc   = balance + 2*sum(bin(s).count("1") for s in tail) - 32
+                dc = max(-511, min(511, dc))
+                out.append(sym15)
+            return out
+        dut    = Gen2TXDCBalance(one_per_cycle=one_per_cycle)
+        out    = []
+        worst  = [0]
+        def driver(dut):
+            for data in blocks:
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.header.eq(header)
+                yield dut.sink.data.eq(data)
+                yield dut.sink.ts.eq(1)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+        def monitor(dut):
+            yield dut.source.ready.eq(1)
+            for _ in range(8*len(blocks)):
+                if (yield dut.source.valid):
+                    out.append(((yield dut.source.data) >> 120) & 0xff)
+                worst[0] = max(worst[0], abs((yield dut.dc_balance)))
+                yield
+        run_simulation(dut, [driver(dut), monitor(dut)])
+        self.assertEqual(len(out), len(blocks))
+        def flip(symbols):
+            # First block of the 0s with the Symbol reducing the 0s (balance negative).
+            return next(i for i, s in enumerate(symbols) if (i >= n) and (s == GEN2_DC_REDUCE_ZEROS[1]))
+        self.assertLessEqual(abs(flip(out) - flip(reference())), 2)
+        # Once negative, the balance stays negative on the 0s (no wrap of the running balance).
+        self.assertEqual(set(out[flip(out):]), {GEN2_DC_REDUCE_ZEROS[1]})
+        self.assertLessEqual(worst[0], 511 + 2*132)
 
     def loopback_test(self, edits={0: -4, 1: +4, 2: +16, 3: -20}, data_width=32, tseq_slip=False,
         **kwargs):
