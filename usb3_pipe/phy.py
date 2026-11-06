@@ -147,21 +147,24 @@ class USB3PHY(LiteXModule):
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
         timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8, link_words=1,
         pipe_cd=None, pipe_clk_freq=None, pipe_rx_depth=None, with_u1u2=True):
-        assert role in ["device", "host"]
-        assert lanes in [1, 2]
+        assert role in ["device", "host"], f"role: device or host ({role})."
+        assert lanes in [1, 2], f"lanes: 1 or 2 ({lanes})."
         serdes = [serdes] if lanes == 1 else serdes
-        assert len(serdes) == lanes
-        assert (lanes == 1) or (not with_endianness_swap)
-        assert link_words in [1, 2, 4]
-        assert (lanes == 1) or (link_words == 1)
-        assert (pipe_cd is None) or (lanes == 1)
-        assert (pipe_cd is None) or (not gen2_capable) or (link_words in [2, 4])
-        assert (link_words != 4) or ((pipe_cd is not None) and gen2_capable)
+        assert len(serdes) == lanes, "serdes: one SerDes per lane."
+        assert (lanes == 1) or (not with_endianness_swap), "lanes=2: no endianness swap."
+        assert link_words in [1, 2, 4], f"link_words: 1, 2 or 4 ({link_words})."
+        assert (lanes == 1) or (link_words == 1), "lanes=2: link_words=1."
+        assert (pipe_cd is None) or (lanes == 1), "pipe_cd: lanes=1."
+        assert (pipe_cd is None) or (pipe_clk_freq is not None), "pipe_cd: pipe_clk_freq required."
+        assert (pipe_cd is None) or (not gen2_capable) or (link_words in [2, 4]), \
+            "pipe_cd with gen2_capable: link_words=2 or 4."
+        assert (link_words != 4) or ((pipe_cd is not None) and gen2_capable), \
+            "link_words=4: pipe_cd and gen2_capable."
         # Link Layer words (1: 32-bit), pairs (2: 64-bit) or quads (4: 128-bit).
         self.link_words = link_words
         self.pipe_cd    = pipe_cd
         self.with_u1u2  = with_u1u2 # U1/U2 Link Power Management (USB3LTSSM with_u1u2).
-        assert with_u1u2 or (lanes == 1)
+        assert with_u1u2 or (lanes == 1), "lanes=2: with_u1u2."
         # Link interface defaults (USB3PHY_LINK_INTERFACE), overridden by add_gen2 (ssp_capable,
         # gen2_active) and add_pipe_cdc (rx_throttle, rx_t2_credits).
         self.ssp_capable   = False
