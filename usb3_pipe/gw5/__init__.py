@@ -86,7 +86,9 @@ def gw5_usb3_rate_writes(lane, refclk="100M", pll="QPLL1", clk_freq=62.5e6):
             re.findall(r"upar_write_driver\((0x[0-9a-fA-F]+),(0x[0-9a-fA-F]+)\)", csr)]
     w5, w10 = writes("5G"), writes("10G")
     # CPLL: RX equalizer automatic at 5G, manual at 10G (writes set separately below).
-    eq = {0x9003a7, 0x9003a2, 0x9082d0, 0x9082d4} if pll == "CPLL" else set()
+    eq = set()
+    if pll == "CPLL":
+        eq = {0x9003a7, 0x9003a2, GW5_RX_CTLE_BOOST_REG, GW5_RX_CTLE_ATT_REG}
     w5  = [(a, v) for a, v in w5  if a not in eq]
     w10 = [(a, v) for a, v in w10 if a not in eq]
     assert [a for a, v in w5] == [a for a, v in w10]
@@ -103,14 +105,25 @@ def gw5_usb3_rate_writes(lane, refclk="100M", pll="QPLL1", clk_freq=62.5e6):
         # host, idle link bytes with a bit error per 4s): attenuation 8: ~700, 9: ~900, 7: ~1650,
         # the other boosts/attenuations 5x-50x worse or no link.
         (0x9003a7, 0x60000000, 0x60000000),
-        (0x9082d4, 0x00000000, 0x00088881),
-        (0x9082d0, 0x00000000, 0x000cccc1),
+        (GW5_RX_CTLE_ATT_REG, 0x00000000, 0x00088881),
+        (GW5_RX_CTLE_BOOST_REG, 0x00000000, 0x000cccc1),
         (0x9003a2, 0x00000000, 0x00010000),
         (0x9003a7, 0x00000000, 0x60000000),
         (toggle_rxsd, 0x10000, 0x10000, reset_wait),
         (cpll_reset,  0x22233, 0x22233, lock_wait),
         (toggle_rxsd, 0x00000, 0x00000),
     ])
+
+# Q1 lane 0 registers of the 10Gbps TX FFE (runtime values: USB3 SerDes) and RX CTLE (configuration
+# values in gw5_usb3_rate_writes), with the default values of the TX FFE ones.
+GW5_TX_LEVEL_REG           = 0x908234
+GW5_TX_LEVEL_DEFAULT       = 0xe000
+GW5_TX_CURSORS_REG         = 0x908238
+GW5_TX_CURSORS_DEFAULT     = 0xb00
+GW5_TX_FFE_MANUAL_REG      = 0x9082d8
+GW5_TX_FFE_MANUAL_VALUE    = 0x110
+GW5_RX_CTLE_BOOST_REG      = 0x9082d0
+GW5_RX_CTLE_ATT_REG        = 0x9082d4
 
 # TX Electrical Idle: lane TX driver control register, as written by the Gowin USB 3.2 PHY IP (Gowin
 # IDE SerDes IP library) on its TxElecIdle changes (measured on hardware): 0x1 driver in electrical

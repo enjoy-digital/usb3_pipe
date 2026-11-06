@@ -38,9 +38,10 @@ from litex.gen.genlib.misc import WaitTimer
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.crc    import CRC5, CRC16, CRC16Words, CRC32
-from usb3_core.common import *
-from usb3_core.dpp    import DPPSplitter, DPPQuadSplitter
+from usb3_pipe.crc       import CRC5, CRC16, CRC16Words, CRC32
+from usb3_core.common    import *
+from usb3_core.dpp       import DPPSplitter, DPPQuadSplitter
+from usb3_core.endpoints import MAX_PACKET_SIZE
 
 # Constants ----------------------------------------------------------------------------------------
 
@@ -1043,7 +1044,7 @@ class USB3LinkLayer(LiteXModule):
         # SuperSpeedPlus at Gen 2: the Header Packets are transmitted on the line after their DPP is
         # stored (Gen 2 TX framing, DPH and DPP without spacing): the timer is extended by the
         # maximum DPP buffering time (1024 bytes on the 32-bit Link Layer words).
-        pending_hp_ssp = 10e-6 + (1024 + 64)/4/sys_clk_freq
+        pending_hp_ssp = 10e-6 + (MAX_PACKET_SIZE + 64)/4/sys_clk_freq
         self.t_pending_hp = t_pending_hp = WaitTimer(
             scaled(pending_hp_ssp if ssp_capable else 10e-6))
         t_pending_hp_ss = WaitTimer(scaled(10e-6))

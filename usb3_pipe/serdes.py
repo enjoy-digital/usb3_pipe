@@ -564,6 +564,9 @@ class GW5USB3SerDes(USB3SerDes):
         from liteiclink.serdes.gtr12_gw5 import GTR12, gtr12_primitives
         from usb3_pipe.gw5 import gw5_usb3_csr_config, gw5_usb3_rate_writes
         from usb3_pipe.gw5 import gw5_tx_idle_reg, GW5_TX_IDLE_VALUE, GW5_TX_ACTIVE_VALUE
+        from usb3_pipe.gw5 import GW5_TX_LEVEL_REG, GW5_TX_LEVEL_DEFAULT, GW5_TX_CURSORS_REG
+        from usb3_pipe.gw5 import GW5_TX_CURSORS_DEFAULT, GW5_TX_FFE_MANUAL_REG
+        from usb3_pipe.gw5 import GW5_TX_FFE_MANUAL_VALUE, GW5_RX_CTLE_BOOST_REG, GW5_RX_CTLE_ATT_REG
 
         # Quad position: Q0 on single quad devices (GW5AT-15), Q1 on the GW5AST-138B.
         if position is None:
@@ -624,13 +627,18 @@ class GW5USB3SerDes(USB3SerDes):
                 c1cm  = Signal(32)
                 ffe   = Signal(32)
                 self.comb += [
-                    txlev.eq(Mux(self.tx_ffe_manual, Cat(C(0, 12), self.tx_ffe_txlev), 0xe000)),
+                    txlev.eq(Mux(self.tx_ffe_manual, Cat(C(0, 12), self.tx_ffe_txlev),
+                        GW5_TX_LEVEL_DEFAULT)),
                     c1cm.eq(Mux(self.tx_ffe_manual,
-                        Cat(self.tx_ffe_cm, C(0, 4), self.tx_ffe_c1), 0xb00)),
-                    ffe.eq(Mux(self.tx_ffe_manual, 0x110, 0)),
+                        Cat(self.tx_ffe_cm, C(0, 4), self.tx_ffe_c1),
+                        GW5_TX_CURSORS_DEFAULT)),
+                    ffe.eq(Mux(self.tx_ffe_manual, GW5_TX_FFE_MANUAL_VALUE, 0)),
                 ]
-                writes = writes[:1] + [(0x908234, 0xe000, txlev), (0x908238, 0xb00, c1cm),
-                    (0x9082d8, 0, ffe)] + writes[1:]
+                writes = writes[:1] + [
+                    (GW5_TX_LEVEL_REG,      GW5_TX_LEVEL_DEFAULT,   txlev),
+                    (GW5_TX_CURSORS_REG,    GW5_TX_CURSORS_DEFAULT, c1cm),
+                    (GW5_TX_FFE_MANUAL_REG, 0,                      ffe),
+                ] + writes[1:]
             # RX CTLE at 10Gbps (runtime, bring-up: applied at the next rate change, lane 0
             # registers): rx_eq_manual: attenuation (att) and boost values, else the configuration
             # values (gw5_usb3_rate_writes).
@@ -643,7 +651,7 @@ class GW5USB3SerDes(USB3SerDes):
                     self.comb += v.eq(Mux(self.rx_eq_manual,
                         Cat(C(1, 4), Replicate(value, 4), C(0, 12)), default))
                     return v
-                rx_eq = {0x9082d4: self.rx_eq_att, 0x9082d0: self.rx_eq_boost}
+                rx_eq = {GW5_RX_CTLE_ATT_REG: self.rx_eq_att, GW5_RX_CTLE_BOOST_REG: self.rx_eq_boost}
                 writes = [(w[0], w[1], eq_value(w[2], rx_eq[w[0]]) if w[0] in rx_eq else w[2]) +
                     tuple(w[3:]) for w in writes]
             self.rate_sequencer = rate_sequencer = ClockDomainsRenamer({"sys": xcvr_cd})(

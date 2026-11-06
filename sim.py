@@ -46,7 +46,8 @@ from usb3_pipe.common   import SKP
 from usb3_pipe.datapath import TXDatapath, RXDatapath, RXErrorMonitor
 from usb3_pipe.phy      import USB3PHY
 from usb3_pipe.serdes   import USB3SerDes
-from usb3_core.host_model import USB3HostModel, enumeration_script
+from usb3_core.host_model import USB3HostModel, enumeration_script, pm_flag
+from usb3_core.host_model import PM_REQ_U1, PM_REQ_U2, PM_LAU, PM_EXIT_U1, PM_EXIT_U2, PM_RECOVERY
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
 from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
@@ -568,7 +569,7 @@ class USB3PIPESim(SoCMini):
                 host_rec      = Signal()
                 host_rec_left = Signal()
                 sync += [
-                    If(host_model.pm[5],
+                    If(pm_flag(host_model.pm, PM_RECOVERY),
                         host_rec.eq(1),
                         host_rec_left.eq(0),
                     ).Elif(host_rec & ~ltssm.u0,
@@ -577,7 +578,7 @@ class USB3PIPESim(SoCMini):
                         host_rec.eq(0),
                     ),
                 ]
-                self.host_pm_recovery = host_model.pm[5]
+                self.host_pm_recovery = pm_flag(host_model.pm, PM_RECOVERY)
                 self.comb += [
                     phy.source.connect(host_model.sink),
                     host_model.source.connect(phy.sink),
@@ -585,11 +586,11 @@ class USB3PIPESim(SoCMini):
                         # Script done: not restarted by the Recovery.
                         (host_model.done & host_recovery)),
                     host_model.u0.eq(ltssm.u0),
-                    ltssm.req_u1.eq(host_model.pm[0]),
-                    ltssm.req_u2.eq(host_model.pm[1]),
-                    ltssm.lau.eq(host_model.pm[2]),
-                    ltssm.exit_u1_req.eq(host_model.pm[3]),
-                    ltssm.exit_u2_req.eq(host_model.pm[4]),
+                    ltssm.req_u1.eq(pm_flag(host_model.pm, PM_REQ_U1)),
+                    ltssm.req_u2.eq(pm_flag(host_model.pm, PM_REQ_U2)),
+                    ltssm.lau.eq(pm_flag(host_model.pm, PM_LAU)),
+                    ltssm.exit_u1_req.eq(pm_flag(host_model.pm, PM_EXIT_U1)),
+                    ltssm.exit_u2_req.eq(pm_flag(host_model.pm, PM_EXIT_U2)),
                     serdes[0].tx_skp.eq(host_model.skp),
                 ]
             elif with_core:
