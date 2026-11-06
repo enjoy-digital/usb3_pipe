@@ -30,9 +30,9 @@ handshake, exit_u1_req/exit_u2_req, u2_timeout, directed_recovery and link_activ
 """
 
 from migen import *
-from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
+from litex.gen.genlib.misc import WaitTimer
 
 from litex.soc.interconnect import stream
 

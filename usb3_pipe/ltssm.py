@@ -10,9 +10,9 @@ Polling substates (SSPPolling, 7.5.4.3-7.5.4.6, see doc/gen2-x2-roadmap.md).
 """
 
 from migen import *
-from migen.genlib.misc import WaitTimer
 
 from litex.gen import *
+from litex.gen.genlib.misc import WaitTimer
 
 from usb3_pipe.common import LTSSM_PIPE_INTERFACE
 from usb3_pipe.lfps   import U1ExitLFPSBurst, U2ExitLFPSBurst, U3WakeupLFPSBurst
