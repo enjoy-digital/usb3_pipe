@@ -417,7 +417,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
 
     # USB3 PHY (PIPE + LTSSM) ----------------------------------------------------------------------
     gen2_capable = getattr(serdes, "gen2_capable", False)
-    assert (phy_cd is None) or not (with_debug or with_serdes_debug or with_profile)
+    assert (phy_cd is None) or not (with_serdes_debug or with_profile)
     soc.usb3_phy = usb3_phy = USB3PHY(
         serdes        = serdes,
         sys_clk_freq  = sys_clk_freq,
@@ -427,7 +427,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
         pipe_cd       = phy_cd,
         pipe_clk_freq = phy_clk_freq,
         with_u1u2     = with_lpm or (phy_cd is None)) # U1/U2 only with LPM on slow fabrics.
-    if phy_cd is not None:
+    if (phy_cd is not None) and not with_debug:
         # Minimal PHY status (no USB3PHYDebug): LTSSM state (get_ltssm_states), U0, SerDes ready.
         usb3_phy.status = CSRStatus(fields=[
             CSRField("ltssm_state", size=len(usb3_phy.ltssm_state)),

@@ -24,15 +24,18 @@ PIPE_EVENTS = ["ts_rx_ts1", "ts_rx_ts1_inv", "ts_rx_ts2", "lfps_rx_polling", "lf
 
 U3 = 30 # Fake LTSSM U3 state encoding.
 
-def fake_phy():
+def fake_phy(pipe_cd=None):
+    """PHY/SerDes stand-ins for USB3PHYDebug (pipe_cd: PIPE/SerDes in another clock domain, the
+    PIPE events then taken from the LTSSM inputs)."""
     phy = SimpleNamespace(
         reset           = Signal(),
         serdes_rx_reset = Signal(),
         ltssm_state     = Signal(5),
         ltssm_states    = {"U3": U3},
         ltssm           = SimpleNamespace(u0=Signal(), recovery=Signal(), u1=Signal(), u2=Signal(),
-            u3=Signal()),
+            u3=Signal(), **{name: Signal(name=name) for name in PIPE_EVENTS}),
         pipe            = SimpleNamespace(**{name: Signal(name=name) for name in PIPE_EVENTS}),
+        pipe_cd         = pipe_cd,
     )
     serdes = SimpleNamespace(
         ready       = Signal(),
@@ -44,8 +47,8 @@ def fake_phy():
     return phy, serdes
 
 class DUT(LiteXModule):
-    def __init__(self):
-        self.phy, self.serdes = fake_phy()
+    def __init__(self, pipe_cd=None):
+        self.phy, self.serdes = fake_phy(pipe_cd)
         self.submodules.debug = USB3PHYDebug(self.phy, self.serdes, sys_clk_freq=4e6)
 
 # Test ---------------------------------------------------------------------------------------------
@@ -95,7 +98,7 @@ class TestUSB3PHYDebug(unittest.TestCase):
             yield dbg._phy_reset.storage.eq(1)
             yield
             self.assertEqual((yield dut.phy.reset), 1)
-            self.assertEqual((yield dbg._status.status) & 0xff, 1 + ((n - 1) % 20))
+            self.assertEqual((yield dbg._status.fields.ltssm_state), 1 + ((n - 1) % 20))
             yield dbg._clear.re.eq(1)
             yield
             yield dbg._clear.re.eq(0)
@@ -104,6 +107,45 @@ class TestUSB3PHYDebug(unittest.TestCase):
             self.assertEqual((yield dbg._history_count.status), 0)
 
         run_simulation(dut, generator())
+
+    def test_pipe_cd_resynchronization(self):
+        # PIPE/SerDes in another clock domain (pipe, twice the sys frequency): PIPE events from the
+        # LTSSM inputs, SerDes levels and K28.4 pulses resynchronized, each event counted once.
+        dut = DUT(pipe_cd="pipe")
+        dbg = dut.debug
+
+        def sys_generator():
+            yield dut.phy.ltssm.ts_rx_ts1.eq(1)
+            yield
+            yield dut.phy.ltssm.ts_rx_ts1.eq(0)
+            for _ in range(64):
+                yield
+            self.assertEqual((yield dbg._ts1_count.status), 1)
+            self.assertEqual((yield dbg._rx_idle_count.status), 1)
+            self.assertEqual((yield dbg._k28_4_count.status), 2)
+            self.assertEqual((yield dbg._status.fields.rx_idle), 1)
+            self.assertEqual((yield dbg._status.fields.serdes_ready), 1)
+
+        def pipe_generator():
+            yield dut.serdes.source.ready.eq(1)
+            yield dut.serdes.ready.eq(1)
+            for _ in range(4):
+                yield
+            yield dut.serdes.rx_idle.eq(1)
+            # Two K28.4 words (one symbol each), 8 cycles apart (pulse resynchronization).
+            for _ in range(2):
+                yield dut.serdes.source.valid.eq(1)
+                yield dut.serdes.source.data.eq(K(28, 4))
+                yield dut.serdes.source.ctrl.eq(0b0001)
+                yield
+                yield dut.serdes.source.valid.eq(0)
+                for _ in range(8):
+                    yield
+            for _ in range(64):
+                yield
+
+        run_simulation(dut, {"sys": [sys_generator()], "pipe": [pipe_generator()]},
+            clocks={"sys": 16, "pipe": 8})
 
     def test_history_u3_exit(self):
         # Frozen full history, armed: the U3 exit restarts it (first entry: the state after U3).
