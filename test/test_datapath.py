@@ -800,7 +800,8 @@ class TestGen2Datapath(unittest.TestCase):
         self.assertEqual(len(out), len(blocks))
         def flip(symbols):
             # First block of the 0s with the Symbol reducing the 0s (balance negative).
-            return next(i for i, s in enumerate(symbols) if (i >= n) and (s == GEN2_DC_REDUCE_ZEROS[1]))
+            return next(i for i, s in enumerate(symbols)
+                if (i >= n) and (s == GEN2_DC_REDUCE_ZEROS[1]))
         self.assertLessEqual(abs(flip(out) - flip(reference())), 2)
         # Once negative, the balance stays negative on the 0s (no wrap of the running balance).
         self.assertEqual(set(out[flip(out):]), {GEN2_DC_REDUCE_ZEROS[1]})

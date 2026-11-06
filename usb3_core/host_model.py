@@ -205,6 +205,10 @@ PM_EXIT_U2  = 0b10000
 # Directed Recovery from U0 (script kept running, Advertisement in reactive mode).
 PM_RECOVERY = 0b100000
 
+def pm_flag(pm, flag):
+    """PM_* flag of a USB3HostModel.pm Signal."""
+    return pm[flag.bit_length() - 1]
+
 class USB3HostModel(LiteXModule):
     """Scripted USB3 Host Link/Protocol Layer model.
 
