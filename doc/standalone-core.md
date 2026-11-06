@@ -35,7 +35,8 @@ dedicated 156.25MHz transceiver reference clock).
 ## Interfaces
 
 - **PHY only**: `sink_*`/`source_*` AXI-Stream symbol streams (32-bit data, 4-bit K-symbol flags in
-  `tuser`), LTSSM status ports (`u0`, `ltssm_state`...), optional Link-Layer control ports.
+  `tuser`, `sink_tlast`: end of packet, required: the PHY only inserts SKP Ordered Sets between the
+  packets), LTSSM status ports (`u0`, `ltssm_state`...), optional Link-Layer control ports.
 - **PHY + Device Core** (`usb_core`): `bulk_in_*` (EP1 IN, device -> host) and `bulk_out_*` (EP2 OUT,
   host -> device) AXI-Stream (32-bit data, first byte on `tdata[7:0]`, `tkeep` on the last word of a
   packet, `tlast`: end of packet), `usb_ready`, `usb_configured`. Host side: any libusb application.
