@@ -31,8 +31,8 @@ from litex.gen.fhdl.verilog import convert
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.crc         import CRC16, CRC32
 from usb3_core.host_model  import PHYStandIn
-from usb3_core.crc         import CRC16, CRC32
 from usb3_core.link        import USB3LinkLayer
 from usb3_core.protocol    import USB3ProtocolLayer
 from usb3_core.control     import USB3EndpointControl

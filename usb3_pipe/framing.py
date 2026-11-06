@@ -31,6 +31,7 @@ from usb3_pipe.common import EPF as _EPF
 from usb3_pipe.common import GEN2_IDLE, GEN2_SHP, GEN2_DPHP, GEN2_SDP, GEN2_EDB, GEN2_END
 from usb3_pipe.common import GEN2_SLC, GEN2_EPF
 from usb3_pipe.common import Buffer, PipeReady, AsyncFIFOPipelinedRead
+from usb3_pipe.crc    import CRC5
 
 # Gen 1 K Symbols (Link Layer words).
 SHP, SDP, EDB, END, SLC, EPF = [s.value for s in [_SHP, _SDP, _EDB, _END, _SLC, _EPF]]
@@ -545,8 +546,6 @@ class Gen2RXFraming(LiteXModule):
         # where the following fast Link Commands would overtake it (LGOOD_n/LCRD_x out of order:
         # Recovery, seen on hardware at 10Gbps). With 16+ bytes per cycle, decoded on the registered
         # chunk (timings).
-        # Imported here: the PHY package does not depend on usb3_core.
-        from usb3_core.crc import CRC5
         def fast_kind(c):
             return (((c[0:11] & 0x7f0) == 0x000) |  # LGOOD_n.
                     ((c[0:11] & 0x7f8) == 0x080) |  # LCRD_x/LCRD1_x/LCRD2_x.

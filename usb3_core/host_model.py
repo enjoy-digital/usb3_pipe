@@ -31,8 +31,8 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
+from usb3_pipe.crc    import CRC5
 from usb3_core.common import phy_layout
-from usb3_core.crc    import CRC5
 
 # CRCs (USB 3.2 7.2.1/7.2.2: bits transmitted LSB first, inverted remainder) -----------------------
 
