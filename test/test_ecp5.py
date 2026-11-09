@@ -4,98 +4,75 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-import random
 import unittest
 
 from migen import *
 
 from litex.gen import *
 
-from usb3_pipe.serdes_ecp5 import ECP5DCUPLL, ECP5TXGearbox, ECP5RXGearbox, ECP5RXCommaAligner
+from liteiclink.serdes import serdes_ecp5
 
-# 10-bit symbols (LSB first): K28.5 (RD-/RD+) and comma-free data symbols (D21.5, D10.2).
-K28_5   = [0x17c, 0x283]
-SYMBOLS = [0x2aa, 0x155]
+from usb3_pipe.serdes import ECP5USB3SerDes
 
-CLOCKS = {"full": 4, "half": 8, "sys": 8}
+# Helpers ------------------------------------------------------------------------------------------
 
-def bits_of(words, width):
-    return [(w >> i) & 1 for w in words for i in range(width)]
-
-def words_of(bits, width):
-    return [sum(b << i for i, b in enumerate(bits[n:n + width])) for n in range(0, len(bits) - width + 1, width)]
-
-class TestECP5DCUPLL(unittest.TestCase):
-    def test_configs(self):
-        pll = ECP5DCUPLL(None, refclk_freq=250e6, linerate=5e9)
-        self.assertEqual((pll.m, pll.d), (20, 1))
-        pll = ECP5DCUPLL(None, refclk_freq=100e6, linerate=2.5e9)
-        self.assertEqual((pll.m, pll.d), (25, 1))
-        with self.assertRaises(ValueError):
-            ECP5DCUPLL(None, refclk_freq=100e6, linerate=5e9) # x25 max: 2.5Gbps.
-
-class TestECP5TXGearbox(unittest.TestCase):
-    def test_order(self):
-        dut = ECP5TXGearbox()
-        words = [random.getrandbits(40) for _ in range(64)]
-        out   = []
-        def half_gen():
-            for w in words:
-                yield dut.sink.eq(w)
-                yield
-        def full_gen():
-            for _ in range(2*len(words) + 8):
-                out.append((yield dut.source))
-                yield
-        run_simulation(dut, {"half": half_gen(), "full": full_gen()}, clocks=CLOCKS)
-        # 20-bit words: LSBs then MSBs of each 40-bit word, in order (after the gearbox latency).
-        expected = [h for w in words for h in [w & 0xfffff, w >> 20]]
-        stream   = "".join(f"{w:05x}" for w in out)
-        self.assertEqual(len(out), 2*len(words) + 8)
-        self.assertIn("".join(f"{w:05x}" for w in expected[:100]), stream)
-
-class RXPath(LiteXModule):
+class Pads:
     def __init__(self):
-        self.gearbox = ECP5RXGearbox()
-        self.aligner = ClockDomainsRenamer("half")(ECP5RXCommaAligner())
-        self.comb += self.aligner.sink.eq(self.gearbox.source)
+        self.p = Signal()
+        self.n = Signal()
 
-class TestECP5RXPath(unittest.TestCase):
-    def check_offset(self, offset):
-        # Symbols stream: Ordered Sets like (4 COMs) and data, shifted by offset bits.
-        symbols = []
-        rd = 0
-        for _ in range(48):
-            for _ in range(4):
-                symbols.append(K28_5[rd]); rd ^= 1
-            symbols += [random.choice(SYMBOLS) for _ in range(12)]
-        bits = [random.getrandbits(1) for _ in range(offset)] + bits_of(symbols, 10)
-        rx_words = words_of(bits, 20)
+class Platform:
+    def __init__(self):
+        self.period_constraints = []
 
-        dut = RXPath()
-        out = []
-        def full_gen():
-            for w in rx_words:
-                yield dut.gearbox.sink.eq(w)
-                yield
-        def half_gen():
-            for _ in range(len(rx_words)//2):
-                out.append((yield dut.aligner.source))
-                yield
-        run_simulation(dut, {"full": full_gen(), "half": half_gen()}, clocks=CLOCKS)
+    def add_period_constraint(self, clk, period):
+        self.period_constraints.append((clk, period))
 
-        # After the alignment (first Ordered Sets), the output symbols are the transmitted ones.
-        rx_symbols = words_of(bits_of(out[len(out)//4:], 40), 10)
-        expected   = "".join(f"{s:03x}" for s in symbols)
-        received   = "".join(f"{s:03x}" for s in rx_symbols[:len(rx_symbols) - 8])
-        self.assertGreater(len(rx_symbols), len(symbols)//2)
-        self.assertIn(received, expected)
+    def add_false_path_constraints(self, *clks):
+        pass
 
-    def test_offsets(self):
-        random.seed(0)
-        for offset in range(40):
-            with self.subTest(offset=offset):
-                self.check_offset(offset)
+def ecp5_usb3_serdes(platform=None, **kwargs):
+    return ECP5USB3SerDes(platform or Platform(),
+        sys_clk      = Signal(),
+        sys_clk_freq = 125e6,
+        refclk       = Signal(),
+        refclk_freq  = 250e6,
+        tx_pads      = Pads(),
+        rx_pads      = Pads(),
+        **kwargs)
+
+# ECP5USB3SerDes -----------------------------------------------------------------------------------
+
+@unittest.skipUnless(hasattr(serdes_ecp5, "SerDesECP5SymbolAligner"),
+    "LiteICLink SerDesECP5 without 40-bit support.")
+class TestECP5USB3SerDes(unittest.TestCase):
+    def test_dcu(self):
+        platform = Platform()
+        serdes   = ecp5_usb3_serdes(platform)
+        dcu      = serdes.dcu
+        # 5Gbps from 250MHz x20, 40-bit words at 125MHz, DCU clocks constrained at 250MHz.
+        self.assertEqual((serdes.pll.config["m"], serdes.pll.config["d"]), (20, 1))
+        self.assertEqual(dcu.nwords, 4)
+        self.assertEqual(dcu.tx_clk_freq, 125e6)
+        self.assertEqual(dcu.rx_clk_freq, 125e6)
+        (tx_clk, tx_period), (rx_clk, rx_period) = platform.period_constraints
+        self.assertIs(tx_clk, dcu.txoutclk)
+        self.assertIs(rx_clk, dcu.rxoutclk)
+        self.assertEqual((tx_period, rx_period), (4.0, 4.0))
+        # Separate TX/RX initialization and TX Electrical Idle from FFC_EI_EN (OOB/LFPS).
+        self.assertEqual(dcu.serdes_params["p_CHX_LSM_DISABLE"], "0b1")
+        self.assertIn("i_CHX_FFC_EI_EN", dcu.serdes_params)
+
+    def test_rx_settings(self):
+        dcu = ecp5_usb3_serdes().dcu
+        for k, v in ECP5USB3SerDes.rx_settings.items():
+            with self.subTest(param=k):
+                self.assertIs(dcu.serdes_params[k], v)
+
+    def test_pipe_cd(self):
+        # DCU control logic in its own clock domain (PIPE on the DCU TX clock, USB3PHY pipe_cd).
+        serdes = ecp5_usb3_serdes(xcvr_cd="dcu_ctrl", tx_cdc=False)
+        self.assertEqual(serdes.dcu.tx_clk_freq, 125e6)
 
 if __name__ == "__main__":
     unittest.main()
