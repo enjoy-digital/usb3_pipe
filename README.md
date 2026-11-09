@@ -39,15 +39,15 @@ disk (and DDR3 disk), composite camera + console.
 
 [> Features
 -----------
-- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST/GW5AT GTR12 SerDes (LiteICLink), LFPS, Training
+- **PHY** (`usb3_pipe/`): Artix7 GTP/Kintex7 GTX/UltraScale+ GTY/Gowin GW5AST/GW5AT GTR12 SerDes (LiteICLink), Lattice ECP5-5G DCU, LFPS, Training
   Sequences, 8b/10b, scrambling, SKP insertion/removal, word/framing alignment, polarity, LTSSM
   (Polling/U0/Recovery/U1-U3/Hot/Warm Reset/Compliance/Loopback), debug counters. **Gen 2x1** on
   UltraScale+ GTY: SuperSpeedPlus Polling (SCD/LBPM), 128b/132b blocks, Gen 2 scrambler/SKP/SYNC,
   Gen 2 packet framing, optional 64/128-bit Link Layer interface (`link_words=2|4`). Also generated
   as a standalone Verilog core (`usb3_pipe_gen`, Gen 1, Artix7/Kintex7/UltraScale+). For slower
-  fabrics (Gowin GW5A), the PIPE can run in its own clock domain (`pipe_cd`, on the transceiver TX
-  clock) with the LTSSM/Link Layer/Core at half the frequency on 64/128-bit words, Link Layer RX
-  credits flow control.
+  fabrics (Gowin GW5A, Lattice ECP5), the PIPE can run in its own clock domain (`pipe_cd`, on the
+  transceiver TX clock) with the LTSSM/Link Layer/Core at a lower frequency on 64/128-bit words (ex:
+  62.5MHz, 83.33MHz), Link Layer RX credits flow control.
 - **USB3 Device Core** (`usb3_core/`): Link Layer (header flow control, retries, LMPs, timers,
   SuperSpeedPlus operation: 4-bit sequence numbers, Type 1/Type 2 buffers and credits), Protocol
   Layer, Control Endpoint (standard requests, alternate settings, class/vendor request handler,
@@ -78,6 +78,11 @@ Gen 2x1 on UltraScale+ GTY and on Gowin GTR12 with 64/128-bit Link Layer words.*
   validated at Gen 1 (5Gbps): IN 372MB/s, OUT 433MB/s, full duplex 262 + 383MB/s, 0 errors (PIPE at
   125MHz on the GTR12 TX clock, Link Layer/Core at 62.5MHz on 64-bit words). Needs
   [LiteICLink](https://github.com/enjoy-digital/liteiclink) GTR12 support.
+- [LambdaConcept ECPIX-5](https://shop.lambdaconcept.com/home/46-ecpix-5.html)
+  (`bench/lambdaconcept_ecpix5.py`, Lattice ECP5-5G DCU, on-board USB-C, open source toolchain):
+  validated at Gen 1 (5Gbps): IN 434MB/s, OUT 449MB/s, full duplex 342 + 349MB/s, 0 errors (PIPE at
+  125MHz on the DCU TX clock, Link Layer/Core at 83.33MHz on 64-bit words, see
+  [doc/ecpix5.md](doc/ecpix5.md)).
 - Gowin GW5AT-15 (`GW5USB3SerDes`: GTR12 Q0 lane 0, 125MHz REFCLK0, QPLL0 as Gowin's USB 3.0 PHY IP):
   validated at Gen 1 (5Gbps) on a GW5AT-15 device with a direct USB-C connection: Bulk IN ~400MB/s with
   `max_burst=16` (Link Layer/Core at 62.5MHz on 64-bit words). SerDes configuration in
