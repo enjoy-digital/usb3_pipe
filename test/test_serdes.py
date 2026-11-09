@@ -100,5 +100,20 @@ class TestSerDes(unittest.TestCase):
         self.assertEqual(_input(channel, "TXSYSCLKSEL").value, 0b11)
         self.assertNotIn(pll.reset, list_targets(fragment.comb))
 
+    def test_a7_rx_idle_min_burst(self):
+        # RX idle spike rejection: off by default, 40ns at 125MHz: 5 cycles (stretch 10 - 5).
+        for rx_idle_min_burst, stretch in [(None, 9), (40e-9, 5)]:
+            with self.subTest(rx_idle_min_burst=rx_idle_min_burst):
+                platform = XilinxPlatform("xc7a200t-fbg484-3", io=[])
+                serdes   = A7USB3SerDes(platform,
+                    sys_clk           = Signal(),
+                    sys_clk_freq      = 125e6,
+                    refclk_pads       = _pads("p", "n"),
+                    refclk_freq       = 100e6,
+                    tx_pads           = _pads("p", "n"),
+                    rx_pads           = _pads("p", "n"),
+                    rx_idle_min_burst = rx_idle_min_burst)
+                self.assertEqual(serdes.rx_idle_stretch, stretch)
+
 if __name__ == "__main__":
     unittest.main()

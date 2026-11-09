@@ -272,27 +272,44 @@ class RXIdleFilter(LiteXModule):
 
     Resynchronizes the transceiver's electrical idle detection and only reports electrical idle
     after `idle_cycles` consecutive idle cycles: filters the idle detection toggling during LFPS.
-    A non-idle burst is seen stretched by `stretch_cycles` (filter latency on the idle edge only).
+    With `burst_cycles` > 1, the end of electrical idle is only reported after `burst_cycles`
+    consecutive non-idle cycles: shorter non-idle spikes from the detector are rejected (ex: a 32ns
+    spike after each partner Polling LFPS burst seen on an Artix7 GTP board on some bitstream loads,
+    taken for Ping/U1 Exit LFPS bursts: no Polling LFPS sequence seen). Keep it below the shortest
+    LFPS burst (Ping.LFPS tBurst >= 40ns, Table 6-30). A non-idle burst is seen stretched by
+    `stretch_cycles` = idle_cycles - burst_cycles (filter latencies on its edges).
     """
-    def __init__(self, rx_elecidle, idle_cycles=10):
+    def __init__(self, rx_elecidle, idle_cycles=10, burst_cycles=1):
+        assert 1 <= burst_cycles < idle_cycles
         self.idle           = Signal() # o
-        self.stretch_cycles = idle_cycles - 1
+        self.stretch_cycles = idle_cycles - burst_cycles
 
         # # #
 
         rx_elecidle_r = Signal(reset=1)
-        count         = Signal(max=idle_cycles + 1, reset=idle_cycles) # Idle at reset.
+        idle_count    = Signal(max=idle_cycles + 1, reset=idle_cycles) # Idle at reset.
+        burst_count   = Signal(max=max(burst_cycles, 2))
+        burst         = Signal() # Non-idle reported (until idle_cycles idle cycles).
         self.specials += MultiReg(rx_elecidle, rx_elecidle_r, reset=1)
         self.sync += [
             If(rx_elecidle_r,
-                If(count != idle_cycles,
-                    count.eq(count + 1)
+                burst_count.eq(0),
+                If(idle_count != idle_cycles,
+                    idle_count.eq(idle_count + 1)
                 )
             ).Else(
-                count.eq(0)
+                idle_count.eq(0),
+                If(burst_count != (burst_cycles - 1),
+                    burst_count.eq(burst_count + 1)
+                )
+            ),
+            If(~rx_elecidle_r & (burst_count == (burst_cycles - 1)),
+                burst.eq(1)
+            ).Elif(idle_count == idle_cycles,
+                burst.eq(0)
             )
         ]
-        self.comb += self.idle.eq(count == idle_cycles)
+        self.comb += self.idle.eq((idle_count == idle_cycles) | ~burst)
 
 # TX SKP Inserter (6.4.3) --------------------------------------------------------------------------
 
