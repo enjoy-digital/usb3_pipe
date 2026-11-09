@@ -328,8 +328,8 @@ def pyhost_iso_in(host, ept, bursts=[1], ping=True):
 
 # Mass Storage (Bulk-Only Transport) ---------------------------------------------------------------
 
-def cbw(tag, length, din, cb):
+def cbw(tag, length, din, cb, lun=0):
     """Command Block Wrapper (31 bytes)."""
     cb = bytes(cb).ljust(16, b"\x00")
-    return list(struct.pack("<IIIBBB16s", CBW_SIGNATURE, tag, length, 0x80 if din else 0, 0,
+    return list(struct.pack("<IIIBBB16s", CBW_SIGNATURE, tag, length, 0x80 if din else 0, lun,
         len(cb), cb))
