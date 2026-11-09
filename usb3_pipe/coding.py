@@ -81,8 +81,11 @@ class RX8b10bChecker(LiteXModule):
 
     The running disparity is tracked over the symbols and re-initialized from the received code on
     errors (6.3.1.2: initial disparity is the disparity of the first received symbol).
+
+    rom_style: code lookups ROM style ("distributed": Xilinx LUTs, "logic": Yosys/ECP5, no 1024
+    entries distributed RAM).
     """
-    def __init__(self, decoders, lsb_first=True):
+    def __init__(self, decoders, lsb_first=True, rom_style="distributed"):
         n = len(decoders)
         self.invalid         = Signal(n) # o
         self.disparity_error = Signal(n) # o
@@ -100,7 +103,7 @@ class RX8b10bChecker(LiteXModule):
         # the same address (decoders/checker) into wrong contents.
         lookups = []
         for decoder in decoders:
-            lookup_comb = Signal(4, attr={("rom_style", "distributed")})
+            lookup_comb = Signal(4, attr={("rom_style", rom_style)})
             lookup      = Signal(4, attr={("syn_romstyle", "logic")})
             self.comb += Case(decoder.input, {code: lookup_comb.eq(v) for code, v in rom.items()})
             self.sync += lookup.eq(lookup_comb)

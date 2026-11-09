@@ -5,9 +5,9 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 SerDes (USB 3.2 chapter 6): LiteICLink transceivers (Artix7 GTP/Kintex7 GTX/UltraScale+
-GTY/Gowin GW5AST/GW5AT GTR12) at 5Gbps, 10Gbps on the GTY and the GTR12 with gen2_capable (Gen 2,
-raw transceiver words), with the TX/RX datapaths (usb3_pipe/datapath.py) and LFPS (TX
-pattern/electrical idle, filtered RX electrical idle, RX decode errors).
+GTY/Gowin GW5AST/GW5AT GTR12/Lattice ECP5-5G DCU) at 5Gbps, 10Gbps on the GTY and the GTR12 with
+gen2_capable (Gen 2, raw transceiver words), with the TX/RX datapaths (usb3_pipe/datapath.py) and
+LFPS (TX pattern/electrical idle, filtered RX electrical idle, RX decode errors).
 """
 
 from migen import *
@@ -104,9 +104,10 @@ class USB3SerDes(LiteXModule):
         return self.add_xcvr_datapath(name, xcvr, data_width)
 
     def add_xcvr_datapath(self, name, xcvr, data_width, rx_disparity_check=True, tx_cdc=True,
-        tx_input_register=False):
+        tx_input_register=False, rx_rom_style="distributed"):
         """TX/RX datapaths of a LiteICLink transceiver (added as name): 8b/10b stream endpoints,
-        SKP insertion/removal, CDC, word alignment, RX errors substitution."""
+        SKP insertion/removal, CDC, word alignment, RX errors substitution (rx_rom_style: 8b/10b
+        checker ROM style)."""
         self.add_module(name=name, module=xcvr)
         self.xcvr_name = name
         xcvr.add_stream_endpoints()
@@ -114,7 +115,7 @@ class USB3SerDes(LiteXModule):
         self.tx_datapath     = tx_datapath     = TXDatapath("tx", phy_dw=phy_dw, with_cdc=tx_cdc,
             with_input_register=tx_input_register)
         self.rx_substitution = rx_substitution = RXErrorSubstitution(xcvr, "rx",
-            with_disparity=rx_disparity_check)
+            with_disparity=rx_disparity_check, rom_style=rx_rom_style)
         self.rx_buffer       = rx_buffer       = ClockDomainsRenamer("rx")(
             Buffer(rx_substitution.source.description, pipe_ready=True)) # Timings.
         self.rx_datapath     = rx_datapath     = RXDatapath("rx", phy_dw=phy_dw)
@@ -749,3 +750,75 @@ class GW5USB3SerDes(USB3SerDes):
             gtr12.tx_raw_enable.eq(lfps_tx | self.gen2_tx_enable),
             gtr12.tx_raw.eq(Mux(lfps_tx, lfps_word, self.gen2_tx_data if raw_width == 80 else 0)),
         ]
+
+# Lattice ECP5 USB3 Serializer/Deserializer --------------------------------------------------------
+
+class ECP5USB3SerDes(USB3SerDes):
+    """Lattice ECP5-5G DCU USB3 SerDes (LiteICLink SerDesECP5: raw 10BSER DCU channel, 40-bit
+    125MHz fabric words, fabric 8b/10b/comma alignment).
+
+    refclk/refclk_freq: DCU reference clock (fabric clock: 250MHz x20 for 5Gbps, ex: ECPIX-5, the
+    100MHz EXTREF0 input only reaches 2.5Gbps with the x25 multiplier). TX Electrical Idle from the
+    DCU FFC_EI_EN input, RX Electrical Idle from the RX loss of signal detector, DCU RX settings for
+    USB3 (rx_settings).
+
+    xcvr_cd: clock domain of the DCU control logic (initialization, resets, SCI): a free-running
+    clock domain when this SerDes "sys" clock domain is renamed to the DCU TX clock (PIPE on the TX
+    clock, LTSSM/Link Layer/Core at a lower frequency: USB3PHY pipe_cd), tx_cdc: TX datapath clock
+    domain crossing (no CDC with the SerDes logic on the DCU TX clock).
+    """
+    # DCU RX settings (over LiteICLink's SerDesECP5 ones), from LUNA's ECP5 SerDes PHY (Great Scott
+    # Gadgets, BSD-3-Clause, luna/gateware/interface/serdes_phy/ecp5.py) and the ECPIX-5 bring-up:
+    # the CDR/DCO calibration and lock window are the RX fix with the host SSC (host TSEQ word
+    # errors 1.4e-1 -> ~1e-4), the equalizer settings are within the run-to-run spread.
+    rx_settings = dict(
+        p_CHX_RXTERM_CM         = "0b10",  # RX termination to GND (USB3 receiver detection).
+        p_CHX_REQ_EN            = "0b1",   # Equalizer enabled.
+        p_CHX_REQ_LVL_SET       = "0b00",  # Equalizer attenuation.
+        p_CHX_RX_RATE_SEL       = "0d06",  # Equalizer pole position.
+        p_CHX_PDEN_SEL          = "0b0",   # CDR phase detector always enabled (not disabled on LOS).
+        p_CHX_DCOCALDIV         = "0b010", # DCO calibration.
+        p_CHX_DCODISBDAVOID     = "0b1",
+        p_CHX_DCONUOFLSB        = "0b101",
+        p_CHX_BAND_THRESHOLD    = "0d0",
+        p_CHX_CALIB_CK_MODE     = "0b1",
+        p_D_DCO_CALIB_TIME_SEL  = "0b00",
+        p_D_CDR_LOL_SET         = "0b10",  # +-4000ppm lock, +-7000ppm unlock (SSC).
+        p_CHX_RX_LOS_HYST_EN    = "0b0",   # No loss of signal hysteresis.
+        i_CHX_FFC_SIGNAL_DETECT = 0,       # DCU word alignment unused (fabric alignment).
+        p_CHX_ENABLE_CG_ALIGN   = "0b0",
+    )
+
+    def __init__(self, platform, sys_clk, sys_clk_freq, refclk, refclk_freq, tx_pads, rx_pads,
+        dual=0, channel=0, xcvr_cd="sys", tx_cdc=True):
+        USB3SerDes.__init__(self)
+
+        # # #
+
+        from liteiclink.serdes.serdes_ecp5 import SerDesECP5PLL, SerDesECP5
+
+        # Transceiver ------------------------------------------------------------------------------
+        self.pll = pll = SerDesECP5PLL(refclk, refclk_freq, linerate=5e9)
+        dcu = SerDesECP5(pll, tx_pads, rx_pads,
+            dual        = dual,
+            channel     = channel,
+            data_width  = 40,
+            tx_polarity = self.tx_polarity,
+            rx_polarity = self.rx_polarity,
+            with_oob    = True) # TX up without RX signal (LFPS), fabric alignment, FFC_EI_EN.
+        dcu.serdes_params.update(self.rx_settings)
+        if xcvr_cd != "sys":
+            dcu = ClockDomainsRenamer({"sys": xcvr_cd})(dcu)
+        # No RX running disparity check, TX datapath input register (125MHz on the ECP5 fabric),
+        # 8b/10b checker lookups in logic (no 1024 entries distributed RAM on ECP5).
+        self.add_xcvr_datapath("dcu", dcu, data_width=40, rx_disparity_check=False,
+            tx_cdc=tx_cdc, tx_input_register=True, rx_rom_style="logic")
+
+        # LFPS -------------------------------------------------------------------------------------
+        self.add_lfps(dcu, dcu.rx_idle)
+        self.comb += dcu.tx_idle.eq(self.tx_idle & ~self.tx_lfps)
+
+        # Timing constraints (DCU clocks at linerate/20, CLKDIVF /2 for the 40-bit words) ----------
+        platform.add_period_constraint(dcu.txoutclk, 1e9/(2*dcu.tx_clk_freq))
+        platform.add_period_constraint(dcu.rxoutclk, 1e9/(2*dcu.rx_clk_freq))
+        platform.add_false_path_constraints(sys_clk, dcu.txoutclk, dcu.rxoutclk)
