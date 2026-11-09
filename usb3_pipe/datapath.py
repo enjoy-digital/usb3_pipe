@@ -205,9 +205,10 @@ class RXErrorSubstitution(LiteXModule):
 
     Substitutes received 8b/10b decode errors and disparity errors with K28.4 symbols (6.3.1.4).
     with_disparity=False: decode errors only (no running disparity tracking: shorter RX paths on
-    slow fabrics, corrupted packets still detected by the Link Layer CRCs).
+    slow fabrics, corrupted packets still detected by the Link Layer CRCs). rom_style: RX8b10bChecker
+    code lookups ROM style.
     """
-    def __init__(self, serdes, clock_domain, with_disparity=True):
+    def __init__(self, serdes, clock_domain, with_disparity=True, rom_style="distributed"):
         n = len(serdes.decoders)
         self.sink   = stream.Endpoint([("data", 8*n), ("ctrl", n)])
         self.source = stream.Endpoint([("data", 8*n), ("ctrl", n)])
@@ -215,7 +216,7 @@ class RXErrorSubstitution(LiteXModule):
         # # #
 
         self.comb += self.sink.connect(self.source)
-        checker = RX8b10bChecker(serdes.decoders)
+        checker = RX8b10bChecker(serdes.decoders, rom_style=rom_style)
         if clock_domain != "sys":
             checker = ClockDomainsRenamer(clock_domain)(checker)
         self.checker = checker
