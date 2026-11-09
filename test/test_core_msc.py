@@ -19,18 +19,22 @@ from litex.gen import *
 from usb3_core.host_model import *
 from usb3_core.msc        import *
 
-from test.model.host import *
+from test.model.host   import *
+from test.model.device import PairsPHY
 
 SIZE = 16*1024 # 32 blocks.
 
 class DUT(LiteXModule):
-    def __init__(self):
+    def __init__(self, link_words=1):
         self.phy = phy = PHYStandIn()
-        self.msc = USB3MSC(phy, 125e6, size=SIZE, max_burst=2)
+        self.msc = USB3MSC(phy if link_words == 1 else PairsPHY(phy, self, link_words), 125e6,
+            size=SIZE, max_burst=2)
 
 class TestCoreMSC(unittest.TestCase):
+    link_words = 1 # PHY words (1) or words pairs (2: 64-bit Link Layer/Bulk endpoints).
+
     def scsi_commands_test(self, with_data=True):
-        dut  = DUT()
+        dut  = DUT(self.link_words)
         host = PyHost(dut.phy)
         state = {"out_seq": 0, "in_seq": 0, "tag": 1}
 

@@ -30,7 +30,7 @@ from litex.soc.interconnect import stream
 
 from usb3_core.common      import bytes_to_be
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT, bulk_endpoint_32
 from usb3_core.descriptors import *
 from usb3_core.msc_storage import *
 
@@ -391,11 +391,15 @@ class USB3MSC(LiteXModule):
     def __init__(self, phy, sys_clk_freq, size=512*1024, image=None, storage=None, max_burst=8,
         inquiry_product="USB3-PIPE RAMDisk", **kwargs):
         descriptors = msc_descriptors(max_burst=max_burst, **kwargs)
+        dw = 32*getattr(phy, "link_words", 1) # Bulk endpoints at the Link Layer width.
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[
-            USB3BulkIN(ept=1,  max_burst=max_burst),
-            USB3BulkOUT(ept=2, max_burst=max_burst),
+            USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw),
+            USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw),
         ])
         if storage is None:
             storage = USB3MSCRAMStorage(size, image)
         self.storage = storage
-        self.scsi    = USB3MSCSCSI(core.endpoints[0], core.endpoints[1], storage, inquiry_product)
+        self.scsi    = USB3MSCSCSI(
+            bulk_endpoint_32(self, core.endpoints[0]),
+            bulk_endpoint_32(self, core.endpoints[1]),
+            storage, inquiry_product)
