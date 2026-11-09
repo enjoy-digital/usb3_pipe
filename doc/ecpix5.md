@@ -1,8 +1,9 @@
 # LambdaConcept ECPIX-5 (Lattice ECP5-5G)
 
 USB3 Gen 1x1 (5Gbps) device on the [ECPIX-5](https://shop.lambdaconcept.com/home/46-ecpix-5.html)
-(LFE5UM5G-85F) USB-C connector, with `ECP5USB3SerDes` (`usb3_pipe/serdes_ecp5.py`) on DCU0 and the
-open source toolchain (Yosys/nextpnr-ecp5/Trellis).
+(LFE5UM5G-85F) USB-C connector, with `ECP5USB3SerDes` on DCU0 and the open source toolchain
+(Yosys/nextpnr-ecp5/Trellis). Needs [LiteICLink](https://github.com/enjoy-digital/liteiclink)
+`SerDesECP5` 40-bit words support.
 
 ```sh
 $ ./bench/lambdaconcept_ecpix5.py --build --load --example bench
@@ -38,14 +39,15 @@ RX errors/Electrical Idle).
 
 ## ECP5 DCU
 
-- Raw 10BSER channel, 8b/10b, comma alignment and polarity in the fabric, 20-bit words at 250MHz on
-  the DCU clocks (1:2 gearbox) converted to 40-bit words at 125MHz (`CLKDIVF` /2 clocks): only the
-  gearboxes run at 250MHz (the ECP5 fabric doesn't reach 250MHz with the 8b/10b/alignment logic).
+- LiteICLink `SerDesECP5` (`data_width=40`, `with_oob`): raw 10BSER channel, 8b/10b and comma
+  alignment in the fabric, 20-bit words at 250MHz on the DCU clocks (1:2 gearbox) converted to
+  40-bit words at 125MHz (`CLKDIVF` /2 clocks): only the gearboxes run at 250MHz (the ECP5 fabric
+  doesn't reach 250MHz with the 8b/10b/alignment logic).
 - 5Gbps needs a 250MHz reference clock (x20, fabric PLL from the 100MHz oscillator): the 100MHz
   EXTREF0 input (`serdes_clk100`) only reaches 2.5Gbps (x25 max, measured on the DCU TX clock).
 - CDR phase detector always enabled (`CHX_PDEN_SEL`): disabled on LOS otherwise.
 - Separate TX/RX initialization (LiteICLink `SerdesInitOOB`): TX up without RX signal (LFPS).
-- RX settings from [LUNA](https://github.com/greatscottgadgets/luna)'s ECP5 SerDes PHY: RX termination
+- USB3 RX settings (`ECP5USB3SerDes.rx_settings`) from [LUNA](https://github.com/greatscottgadgets/luna)'s ECP5 SerDes PHY: RX termination
   to GND, CDR/DCO calibration and lock window (`D_CDR_LOL_SET`), equalizer. The CDR/DCO settings are
   the RX fix with the host SSC (host TSEQ word errors: 1.4e-1 -> 4e-5..8e-4 per word in training).
 - Avoid LUNA's TX driver/CMU loop settings without checks: after a test with them, the board DDR3 failed
@@ -78,7 +80,7 @@ the progressive bring-up, still useful to check/tune the DCU:
 1. `serdes`: LiteICLink `SerDesECP5` with PRBS, internal loopback (SCI `lb_ctl`, channel register
    0x15 bit 0), clocks frequency meters, raw RX words: PLL/reference clock checks, 0 errors over
    1.5e11 bits (PRBS7/15/31) at 5Gbps in loopback.
-2. `dcu`: `ECP5DCU` 40-bit path in loopback (incrementing bytes, decode errors/sequence checks):
+2. `dcu`: `SerDesECP5` 40-bit path in loopback (incrementing bytes, decode errors/sequence checks):
    0 errors over 1.3e10 symbols.
 3. `lfps`: `ECP5USB3SerDes` with the LFPS Unit only (no LTSSM/Link Layer: no link training, safe for
    the host): host LFPS measurements, LOS/LDR captures, host TSEQ/TS1 RX monitor (data window

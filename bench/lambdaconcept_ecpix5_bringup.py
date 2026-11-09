@@ -11,8 +11,9 @@
 # - serdes: LiteICLink SerDesECP5 (20-bit/250MHz) on DCU0 with PRBS/loopback, SCI access, TX/RX
 #           clocks frequency meters, raw RX words observer (no USB3 logic). PLL/reference clock
 #           experiments: --refclk extref (EXTREF0 100MHz), --dcu-mult/--dcu-div/--refck-mode.
-# - dcu:    ECP5DCU (40-bit/125MHz words: gearboxes, fabric comma aligner) with a loopback checker
-#           (incrementing bytes: decode errors/commas/sequence breaks counters, words capture).
+# - dcu:    LiteICLink SerDesECP5 40-bit/125MHz words (gearboxes, fabric comma aligner), USB3 RX
+#           settings, loopback checker (incrementing bytes: decode errors/commas/sequence breaks
+#           counters, words capture).
 # - lfps:   ECP5USB3SerDes with the LFPS Unit, no LTSSM/Link Layer (host LFPS/TSEQ/TS1 only, no
 #           link training): LFPS bursts measurements, LOS/LDR captures, RX words monitor.
 
@@ -31,11 +32,10 @@ from litex.soc.interconnect.csr import *
 from litex.soc.cores.freqmeter  import FreqMeter
 from litex.soc.cores.prbs       import PRBSRX
 
-from liteiclink.serdes.serdes_ecp5 import SerDesECP5
+from liteiclink.serdes.serdes_ecp5 import SerDesECP5PLL, SerDesECP5
 
-from usb3_pipe import ECP5USB3SerDes
-from usb3_pipe.serdes_ecp5 import ECP5DCUPLL, ECP5DCU
-from usb3_pipe.lfps        import LFPSUnit
+from usb3_pipe      import ECP5USB3SerDes
+from usb3_pipe.lfps import LFPSUnit
 
 from usb3_soc import usb3_soc_args, usb3_soc_argdict, usb3_soc_build
 
@@ -49,6 +49,28 @@ class _SerDesECP5PLL:
     def __init__(self, refclk, refclk_freq, m, d):
         self.refclk = refclk
         self.config = {"clkin": refclk_freq, "m": m, "d": d, "vco_freq": refclk_freq*m, "linerate": 5e9}
+
+# DCU Probes ---------------------------------------------------------------------------------------
+
+def dcu_rx_los(serdes):
+    """DCU RX loss of signal output (async)."""
+    return serdes.serdes_params["o_CHX_FFS_RLOS"]
+
+def dcu_add_rx_ldr(serdes):
+    """DCU RX low data rate input (raw RX input value to the fabric, async)."""
+    rx_ldr = Signal()
+    serdes.serdes_params.update(p_CHX_LDR_RX2CORE_SEL="0b1", o_CHX_LDR_RX2CORE=rx_ldr)
+    return rx_ldr
+
+def dcu_add_rx_los_mask(serdes):
+    """Mask of the DCU RX loss of signal to the initialization: RX up without RX signal (ex:
+    near-end serial loopback with the RX inputs unconnected)."""
+    mask     = Signal()
+    rx_los   = Signal()
+    init_los = serdes.serdes_params["o_CHX_FFS_RLOS"]
+    serdes.serdes_params["o_CHX_FFS_RLOS"] = rx_los
+    serdes.comb += init_los.eq(rx_los & ~mask)
+    return mask, rx_los
 
 # SerDes Status ------------------------------------------------------------------------------------
 
@@ -186,9 +208,10 @@ class SerDesRXObserver(LiteXModule):
 # DCU 40-bit Checker -------------------------------------------------------------------------------
 
 class DCUChecker(LiteXModule):
-    """ECP5DCU 40-bit path check (dcu stage): TX incrementing bytes with a COM word every 16 words,
-    RX decode errors/commas/sequence breaks counters (symbols rotation agnostic), aligner status."""
-    def __init__(self, dcu, sys_clk_freq):
+    """SerDesECP5 40-bit path check (dcu stage): TX incrementing bytes with a COM word every 16
+    words, RX decode errors/commas/sequence breaks counters (symbols rotation agnostic), aligner
+    status. rx_los: DCU RX loss of signal, rx_los_mask: its mask to the initialization."""
+    def __init__(self, dcu, sys_clk_freq, rx_los, rx_los_mask):
         self.status = CSRStatus(fields=[
             CSRField("tx_ready",   size=1),
             CSRField("rx_ready",   size=1),
@@ -200,7 +223,7 @@ class DCUChecker(LiteXModule):
         ])
         self.control = CSRStorage(fields=[
             CSRField("loopback",   size=1, description="Near-end serial loopback (SCI lb_ctl)."),
-            CSRField("rx_release", size=1, description="Release the RX PCS reset (bypass the init)."),
+            CSRField("rx_release", size=1, description="Mask the RX loss of signal to the init (RX up without RX signal)."),
             CSRField("rx_align",   size=1, reset=1, description="RX comma alignment enable."),
         ])
         self.errors = CSRStatus(32, description="RX decode errors.")
@@ -215,24 +238,24 @@ class DCUChecker(LiteXModule):
 
         # # #
 
-        offset  = Signal(4)
-        aligned = Signal()
-        rx_los  = Signal()
+        offset   = Signal(4)
+        aligned  = Signal()
+        rx_los_s = Signal()
         self.specials += [
             MultiReg(dcu.rx_aligner.offset, offset),
-            MultiReg(dcu.rx_aligned, aligned),
-            MultiReg(dcu.rx_los, rx_los),
+            MultiReg(dcu.rx_aligner.aligned, aligned),
+            MultiReg(rx_los, rx_los_s),
         ]
         self.comb += [
             self.status.fields.tx_ready.eq(dcu.tx_ready),
             self.status.fields.rx_ready.eq(dcu.rx_ready),
-            self.status.fields.tx_lol.eq(dcu.tx_lol),
-            self.status.fields.rx_lol.eq(dcu.rx_lol),
-            self.status.fields.rx_los.eq(rx_los),
+            self.status.fields.tx_lol.eq(dcu.init.tx_lol),
+            self.status.fields.rx_lol.eq(dcu.init.rx_lol),
+            self.status.fields.rx_los.eq(rx_los_s),
             self.status.fields.rx_aligned.eq(aligned),
             self.status.fields.offset.eq(offset),
             dcu.loopback.eq(self.control.fields.loopback),
-            dcu.rx_rst_release.eq(self.control.fields.rx_release),
+            rx_los_mask.eq(self.control.fields.rx_release),
             dcu.rx_align.eq(self.control.fields.rx_align),
         ]
 
@@ -449,7 +472,7 @@ class LOSCapture(LiteXModule):
 # RX Monitor ---------------------------------------------------------------------------------------
 
 class RXMonitor(LiteXModule):
-    """ECP5DCU RX words monitor (S5, host TSEQ/TS1 after the LFPS handshake), on a no-reset clock
+    """SerDesECP5 40-bit RX words monitor (S5, host TSEQ/TS1 after the LFPS handshake), on a no-reset clock
     domain on the recovered clock: words/ready/aligned words, decode errors (rx ready), COMs/SKPs
     counters, decoded words capture (block RAM, 36-bit: k[35:32]/d[31:0], triggered on a COM),
     recovered clock frequency."""
@@ -534,7 +557,7 @@ class RXMonitor(LiteXModule):
             "com_bad"     : com_bad != 0,
             "words"   : 1,
             "ready"   : rx_ready,
-            "aligned" : rx_ready & dcu.rx_aligned,
+            "aligned" : rx_ready & dcu.rx_aligner.aligned,
             "errors"  : rx_ready & Reduce("OR", e),
             "coms"    : rx_ready & com,
             "skps"    : rx_ready & skp,
@@ -548,7 +571,7 @@ class RXMonitor(LiteXModule):
         aligned = Signal()
         self.specials += [
             MultiReg(dcu.rx_aligner.offset, offset),
-            MultiReg(dcu.rx_aligned, aligned),
+            MultiReg(dcu.rx_aligner.aligned, aligned),
         ]
 
         # Capture.
@@ -666,19 +689,23 @@ class BringupSoC(ECPIX5BaseSoC):
         self.led(self.leds[1].g, self.serdes_status.status.fields.rx_ready)
 
     def add_dcu_stage(self, platform, serdes_refclk, refclk_freq, channel):
-        """ECP5DCU (40-bit/125MHz words, gearboxes, fabric comma aligner) with the DCUChecker (S3)."""
-        pll = ECP5DCUPLL(serdes_refclk, refclk_freq, linerate=5e9)
-        self.dcu = dcu = ECP5DCU(pll,
-            tx_pads = platform.request("usb3_tx", channel),
-            rx_pads = platform.request("usb3_rx", channel),
-            dual    = 0,
-            channel = channel)
-        dcu.add_sci()
+        """SerDesECP5 (40-bit/125MHz words, gearboxes, fabric comma aligner, USB3 RX settings) with
+        the DCUChecker (S3)."""
+        pll = SerDesECP5PLL(serdes_refclk, refclk_freq, linerate=5e9)
+        self.dcu = dcu = SerDesECP5(pll,
+            tx_pads    = platform.request("usb3_tx", channel),
+            rx_pads    = platform.request("usb3_rx", channel),
+            dual       = 0,
+            channel    = channel,
+            data_width = 40,
+            with_oob   = True)
+        dcu.serdes_params.update(ECP5USB3SerDes.rx_settings)
+        rx_los_mask, rx_los = dcu_add_rx_los_mask(dcu)
         dcu.add_stream_endpoints()
         platform.add_period_constraint(dcu.txoutclk, 1e9/(2*dcu.tx_clk_freq))
         platform.add_period_constraint(dcu.rxoutclk, 1e9/(2*dcu.rx_clk_freq))
         platform.add_false_path_constraints(self.crg.cd_sys.clk, dcu.txoutclk, dcu.rxoutclk)
-        self.dcu_checker = DCUChecker(dcu, self.sys_clk_freq)
+        self.dcu_checker = DCUChecker(dcu, self.sys_clk_freq, rx_los, rx_los_mask)
 
         # Leds: TX ready, RX aligned.
         self.led(self.leds[0].g, dcu.tx_ready)
@@ -695,12 +722,11 @@ class BringupSoC(ECPIX5BaseSoC):
             tx_pads      = platform.request("usb3_tx", channel),
             rx_pads      = platform.request("usb3_rx", channel),
             dual         = 0,
-            channel      = channel,
-            with_sci     = True)
+            channel      = channel)
         self.lfps = lfps = LFPSUnit(serdes, self.sys_clk_freq)
         self.lfps_monitor = LFPSMonitor(serdes, lfps)
-        self.los_capture  = LOSCapture(serdes.dcu.rx_los)
-        self.ldr_capture  = LOSCapture(serdes.dcu.rx_ldr, trigger="edge")
+        self.los_capture  = LOSCapture(dcu_rx_los(serdes.dcu))
+        self.ldr_capture  = LOSCapture(dcu_add_rx_ldr(serdes.dcu), trigger="edge")
         self.rx_monitor   = RXMonitor(serdes.dcu, self.sys_clk_freq)
         self.rx_align     = CSRStorage(reset=1, description="RX comma alignment enable.")
         self.comb += serdes.rx_align.eq(self.rx_align.storage)

@@ -82,7 +82,8 @@ Gen 2x1 on UltraScale+ GTY and on Gowin GTR12 with 64/128-bit Link Layer words.*
   (`bench/lambdaconcept_ecpix5.py`, Lattice ECP5-5G DCU, on-board USB-C, open source toolchain):
   validated at Gen 1 (5Gbps): IN 434MB/s, OUT 449MB/s, full duplex 342 + 349MB/s, 0 errors (PIPE at
   125MHz on the DCU TX clock, Link Layer/Core at 83.33MHz on 64-bit words, see
-  [doc/ecpix5.md](doc/ecpix5.md)).
+  [doc/ecpix5.md](doc/ecpix5.md)). Needs [LiteICLink](https://github.com/enjoy-digital/liteiclink)
+  `SerDesECP5` 40-bit words support.
 - Gowin GW5AT-15 (`GW5USB3SerDes`: GTR12 Q0 lane 0, 125MHz REFCLK0, QPLL0 as Gowin's USB 3.0 PHY IP):
   validated at Gen 1 (5Gbps) on a GW5AT-15 device with a direct USB-C connection: Bulk IN ~400MB/s with
   `max_burst=16` (Link Layer/Core at 62.5MHz on 64-bit words). SerDes configuration in
