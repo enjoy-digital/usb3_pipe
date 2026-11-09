@@ -42,8 +42,9 @@ def framing_word(k):
 # except on the last word of a packet.
 
 def be_to_bytes(be):
-    """be to valid bytes of the word (1-4, 1-8 with an 8-bit be)."""
-    r = 1
+    """be to valid bytes of the word (1-4, 1-8 with an 8-bit be, 0 without valid bytes: ex: Bulk IN
+    zero-length packet, a last word with be=0 starting a packet)."""
+    r = Mux(be[0], 1, 0)
     for i in range(1, len(be)):
         r = Mux(be[i], i + 1, r)
     return r

@@ -301,9 +301,10 @@ class USB3BulkOUT(USB3Endpoint):
     """Bulk OUT Endpoint (Host -> Device).
 
     source: received packets (data: data_width words, first byte on data[0:8], be: valid bytes,
-    last: end of packet). Zero-length packets are dropped.
+    last: end of packet). Zero-length packets are dropped, or with_zlp: one word without valid bytes
+    (be=0, last: end of transfer marker, ex: CDC-ECM frames of a multiple of the max packet size).
     """
-    def __init__(self, ept, max_burst=8, data_width=32):
+    def __init__(self, ept, max_burst=8, data_width=32, with_zlp=False):
         assert max_burst in [2, 4, 8, 16]
         USB3Endpoint.__init__(self, ept, direction=0, data_width=data_width)
         self.max_burst = max_burst
@@ -431,6 +432,8 @@ class USB3BulkOUT(USB3Endpoint):
         rd_be     = Signal(wb, reset_less=True)
         rd_issue  = Signal()
         rd_slot   = Signal(pbits - 1)
+        zlp_issue = Signal()
+        zlp_valid = Signal()
         self.comb += [
             rd_slot.eq(rd_ptr[0:pbits-1]),
             rd_len.eq(lengths[rd_slot]),
@@ -438,19 +441,24 @@ class USB3BulkOUT(USB3Endpoint):
             rd_port.adr.eq(slots.adr(rd_slot, rd_count)),
             rd_issue.eq(rd_active & (fifo.level < 12)),
             rd_port.re.eq(rd_issue),
+            # Zero-length packet: end of transfer marker word (with_zlp).
+            zlp_issue.eq(int(with_zlp) & ~rd_active & (rd_ptr != decide_ptr) & valids[rd_slot] &
+                (rd_len == 0) & (fifo.level < 12)),
         ]
         self.sync += [
-            rd_valid.eq(rd_issue),
-            rd_last.eq(rd_issue & (rd_count + 1 >= rd_words)),
-            rd_be.eq(Mux(rd_count + 1 >= rd_words,
-                bytes_to_be_n(rd_len[:log2_int(wb)], wb), 2**wb - 1)),
+            rd_valid.eq(rd_issue | zlp_issue),
+            zlp_valid.eq(zlp_issue),
+            rd_last.eq((rd_issue & (rd_count + 1 >= rd_words)) | zlp_issue),
+            rd_be.eq(Mux(zlp_issue, 0, Mux(rd_count + 1 >= rd_words,
+                bytes_to_be_n(rd_len[:log2_int(wb)], wb), 2**wb - 1))),
             If(~rd_active,
                 # Next decided slot: read it (valid, not empty) or skip it.
                 If(rd_ptr != decide_ptr,
                     If(valids[rd_slot] & (rd_len != 0),
                         rd_active.eq(1),
                         rd_count.eq(0),
-                    ).Else(
+                    ).Elif(~(int(with_zlp) & valids[rd_slot]) | zlp_issue,
+                        # Discarded or (with_zlp) zero-length packet marker issued.
                         rd_ptr.eq(rd_ptr + 1),
                     )
                 )
@@ -464,7 +472,7 @@ class USB3BulkOUT(USB3Endpoint):
         ]
         self.comb += [
             fifo.sink.valid.eq(rd_valid),
-            fifo.sink.data.eq(rd_port.dat_r),
+            fifo.sink.data.eq(Mux(zlp_valid, 0, rd_port.dat_r)),
             fifo.sink.last.eq(rd_last),
             fifo.sink.be.eq(rd_be),
             fifo.source.connect(source),
