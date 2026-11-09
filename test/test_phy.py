@@ -135,6 +135,28 @@ class TestPHY(unittest.TestCase):
                 "---- tail ----\n" + out[-4000:]
             )
 
+    def test_phy_hot_resets(self):
+        # Host directed to 4 back to back Hot Resets after the script (sim.py --host-hot-reset 4),
+        # each one at the U0 entry after the previous one: the HotReset.Active entries are skewed by
+        # the Recovery, each side leaves HotReset.Active only after a full TS2 burst with Reset=0
+        # sent (7.5.12.2), all back to U0 (no tHotResetActiveTimeout/tHotResetExitTimeout to
+        # eSS.Inactive).
+        root = Path(__file__).resolve().parents[1]
+        cmd  = [sys.executable, str(root / "sim.py"), "--host-hot-reset", "4",
+            "--output-dir", str(get_output_dir(self))]
+        try:
+            p = subprocess.run(cmd, cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=1200, check=False)
+        except subprocess.TimeoutExpired:
+            self.fail("Simulation timeout.")
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, "Simulation failed." + tail)
+        self.assertIn("HOST script done", out, tail)
+        for side in ["HOST", r"DEV\s"]:
+            self.assertEqual(len(re.findall(side + r"\s*entering HotReset.Exit state", out)), 4, tail)
+            self.assertNotRegex(out, side + r"\s*entering eSS.Inactive", tail)
+
     def test_phy_gen2_capable(self):
         # Gen 2x1 capable Host/Device (sim.py --gen2-capable): SuperSpeedPlus Polling with Gen 2
         # negotiated on both sides (training then continues at Gen 1 speed: no Gen 2 speed switch).
