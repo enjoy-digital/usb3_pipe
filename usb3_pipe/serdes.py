@@ -134,15 +134,16 @@ class USB3SerDes(LiteXModule):
         ]
         return xcvr
 
-    def add_lfps(self, xcvr, rx_idle):
-        """LFPS: TX pattern, filtered RX electrical idle (from the transceiver's OOB detector) and
-        RX decode errors (Warm Reset LFPS detection)."""
+    def add_lfps(self, xcvr, rx_idle, rx_idle_burst_cycles=1):
+        """LFPS: TX pattern, filtered RX electrical idle (from the transceiver's OOB detector, non-idle
+        spikes shorter than rx_idle_burst_cycles rejected) and RX decode errors (Warm Reset LFPS
+        detection)."""
         self.comb += [
             xcvr.tx_produce_pattern.eq(self.tx_lfps | (self.tx_pattern != 0)),
             # Constant words.
             xcvr.tx_pattern.eq(Replicate(self.tx_pattern[0], len(xcvr.tx_pattern))),
         ]
-        self.rx_idle_filter  = RXIdleFilter(rx_idle)
+        self.rx_idle_filter  = RXIdleFilter(rx_idle, burst_cycles=rx_idle_burst_cycles)
         self.rx_idle_stretch = self.rx_idle_filter.stretch_cycles
         self.comb += self.rx_idle.eq(self.rx_idle_filter.idle)
         self.rx_error_monitor = RXErrorMonitor(xcvr.decoders, clock_domain="rx")
@@ -225,9 +226,12 @@ class A7USB3SerDes(USB3SerDes):
     with the GTPQuadPLL interface (channel, clk, refclk, lock, reset, config) and configured for
     5Gbps (2.5GHz VCO, D=1). The PLL is then not reset by the transceiver (owned by the user) and
     refclk_pads/refclk_freq are unused.
+
+    rx_idle_min_burst: optional minimum RX non-idle period (s, ex: 40e-9, the shortest LFPS burst):
+    shorter non-idle spikes from the RX electrical idle detector are rejected (RXIdleFilter).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
-        rxcdr_cfg=None, pll=None):
+        rxcdr_cfg=None, pll=None, rx_idle_min_burst=None):
         USB3SerDes.__init__(self)
 
         # # #
@@ -282,7 +286,10 @@ class A7USB3SerDes(USB3SerDes):
             i_TXPDELECIDLEMODE = 0b1,
             i_TXELECIDLE       = self.tx_idle
         )
-        self.add_lfps(gtp, rx_idle)
+        rx_idle_burst_cycles = 1
+        if rx_idle_min_burst is not None:
+            rx_idle_burst_cycles = max(1, int(rx_idle_min_burst*sys_clk_freq))
+        self.add_lfps(gtp, rx_idle, rx_idle_burst_cycles=rx_idle_burst_cycles)
 
         # RX status (debug: comma realignment, elastic buffer), synchronized to sys ----------------
         rx_realign       = Signal()
