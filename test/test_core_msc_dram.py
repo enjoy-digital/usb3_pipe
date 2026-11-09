@@ -221,8 +221,13 @@ class TestCoreMSCDRAM(unittest.TestCase):
             # READ(10) while not ready: padded, failed.
             data, residue, status = yield from command(rw10(SCSI_READ_10, 0, 1), length=512)
             self.assertEqual((data, status), ([0]*512, 1))
-            # DRAM ready.
+            # DRAM ready: UNIT ATTENTION/MEDIUM MAY HAVE CHANGED once, then ready.
             yield dut.ready.eq(1)
+            data, residue, status = yield from command([SCSI_TEST_UNIT_READY])
+            self.assertEqual(status, 1)
+            data, residue, status = yield from command([SCSI_REQUEST_SENSE, 0, 0, 0, 18, 0],
+                length=18)
+            self.assertEqual((data[2] & 0xf, data[12]), (0x06, 0x28))
             data, residue, status = yield from command([SCSI_TEST_UNIT_READY])
             self.assertEqual((data, residue, status), ([], 0, 0))
             # READ CAPACITY(10): DRAM disk size.
