@@ -18,14 +18,16 @@ from litex.soc.interconnect import stream
 from usb3_core.host_model import *
 from usb3_core.cdc_acm    import USB3CDCACM
 
-from test.model.host import *
+from test.model.host   import *
+from test.model.device import PairsPHY
 
 # DUT (CDC-ACM with echo) --------------------------------------------------------------------------
 
 class DUT(LiteXModule):
-    def __init__(self):
+    def __init__(self, link_words=1):
         self.phy  = phy  = PHYStandIn()
-        self.acm  = acm  = USB3CDCACM(phy, sys_clk_freq=125e6)
+        self.acm  = acm  = USB3CDCACM(phy if link_words == 1 else PairsPHY(phy, self, link_words),
+            sys_clk_freq=125e6)
         self.echo = echo = stream.SyncFIFO([("data", 8)], 64)
         self.comb += [
             acm.source.connect(echo.sink),
@@ -35,8 +37,10 @@ class DUT(LiteXModule):
 # Tests --------------------------------------------------------------------------------------------
 
 class TestCoreCDCACM(unittest.TestCase):
+    link_words = 1 # PHY words (1) or words pairs (2: 64-bit Link Layer/Bulk endpoints).
+
     def test_connect_line_coding_echo(self):
-        dut  = DUT()
+        dut  = DUT(self.link_words)
         host = PyHost(dut.phy)
         def scenario():
             yield from pyhost_link_init(host)

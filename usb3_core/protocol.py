@@ -58,6 +58,10 @@ class USB3ProtocolLayer(LiteXModule):
         adapted = {ep: ep.data_width != dw for ep in endpoints}
         for ep in endpoints:
             assert (ep.data_width == dw) or (ep.data_width == 32 and dw in [64, 128])
+            # Adapted OUT endpoints: Control only (DPPs always landed, decided after the adapter
+            # delivered them); Bulk OUT at the Link Layer width (bulk_endpoint_32 for 32-bit
+            # functions): an adapted Bulk OUT endpoint would be decided before landing its DPP.
+            assert not adapted[ep] or (ep.ept == 0) or (ep.direction == 1)
 
         # Received Header Packets (registered: timings).
         self.rx_hp = rx_hp = stream.PipeValid(header_layout())

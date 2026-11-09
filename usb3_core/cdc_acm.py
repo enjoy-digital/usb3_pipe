@@ -21,7 +21,7 @@ from litex.gen import *
 from litex.soc.interconnect import stream
 
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT, bulk_endpoint_32
 from usb3_core.descriptors import *
 from usb3_core.bridge      import USB3ByteUnpacker, USB3BytePacker
 
@@ -120,14 +120,17 @@ class USB3CDCACM(LiteXModule):
     def __init__(self, phy, sys_clk_freq, product="USB3-PIPE Serial", max_burst=2, **kwargs):
         # USB3 Device: CDC-ACM Data Bulk IN/OUT (EP1/EP2), Notification Interrupt IN (EP3, unused).
         descriptors = cdc_acm_descriptors(max_burst=max_burst, product=product, **kwargs)
+        dw = 32*getattr(phy, "link_words", 1) # Bulk endpoints at the Link Layer width.
         self.core = core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
             endpoints = [
-                USB3BulkIN(ept=1,  max_burst=max_burst),
-                USB3BulkOUT(ept=2, max_burst=max_burst),
-                USB3BulkIN(ept=3,  max_burst=max_burst),
+                USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw),
+                USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw),
+                USB3BulkIN(ept=3,  max_burst=max_burst, data_width=dw),
             ],
             with_ep0_handler = True)
-        function = USB3CDCACMFunction(core.ep0, core.endpoints[0], core.endpoints[1])
+        function = USB3CDCACMFunction(core.ep0,
+            bulk_endpoint_32(self, core.endpoints[0]),
+            bulk_endpoint_32(self, core.endpoints[1]))
         self.function = function
         self.sink     = function.sink
         self.source   = function.source

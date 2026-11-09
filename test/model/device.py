@@ -37,8 +37,9 @@ class PairsPHY:
             phy.source.connect(to_pairs.sink),
             to_words.source.connect(phy.sink),
         ]
-        self.source = to_pairs.source
-        self.sink   = to_words.sink
+        self.source     = to_pairs.source
+        self.sink       = to_words.sink
+        self.link_words = n
 
 class BulkLoopbackDUT(LiteXModule):
     """USB3 Device Core (PHY stand-in) with Bulk IN/OUT endpoints (bulk_descriptors), EP2 OUT looped
