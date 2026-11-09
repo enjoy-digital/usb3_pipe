@@ -151,7 +151,12 @@ class LTSSMDriver:
             yield from self.expect(dut, "HotReset.Active")
             if target == "HotReset.Exit":
                 yield from pulse(dut.ts_rx_ts2_reset) # Partner Reset bit seen, then cleared.
-                yield from self.expect(dut, "HotReset.Exit", 64)
+                # TS2 bursts sent (own reset done, then a full burst with Reset=0) -> Exit.
+                for n in range(16):
+                    yield from pulse(dut.ts_tx_done)
+                    if (yield from wait_state(dut, "HotReset.Exit", 8)) is not None:
+                        break
+                yield from self.expect(dut, "HotReset.Exit", 1)
             return
 
         # Polling.Idle -> U0 (Idle handshake, 7.5.4.10.2).
@@ -703,8 +708,9 @@ class TestLTSSMIdleExits(unittest.TestCase, LTSSMDriver):
 
 class TestLTSSMHotReset(unittest.TestCase, LTSSMDriver):
     def test_hot_reset_active_exit_u0(self):
-        # HotReset.Active (TS2 Reset=1 until own reset done, then Reset=0) -> HotReset.Exit when the
-        # partner's Reset bit falls -> Idle handshake -> U0.
+        # HotReset.Active (TS2 Reset=1 until own reset done, then Reset=0) -> HotReset.Exit at the
+        # end of a full TS2 burst with Reset=0 sent after the partner's Reset bit fell (7.5.12.2)
+        # -> Idle handshake -> U0.
         for ds_port in [0, 1]:
             with self.subTest(ds_port=ds_port):
                 def generator(dut):
@@ -720,6 +726,13 @@ class TestLTSSMHotReset(unittest.TestCase, LTSSMDriver):
                     # Stay in Active while the partner still sends Reset=1.
                     self.assertTrue((yield from stay_in(dut, "HotReset.Active", 16)))
                     yield dut.ts_rx_ts2_reset.eq(0)
+                    # No exit on the detection alone: the partner must receive Reset=0 TS2 from us.
+                    self.assertTrue((yield from stay_in(dut, "HotReset.Active", 16)))
+                    # Burst in progress at the detection: not counted (still Active at its end).
+                    yield from pulse(dut.ts_tx_done)
+                    self.assertTrue((yield from stay_in(dut, "HotReset.Active", 8)))
+                    # Full burst with Reset=0 sent after the detection -> Exit at its end.
+                    yield from pulse(dut.ts_tx_done)
                     yield from self.expect(dut, "HotReset.Exit", 4)
                     self.assertEqual((yield dut.hot_reset), 1)
                     self.assertEqual((yield dut.idle_handshake), 1)

@@ -144,6 +144,8 @@ class USB3LTSSM(LiteXModule):
         loopback_master = Signal() # Loopback role
         hr_seen         = Signal() # partner TS2 Reset bit seen in HotReset.Active
         hr_tx_reset     = Signal() # TS2 Reset bit transmitted in HotReset.Active.
+        hr_rx_clear     = Signal() # partner TS2 Reset bit de-asserted (after hr_seen).
+        hr_tx_after     = Signal() # TS2 burst with Reset de-asserted started after hr_rx_clear.
 
         # Timers (Table 7-12 LTSSM timeouts, 7.2.4.2 Link Power Management timers) -----------------
         # tPollingLFPSTimeout (360ms, Polling.LFPS).
@@ -343,9 +345,11 @@ class USB3LTSSM(LiteXModule):
                 NextState("Recovery.Active"),
             ]
 
-        def goto_hot_reset(hr_seen=hr_seen):
+        def goto_hot_reset(hr_seen=hr_seen, hr_rx_clear=hr_rx_clear, hr_tx_after=hr_tx_after):
             return [
                 NextValue(hr_seen, 0),
+                NextValue(hr_rx_clear, 0),
+                NextValue(hr_tx_after, 0),
                 NextState("HotReset.Active"),
             ]
 
@@ -837,12 +841,23 @@ class USB3LTSSM(LiteXModule):
             self.ts_tx_ts2.eq(1),
             NextValue(hr_tx_reset, 1),
             NextValue(hr_seen, hr_seen | self.ts_rx_ts2_reset),
+            NextValue(hr_rx_clear, hr_rx_clear | (hr_seen & ~self.ts_rx_ts2_reset)),
             If((hr_cnt + 1) >= hr_delay,
                 # Own reset done: send Reset=0 TS2 (Simplification: symmetric auto-clear).
                 NextValue(hr_tx_reset, 0)
             ),
-            If(hr_seen & ~self.ts_rx_ts2_reset & ~hr_tx_reset,
-                # Both sides saw Reset=0 -> Exit (Simplification: single fall detection).
+            # Partner Reset=1 then Reset=0 TS2 received, and a full TS2 burst with Reset=0 sent
+            # after that (7.5.12.2: TS2 with Reset de-asserted received, 16 TS2 with Reset
+            # de-asserted sent after receiving the first of them): exit at the end of a burst started
+            # after the detection, own reset done. Exiting on the detection alone left a partner
+            # entering HotReset.Active later than us (its Reset=1 window still running) without any
+            # Reset=0 TS2 from us: partner stuck until tHotResetActiveTimeout (12ms), us until
+            # tHotResetExitTimeout (2ms), both to eSS.Inactive (ex: a Hot Reset directed right
+            # after a U0 entry, the HotReset.Active entries skewed by the Recovery).
+            If(self.ts_tx_done,
+                NextValue(hr_tx_after, hr_rx_clear & ~hr_tx_reset),
+            ),
+            If(hr_tx_after & self.ts_tx_done,
                 NextState("HotReset.Exit")
             ).Elif(t_active.done,
                 # tHotResetActiveTimeout (12ms) -> eSS.Inactive (Table 7-12).

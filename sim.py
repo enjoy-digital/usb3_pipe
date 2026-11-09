@@ -443,6 +443,7 @@ class USB3PIPESim(SoCMini):
         host_status_gap=64, host_pm=False, host_lpm=False, host_itp=False, lanes=1,
         lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096, gen2_capable=False, gen2=False,
         link_words=1, dev_pipe_cd=False, dev_u1u2=True, gen2_data_width=None, host_recovery=False,
+        host_hot_reset=0,
         host_burst_out=0, host_burst_len=64, host_burst_stream=0, dev_loopback_depth=512,
         host_lbad_test=False, host_burst_duplex=0, host_burst_duplex_skp=False,
         host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None):
@@ -584,7 +585,7 @@ class USB3PIPESim(SoCMini):
                     host_model.source.connect(phy.sink),
                     host_model.enable.eq(ltssm.u0 | ltssm.u1 | ltssm.u2 | host_ux | host_rec |
                         # Script done: not restarted by the Recovery.
-                        (host_model.done & host_recovery)),
+                        (host_model.done & int(bool(host_recovery or host_hot_reset)))),
                     host_model.u0.eq(ltssm.u0),
                     ltssm.req_u1.eq(pm_flag(host_model.pm, PM_REQ_U1)),
                     ltssm.req_u2.eq(pm_flag(host_model.pm, PM_REQ_U2)),
@@ -676,9 +677,40 @@ class USB3PIPESim(SoCMini):
                 end_timer.wait.eq(script_end),
                 done.eq(end_timer.done),
             ]
-            if (not host_recovery) and hasattr(self, "host_pm_recovery"):
+            if (not host_recovery) and (not host_hot_reset) and hasattr(self, "host_pm_recovery"):
                 # Script directed Recovery (PM_RECOVERY).
                 self.sync += phys["host"].ltssm.directed_recovery.eq(self.host_pm_recovery)
+            if host_hot_reset:
+                # Host directed to host_hot_reset Hot Resets from U0 once the script is done, each one
+                # requested at the U0 entry after the previous one (as a host resetting its port
+                # again right after the link came back: the HotReset.Active entries skewed by the
+                # Recovery), request held until the Hot Reset or a Polling.Idle.
+                host_ltssm = phys["host"].ltssm
+                dev_u0     = Signal()
+                requesting = Signal()
+                hot_reset  = Signal()
+                resets     = Signal(8)
+                self.specials += MultiReg(phys["dev"].ltssm.u0, dev_u0)
+                self.sync += [
+                    host_ltssm.directed_recovery.eq(self.host_pm_recovery),
+                    hot_reset.eq(host_ltssm.hot_reset),
+                    If(host_model.done & ~requesting & host_ltssm.u0 & (resets < int(host_hot_reset)) &
+                        ~host_ltssm.hot_reset,
+                        Display("HOST directed to Hot Reset"),
+                        requesting.eq(1),
+                    ).Elif(requesting & (host_ltssm.hot_reset | host_ltssm.polling_idle),
+                        requesting.eq(0),
+                    ),
+                    If(host_ltssm.hot_reset & ~hot_reset, resets.eq(resets + 1)),
+                ]
+                # End once both sides are in U0 after the last Hot Reset (the Device Link Layer then
+                # requests Recoveries on PENDING_HP_TIMER: the finished host model does not run the
+                # Link initialization again after the Hot Reset).
+                self.comb += [
+                    host_ltssm.hot_reset_req.eq(requesting),
+                    end_timer.wait.eq(host_model.error |
+                        ((resets >= int(host_hot_reset)) & ~requesting & host_ltssm.u0 & dev_u0)),
+                ]
             if host_recovery:
                 # Host directed to Recovery from U0 once the script is done, end once both sides are
                 # back in U0.
@@ -885,6 +917,7 @@ def main():
     parser.add_argument("--host-burst-stream", default=0, help="Host model Bulk OUT DPs streamed as the device Type 2 credits allow (after the bursts).")
     parser.add_argument("--dev-loopback-depth", default=512, help="Device Bulk loopback FIFO depth (endpoint words).")
     parser.add_argument("--host-lbad-test", action="store_true", help="Host model Bulk OUT burst with a DPH CRC error: device LBAD, LRTY and retransmission.")
+    parser.add_argument("--host-hot-reset", default=0, type=int, help="Host directed to N Hot Resets from U0 after the script, each one at the U0 entry after the previous one (back to U0 on both sides).")
     parser.add_argument("--host-recovery", action="store_true", help="Host directed to Recovery from U0 after the script (back to U0 on both sides).")
     parser.add_argument("--host-itp",      action="store_true", help="Host model Isochronous Timestamp Packets between the transfers.")
     parser.add_argument("--dev-pipe-cd",   action="store_true", help="Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, 64-bit Link Layer words).")
@@ -924,6 +957,7 @@ def main():
         dev_u1u2              = not args.dev_no_u1u2,
         gen2_data_width       = args.gen2_data_width,
         host_recovery         = args.host_recovery,
+        host_hot_reset        = args.host_hot_reset,
         host_burst_out        = int(args.host_burst_out),
         host_burst_len        = int(args.host_burst_len),
         host_burst_stream     = int(args.host_burst_stream),
