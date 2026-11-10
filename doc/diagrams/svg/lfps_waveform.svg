@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="230" viewBox="0 0 760 230">
+<defs>
+  <marker id="arrow-ctrl" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-ctrl-rev" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+    <path d="M8,0 L0,4 L8,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-stream" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#606060"/></marker>
+  <marker id="arrow-accent" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-accent-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-stream-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#606060"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<polyline points="80,90 80,70 86,70 86,110 92,110 92,70 98,70 98,110 104,110 104,70 110,70 110,110 116,110 116,70 122,70 122,110 128,110 128,70 134,70 134,110 140,110 140,70 146,70 146,110 152,110 152,70 158,70 158,110 164,110 164,70 170,70 170,110 176,110 176,90" fill="none" stroke="#2eaadc" stroke-width="2.0"/>
+<polyline points="380,90 380,70 386,70 386,110 392,110 392,70 398,70 398,110 404,110 404,70 410,70 410,110 416,110 416,70 422,70 422,110 428,110 428,70 434,70 434,110 440,110 440,70 446,70 446,110 452,110 452,70 458,70 458,110 464,110 464,70 470,70 470,110 476,110 476,90" fill="none" stroke="#2eaadc" stroke-width="2.0"/>
+<polyline points="680,90 680,70 686,70 686,110 692,110 692,70 698,70 698,110 704,110 704,70 710,70 710,110 716,110 716,70 722,70 722,110 728,110 728,70 734,70 734,110 740,110 740,90" fill="none" stroke="#2eaadc" stroke-width="2.0"/>
+<polyline points="20,90 80,90" fill="none" stroke="#606060" stroke-width="2.0" stroke-dasharray="6,4"/>
+<polyline points="176,90 380,90" fill="none" stroke="#606060" stroke-width="2.0" stroke-dasharray="6,4"/>
+<polyline points="476,90 680,90" fill="none" stroke="#606060" stroke-width="2.0" stroke-dasharray="6,4"/>
+<polyline points="80,118 80,200" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="2,3"/>
+<polyline points="176,118 176,200" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="2,3"/>
+<polyline points="380,118 380,200" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="2,3"/>
+<polyline points="80,145 176,145" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)" marker-start="url(#arrow-ctrl-rev)"/>
+<text x="128" y="152" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="128" dy="0">tBurst</tspan></text>
+<polyline points="80,185 380,185" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)" marker-start="url(#arrow-ctrl-rev)"/>
+<text x="230" y="192" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="230" dy="0">tRepeat</tspan></text>
+<text x="278" y="52" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#5b5b5b" text-anchor="middle" dominant-baseline="central"><tspan x="278" dy="0">electrical idle</tspan></text>
+<text x="578" y="52" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#5b5b5b" text-anchor="middle" dominant-baseline="central"><tspan x="578" dy="0">electrical idle</tspan></text>
+<text x="128" y="52" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#5b5b5b" text-anchor="middle" dominant-baseline="central"><tspan x="128" dy="0">burst</tspan></text>
+</svg>

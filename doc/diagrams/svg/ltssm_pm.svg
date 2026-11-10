@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380">
+<defs>
+  <marker id="arrow-ctrl" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-ctrl-rev" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+    <path d="M8,0 L0,4 L8,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-stream" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#606060"/></marker>
+  <marker id="arrow-accent" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-accent-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-stream-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#606060"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<polyline points="220,60 220,360" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,4"/>
+<polyline points="540,60 540,360" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,4"/>
+<polyline points="540,90 220,90" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="83" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">LGO_U1</tspan></text>
+<polyline points="220,130 540,130" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="123" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">LAU</tspan></text>
+<polyline points="540,170 220,170" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="163" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">LPMA</tspan></text>
+<polyline points="220,250 540,250" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="240" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">U1 exit LFPS</tspan></text>
+<polyline points="540,290 220,290" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="280" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">U1 exit LFPS</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M161.2,22 L271.2,22 L281.2,32 L281.2,62 Q281.2,62 281.2,62 L171.2,62 L161.2,52 L161.2,22 Q161.2,22 161.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M161.2,22 L271.2,22 L281.2,32 L281.2,62 Q281.2,62 281.2,62 L171.2,62 L161.2,52 L161.2,22 Q161.2,22 161.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M161,21.5 L271,21.5 L281,31.5 L281,61.5 Q281,61.5 281,61.5 L171,61.5 L161,51.5 L161,21.5 Q161,21.5 161,21.5 Z"/>
+</g>
+<g fill="#bfe6f5" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M160,20 L270,20 L280,30 L280,60 Q280,60 280,60 L170,60 L160,50 L160,20 Q160,20 160,20 Z"/>
+</g>
+<text x="220" y="40" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="220" dy="0">Device</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M481.2,22 L591.2,22 L601.2,32 L601.2,62 Q601.2,62 601.2,62 L491.2,62 L481.2,52 L481.2,22 Q481.2,22 481.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M481.2,22 L591.2,22 L601.2,32 L601.2,62 Q601.2,62 601.2,62 L491.2,62 L481.2,52 L481.2,22 Q481.2,22 481.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M481,21.5 L591,21.5 L601,31.5 L601,61.5 Q601,61.5 601,61.5 L491,61.5 L481,51.5 L481,21.5 Q481,21.5 481,21.5 Z"/>
+</g>
+<g fill="#b8b8b8" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M480,20 L590,20 L600,30 L600,60 Q600,60 600,60 L490,60 L480,50 L480,20 Q480,20 480,20 Z"/>
+</g>
+<text x="540" y="40" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="540" dy="0">Host</tspan></text>
+<text x="30" y="80" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="start" font-style="italic" dominant-baseline="central"><tspan x="30" dy="0">U0</tspan></text>
+<text x="730" y="80" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="end" font-style="italic" dominant-baseline="central"><tspan x="730" dy="0">U0</tspan></text>
+<text x="30" y="210" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="start" font-style="italic" dominant-baseline="central"><tspan x="30" dy="0">U1</tspan></text>
+<text x="730" y="210" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="end" font-style="italic" dominant-baseline="central"><tspan x="730" dy="0">U1</tspan></text>
+<text x="30" y="330" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="start" font-style="italic" dominant-baseline="central"><tspan x="30" dy="0">Recovery, U0</tspan></text>
+<text x="730" y="330" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="end" font-style="italic" dominant-baseline="central"><tspan x="730" dy="0">Recovery, U0</tspan></text>
+</svg>
