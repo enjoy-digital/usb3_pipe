@@ -314,11 +314,6 @@ class USB3EndpointControl(USB3Endpoint):
                 ),
             ]
             self.comb += [
-                self.req_type.eq(bmRequestType),
-                self.req_request.eq(bRequest),
-                self.req_value.eq(wValue),
-                self.req_index.eq(wIndex),
-                self.req_length.eq(wLength),
                 self.req_in.ready.eq(self.req_valid & ~resp_ready &
                     (resp_words != EP0_HANDLER_WORDS)),
             ]
@@ -343,6 +338,14 @@ class USB3EndpointControl(USB3Endpoint):
                 self.req_out.be.eq(Mux(self.rx_dpp.last, bytes_to_be(self.rx_dpp.bytes), 0b1111)),
             ]
         self.comb += self.req_done.eq(self.hdr_strobe & status_tp & ~stall)
+        # Request fields (also without request handler: ex, req_done of table requests).
+        self.comb += [
+            self.req_type.eq(bmRequestType),
+            self.req_request.eq(bRequest),
+            self.req_value.eq(wValue),
+            self.req_index.eq(wIndex),
+            self.req_length.eq(wLength),
+        ]
 
         # Data stage IN ----------------------------------------------------------------------------
         # IN data available: from the ROM (table responses) or the handler response (once complete).
