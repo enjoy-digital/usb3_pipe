@@ -1,4 +1,5 @@
-# pandoc defaults for the standalone HTML build of the USB3-PIPE manual (rewritten by build.py).
+# pandoc defaults for the standalone HTML build of the manual (part of the manual kit). build.py adds
+# the chapters of manual.yaml, the output file and absolute paths: run build.py, not pandoc.
 from: markdown+pipe_tables+grid_tables+fenced_code_attributes+implicit_figures+link_attributes+raw_html
 to: html5
 template: @MANUAL@/template/manual.html5
@@ -14,26 +15,3 @@ filters:
   - @MANUAL@/tools/appendix.lua
 highlight-style: breezedark
 resource-path: []
-input-files:
-  - 00_front.md
-  - 01_introduction.md
-  - 02_usb3_primer.md
-  - 03_phy_architecture.md
-  - 04_link_training.md
-  - 05_datapath.md
-  - 06_transceivers.md
-  - 07_core_architecture.md
-  - 08_classes.md
-  - 09_boards.md
-  - 10_getting_started.md
-  - 11_integration.md
-  - 12_examples.md
-  - 13_simulation.md
-  - 14_debugging.md
-  - Z_appendix.md
-  - A_registers.md
-  - B_build_options.md
-  - C_glossary.md
-  - D_performance.md
-  - E_maintenance.md
-output-file: ../../build/doc/usb3_pipe_manual.html

@@ -1,0 +1,25 @@
+# Manual of this project: output name and chapters, in order (read by build.py; the pandoc defaults
+# files and the theme are generic, from the manual kit).
+name: usb3_pipe_manual
+chapters:
+  - 00_front.md
+  - 01_introduction.md
+  - 02_usb3_primer.md
+  - 03_phy_architecture.md
+  - 04_link_training.md
+  - 05_datapath.md
+  - 06_transceivers.md
+  - 07_core_architecture.md
+  - 08_classes.md
+  - 09_boards.md
+  - 10_getting_started.md
+  - 11_integration.md
+  - 12_examples.md
+  - 13_simulation.md
+  - 14_debugging.md
+  - Z_appendix.md
+  - A_registers.md
+  - B_build_options.md
+  - C_glossary.md
+  - D_performance.md
+  - E_maintenance.md

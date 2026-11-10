@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 #
-# This file is part of USB3-PIPE project.
+# This file is part of the LiteX manual kit.
 #
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# SVG block-diagram helper for the USB3-PIPE manual figures.
+# SVG block-diagram helper for the manual figures.
 #
 # House style (Enjoy-Digital block diagrams): diagonally cut top-right / bottom-left corners,
 # pale grey panels, cyan-tinted principal blocks (the Enjoy-Digital brand colour), fine grey

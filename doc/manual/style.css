@@ -1,5 +1,6 @@
-/* Style of the standalone HTML build of the USB3-PIPE manual: the look of enjoy-digital.fr and of
-   its blog (square, plain, content first; brand cyan #2eaadc, text blue #136f9c, Gravur titles). */
+/* Style of the standalone HTML build of the manual (part of the manual kit): the look of
+   enjoy-digital.fr and of its blog (square, plain, content first; brand cyan #2eaadc, text blue
+   #136f9c, Gravur titles). */
 
 @font-face { font-family: "Gravur"; src: url("fonts/gravuconlig-webfont.woff2") format("woff2"); font-weight: 400; }
 @font-face { font-family: "Gravur"; src: url("fonts/gravuconbol-webfont.woff2") format("woff2"); font-weight: 700; }

@@ -1,18 +1,20 @@
-# Writing style of the USB3-PIPE manual
+# Writing style of the manual
 
 This guide is the editorial reference of the manual: one consistent way of writing, so that a
 reader finds the same structure in every chapter and a contributor knows how to add to it. It
-complements `README.md` (toolchain, build, checks). The voice is short paragraphs, one idea each,
+complements `README.md` (toolchain, build, checks). This file is part of the manual kit and is
+the same in every project; the vocabulary of this project (names of its parts, protocol
+conventions, boards, placeholders) is in `VOCABULARY.md`. The voice is short paragraphs, one idea each,
 plain words, and a figure or a table wherever it replaces a paragraph.
 
 The manual has two jobs. It is the reference of the project (what it does, how to integrate it,
-how to debug it) and it teaches USB 3 along the way: a reader who knows FPGAs but not USB 3 must
-come out of Part I able to read the code. Every protocol concept is explained once, in plain
+how to debug it) and it teaches the protocol or technology along the way: a reader who knows
+FPGAs but not the protocol must come out of Part I able to read the code. Every protocol concept is explained once, in plain
 words, then linked to the module that implements it.
 
 ## Goals
 
-1. A newcomer (FPGA engineer, no USB 3 background) can read a chapter top to bottom without
+1. A newcomer (FPGA engineer, no background in the protocol) can read a chapter top to bottom without
    stopping.
 2. A user finds the fact they need in one place, and every other place points there.
 3. A contributor changes one section without having to rewrite three others.
@@ -25,33 +27,14 @@ words, then linked to the module that implements it.
   sentence; make it a sentence.
 - Explain before naming. The name of a module, signal or file comes *after* the plain-language
   statement of what it does: "The aligner finds the comma in the received bits and shifts the
-  words so that each symbol starts on a byte boundary (`USB3RXAligner`)". At most one code
+  words so that each symbol starts on a byte boundary (`RXAligner`)". At most one code
   identifier per sentence in prose; several identifiers belong in a table or a list.
-- Use the same word for the same thing throughout:
-  - *the PHY* is `usb3_pipe` (transceiver wrapper, PIPE datapath, LTSSM); *the device core* is
-    `usb3_core` (link layer, protocol layer, endpoints, classes); *the project* is both.
-  - *the host* is the USB 3 host controller (xHCI) at the other end of the cable; *the link
-    partner* is the port the PHY is connected to (the host or a hub); *the device* is the FPGA
-    design.
-  - *transceiver* is the FPGA high-speed serial block (GTP, GTX, GTY, GTR12, DCU); "SerDes" only
-    in class names (`USB3SerDes`, `A7USB3SerDes`).
-  - *board* (hardware), *target* (a script in `bench/`), *example* (a device design of
-    `usb3_core/examples.py`), *bitstream* (the file).
-  - *register* (never "CSR" in prose, except for the bus name "CSR bus").
-  - *link layer*, *protocol layer*, *physical layer* in lower case in prose; "Link Layer" only in
-    a title or a class docstring.
-- USB 3 names follow the USB 3.2 specification: *Gen 1* and *Gen 2* (with a space), *Gen 1x1*,
-  *Gen 2x1*, *Gen 1x2*; *SuperSpeed* and *SuperSpeedPlus* for the operating modes; link states
-  as `U0` to `U3` in prose without code font (U0, U1, U2, U3); LTSSM states as
-  *Polling.Active*, *Recovery.Idle* (dotted, capitalised, no code font); packet names in capitals
-  (TS1, TS2, TSEQ, SKP, LFPS, LGOOD, LCRD, LUP, LDN, ACK, NRDY, ERDY, DP, ITP).
-- Cite the specification as "USB 3.2 section 7.5.4" (with the word *section*), never by page.
-- Placeholders: `<target>` is a target script name without `.py` (`acorn`, `alibaba_xcku3p`);
-  `<example>` is an example name (`loopback`, `bench`, `uvc`). Both are defined once in the
-  Conventions of the front matter.
-- Board names: Acorn CLE-215+, KC705, Alibaba XCKU3P (then "the XCKU3P board"), Tang Mega 138K
-  Pro, ECPIX-5, GW5AT-15. FPGA families: Artix-7, Kintex-7, Kintex UltraScale+, Gowin GW5AST and
-  GW5AT, Lattice ECP5-5G.
+- Use the same word for the same thing throughout, as `VOCABULARY.md` defines it: the names of
+  the parts of the project, of the hardware, of the protocol objects and of the placeholders.
+  General terms: *board* (hardware), *target* (a target script), *example* (an example design),
+  *bitstream* (the file), *register* (never "CSR" in prose, except for the bus name "CSR bus").
+- Protocol names follow the specification, cited with the word *section* ("USB 3.2 section 7.5.4",
+  "PCIe 3.0 section 4.2"), never by page.
 - No dates, pull request numbers, branch names, "former", "still", "recently", "current",
   "TODO" or names of people in the text, except in the credits of the introduction.
 - Numbers with units and a space (`5 Gbps`, `125 MHz`, `446 MB/s`, `64 KiB`); hexadecimal in code
@@ -70,7 +53,7 @@ words, then linked to the module that implements it.
    small table.
 5. **Where to go next**: links to the related chapters, one line.
 
-Part I (Understand) explains USB 3 as the specification defines it, with the project's choices
+Part I (Understand) explains the protocol as the specification defines it, with the project's choices
 noted where they matter. Parts II and III describe the implementation and link back to the
 Part I section of each concept instead of explaining it again.
 
@@ -88,7 +71,7 @@ Part I section of each concept instead of explaining it again.
   Data arrows are 2 px grey lines; the path the figure is about may use `kind="accent"` (2 px
   cyan); control arrows are 1 px; feedback and clock boundaries are dotted. Bit fields keep
   adjoining square cells without shadows (`radius=0`). Red is reserved for error conditions
-  (bad CRC, LBAD, retry), green for "ok" markers (locked, aligned, U0).
+  (bad CRC, retry, fault), green for "ok" markers (locked, aligned, link up).
 - Every figure is drawn on a 760 px wide canvas (`svgdiag.CANVAS_WIDTH`; the height is free).
   The PDF prints the SVG at its natural size capped to the text width, so one canvas width means
   one printed scale: a 15 px box label prints at 9 pt, a 12 px arrow label at 7.2 pt. Dense
@@ -105,7 +88,7 @@ Part I section of each concept instead of explaining it again.
   to, crossing a container border or crossed by an arrow; a diagonal or zero-length arrow
   segment; an arrow segment passing through a box it neither starts nor ends on. Unlabelled boxes
   are frames and are exempt from the overlap tests.
-- State machines (LTSSM) are drawn as boxes and orthogonal arrows like any other figure; timing
+- State machines (such as a link training state machine) are drawn as boxes and orthogonal arrows like any other figure; timing
   and packet exchanges are drawn as lanes (one horizontal or vertical line per side, `Bus` with
   a dash) with horizontal arrows between them.
 

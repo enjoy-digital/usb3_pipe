@@ -1,4 +1,4 @@
--- This file is part of USB3-PIPE project.
+-- This file is part of the LiteX manual kit.
 --
 -- Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 -- SPDX-License-Identifier: BSD-2-Clause
