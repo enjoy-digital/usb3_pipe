@@ -116,7 +116,9 @@ def prepare(out, font_url=FONT_URL):
     # Chapters: pipe tables become grid tables (see tools/tables.py).
     name, files = load_manual()
     for f in files:
-        (src/f).write_text(tables.convert_markdown((HERE/f).read_text()))
+        # Each chapter ends with a newline: pandoc joins the input files, a missing one would merge the
+        # last line of a chapter with the heading of the next.
+        (src/f).write_text(tables.convert_markdown((HERE/f).read_text()).rstrip("\n") + "\n")
 
     # Display font: Gravur when it can be fetched, else TeX Gyre Heros Cn (PDF) / Arial Narrow (HTML).
     gravur = fetch_fonts(out, font_url)
