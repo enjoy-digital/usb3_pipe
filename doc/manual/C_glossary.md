@@ -11,6 +11,7 @@ The terms below are used throughout the manual. USB 3 terms follow the USB 3.2 s
 | BOS | Binary device Object Store: descriptor listing the device capabilities |
 | Burst | Data packets sent without waiting for their acknowledgement, up to the max burst |
 | CDC-ACM | Communications Device Class, Abstract Control Model: a virtual serial port |
+| CDC-ECM | Communications Device Class, Ethernet Control Model: a USB network adapter |
 | CDR | Clock and Data Recovery: the receiver circuit that recovers the clock from the data |
 | COM | K28.5 comma symbol: symbol alignment and start of the training ordered sets |
 | CRC | Cyclic Redundancy Check: CRC-5 of link commands, CRC-16 of headers, CRC-32 of payloads |
@@ -47,6 +48,7 @@ The terms below are used throughout the manual. USB 3 terms follow the USB 3.2 s
 | LMP | Link Management Packet: port capability, configuration and link functions |
 | LRTY | Link command: retransmission of header packets starts |
 | LTSSM | Link Training and Status State Machine |
+| LUN | Logical Unit Number: one disk of a Mass Storage device, selected in each command |
 | Max burst | Number of packets an endpoint can send or take in one burst (1 to 16), in the SuperSpeed endpoint companion descriptor |
 | MSC | Mass Storage Class: a disk over USB |
 | NRDY | Transaction packet: the endpoint has no data or no space now |
@@ -69,3 +71,4 @@ The terms below are used throughout the manual. USB 3 terms follow the USB 3.2 s
 | UVC | USB Video Class: a camera over USB |
 | Warm Reset | Link reset signaled by a long LFPS; restarts training |
 | xHCI | Extensible Host Controller Interface: the USB 3 host controller of a PC |
+| Zero-length packet | Data packet without payload: ends a transfer whose last packet has the maximum size |

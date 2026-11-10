@@ -263,7 +263,7 @@
    },
    {
     "access": "ro",
-    "description": "Entry.",
+    "description": "Entry (timestamp, events, RX/TX Link Command and Header Packet fields, Recovery causes: see USB3LinkTrace).",
     "fields": [],
     "name": "link_trace_data",
     "offset": 40,

@@ -123,7 +123,7 @@ Bank `usb3_core`.
 | `link_trace_` `count` | `0x001c` | 16 | ro | Recorded entries. |
 | `link_trace_` `pointer` | `0x0020` | 16 | ro | Write pointer (circular: oldest entry). |
 | `link_trace_` `index` | `0x0024` | 16 | rw | Entry to read. Reset `0x0`. |
-| `link_trace_data` | `0x0028` | 96 | ro | Entry. |
+| `link_trace_data` | `0x0028` | 96 | ro | Entry (timestamp, events, RX/TX Link Command and Header Packet fields, Recovery causes: see USB3LinkTrace). |
 | `status` | `0x0034` | 15 | ro | See the fields below. |
 | `rx_lbad` | `0x0038` | 16 | ro | LBAD sent (Header Packets RX errors). |
 | `tx_retry` | `0x003c` | 16 | ro | LBAD received (Header Packets resent). |
@@ -243,8 +243,8 @@ Defined by `add_usb3_gen2_rx` (`bench/usb3_soc.py`).
 
 The snapshot banks share one interface: `arm` starts a capture, `trigger` selects
 its stop condition, `done` tells when the buffer is full, then `index` selects an
-entry and `data0` to `dataN` read it. Their registers carry no description in the
-source; [Debugging](#debugging) describes what each snapshot holds.
+entry and `data0` to `dataN` read it. [Debugging](#debugging) describes what each
+snapshot holds.
 
 Registers of the top-level `main` bank of the bench SoC.
 
@@ -267,14 +267,14 @@ Registers of the top-level `main` bank of the bench SoC.
 | Register | Offset | Bits | Access | Description |
 |----------------------------|-------------|--------|---------|----------------------------------------|
 | `arm` | `0x0000` | 1 | wo | Write strobe. |
-| `trigger` | `0x0004` | 2 | rw | Reset `0x0`. |
-| `done` | `0x0008` | 1 | ro | No description. |
-| `index` | `0x000c` | 9 | rw | Reset `0x0`. |
-| `data0` | `0x0010` | 32 | ro | No description. |
-| `data1` | `0x0014` | 32 | ro | No description. |
-| `data2` | `0x0018` | 32 | ro | No description. |
-| `data3` | `0x001c` | 32 | ro | No description. |
-| `data4` | `0x0020` | 32 | ro | No description. |
+| `trigger` | `0x0004` | 2 | rw | Trigger: flags bit index. Reset `0x0`. |
+| `done` | `0x0008` | 1 | ro | Capture done (triggered after arm, post-trigger entries stored). |
+| `index` | `0x000c` | 9 | rw | Entry to read (0: oldest): the raw word then the flags, in data0..data4. Reset `0x0`. |
+| `data0` | `0x0010` | 32 | ro | Entry bits [31:0]. |
+| `data1` | `0x0014` | 32 | ro | Entry bits [63:32]. |
+| `data2` | `0x0018` | 32 | ro | Entry bits [95:64]. |
+| `data3` | `0x001c` | 32 | ro | Entry bits [127:96]. |
+| `data4` | `0x0020` | 32 | ro | Entry bits [159:128]. |
 
 ### `usb3_gen2_rx`
 
@@ -308,33 +308,33 @@ Fields of `status`:
 | Register | Offset | Bits | Access | Description |
 |----------------------------|-------------|--------|---------|----------------------------------------|
 | `arm` | `0x0000` | 1 | wo | Write strobe. |
-| `trigger` | `0x0004` | 3 | rw | Reset `0x0`. |
-| `done` | `0x0008` | 1 | ro | No description. |
-| `index` | `0x000c` | 10 | rw | Reset `0x0`. |
-| `data0` | `0x0010` | 32 | ro | No description. |
-| `data1` | `0x0014` | 32 | ro | No description. |
+| `trigger` | `0x0004` | 3 | rw | Trigger: flags bit index. Reset `0x0`. |
+| `done` | `0x0008` | 1 | ro | Capture done (triggered after arm, post-trigger entries stored). |
+| `index` | `0x000c` | 10 | rw | Entry to read (0: oldest): the raw word then the flags, in data0..data4. Reset `0x0`. |
+| `data0` | `0x0010` | 32 | ro | Entry bits [31:0]. |
+| `data1` | `0x0014` | 32 | ro | Entry bits [63:32]. |
 
 ### `usb3_gen2_tx_snapshot`
 
 | Register | Offset | Bits | Access | Description |
 |----------------------------|-------------|--------|---------|----------------------------------------|
 | `arm` | `0x0000` | 1 | wo | Write strobe. |
-| `trigger` | `0x0004` | 1 | rw | Reset `0x0`. |
-| `done` | `0x0008` | 1 | ro | No description. |
-| `index` | `0x000c` | 10 | rw | Reset `0x0`. |
-| `data0` | `0x0010` | 32 | ro | No description. |
-| `data1` | `0x0014` | 32 | ro | No description. |
+| `trigger` | `0x0004` | 1 | rw | Trigger: flags bit index. Reset `0x0`. |
+| `done` | `0x0008` | 1 | ro | Capture done (triggered after arm, post-trigger entries stored). |
+| `index` | `0x000c` | 10 | rw | Entry to read (0: oldest): the raw word then the flags, in data0..data4. Reset `0x0`. |
+| `data0` | `0x0010` | 32 | ro | Entry bits [31:0]. |
+| `data1` | `0x0014` | 32 | ro | Entry bits [63:32]. |
 
 ### `usb3_gen2_txblocks_snapshot`
 
 | Register | Offset | Bits | Access | Description |
 |----------------------------|-------------|--------|---------|----------------------------------------|
 | `arm` | `0x0000` | 1 | wo | Write strobe. |
-| `trigger` | `0x0004` | 1 | rw | Reset `0x0`. |
-| `done` | `0x0008` | 1 | ro | No description. |
-| `index` | `0x000c` | 10 | rw | Reset `0x0`. |
-| `data0` | `0x0010` | 32 | ro | No description. |
-| `data1` | `0x0014` | 32 | ro | No description. |
-| `data2` | `0x0018` | 32 | ro | No description. |
-| `data3` | `0x001c` | 32 | ro | No description. |
-| `data4` | `0x0020` | 32 | ro | No description. |
+| `trigger` | `0x0004` | 1 | rw | Trigger: flags bit index. Reset `0x0`. |
+| `done` | `0x0008` | 1 | ro | Capture done (triggered after arm, post-trigger entries stored). |
+| `index` | `0x000c` | 10 | rw | Entry to read (0: oldest): the raw word then the flags, in data0..data4. Reset `0x0`. |
+| `data0` | `0x0010` | 32 | ro | Entry bits [31:0]. |
+| `data1` | `0x0014` | 32 | ro | Entry bits [63:32]. |
+| `data2` | `0x0018` | 32 | ro | Entry bits [95:64]. |
+| `data3` | `0x001c` | 32 | ro | Entry bits [127:96]. |
+| `data4` | `0x0020` | 32 | ro | Entry bits [159:128]. |

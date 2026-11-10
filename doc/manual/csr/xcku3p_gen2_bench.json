@@ -363,7 +363,7 @@
    },
    {
     "access": "ro",
-    "description": "Entry.",
+    "description": "Entry (timestamp, events, RX/TX Link Command and Header Packet fields, Recovery causes: see USB3LinkTrace).",
     "fields": [],
     "name": "link_trace_data",
     "offset": 40,
@@ -954,7 +954,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Trigger: flags bit index.",
     "fields": [],
     "name": "trigger",
     "offset": 4,
@@ -963,7 +963,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Capture done (triggered after arm, post-trigger entries stored).",
     "fields": [],
     "name": "done",
     "offset": 8,
@@ -972,7 +972,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Entry to read (0: oldest): the raw word then the flags, in data0..data4.",
     "fields": [],
     "name": "index",
     "offset": 12,
@@ -981,7 +981,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [31:0].",
     "fields": [],
     "name": "data0",
     "offset": 16,
@@ -990,7 +990,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [63:32].",
     "fields": [],
     "name": "data1",
     "offset": 20,
@@ -999,7 +999,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [95:64].",
     "fields": [],
     "name": "data2",
     "offset": 24,
@@ -1008,7 +1008,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [127:96].",
     "fields": [],
     "name": "data3",
     "offset": 28,
@@ -1017,7 +1017,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [159:128].",
     "fields": [],
     "name": "data4",
     "offset": 32,
@@ -1188,7 +1188,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Trigger: flags bit index.",
     "fields": [],
     "name": "trigger",
     "offset": 4,
@@ -1197,7 +1197,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Capture done (triggered after arm, post-trigger entries stored).",
     "fields": [],
     "name": "done",
     "offset": 8,
@@ -1206,7 +1206,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Entry to read (0: oldest): the raw word then the flags, in data0..data4.",
     "fields": [],
     "name": "index",
     "offset": 12,
@@ -1215,7 +1215,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [31:0].",
     "fields": [],
     "name": "data0",
     "offset": 16,
@@ -1224,7 +1224,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [63:32].",
     "fields": [],
     "name": "data1",
     "offset": 20,
@@ -1244,7 +1244,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Trigger: flags bit index.",
     "fields": [],
     "name": "trigger",
     "offset": 4,
@@ -1253,7 +1253,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Capture done (triggered after arm, post-trigger entries stored).",
     "fields": [],
     "name": "done",
     "offset": 8,
@@ -1262,7 +1262,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Entry to read (0: oldest): the raw word then the flags, in data0..data4.",
     "fields": [],
     "name": "index",
     "offset": 12,
@@ -1271,7 +1271,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [31:0].",
     "fields": [],
     "name": "data0",
     "offset": 16,
@@ -1280,7 +1280,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [63:32].",
     "fields": [],
     "name": "data1",
     "offset": 20,
@@ -1300,7 +1300,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Trigger: flags bit index.",
     "fields": [],
     "name": "trigger",
     "offset": 4,
@@ -1309,7 +1309,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Capture done (triggered after arm, post-trigger entries stored).",
     "fields": [],
     "name": "done",
     "offset": 8,
@@ -1318,7 +1318,7 @@
    },
    {
     "access": "rw",
-    "description": "",
+    "description": "Entry to read (0: oldest): the raw word then the flags, in data0..data4.",
     "fields": [],
     "name": "index",
     "offset": 12,
@@ -1327,7 +1327,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [31:0].",
     "fields": [],
     "name": "data0",
     "offset": 16,
@@ -1336,7 +1336,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [63:32].",
     "fields": [],
     "name": "data1",
     "offset": 20,
@@ -1345,7 +1345,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [95:64].",
     "fields": [],
     "name": "data2",
     "offset": 24,
@@ -1354,7 +1354,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [127:96].",
     "fields": [],
     "name": "data3",
     "offset": 28,
@@ -1363,7 +1363,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Entry bits [159:128].",
     "fields": [],
     "name": "data4",
     "offset": 32,
