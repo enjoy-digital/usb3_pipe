@@ -30,23 +30,30 @@ msc_storage_cmd_layout = [
 ]
 
 class USB3MSCStorage(LiteXModule):
-    """Storage interface of the SCSI command engine (BRAM/DRAM backends).
+    """Storage interface of the SCSI command engine (BRAM/DRAM/SD card/SATA backends).
 
-    - cmd    : Read/write command (msc_storage_cmd_layout), accepted when the storage is idle.
-    - source : Read data (32-bit words, blocks*MSC_BLOCK_SIZE//4 words per read command).
-    - sink   : Write data (32-bit words, blocks*MSC_BLOCK_SIZE//4 words per write command).
-    - ready  : Storage available (ex: DRAM initialized), commands fail with NOT READY when low.
-    - idle   : No command ongoing, write data committed (a following read returns it).
+    - cmd     : Read/write command (msc_storage_cmd_layout), accepted when the storage is idle.
+    - source  : Read data (32-bit words, blocks*MSC_BLOCK_SIZE//4 words per read command).
+    - sink    : Write data (32-bit words, blocks*MSC_BLOCK_SIZE//4 words per write command).
+    - ready   : Storage available (ex: DRAM initialized, SD card initialized), commands fail with
+                NOT READY when low (UNIT ATTENTION reported when it becomes ready).
+    - idle    : No command ongoing, write data committed (a following read returns it).
+    - capacity: Capacity in blocks, valid when ready: size//MSC_BLOCK_SIZE (fixed size storages) or
+                driven by the storage (size=None: ex: SD card/SATA drive capacity).
+    removable: removable medium (ex: SD card): not ready reported as MEDIUM NOT PRESENT (else
+               LOGICAL UNIT NOT READY: becoming ready, ex: DRAM initialization).
     """
-    def __init__(self, size):
-        assert size % MSC_BLOCK_SIZE == 0
-        self.size   = size
-        self.blocks = size//MSC_BLOCK_SIZE
-        self.cmd    = stream.Endpoint(msc_storage_cmd_layout) # i
-        self.source = stream.Endpoint([("data", 32)])         # o
-        self.sink   = stream.Endpoint([("data", 32)])         # i
-        self.ready  = Signal()                                # o
-        self.idle   = Signal()                                # o
+    def __init__(self, size=None, removable=False):
+        assert (size is None) or (size % MSC_BLOCK_SIZE == 0)
+        self.size      = size
+        self.removable = removable
+        self.blocks   = None if size is None else size//MSC_BLOCK_SIZE
+        self.cmd      = stream.Endpoint(msc_storage_cmd_layout)   # i
+        self.source   = stream.Endpoint([("data", 32)])           # o
+        self.sink     = stream.Endpoint([("data", 32)])           # i
+        self.ready    = Signal()                                  # o
+        self.idle     = Signal()                                  # o
+        self.capacity = Signal(32, reset=self.blocks or 0)        # o
 
 # USB3 MSC RAM Disk --------------------------------------------------------------------------------
 
