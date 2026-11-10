@@ -2,7 +2,8 @@
 # Theme of the manual (part of the manual kit, identical in every project): the look of
 # enjoy-digital.fr for the eisvogel PDF. build.py merges it with metadata.yaml and replaces
 # @MANUAL@ (doc/manual), @BUILD@ (build/doc), @GRAVUR_BOLD@/@GRAVUR_LIGHT@ (display font, Gravur
-# when fetched) and @SHORTTITLE@ (the title, for the running head). xelatex runs in a temporary
+# when fetched) and @SHORTTITLE@ (the title, for the running head, which is truncated with an
+# ellipsis when the chapter title would run into the right header). xelatex runs in a temporary
 # directory: fonts and title page assets need absolute paths.
 
 book: true
@@ -57,7 +58,8 @@ header-includes: |
       \definecolor{blockquote-border}{HTML}{2EAADC}
       \lstset{frame=l, framerule=2.5pt, rulecolor=\color{edcyan}, xleftmargin=6pt, framexleftmargin=4pt, framextopmargin=5pt, framexbottommargin=5pt, aboveskip=10pt, belowskip=8pt}
     }
-    \newcommand{\runninghead}{\ifnum\value{chapter}>0 \leftmark\else @SHORTTITLE@\fi}
+    \usepackage[fit]{truncate}
+    \newcommand{\runninghead}{\truncate{0.40\textwidth}{\ifnum\value{chapter}>0 \leftmark\else @SHORTTITLE@\fi}}
     \AtBeginDocument{\renewcommand*{\partpagestyle}{ChapterStyle}\automark[chapter]{chapter}}
     \addtokomafont{disposition}{\gravur}
     \addtokomafont{part}{\color{edink}}
