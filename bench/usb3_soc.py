@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 SoC shared by the bench targets (acorn.py, kc705.py, alibaba_xcku3p.py,
-sipeed_tang_mega_138k_pro.py), see doc/targets.md.
+sipeed_tang_mega_138k_pro.py), see doc/manual/09_boards.md.
 
 - USB3BaseSoC     : SoCCore (no CPU by default), UARTBone/JTAGBone.
 - add_usb3_device : USB3PHY + debug (USB3PHYDebug, USB3SerDesDebug), USB3 Device Core example

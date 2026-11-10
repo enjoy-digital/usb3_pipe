@@ -10,7 +10,7 @@
 
 SFP2USB adapter in SFP0 (GTR12 Q1 lane 0; --sfp 1: lane 1), GTR12 reference clock from the dock
 (--refclk: 100MHz REFCLK1 or 125MHz REFCLK0; --pll: QPLL1 or CPLL). Gen 1x1 (5Gbps) validated,
-Gen 2x1 (10Gbps) in bring-up: --gen2-capable --pll CPLL --refclk 125M (doc/targets.md).
+Gen 2x1 (10Gbps) in bring-up: --gen2-capable --pll CPLL --refclk 125M (doc/manual/09_boards.md).
 
 Clocking (slow fabric): the PIPE and the SerDes datapath run on the GTR12 TX clock at 125MHz, the
 LTSSM/Link Layer/Core/SoC in sys at 62.5MHz (--sys-clk-freq, USB3PHY pipe_cd) on 64-bit Link Layer

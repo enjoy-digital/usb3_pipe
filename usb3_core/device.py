@@ -57,7 +57,7 @@ class USB3DeviceCore(LiteXModule):
       Link Layer words width (32*link_words), or 32 (adapted by the Protocol Layer).
     - timer_scale: Link Layer timers scaling (simulation).
     - with_ep0_handler: class/vendor requests delegated to user logic on ep0 (req_*,
-      doc/usb3-core.md).
+      doc/manual/07_core_architecture.md).
     - with_lpm, crc32_cascade: see the module docstring.
 
     Interface:

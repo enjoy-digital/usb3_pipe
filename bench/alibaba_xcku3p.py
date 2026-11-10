@@ -10,7 +10,7 @@
 
 SFP2USB adapter in a SFP cage (--sfp 0: NIC1, default). Gen 1x1 (5Gbps) and Gen 2x1 (10Gbps,
 --gen2-capable: QPLL at 10Gbps, Gen 2 negotiated on a USB 3.2 Gen 2 host port): main Gen 2
-validation target (doc/targets.md).
+validation target (doc/manual/09_boards.md).
 
 Clocking: GTY reference clock from the SFP MGT clock (156.25MHz) or the 100MHz oscillator
 (--refclk), sys at 125MHz.

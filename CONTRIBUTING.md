@@ -34,18 +34,21 @@ not rename options or CSRs.
   linear stack. Say if an agent wrote the code and who supervised it.
 - Never edit generated files (`build/`, `csr.h`, `csr.csv`, the Verilog, `gateware/analyzer.csv`):
   change the Python.
-- Documentation goes in the same pull request: an option added to `usb3_soc_args`
-  (`bench/usb3_soc.py`), to a target or to `sim.py` is documented in `doc/examples.md`/`doc/targets.md`
-  or `doc/usb3-pipe.md` ("Simulation"); a new debug CSR or flow in `doc/debugging-guide.md`; new
-  figures or milestones in the README status table and `doc/gen2-x2-roadmap.md`.
+- Documentation goes in the same pull request, in the manual (`doc/manual/`, rules in
+  `doc/manual/STYLE.md`, sources in `SOURCES.md`): an option added to `usb3_soc_args`
+  (`bench/usb3_soc.py`), to a target or to `sim.py` goes in Build options (`B_build_options.md`) and
+  the chapter that uses it; a new debug register or flow in Debugging (`14_debugging.md`) and the
+  register appendix (`tools/csr_doc.py dump` then `generate`); new figures or milestones in the
+  README status table, Performance (`D_performance.md`) and `doc/notes/gen2-x2-roadmap.md`. Check
+  with `python3 doc/manual/build.py --check`.
 
 ## Hardware
 
 - `--load` (volatile) is the default for experiments: never flash a board or write its SPI flash
   unless asked.
 - Never retrain a link from the debug CSRs while the device is in U3 (suspended): the host still sees
-  its port in U3 and the device ends in Compliance (`doc/debugging-guide.md`, "Suspend/Resume").
-- Read `doc/debugging-guide.md` before hardware work: registers before traces, narrow LiteScope
+  its port in U3 and the device ends in Compliance (manual, Debugging: "Suspend and resume").
+- Read the Debugging chapter of the manual (`doc/manual/14_debugging.md`) before hardware work: registers before traces, narrow LiteScope
   captures, reproduce every finding in simulation (a Migen test or `sim.py`).
 - Slow fabrics (Gowin GW5): Fmax is the limiting factor, keep new logic registered and check timing
   on the GW5 target, not only on Xilinx. Gowin synthesis drops the init contents of memories with an

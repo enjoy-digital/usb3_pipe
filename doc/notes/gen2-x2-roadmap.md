@@ -9,7 +9,7 @@ two lanes, no hardware). **Gen 2x2** (2x10Gbps): not started.
 This document lists what Gen 2x1 (SuperSpeedPlus 10Gbps, 128b/132b, one lane) and Gen 1x2
 (SuperSpeedPlus 2x5Gbps, 8b/10b, two lanes) require, layer by layer, what was done and found during
 the Gen 2x1 bring-up and what remains. References are to the USB 3.2 specification (Rev 1.1). PHY and
-Device Core: [usb3-pipe.md](usb3-pipe.md), [usb3-core.md](usb3-core.md).
+Device Core: the manual ([doc/manual](../manual/README.md)).
 
 Both are **SuperSpeedPlus** operation: they change the PHY *and* the Link Layer (Type 1/Type 2 traffic
 classes, 4-bit Header Sequence Numbers, Rx Buffer credits), the Protocol Layer is mostly unchanged.
@@ -278,9 +278,9 @@ needed a host port power cycle: capability changes between trainings are a test-
    hardware validation.
 3. Gen 2x2 (20Gbps) on UltraScale+ GTY: combination of both, 7 buffers.
 4. Gen 2x1 on Gowin GW5AST (Tang Mega 138K Pro, `bench/sipeed_tang_mega_138k_pro.py`, build flow
-   and options in [targets.md](targets.md)): Gen 1 is validated on hardware with the PIPE in its own
-   clock domain (`pipe_cd`, GTR12 TX clock at 125MHz) and the LTSSM/Link Layer/Core at 62.5MHz on
-   64-bit words. Remaining for 10Gbps:
+   and options in [Supported FPGAs and boards](../manual/09_boards.md)): Gen 1 is validated on
+   hardware with the PIPE in its own clock domain (`pipe_cd`, GTR12 TX clock at 125MHz) and the
+   LTSSM/Link Layer/Core at 62.5MHz on 64-bit words. Remaining for 10Gbps:
    - GTR12 rate switch: 5Gbps -> 10Gbps is 6 register writes (CDR divider, QPLL1 output divider, TX
      lanes clock tree, TX/RX gear FIFOs: 1:2 -> 1:4) with the same 5GHz VCO and 125MHz fabric clock
      (40-bit -> 80-bit raw words), back to 5Gbps for the next SuperSpeedPlus Polling. Done:

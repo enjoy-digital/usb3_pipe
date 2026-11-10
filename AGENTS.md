@@ -14,7 +14,7 @@ documentation of new options): [CONTRIBUTING.md](CONTRIBUTING.md).
 - `usb3_pipe/`: PHY: `serdes.py`, `datapath.py`, `coding.py`, `scrambling.py`, `lfps.py`, `training.py`, `core.py` (USB3PIPE/Gen2PIPE), `framing.py` (Gen 2 packet framing, word pairs/quads), `ltssm.py`, `lanes.py`, `phy.py` (USB3PHY, Link interface), `crc.py`, `common.py`, `debug.py` (debug CSRs and LiteScope groups), `gen.py` (standalone core), `gw5/` (GTR12 configurations).
 - `usb3_core/`: Device Core: `link.py`, `protocol.py`, `endpoints.py`/`bulk.py`/`iso.py`/`control.py`, device classes (`cdc_acm.py`, `uvc.py`, `msc.py`), `trace.py`, `examples.py` (example designs); `host_model.py` (simulation host).
 - `bench/`: targets (Acorn, KC705, XCKU3P, Tang Mega 138K Pro), shared SoC `usb3_soc.py`, host scripts; `sim.py`: Verilator simulation; `test/`: pytest suite.
-- `doc/`: `usb3-pipe.md`, `usb3-core.md`, `integration.md`, `targets.md`, `examples.md`, `standalone-core.md`, `debugging-guide.md`, `gen2-x2-roadmap.md`.
+- `doc/manual/`: the manual (Markdown chapters, pandoc PDF/HTML, `build.py`); `doc/diagrams/`: its figures (Python, `svgdiag.py`); `doc/notes/`: bring-up notes (`gen2-x2-roadmap.md`).
 
 ## Verify a change
 
@@ -24,9 +24,10 @@ python3 -m pytest -v                                                # default su
 python3 -m pytest -v -m slow                                        # long simulations (nightly CI)
 ```
 
-Read `doc/debugging-guide.md` before hardware work (debug CSRs, LiteScope groups, traces); never
-flash a board unless asked, never retrain a link in U3 ([CONTRIBUTING.md](CONTRIBUTING.md),
-"Hardware").
+Read the Debugging chapter of the manual (`doc/manual/14_debugging.md`) before hardware work (debug
+registers, LiteScope groups, traces); never flash a board unless asked, never retrain a link in U3
+([CONTRIBUTING.md](CONTRIBUTING.md), "Hardware"). Update the manual chapter with the code it
+describes (`doc/manual/STYLE.md`, `SOURCES.md`; check with `python3 doc/manual/build.py --check`).
 
 ## Debug on hardware
 

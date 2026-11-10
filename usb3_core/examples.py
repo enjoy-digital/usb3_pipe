@@ -5,7 +5,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 Device Core example designs, shared by the targets (bench/acorn.py, bench/kc705.py,
-bench/alibaba_xcku3p.py, bench/sipeed_tang_mega_138k_pro.py), see doc/examples.md.
+bench/alibaba_xcku3p.py, bench/sipeed_tang_mega_138k_pro.py), see doc/manual/12_examples.md.
 
 - loopback     : Vendor Bulk OUT (EP2) -> FIFO -> Bulk IN (EP1) (bench/usb3_bulk.py).
 - wishbone     : loopback + EP0 Wishbone bridge (litex_server --usb --usb-vid 0x1d50

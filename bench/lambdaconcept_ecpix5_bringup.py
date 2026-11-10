@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 # USB3-PIPE on the LambdaConcept ECPIX-5: progressive bring-up designs (small bitstreams, see
-# doc/ecpix5.md), on the lambdaconcept_ecpix5.py base (CRG, USB-C control, LEDs):
+# doc/manual), on the lambdaconcept_ecpix5.py base (CRG, USB-C control, LEDs):
 # - serdes: LiteICLink SerDesECP5 (20-bit/250MHz) on DCU0 with PRBS/loopback, SCI access, TX/RX
 #           clocks frequency meters, raw RX words observer (no USB3 logic). PLL/reference clock
 #           experiments: --refclk extref (EXTREF0 100MHz), --dcu-mult/--dcu-div/--refck-mode.
