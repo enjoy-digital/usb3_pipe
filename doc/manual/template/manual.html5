@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- HTML template of the USB3-PIPE manual (pandoc), styled after enjoy-digital.fr (style.css). -->
+<!-- HTML template of the manual (pandoc, part of the manual kit), styled after enjoy-digital.fr (style.css). -->
 <html xmlns="http://www.w3.org/1999/xhtml" lang="$lang$" xml:lang="$lang$">
 <head>
   <meta charset="utf-8" />
@@ -8,7 +8,7 @@
 $for(author-meta)$
   <meta name="author" content="$author-meta$" />
 $endfor$
-  <title>$pagetitle$: USB3-PIPE Manual</title>
+  <title>$pagetitle$$if(project)$ ($project$ manual)$endif$</title>
 $for(css)$
   <link rel="stylesheet" href="$css$" />
 $endfor$
@@ -54,6 +54,6 @@ $endif$
 $body$
 </main>
 </div>
-<footer class="foot">USB 3.2 PHY &amp; Core (USB3-PIPE) · Enjoy-Digital · generated $date$ · BSD-2-Clause · <a href="mailto:$contact$">$contact$</a></footer>
+<footer class="foot">$title$$if(project)$ ($project$)$endif$ · Enjoy-Digital · generated $date$$if(license-short)$ · $license-short$$endif$ · <a href="mailto:$contact$">$contact$</a></footer>
 </body>
 </html>

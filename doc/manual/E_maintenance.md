@@ -29,9 +29,9 @@ python3 doc/diagrams/build.py [--check]
 python3 doc/manual/build.py --check
 ```
 
-The outputs are `build/doc/usb3_pipe_manual.pdf` and `build/doc/usb3_pipe_manual.html`. The HTML
-page is self-contained: figures, fonts and styles are embedded, so the file can be copied or
-published alone.
+The outputs are `build/doc/<name>.pdf` and `build/doc/<name>.html`, `<name>` being set in
+`manual.yaml`. The HTML page is self-contained: figures, fonts and styles are embedded, so the
+file can be copied or published alone.
 
 ## Continuous integration and publication {#maint-ci}
 

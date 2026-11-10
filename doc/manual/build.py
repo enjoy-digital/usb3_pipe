@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 #
-# This file is part of USB3-PIPE project.
+# This file is part of the LiteX manual kit.
 #
 # Copyright (c) 2019-2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# Build the USB3-PIPE manual (PDF and HTML) from the Markdown sources of this directory.
+# Build the manual (PDF and HTML) from the Markdown sources of this directory: the chapters and the
+# output name are in manual.yaml, the project metadata in metadata.yaml, the theme in theme.yaml.
 #
 #   python3 doc/manual/build.py                 # diagrams + check + PDF + HTML
 #   python3 doc/manual/build.py --pdf           # PDF only
 #   python3 doc/manual/build.py --html --check  # HTML plus the link/figure/table check
 #
-# Outputs: build/doc/usb3_pipe_manual.pdf and build/doc/usb3_pipe_manual.html (repository root).
+# Outputs: build/doc/<name>.pdf and build/doc/<name>.html (repository root, <name> from manual.yaml).
 # Requirements: pandoc (2.9 or 3.x), a TeX distribution with xelatex, and rsvg-convert
 # (librsvg2-bin) or the cairosvg Python package for the SVG figures. See README.md.
 
@@ -51,23 +52,30 @@ def run(cmd, env=None):
     subprocess.run([str(c) for c in cmd], check=True, env=env)
 
 
-def load_defaults(name):
-    """Split a defaults file into (header lines, input files, output file)."""
-    header, files, output = [], [], None
-    in_files = False
-    for line in (HERE/name).read_text().split("\n"):
-        if line.startswith("input-files:"):
-            in_files = True
-            continue
-        if in_files and line.startswith("  - "):
-            files.append(line[4:].strip())
-            continue
-        in_files = False
-        if line.startswith("output-file:"):
-            output = line.split(":", 1)[1].strip()
-            continue
-        header.append(line)
-    return header, files, output
+def load_manual():
+    """Read manual.yaml (name and chapter list) without a YAML dependency."""
+    name, chapters = None, []
+    for line in (HERE/"manual.yaml").read_text().split("\n"):
+        if line.startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+        elif line.startswith("  - "):
+            chapters.append(line[4:].strip())
+    if not name or not chapters:
+        sys.exit("error: manual.yaml needs a name and a chapters list")
+    return name, chapters
+
+
+def metadata_value(key):
+    """A top-level string value of metadata.yaml (title, project...)."""
+    for line in (HERE/"metadata.yaml").read_text().split("\n"):
+        if line.startswith(f"{key}:"):
+            return line.split(":", 1)[1].strip().strip('"')
+    return ""
+
+
+def yaml_body(path):
+    """Content of a YAML metadata block, without its --- delimiters."""
+    return "\n".join(l for l in Path(path).read_text().split("\n") if l.strip() != "---")
 
 
 def generation_date():
@@ -106,7 +114,7 @@ def prepare(out, font_url=FONT_URL):
     figs.mkdir(parents=True, exist_ok=True)
 
     # Chapters: pipe tables become grid tables (see tools/tables.py).
-    _, files, _ = load_defaults("defaults-pdf.yaml")
+    name, files = load_manual()
     for f in files:
         (src/f).write_text(tables.convert_markdown((HERE/f).read_text()))
 
@@ -124,8 +132,9 @@ def prepare(out, font_url=FONT_URL):
         css = "\n".join(l for l in css.split("\n") if not l.startswith("@font-face"))
     (out/"style.css").write_text(css) # Next to out/fonts, for the url("fonts/...") of @font-face.
 
-    # Metadata: absolute paths, display font and generation date.
-    meta = (HERE/"metadata.yaml").read_text()
+    # Metadata: project metadata plus theme, absolute paths, display font and generation date.
+    meta = "---\n" + yaml_body(HERE/"metadata.yaml") + "\n" + yaml_body(HERE/"theme.yaml") + "\n---\n"
+    meta = meta.replace("@SHORTTITLE@", metadata_value("title").replace("&", "\\&"))
     meta = meta.replace("@GRAVUR_BOLD@", font_bold).replace("@GRAVUR_LIGHT@", font_light)
     meta = meta.replace("@MANUAL@", str(HERE)).replace("@BUILD@", str(out))
     meta = meta.replace("@DATE@", generation_date())
@@ -134,16 +143,15 @@ def prepare(out, font_url=FONT_URL):
     # Defaults files with absolute input, resource and output paths.
     respath = [str(src), str(HERE), str(HERE/"figures"), str(HERE.parent/"diagrams"/"svg"), str(ROOT/"doc"/"images"), str(ROOT/"doc")]
     for kind in ("pdf", "html"):
-        header, files, output = load_defaults(f"defaults-{kind}.yaml")
         lines = []
-        for line in header:
+        for line in (HERE/f"defaults-{kind}.yaml").read_text().rstrip("\n").split("\n"):
             if line.startswith("resource-path:"):
                 line = f"resource-path: [{', '.join(repr(r) for r in respath)}]"
             line = line.replace("@MANUAL@", str(HERE)).replace("@BUILD@", str(out))
             line = line.replace("metadata-file: metadata.yaml", f"metadata-file: {src/'metadata.yaml'}")
             lines.append(line)
         lines += ["input-files:"] + [f"  - {src/f}" for f in files]
-        lines += [f"output-file: {out/Path(output).name}"]
+        lines += [f"output-file: {out/name}.{kind}"]
         (src/f"defaults-{kind}.yaml").write_text("\n".join(lines) + "\n")
 
     # Figures (PDF for LaTeX, converted only when the SVG is newer) and title page background.
@@ -158,7 +166,8 @@ def prepare(out, font_url=FONT_URL):
 # Main ---------------------------------------------------------------------------------------------
 
 def main(argv):
-    parser = argparse.ArgumentParser(description="Build the USB3-PIPE manual.")
+    parser = argparse.ArgumentParser(description="Build the manual (PDF and HTML).")
+    parser.add_argument("--print",            choices=["name", "title", "project"], help="Print a manual property and exit (CI).")
     parser.add_argument("--pdf",              action="store_true", help="Build the PDF.")
     parser.add_argument("--html",             action="store_true", help="Build the standalone HTML.")
     parser.add_argument("--check",            action="store_true", help="Check images, cross-references and tables first.")
@@ -168,6 +177,9 @@ def main(argv):
     parser.add_argument("--font-url",         default=FONT_URL, help="Base URL of the Gravur fonts (env MANUAL_FONT_URL).")
     parser.add_argument("--out",              default=str(OUT), help="Output directory (default: build/doc).")
     args = parser.parse_args(argv)
+    if args.print:
+        print(load_manual()[0] if args.print == "name" else metadata_value(args.print))
+        return 0
     if not (args.pdf or args.html or args.check or args.diagrams):
         args.pdf = args.html = args.check = args.diagrams = True
 

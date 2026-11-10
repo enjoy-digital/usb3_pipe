@@ -1003,7 +1003,7 @@ $if(titlepage-background)$
   \setstretch{2}
   \vfill
   \vskip -8em
-  % Local change: the title uses \manualtitlefont when the metadata defines it (USB3-PIPE manual).
+  % Local change: the title uses \manualtitlefont when the metadata defines it (LiteX manual kit).
   \noindent {\providecommand{\manualtitlefont}{\bfseries\sffamily}\fontsize{44}{48}\selectfont\manualtitlefont $title$}
   $if(subtitle)$
   \vskip 1.5em
@@ -1038,7 +1038,7 @@ $endif$
 
 $if(titlepage-logo)$
 \noindent
-\includegraphics[width=$if(logo-width)$$logo-width$$else$35mm$endif$]{$titlepage-logo$}% Local change: optional second logo on the right (USB3-PIPE manual).
+\includegraphics[width=$if(logo-width)$$logo-width$$else$35mm$endif$]{$titlepage-logo$}% Local change: optional second logo on the right (LiteX manual kit).
 $if(titlepage-logo-right)$
 \hfill\includegraphics[height=$if(logo-right-height)$$logo-right-height$$else$20mm$endif$]{$titlepage-logo-right$}
 $endif$
