@@ -1,0 +1,1588 @@
+{
+ "argv": [
+  "--with-serdes-debug",
+  "--example",
+  "bench",
+  "--gen2-capable"
+ ],
+ "banks": {
+  "main": [
+   {
+    "access": "ro",
+    "description": "In U0: ts_rx_ts1 (LTSSM), ts_rx_ts2, ts_rx_ts2_reset cycles, PHY Gen2RX TS1 blocks, monitor TS1 blocks.",
+    "fields": [],
+    "name": "usb3_gen2_events",
+    "offset": 0,
+    "reset": null,
+    "size": 160
+   },
+   {
+    "access": "ro",
+    "description": "RX overflow [0], framing errors [31:16].",
+    "fields": [],
+    "name": "usb3_gen2_rx_link",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "PHY Gen 2 RX: aligned, locked, polarity, data_stream.",
+    "fields": [],
+    "name": "usb3_gen2_phy_rx_status",
+    "offset": 24,
+    "reset": null,
+    "size": 8
+   },
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "usb3_gen2_lc_rearm",
+    "offset": 28,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "rx: LC framing, LC buffer written, entries written; sys: LC buffer read, entries read, LC Link Layer input, LC checked.",
+    "fields": [],
+    "name": "usb3_gen2_lc_counts",
+    "offset": 32,
+    "reset": null,
+    "size": 224
+   },
+   {
+    "access": "rw",
+    "description": "TX Data Blocks snapshot also stopped on a LBAD received.",
+    "fields": [],
+    "name": "usb3_gen2_txblocks_lbad",
+    "offset": 60,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "RX equalizer: 1 LPM, 0 DFE.",
+    "fields": [],
+    "name": "usb3_gen2_rx_lpmen",
+    "offset": 64,
+    "reset": 1,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "Max cycles: LGOOD pending, LCRD pending, DPP stall.",
+    "fields": [],
+    "name": "usb3_gen2_link_max",
+    "offset": 68,
+    "reset": null,
+    "size": 96
+   },
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "usb3_gen2_link_max_clear",
+    "offset": 80,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "Gen 2 capability advertised.",
+    "fields": [],
+    "name": "usb3_gen2_capable",
+    "offset": 84,
+    "reset": 1,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 negotiated [0], 10Gbps rate [1].",
+    "fields": [],
+    "name": "usb3_gen2_status",
+    "offset": 88,
+    "reset": null,
+    "size": 2
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Clear the counters.",
+      "name": "clear",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Counting.",
+      "name": "run",
+      "offset": 1,
+      "reset": 1,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "usb3_profile_control",
+    "offset": 92,
+    "reset": 2,
+    "size": 2
+   },
+   {
+    "access": "ro",
+    "description": "Profile counters: cycles, u0, link_tx_words, link_tx_stall, link_tx_idle, link_tx_full, link_tx_credit, link_dpp_stall, in_dps, in_no_data, in_no_win, in_fc, in_hp_wait, in_slots_full, out_words, hp_push, hp_occupancy, lgood_count, lgood_rtt_sum, lgood_rtt_max, in_inflight_sum.",
+    "fields": [],
+    "name": "usb3_profile",
+    "offset": 96,
+    "reset": null,
+    "size": 672
+   }
+  ],
+  "usb3_bench": [
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Bulk IN source enable.",
+      "name": "source_enable",
+      "offset": 0,
+      "reset": 1,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Counters clear.",
+      "name": "clear",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "control",
+    "offset": 0,
+    "reset": 1,
+    "size": 2
+   },
+   {
+    "access": "ro",
+    "description": "Bulk IN words sent.",
+    "fields": [],
+    "name": "source_words",
+    "offset": 4,
+    "reset": null,
+    "size": 64
+   },
+   {
+    "access": "ro",
+    "description": "Bulk OUT words received.",
+    "fields": [],
+    "name": "sink_words",
+    "offset": 12,
+    "reset": null,
+    "size": 64
+   },
+   {
+    "access": "ro",
+    "description": "Bulk OUT words errors (discontinuities).",
+    "fields": [],
+    "name": "sink_errors",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_core": [
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Trace enable (stops when full).",
+      "name": "enable",
+      "offset": 0,
+      "reset": 1,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Trace clear (timestamp reset).",
+      "name": "clear",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Circular (stopped with enable=0).",
+      "name": "circular",
+      "offset": 2,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Record only the ept endpoint packets.",
+      "name": "ept_filter",
+      "offset": 3,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Endpoint number (ept_filter).",
+      "name": "ept",
+      "offset": 4,
+      "reset": 0,
+      "size": 4,
+      "values": []
+     }
+    ],
+    "name": "trace_control",
+    "offset": 0,
+    "reset": 1,
+    "size": 8
+   },
+   {
+    "access": "ro",
+    "description": "Recorded entries.",
+    "fields": [],
+    "name": "trace_count",
+    "offset": 4,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Write pointer (circular: oldest entry).",
+    "fields": [],
+    "name": "trace_pointer",
+    "offset": 8,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "rw",
+    "description": "Entry to read.",
+    "fields": [],
+    "name": "trace_index",
+    "offset": 12,
+    "reset": 0,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Entry (dw1, type, direction, timestamp).",
+    "fields": [],
+    "name": "trace_data",
+    "offset": 16,
+    "reset": null,
+    "size": 64
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Trace enable (stops when full).",
+      "name": "enable",
+      "offset": 0,
+      "reset": 1,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Trace clear (timestamp reset).",
+      "name": "clear",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Circular, stops on a U0 exit.",
+      "name": "circular",
+      "offset": 2,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Drop LUP/LDN only entries and ITPs.",
+      "name": "filter",
+      "offset": 3,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Circular: U0 exits/Recovery requests ignored before stopping.",
+      "name": "skip",
+      "offset": 4,
+      "reset": 0,
+      "size": 4,
+      "values": []
+     }
+    ],
+    "name": "link_trace_control",
+    "offset": 24,
+    "reset": 1,
+    "size": 8
+   },
+   {
+    "access": "ro",
+    "description": "Recorded entries.",
+    "fields": [],
+    "name": "link_trace_count",
+    "offset": 28,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Write pointer (circular: oldest entry).",
+    "fields": [],
+    "name": "link_trace_pointer",
+    "offset": 32,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "rw",
+    "description": "Entry to read.",
+    "fields": [],
+    "name": "link_trace_index",
+    "offset": 36,
+    "reset": 0,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Entry.",
+    "fields": [],
+    "name": "link_trace_data",
+    "offset": 40,
+    "reset": null,
+    "size": 96
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "U0, link initialized.",
+      "name": "ready",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Configured (SET_CONFIGURATION).",
+      "name": "configured",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Device Address.",
+      "name": "address",
+      "offset": 8,
+      "reset": 0,
+      "size": 7,
+      "values": []
+     }
+    ],
+    "name": "status",
+    "offset": 52,
+    "reset": null,
+    "size": 15
+   },
+   {
+    "access": "ro",
+    "description": "LBAD sent (Header Packets RX errors).",
+    "fields": [],
+    "name": "rx_lbad",
+    "offset": 56,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "LBAD received (Header Packets resent).",
+    "fields": [],
+    "name": "tx_retry",
+    "offset": 60,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Recovery requests (timeouts, errors).",
+    "fields": [],
+    "name": "recovery_req",
+    "offset": 64,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Next Header Sequence Number to send.",
+      "name": "tx_seq",
+      "offset": 0,
+      "reset": 0,
+      "size": 4,
+      "values": []
+     },
+     {
+      "description": "Header Sequence Number expected in the next LGOOD_n.",
+      "name": "ack_seq",
+      "offset": 4,
+      "reset": 0,
+      "size": 4,
+      "values": []
+     },
+     {
+      "description": "Header Sequence Number of the next Header Packet to retransmit.",
+      "name": "send_seq",
+      "offset": 8,
+      "reset": 0,
+      "size": 4,
+      "values": []
+     },
+     {
+      "description": "Remote Type 1 Rx Header Buffer credits.",
+      "name": "remote_credits",
+      "offset": 12,
+      "reset": 0,
+      "size": 3,
+      "values": []
+     },
+     {
+      "description": "Remote Type 2 Rx Header Buffer credits (SuperSpeedPlus).",
+      "name": "remote_credits2",
+      "offset": 15,
+      "reset": 0,
+      "size": 3,
+      "values": []
+     },
+     {
+      "description": "Header Sequence Number Advertisement received.",
+      "name": "adv_received",
+      "offset": 18,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "LAU sent: no transmission until the next U0 entry.",
+      "name": "pm_block",
+      "offset": 19,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "LGO_U1/LGO_U2 accepted: no new Header Packets until the next U0.",
+      "name": "pm_accepted",
+      "offset": 20,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Header Packet to send.",
+      "name": "tx_hp_valid",
+      "offset": 21,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Header Packet accepted.",
+      "name": "tx_hp_ready",
+      "offset": 22,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "LRTY to send.",
+      "name": "lrty_pending",
+      "offset": 23,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "LBAD sent, waiting for LRTY.",
+      "name": "lbad_wait",
+      "offset": 24,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "SuperSpeedPlus operation.",
+      "name": "ssp",
+      "offset": 25,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Tx Header Buffers full.",
+      "name": "tx_full",
+      "offset": 26,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Next Header Sequence Number expected.",
+      "name": "rx_seq",
+      "offset": 27,
+      "reset": 0,
+      "size": 4,
+      "values": []
+     }
+    ],
+    "name": "link_state",
+    "offset": 68,
+    "reset": null,
+    "size": 31
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Last Recovery cause: hp_seq, lgood, lcrd, pending_hp, credit_hp",
+      "name": "last",
+      "offset": 0,
+      "reset": 0,
+      "size": 5,
+      "values": []
+     },
+     {
+      "description": "hp_seq Recovery requests (saturating).",
+      "name": "hp_seq",
+      "offset": 8,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     },
+     {
+      "description": "lgood Recovery requests (saturating).",
+      "name": "lgood",
+      "offset": 16,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     },
+     {
+      "description": "lcrd Recovery requests (saturating).",
+      "name": "lcrd",
+      "offset": 24,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     },
+     {
+      "description": "pending_hp Recovery requests (saturating).",
+      "name": "pending_hp",
+      "offset": 32,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     },
+     {
+      "description": "credit_hp Recovery requests (saturating).",
+      "name": "credit_hp",
+      "offset": 40,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     }
+    ],
+    "name": "recovery_cause",
+    "offset": 72,
+    "reset": null,
+    "size": 48
+   },
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "recovery_request",
+    "offset": 80,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Link Command words rejected (CRC-5/copies).",
+      "name": "lc_bad",
+      "offset": 0,
+      "reset": 0,
+      "size": 16,
+      "values": []
+     },
+     {
+      "description": "DPPs received with a CRC-32 error.",
+      "name": "dpp_bad",
+      "offset": 16,
+      "reset": 0,
+      "size": 16,
+      "values": []
+     }
+    ],
+    "name": "rx_errors",
+    "offset": 84,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_debug": [
+   {
+    "access": "rw",
+    "description": "PHY (PIPE + LTSSM) reset (level).",
+    "fields": [],
+    "name": "phy_reset",
+    "offset": 0,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "SerDes RX re-initialization (level).",
+    "fields": [],
+    "name": "serdes_rx_reset",
+    "offset": 4,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "clear",
+    "offset": 8,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "LTSSM state (get_ltssm_states).",
+      "name": "ltssm_state",
+      "offset": 0,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     },
+     {
+      "description": "SerDes ready.",
+      "name": "serdes_ready",
+      "offset": 8,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "SerDes RX electrical idle.",
+      "name": "rx_idle",
+      "offset": 9,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "SerDes RX polarity inverted.",
+      "name": "rx_polarity",
+      "offset": 10,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "status",
+    "offset": 12,
+    "reset": null,
+    "size": 11
+   },
+   {
+    "access": "ro",
+    "description": "Timestamp (us).",
+    "fields": [],
+    "name": "timestamp",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Number of LTSSM state transitions.",
+    "fields": [],
+    "name": "history_count",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "History entry to read (0 = oldest).",
+    "fields": [],
+    "name": "history_index",
+    "offset": 24,
+    "reset": 0,
+    "size": 5
+   },
+   {
+    "access": "ro",
+    "description": "History entry state.",
+    "fields": [],
+    "name": "history_state",
+    "offset": 28,
+    "reset": null,
+    "size": 8
+   },
+   {
+    "access": "ro",
+    "description": "History entry timestamp (us).",
+    "fields": [],
+    "name": "history_time",
+    "offset": 32,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Keep the first transitions after a clear (else the last ones).",
+    "fields": [],
+    "name": "history_freeze",
+    "offset": 36,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "Write 1: restart the history on the next U3 exit (with history_freeze: the first transitions after the U3 exit are kept).",
+    "fields": [],
+    "name": "history_u3_exit",
+    "offset": 40,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "ts1 events count (saturating).",
+    "fields": [],
+    "name": "ts1_count",
+    "offset": 44,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "ts1_inv events count (saturating).",
+    "fields": [],
+    "name": "ts1_inv_count",
+    "offset": 48,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "ts2 events count (saturating).",
+    "fields": [],
+    "name": "ts2_count",
+    "offset": 52,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "lfps_polling events count (saturating).",
+    "fields": [],
+    "name": "lfps_polling_count",
+    "offset": 56,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "lfps_ping events count (saturating).",
+    "fields": [],
+    "name": "lfps_ping_count",
+    "offset": 60,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "lfps_exit_u1 events count (saturating).",
+    "fields": [],
+    "name": "lfps_exit_u1_count",
+    "offset": 64,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "lfps_exit_u2 events count (saturating).",
+    "fields": [],
+    "name": "lfps_exit_u2_count",
+    "offset": 68,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "lfps_wakeup_u3 events count (saturating).",
+    "fields": [],
+    "name": "lfps_wakeup_u3_count",
+    "offset": 72,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "lfps_reset events count (saturating).",
+    "fields": [],
+    "name": "lfps_reset_count",
+    "offset": 76,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "rx_idle events count (saturating).",
+    "fields": [],
+    "name": "rx_idle_count",
+    "offset": 80,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "rx_errors_cycles cycles count (saturating).",
+    "fields": [],
+    "name": "rx_errors_cycles_count",
+    "offset": 84,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "k28_4 cycles count (saturating).",
+    "fields": [],
+    "name": "k28_4_count",
+    "offset": 88,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "u0 events count (saturating).",
+    "fields": [],
+    "name": "u0_count",
+    "offset": 92,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "recovery events count (saturating).",
+    "fields": [],
+    "name": "recovery_count",
+    "offset": 96,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "u1 events count (saturating).",
+    "fields": [],
+    "name": "u1_count",
+    "offset": 100,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "u2 events count (saturating).",
+    "fields": [],
+    "name": "u2_count",
+    "offset": 104,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "u3 events count (saturating).",
+    "fields": [],
+    "name": "u3_count",
+    "offset": 108,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_gen2_blocks_snapshot": [
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "arm",
+    "offset": 0,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "trigger",
+    "offset": 4,
+    "reset": 0,
+    "size": 2
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "done",
+    "offset": 8,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "index",
+    "offset": 12,
+    "reset": 0,
+    "size": 9
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data0",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data1",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data2",
+    "offset": 24,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data3",
+    "offset": 28,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data4",
+    "offset": 32,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_gen2_rx": [
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "clear",
+    "offset": 0,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Block aligned.",
+      "name": "aligned",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Block alignment locked.",
+      "name": "locked",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "RX polarity inverted.",
+      "name": "polarity",
+      "offset": 2,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Receiving the Data Stream.",
+      "name": "data_stream",
+      "offset": 3,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Received TS2 Link Configuration.",
+      "name": "link_config",
+      "offset": 8,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     }
+    ],
+    "name": "status",
+    "offset": 4,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX Blocks (SKP Ordered Sets excluded).",
+    "fields": [],
+    "name": "blocks_count",
+    "offset": 8,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX Block Headers with a corrected bit error.",
+    "fields": [],
+    "name": "header_errors_count",
+    "offset": 12,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX Alignment losses (undefined Block Header/SKP Ordered Set).",
+    "fields": [],
+    "name": "align_errors_count",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX SYNC Ordered Sets.",
+    "fields": [],
+    "name": "sync_count",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX TSEQ Ordered Sets.",
+    "fields": [],
+    "name": "tseq_count",
+    "offset": 24,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX TS1 Ordered Sets.",
+    "fields": [],
+    "name": "ts1_count",
+    "offset": 28,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX TS2 Ordered Sets.",
+    "fields": [],
+    "name": "ts2_count",
+    "offset": 32,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX SDS Ordered Sets.",
+    "fields": [],
+    "name": "sds_count",
+    "offset": 36,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX SKP Ordered Sets.",
+    "fields": [],
+    "name": "skp_count",
+    "offset": 40,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Gen 2 RX Unknown control blocks.",
+    "fields": [],
+    "name": "unknown_count",
+    "offset": 44,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_gen2_snapshot": [
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "arm",
+    "offset": 0,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "trigger",
+    "offset": 4,
+    "reset": 0,
+    "size": 3
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "done",
+    "offset": 8,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "index",
+    "offset": 12,
+    "reset": 0,
+    "size": 10
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data0",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data1",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_gen2_tx_snapshot": [
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "arm",
+    "offset": 0,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "trigger",
+    "offset": 4,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "done",
+    "offset": 8,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "index",
+    "offset": 12,
+    "reset": 0,
+    "size": 10
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data0",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data1",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_gen2_txblocks_snapshot": [
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "arm",
+    "offset": 0,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "trigger",
+    "offset": 4,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "done",
+    "offset": 8,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [],
+    "name": "index",
+    "offset": 12,
+    "reset": 0,
+    "size": 10
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data0",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data1",
+    "offset": 20,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data2",
+    "offset": 24,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data3",
+    "offset": 28,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [],
+    "name": "data4",
+    "offset": 32,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "usb3_serdes": [
+   {
+    "access": "rw",
+    "description": "TX Driver Swing Control, see UG578.",
+    "fields": [],
+    "name": "gty_tx_diffctrl",
+    "offset": 0,
+    "reset": 24,
+    "size": 5
+   },
+   {
+    "access": "rw",
+    "description": "TX Post Cursor Pre-emphasis Control, see UG578.",
+    "fields": [],
+    "name": "gty_tx_postcursor",
+    "offset": 4,
+    "reset": 0,
+    "size": 5
+   },
+   {
+    "access": "rw",
+    "description": "TX Pre Cursor Pre-emphasis Control, see UG578.",
+    "fields": [],
+    "name": "gty_tx_precursor",
+    "offset": 8,
+    "reset": 0,
+    "size": 5
+   }
+  ],
+  "usb3_serdes_debug": [
+   {
+    "access": "rw",
+    "description": "TX polarity.",
+    "fields": [],
+    "name": "tx_polarity",
+    "offset": 0,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "TX inhibit.",
+    "fields": [],
+    "name": "tx_inhibit",
+    "offset": 4,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "TX inhibit while in LTSSM state [7:0] when enabled [8].",
+    "fields": [],
+    "name": "tx_inhibit_state",
+    "offset": 8,
+    "reset": 0,
+    "size": 9
+   },
+   {
+    "access": "rw",
+    "description": "Transceiver loopback (0b010: Near-End PMA).",
+    "fields": [],
+    "name": "loopback",
+    "offset": 12,
+    "reset": 0,
+    "size": 3
+   },
+   {
+    "access": "rw",
+    "description": "Select DRP access on the transceiver DRP mux.",
+    "fields": [],
+    "name": "drp_sel",
+    "offset": 16,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "DRP Address (9 bits).",
+    "fields": [],
+    "name": "drp_addr",
+    "offset": 20,
+    "reset": 0,
+    "size": 9
+   },
+   {
+    "access": "rw",
+    "description": "DRP Data In (16 bits) for write operation.",
+    "fields": [],
+    "name": "drp_di",
+    "offset": 24,
+    "reset": 0,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "DRP Data Out (16 bits) for read operation.",
+    "fields": [],
+    "name": "drp_do",
+    "offset": 28,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "rw",
+    "description": "DRP Write Enable.",
+    "fields": [],
+    "name": "drp_we",
+    "offset": 32,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "Write to initiate DRP operation.",
+    "fields": [],
+    "name": "drp_start",
+    "offset": 36,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "DRP operation is complete.",
+    "fields": [],
+    "name": "drp_done",
+    "offset": 40,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "Measured frequency counter value.",
+    "fields": [],
+    "name": "tx_freq_value",
+    "offset": 44,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Measured frequency counter value.",
+    "fields": [],
+    "name": "rx_freq_value",
+    "offset": 48,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "wo",
+    "description": "",
+    "fields": [],
+    "name": "rx_errors_clear",
+    "offset": 52,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "RX symbols count.",
+    "fields": [],
+    "name": "rx_errors_symbols_count",
+    "offset": 56,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "RX decoder_invalid count.",
+    "fields": [],
+    "name": "rx_errors_decoder_invalid_count",
+    "offset": 60,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "RX code_invalid count.",
+    "fields": [],
+    "name": "rx_errors_code_invalid_count",
+    "offset": 64,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "RX disparity count.",
+    "fields": [],
+    "name": "rx_errors_disparity_count",
+    "offset": 68,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "RX error bursts count.",
+    "fields": [],
+    "name": "rx_errors_bursts_count",
+    "offset": 72,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "RX longest error-free run (words).",
+    "fields": [],
+    "name": "rx_errors_max_good_run",
+    "offset": 76,
+    "reset": null,
+    "size": 32
+   }
+  ]
+ },
+ "config": "xcku3p_gen2_bench",
+ "target": "alibaba_xcku3p"
+}
