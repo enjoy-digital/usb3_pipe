@@ -76,7 +76,7 @@ files by area.
 | Training and LTSSM | `test_training`, `test_training_coverage`, `test_ts_checker`, `test_ts2_link_config`, `test_ltssm`, `test_ltssm_states`, `test_ltssm_exit`, `test_ltssm_ts_exit`, `test_ltssm_tx_idle`, `test_ltssm_link`, `test_ltssm_pm`, `test_idle_handshake`, `test_phy_rx_reset`, `test_phy_pipe_cd`, `test_debug` |
 | Gen 2 and lanes | `test_coding`, `test_framing`, `test_lfps_ssp`, `test_ltssm_ssp`, `test_core_link_ssp`, `test_lanes` |
 | Link and protocol | `test_core_crc`, `test_core_device`, `test_core_bulk`, `test_core_bulk_wide`, `test_core_endpoint_converters`, `test_core_link_wide`, `test_core_recovery`, `test_core_lpm`, `test_core_slots`, `test_core_control`, `test_core_iso`, `test_host_model` |
-| Classes and examples | `test_core_cdc_acm`, `test_core_uvc`, `test_core_msc`, `test_core_class_wide`, `test_core_msc_dram`, `test_core_wishbone`, `test_core_bridge`, `test_bench` |
+| Classes and examples | `test_core_cdc_acm`, `test_core_cdc_ecm`, `test_core_uvc`, `test_core_msc`, `test_core_msc_luns`, `test_core_class_wide`, `test_core_msc_dram`, `test_core_wishbone`, `test_core_bridge`, `test_bench` |
 | Transceivers and targets | `test_serdes`, `test_ecp5`, `test_gw5`, `test_gw5_config`, `test_targets`, `test_gen` |
 | System (Verilator) | `test_phy`, `test_sim_host`, `test_phy_long` |
 
