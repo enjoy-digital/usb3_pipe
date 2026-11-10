@@ -9,10 +9,10 @@
 """USB3-PIPE on the SQRL Acorn CLE-215+ (Artix7 GTP) in a LiteX Acorn Baseboard.
 
 Baseboard Mini by default (--variant standard), SFP2USB adapter in the SFP cage: Gen 1x1 (5Gbps),
-main validation target (doc/targets.md).
+main validation target (doc/manual/09_boards.md).
 
 Clocking: GTP reference clock from the 200MHz oscillator (GTGREFCLK0, no PCIe host clock:
-doc/debugging-guide.md), sys at 125MHz.
+doc/manual/06_transceivers.md), sys at 125MHz.
 
 Bridge: UARTBone by default, JTAGBone with --with-jtagbone (baseboard FT4232H). Optional DDR3
 (--with-dram, msc_dram example) with a VexRiscv CPU.
@@ -154,7 +154,7 @@ class USB3SoC(USB3BaseSoC):
             tx_pads      = platform.request("sfp_tx"),
             rx_pads      = platform.request("sfp_rx"),
             rxcdr_cfg    = rxcdr_cfg)
-        # Fabric reference clock on GTGREFCLK0 (see doc/debugging-guide.md): allowed as a warning.
+        # Fabric reference clock on GTGREFCLK0 (doc/manual: Transceivers): allowed as a warning.
         platform.add_platform_command("set_property SEVERITY {{Warning}} [get_drc_checks REQP-49]")
         usb3_serdes.gtp.gtp_params.update(gtp_params) # Debug overrides (--gtp-param).
 

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="180" viewBox="0 0 760 180">
+<defs>
+  <marker id="arrow-ctrl" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-ctrl-rev" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+    <path d="M8,0 L0,4 L8,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-stream" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#606060"/></marker>
+  <marker id="arrow-accent" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-accent-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-stream-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#606060"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<polyline points="40,70 40,40 44.4,40 44.4,100 48.8,100 48.8,40 53.1,40 53.1,100 57.5,100 57.5,40 61.9,40 61.9,100 66.2,100 66.2,40 70.6,40 70.6,100 75,100 75,40 79.4,40 79.4,100 83.8,100 83.8,40 88.1,40 88.1,100 92.5,100 92.5,40 96.9,40 96.9,100 101.2,100 101.2,40 105.6,40 105.6,100 110,100 110,70" fill="none" stroke="#2eaadc" stroke-width="1.0"/>
+<polyline points="110,70 270,70" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="270,70 270,40 274.4,40 274.4,100 278.8,100 278.8,40 283.1,40 283.1,100 287.5,100 287.5,40 291.9,40 291.9,100 296.2,100 296.2,40 300.6,40 300.6,100 305,100 305,40 309.4,40 309.4,100 313.8,100 313.8,40 318.1,40 318.1,100 322.5,100 322.5,40 326.9,40 326.9,100 331.2,100 331.2,40 335.6,40 335.6,100 340,100 340,70" fill="none" stroke="#2eaadc" stroke-width="1.0"/>
+<polyline points="340,70 500,70" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="500,70 500,40 504.4,40 504.4,100 508.8,100 508.8,40 513.1,40 513.1,100 517.5,100 517.5,40 521.9,40 521.9,100 526.2,100 526.2,40 530.6,40 530.6,100 535,100 535,40 539.4,40 539.4,100 543.8,100 543.8,40 548.1,40 548.1,100 552.5,100 552.5,40 556.9,40 556.9,100 561.2,100 561.2,40 565.6,40 565.6,100 570,100 570,70" fill="none" stroke="#2eaadc" stroke-width="1.0"/>
+<polyline points="570,70 730,70" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="40,125 110,125" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)" marker-start="url(#arrow-ctrl-rev)"/>
+<text x="120" y="129" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="start" dominant-baseline="central"><tspan x="120" dy="0">tBurst 1 µs</tspan></text>
+<polyline points="40,155 270,155" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)" marker-start="url(#arrow-ctrl-rev)"/>
+<text x="280" y="159" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="start" dominant-baseline="central"><tspan x="280" dy="0">tRepeat 10 µs</tspan></text>
+<text x="190" y="58" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#444444" text-anchor="middle" dominant-baseline="central"><tspan x="190" dy="0">electrical idle</tspan></text>
+</svg>

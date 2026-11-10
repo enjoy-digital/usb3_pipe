@@ -9,7 +9,7 @@
 # USB3-PIPE on the LambdaConcept ECPIX-5 (Lattice LFE5UM5G-85F, ECP5USB3SerDes on DCU0, USB-C
 # connector through the board's SuperSpeed mux).
 #
-# Board notes (measured on hardware, see doc/ecpix5.md):
+# Board notes (measured on hardware, doc/manual: Supported FPGAs and boards):
 # - 5Gbps DCU reference clock: 250MHz from a fabric PLL (x20). The 100MHz EXTREF0 input
 #   (serdes_clk100) only reaches 2.5Gbps (x25 max).
 # - USB-C SuperSpeed mux: enable pin active high (usbc_mux en_n in the platform), amsel high, polarity

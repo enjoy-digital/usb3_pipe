@@ -6,7 +6,7 @@
 
 """USB3 Link Training and Status State Machine (USB 3.2 7.5): Polling, U0, Recovery, U1/U2/U3,
 Hot/Warm Reset, Compliance, Loopback, eSS.Inactive, PM handshake and timers, and the SuperSpeedPlus
-Polling substates (SSPPolling, 7.5.4.3-7.5.4.6, see doc/gen2-x2-roadmap.md).
+Polling substates (SSPPolling, 7.5.4.3-7.5.4.6, see doc/notes/gen2-x2-roadmap.md).
 """
 
 from migen import *

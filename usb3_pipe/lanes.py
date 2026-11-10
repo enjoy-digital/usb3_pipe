@@ -4,7 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""Dual-lane (Gen 1x2) building blocks (USB 3.2 6.13), see doc/gen2-x2-roadmap.md.
+"""Dual-lane (Gen 1x2) building blocks (USB 3.2 6.13), see doc/notes/gen2-x2-roadmap.md.
 
 - LaneStriper   : 64-bit link words (8 symbols, symbol 0 on data[0:8]) striped on two 32-bit lanes,
                   aligned to Lane 0: even symbols on Lane 0, odd symbols on Lane 1 (6.13.4). The two

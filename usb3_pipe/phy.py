@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 """USB3 PHY: USB3PIPE(s) + USB3LTSSM with the Link interface used by a USB3 Link Layer
-(doc/usb3-pipe.md): Gen 1x1 (5Gbps), Gen 2x1 (10Gbps on the Gen2PIPE with a gen2_capable SerDes)
-or Gen 1x2 (two lanes, simulation only, USB 3.2 6.13, see doc/gen2-x2-roadmap.md).
+(doc/manual): Gen 1x1 (5Gbps), Gen 2x1 (10Gbps on the Gen2PIPE with a gen2_capable SerDes) or
+Gen 1x2 (two lanes, simulation only, USB 3.2 6.13, see doc/notes/gen2-x2-roadmap.md).
 """
 
 from migen import *

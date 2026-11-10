@@ -11,7 +11,7 @@
   transceiver and the sys clock domain.
 - Gen 2: block transmitter/receiver (Gen2TX/Gen2RX): TSEQ/TS1/TS2/SYNC/SDS/SKP Ordered Sets, Data
   Blocks and scrambling rules (6.3.2.3), and the transceiver words <-> blocks datapaths
-  (Gen2TXDatapath/Gen2RXDatapath, 40-bit at 250MHz for 10Gbps), see doc/gen2-x2-roadmap.md.
+  (Gen2TXDatapath/Gen2RXDatapath, 40-bit at 250MHz for 10Gbps), see doc/notes/gen2-x2-roadmap.md.
 """
 
 from migen import *

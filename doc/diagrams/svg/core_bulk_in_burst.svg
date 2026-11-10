@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="455" viewBox="0 0 760 455">
+<defs>
+  <marker id="arrow-ctrl" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-ctrl-rev" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+    <path d="M8,0 L0,4 L8,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-stream" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#606060"/></marker>
+  <marker id="arrow-accent" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-accent-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-stream-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#606060"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<polyline points="170,54 170,442.8" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="590,54 590,442.8" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="4,3"/>
+<polyline points="170,86.4 590,86.4" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="75.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">ACK TP: Seq 0, NumP 4</tspan></text>
+<polyline points="590,119.4 170,119.4" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="108.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">DP Seq 0</tspan></text>
+<polyline points="590,152.4 170,152.4" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="141.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">DP Seq 1</tspan></text>
+<polyline points="590,185.4 170,185.4" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="174.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">DP Seq 2</tspan></text>
+<polyline points="590,218.4 170,218.4" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="207.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">DP Seq 3</tspan></text>
+<polyline points="170,251.4 590,251.4" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="240.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">ACK TP: Seq 4, NumP 4</tspan></text>
+<polyline points="590,284.4 170,284.4" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="273.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">NRDY</tspan></text>
+<polyline points="590,337.2 170,337.2" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="326.2" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">ERDY</tspan></text>
+<polyline points="170,370.2 590,370.2" fill="none" stroke="#5b5b5b" stroke-width="1.0" marker-end="url(#arrow-ctrl)"/>
+<text x="380" y="359.2" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">ACK TP: Seq 4, NumP 4</tspan></text>
+<polyline points="590,403.2 170,403.2" fill="none" stroke="#2eaadc" stroke-width="2.0" marker-end="url(#arrow-accent)"/>
+<text x="380" y="392.2" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="380" dy="0">DP Seq 4, short packet</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M96.2,22 L237.7,22 L246.2,30.5 L246.2,56 Q246.2,56 246.2,56 L104.7,56 L96.2,47.5 L96.2,22 Q96.2,22 96.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M96.2,22 L237.7,22 L246.2,30.5 L246.2,56 Q246.2,56 246.2,56 L104.7,56 L96.2,47.5 L96.2,22 Q96.2,22 96.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M96,21.5 L237.5,21.5 L246,30 L246,55.5 Q246,55.5 246,55.5 L104.5,55.5 L96,47 L96,21.5 Q96,21.5 96,21.5 Z"/>
+</g>
+<g fill="#b8b8b8" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M95,20 L236.5,20 L245,28.5 L245,54 Q245,54 245,54 L103.5,54 L95,45.5 L95,20 Q95,20 95,20 Z"/>
+</g>
+<text x="170" y="37" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="170" dy="0">Host</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M516.2,22 L657.7,22 L666.2,30.5 L666.2,56 Q666.2,56 666.2,56 L524.7,56 L516.2,47.5 L516.2,22 Q516.2,22 516.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M516.2,22 L657.7,22 L666.2,30.5 L666.2,56 Q666.2,56 666.2,56 L524.7,56 L516.2,47.5 L516.2,22 Q516.2,22 516.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M516,21.5 L657.5,21.5 L666,30 L666,55.5 Q666,55.5 666,55.5 L524.5,55.5 L516,47 L516,21.5 Q516,21.5 516,21.5 Z"/>
+</g>
+<g fill="#bfe6f5" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M515,20 L656.5,20 L665,28.5 L665,54 Q665,54 665,54 L523.5,54 L515,45.5 L515,20 Q515,20 515,20 Z"/>
+</g>
+<text x="590" y="37" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="590" dy="0">Bulk IN endpoint</tspan></text>
+<text x="600" y="86.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#5b5b5b" text-anchor="start" dominant-baseline="central"><tspan x="600" dy="0">request 4 packets</tspan></text>
+<text x="600" y="251.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#5b5b5b" text-anchor="start" dominant-baseline="central"><tspan x="600" dy="0">slots 0 to 3 freed</tspan></text>
+<text x="600" y="284.4" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#5b5b5b" text-anchor="start" dominant-baseline="central"><tspan x="600" dy="0">slots empty</tspan></text>
+<text x="600" y="337.2" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#5b5b5b" text-anchor="start" dominant-baseline="central"><tspan x="600" dy="0">user wrote a packet</tspan></text>
+<text x="600" y="403.2" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#5b5b5b" text-anchor="start" dominant-baseline="central"><tspan x="600" dy="0">ends the transfer</tspan></text>
+</svg>

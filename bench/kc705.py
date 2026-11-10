@@ -9,7 +9,7 @@
 """USB3-PIPE on the Xilinx KC705 (Kintex7 GTX, Quad 117).
 
 Gen 1x1 (5Gbps) through the SFP cage (SFP2USB adapter, --connector sfp) or the SMA connectors
-(--connector sma). Build-tested, hardware validation in progress (doc/targets.md).
+(--connector sma). Build-tested, hardware validation in progress (doc/manual/09_boards.md).
 
 Clocking: GTX reference clock from the 125MHz SGMII oscillator, sys at 125MHz.
 

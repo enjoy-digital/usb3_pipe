@@ -295,7 +295,7 @@ class USB3PIPECore(SoCMini):
 
     ports (get_ports(config)) lists the top-level ports: AXI-Stream symbol streams or Bulk IN/OUT
     AXI-Stream endpoints, LTSSM status, optional Link-Layer control, documented in the generated
-    <name>.md (doc/standalone-core.md).
+    <name>.md (doc/manual/11_integration.md).
     """
     def __init__(self, platform, config):
         self.ports = ports = get_ports(config)

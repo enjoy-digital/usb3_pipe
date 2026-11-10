@@ -82,7 +82,7 @@ Gen 2x1 on UltraScale+ GTY and on Gowin GTR12 with 64/128-bit Link Layer words.*
   (`bench/lambdaconcept_ecpix5.py`, Lattice ECP5-5G DCU, on-board USB-C, open source toolchain):
   validated at Gen 1 (5Gbps): IN 434MB/s, OUT 449MB/s, full duplex 342 + 349MB/s, 0 errors (PIPE at
   125MHz on the DCU TX clock, Link Layer/Core at 83.33MHz on 64-bit words, see
-  [doc/ecpix5.md](doc/ecpix5.md)). Needs [LiteICLink](https://github.com/enjoy-digital/liteiclink)
+  [Supported FPGAs and boards](doc/manual/09_boards.md)). Needs [LiteICLink](https://github.com/enjoy-digital/liteiclink)
   `SerDesECP5` 40-bit words support.
 - Gowin GW5AT-15 (`GW5USB3SerDes`: GTR12 Q0 lane 0, 125MHz REFCLK0, QPLL0 as Gowin's USB 3.0 PHY IP):
   validated at Gen 1 (5Gbps) on a GW5AT-15 device with a direct USB-C connection: Bulk IN ~400MB/s with
@@ -96,8 +96,8 @@ Gen 2x1 on UltraScale+ GTY and on Gowin GTR12 with 64/128-bit Link Layer words.*
 
 Any 7-Series/UltraScale+/Gowin GW5AST board with a transceiver routed to a SFP/PCIe connector can be
 used with a target file (the example designs are shared: `usb3_core/examples.py`,
-[doc/targets.md](doc/targets.md)). Gen 2 (10Gbps) needs 10Gbps capable transceivers (validated on
-UltraScale+ GTY; GW5AST GTR12: in bring-up, see [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md)).
+[Supported FPGAs and boards](doc/manual/09_boards.md)). Gen 2 (10Gbps) needs 10Gbps capable transceivers (validated on
+UltraScale+ GTY; GW5AST GTR12: in bring-up, see [doc/notes/gen2-x2-roadmap.md](doc/notes/gen2-x2-roadmap.md)).
 
 [> Getting started
 ------------------
@@ -124,7 +124,7 @@ $ ./sim.py --help                  # Host model scenarios, pipe_cd, two lanes, V
 
 Hardware: build and load a target, check the enumeration, run a host script. The scripts reading
 device CSRs (`--csr-csv`) connect to a `litex_server` on the board bridge (JTAGBone/UARTBone, per
-board in [doc/targets.md](doc/targets.md)); `usb3_bulk.py` only needs libusb.
+board in [Supported FPGAs and boards](doc/manual/09_boards.md)); `usb3_bulk.py` only needs libusb.
 
 ```sh
 # Acorn CLE-215+ (Artix7 GTP, Gen 1): Bulk loopback example.
@@ -135,7 +135,7 @@ $ ./bench/usb3_bulk.py loopback --size 1024 --count 1000
 # Alibaba XCKU3P (UltraScale+ GTY, Gen 2): bench example, 64-bit Link Layer.
 $ ./bench/alibaba_xcku3p.py --build --load --example bench --gen2-capable --link-words 2
 $ lsusb -t                                           # 10000M on a USB 3.2 Gen 2 root hub port, 5000M on a Gen 1 port.
-$ litex_server --jtag --jtag-config <openocd config> # JTAGBone (doc/targets.md), in another terminal.
+$ litex_server --jtag --jtag-config <openocd config> # JTAGBone (manual: Getting started), in another terminal.
 $ ./bench/usb3_bench.py both --transfer-size 65536 --csr-csv build/alibaba_xcku3p/csr.csv
 
 # Sipeed Tang Mega 138K Pro (Gowin GW5AST GTR12, Gen 1): bench example, 64-bit Link Layer, 62.5MHz.
@@ -148,12 +148,12 @@ $ ./bench/usb3_bench.py both --transfer-size 65536 --csr-csv build/sipeed_tang_m
 `usb3_bench.py` uses 1MB transfers by default: with them the host itself limits the Gen 2 Bulk IN rate
 (~330MB/s), `--transfer-size 65536` measures the device. Build options of all the targets: `--lean`
 (no debug CSRs, profile and trace), `--with-lpm`, `--max-burst`, `--link-words 1|2|4`
-([doc/targets.md](doc/targets.md)).
+([Supported FPGAs and boards](doc/manual/09_boards.md)).
 
 [> Demos
 --------
 Build with `./bench/acorn.py --build --load --example <name>` (`--with-lpm`: U1/U2 on the vendor Bulk
-examples), see [doc/examples.md](doc/examples.md):
+examples), see [Examples](doc/manual/12_examples.md):
 
 | Example | Device | Host side |
 |---|---|---|
@@ -173,7 +173,7 @@ examples and debug options (`--example`, `--with-lpm`, `--max-burst`, `--link-wo
 `--with-serdes-debug`, `--with-analyzer`), except `msc_dram` (no DRAM controller in these targets).
 `--link-words 2|4` (64/128-bit Link Layer, Gen 2 bandwidth) applies to the vendor Bulk examples
 (`loopback`, `wishbone`, `bench`). The board targets and host scripts are in `bench/` (shared SoC:
-`bench/usb3_soc.py`, shared host helpers: `bench/common.py`), see [doc/targets.md](doc/targets.md).
+`bench/usb3_soc.py`, shared host helpers: `bench/common.py`), see [Supported FPGAs and boards](doc/manual/09_boards.md).
 
 [> Standalone core generation
 -----------------------------
@@ -183,23 +183,30 @@ for designs not built with LiteX:
 ```sh
 $ usb3_pipe_gen examples/a7_usb_device.yml --output-dir build/usb3_device
 ```
-See [doc/standalone-core.md](doc/standalone-core.md) for the YAML keys, interfaces and outputs.
+See [Integration](doc/manual/11_integration.md) for the YAML keys, interfaces and outputs.
 
 [> Documentation
 ----------------
-- [doc/usb3-pipe.md](doc/usb3-pipe.md): PHY (SerDes, PIPE, LTSSM, Link interface, Link Layer words,
-  `pipe_cd`, simulation).
-- [doc/usb3-core.md](doc/usb3-core.md): USB3 Device Core (Link/Protocol layers, endpoints, request
-  handler, device classes, performance, resources).
-- [doc/integration.md](doc/integration.md): using the PHY and the core in your own LiteX SoC.
-- [doc/targets.md](doc/targets.md): per-board guide (adapter, JTAG/bridge, build/load, options,
-  Gen 2).
-- [doc/examples.md](doc/examples.md): example designs and host tools.
-- [doc/standalone-core.md](doc/standalone-core.md): standalone Verilog core generator
-  (`usb3_pipe_gen`), YAML examples in `examples/`.
-- [doc/debugging-guide.md](doc/debugging-guide.md): hardware debugging (CSRs, trace, LiteScope, soak).
-- [doc/gen2-x2-roadmap.md](doc/gen2-x2-roadmap.md): Gen 2x1 (10Gbps) bring-up milestones and results,
-  Gen 1x2 (2x5Gbps)/Gen 2x2 roadmap, Gowin Gen 2 status.
+The **USB 3.2 PHY & Core manual** is the reference of the project: a nightly
+[PDF](https://github.com/enjoy-digital/usb3_pipe/releases/download/manual-nightly/usb3_pipe_manual.pdf)
+and [HTML page](https://github.com/enjoy-digital/usb3_pipe/releases/download/manual-nightly/usb3_pipe_manual.html)
+are published on the [manual-nightly](https://github.com/enjoy-digital/usb3_pipe/releases/tag/manual-nightly)
+release. Sources in [doc/manual](doc/manual/README.md) (build: `python3 doc/manual/build.py`, outputs in
+`build/doc/`):
+
+- **Understand**: [introduction](doc/manual/01_introduction.md), [USB 3 in a nutshell](doc/manual/02_usb3_primer.md)
+  (layers, LFPS, coding, training, LTSSM, link and protocol layers, Gen 2).
+- **The PHY**: [architecture](doc/manual/03_phy_architecture.md), [link training](doc/manual/04_link_training.md),
+  [datapath](doc/manual/05_datapath.md), [transceivers](doc/manual/06_transceivers.md) (7-Series, UltraScale+, Gowin
+  GW5, Lattice ECP5).
+- **The device core**: [architecture](doc/manual/07_core_architecture.md), [device classes](doc/manual/08_classes.md).
+- **Use it**: [supported FPGAs and boards](doc/manual/09_boards.md), [getting started](doc/manual/10_getting_started.md),
+  [integration](doc/manual/11_integration.md) (LiteX SoC, standalone Verilog core), [examples](doc/manual/12_examples.md),
+  [simulation](doc/manual/13_simulation.md), [debugging](doc/manual/14_debugging.md).
+- **Appendices**: [registers](doc/manual/A_registers.md), [build options](doc/manual/B_build_options.md),
+  [glossary](doc/manual/C_glossary.md), [performance and resources](doc/manual/D_performance.md).
+- [doc/notes/gen2-x2-roadmap.md](doc/notes/gen2-x2-roadmap.md): Gen 2x1 (10Gbps) bring-up milestones and
+  results, Gen 1x2 (2x5Gbps)/Gen 2x2 roadmap, Gowin Gen 2 status.
 - [CONTRIBUTING.md](CONTRIBUTING.md): tests, CI, coding style, pull requests;
   [AGENTS.md](AGENTS.md): pointers for AI agents. `bench/99-usb3-pipe.rules`: udev rule of the test
   device.
