@@ -252,7 +252,7 @@ table below lists what EP0 handles.
 | SET_CONFIGURATION | Applied (`configured`); resets sequence numbers and alternate settings |
 | SET_FEATURE, CLEAR_FEATURE | U1_ENABLE and U2_ENABLE tracked; other features accepted |
 | CLEAR_FEATURE(ENDPOINT_HALT) | Resets the sequence number of the endpoint |
-| SET_INTERFACE, GET_INTERFACE | Alternate settings (`set_interface`, `interface`, `alt_setting`) |
+| SET_INTERFACE, GET_INTERFACE | Alternate settings (`set_interface`, `interface`, `alt_setting`); SET_INTERFACE resets the sequence numbers of the endpoints of the interface |
 | SET_SEL, SET_ISOCH_DELAY | Accepted, data ignored |
 | Class requests of the table | Constant responses (`add_class_request`) |
 | Other class or vendor requests | User handler with `with_ep0_handler`, else STALL |
