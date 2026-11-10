@@ -17,6 +17,7 @@ attaches to the EP0 and endpoints of an existing core, so several functions can 
 | Vendor Bulk | none | none | usbfs (libusb) |
 | CDC-ACM | `USB3CDCACM` | `USB3CDCACMFunction` | `cdc_acm`, `/dev/ttyACMx` |
 | CDC-ECM | none | `USB3CDCECMFunction` | `cdc_ether`, network interface |
+| CDC-NCM | none | `USB3CDCNCMFunction` | `cdc_ncm`, network interface |
 | UVC | `USB3UVC` | `USB3UVCFunction` | `uvcvideo`, `/dev/videoX` |
 | Mass Storage | `USB3MSC` | none | `usb-storage`, `/dev/sdX` |
 | GUD display | none | `USB3GUDFunction` | `gud`, DRM display and `/dev/fbX` |
@@ -86,7 +87,29 @@ self.uart     = UART(self.usb3_acm)
 On the host, open the port with `litex_term /dev/ttyACM0`. For the `cdc_uartbone` example, bridge
 the SoC bus with `litex_server --uart --uart-port /dev/ttyACM0` instead.
 
-## CDC-ECM network adapter {#classes-ecm}
+## Network adapters {#classes-net}
+
+A CDC-ECM or CDC-NCM function makes the device a USB network adapter. The host sees a network
+interface, and the design gets Ethernet frames on two 32-bit streams, for example to bridge them
+to an Ethernet MAC. Both functions have the same user side, so a design switches from one to the
+other without other change.
+
+| Item | CDC-ECM | CDC-NCM |
+|-----------------------|--------------------------------|---------------------------------------|
+| Host drivers | Linux `cdc_ether`, macOS | Linux `cdc_ncm`, Windows 10+, macOS |
+| Transfer | one frame per transfer | one NCM Transfer Block (NTB16) per transfer |
+| Frames toward the host | one per transfer | one per NTB |
+| Frames from the host | one per transfer | several per NTB |
+| Class requests | SET_ETHERNET_PACKET_FILTER | NTB parameters, format and input size, packet filter |
+
+Each function has a Communication interface with a notification endpoint and a Data interface
+with Bulk IN and Bulk OUT endpoints. The Data interface has an empty alternate setting 0, and the
+host selects setting 1 to start the traffic. A transfer ends with a short packet or a zero-length
+packet, so the Bulk OUT endpoint is declared `with_zlp`.
+
+The two sections below describe each function.
+
+### CDC-ECM {#classes-ecm}
 
 A CDC-ECM device appears on Linux as an Ethernet interface, with the standard `cdc_ether` driver.
 Ethernet frames move between the host and the FPGA as on a network card, so the FPGA side can
@@ -167,6 +190,28 @@ Ethernet interface:
 ```sh
 ip -br link
 sudo ip link set usb0 up
+```
+
+### CDC-NCM {#classes-ncm}
+
+A CDC-NCM device appears as a network interface on Linux, with the standard `cdc_ncm` driver, and
+on Windows 10 and later without a vendor driver. It packs several frames in one transfer, which
+keeps the host overhead low with small frames.
+
+The NCM function buffers each NTB from the host in a 16 KiB block RAM (`NCMNTBParser`). It then
+walks the NTB headers and sends each datagram as a frame. Toward the host, it stores each frame to
+know its length, then sends it as one NTB (`NCMNTBBuilder`).
+
+```python
+mac = add_cdc_ecm_strings(descriptors, 0x02eccc000001)
+descriptors.interfaces = cdc_ncm_interfaces(0, notif_ept=3, in_ept=1, out_ept=2,
+    mac_string=mac)
+add_cdc_ncm_requests(descriptors)
+core = USB3DeviceCore(phy, sys_clk_freq, descriptors, endpoints=[
+    USB3BulkIN(ept=1), USB3BulkOUT(ept=2, with_zlp=True), USB3BulkIN(ept=3)],
+    with_ep0_handler=True)
+ncm = USB3CDCNCMFunction(core.ep0, *core.endpoints)
+# ncm.sink: frames to the host, ncm.source: frames from the host, ncm.link: link status.
 ```
 
 ## UVC camera {#classes-uvc}

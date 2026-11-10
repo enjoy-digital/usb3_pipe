@@ -73,32 +73,22 @@ def be_bytes(be):
     """Valid bytes of a contiguous 4-bit byte enable."""
     return Mux(be[3], 4, Mux(be[2], 3, Mux(be[1], 2, Mux(be[0], 1, 0))))
 
-# USB3 CDC-ECM Function ----------------------------------------------------------------------------
+# Bulk Transfers ---------------------------------------------------------------------------------
 
-class USB3CDCECMFunction(LiteXModule):
-    """CDC-ECM function of a USB3 device (Bulk IN/OUT data endpoints: 32-bit user sides, Bulk OUT
-    with_zlp; notification endpoint).
-
-    sink  : frames to the host (data: 32-bit words, first byte on data[0:8], be: valid bytes, last:
-            end of frame).
-    source: frames from the host (same layout).
-    link  : network connection status (notified to the host).
-    """
-    def __init__(self, ep0, bulk_in, bulk_out, notif_in, comm_interface=0, speed=1_000_000_000):
-        self.sink   = sink   = stream.Endpoint(endpoint_layout(32)) # i
+class USB3BulkTransferRX(LiteXModule):
+    """Bulk OUT transfers (32-bit user side, with_zlp endpoint) -> stream of transfers: a transfer
+    ends with a short packet or a zero-length packet (marker word, be=0). One word held: a transfer
+    ending with a max size packet is only ended by the following zero-length packet."""
+    def __init__(self, bulk_out):
         self.source = source = stream.Endpoint(endpoint_layout(32)) # o
-        self.link   = Signal(reset=1)                               # i
 
         # # #
 
-        # Host -> Device: frames delimited by a short packet or a zero-length packet (marker word,
-        # be=0). One word held: a frame ending with a max size packet is only ended by the
-        # following zero-length packet.
         rx        = bulk_out.source
         rx_bytes  = Signal(max=MAX_PACKET_SIZE + 1) # Bytes of the current packet.
         rx_n      = Signal(3)
         rx_zlp    = Signal()
-        rx_end    = Signal() # Word ending a frame (last of a short packet).
+        rx_end    = Signal() # Word ending a transfer (last of a short packet).
         held      = Signal()
         held_data = Signal(32)
         held_be   = Signal(4)
@@ -132,10 +122,16 @@ class USB3CDCECMFunction(LiteXModule):
             ),
         ]
 
-        # Device -> Host: one transfer per frame, zero-length packet after a frame of a multiple
-        # of the max packet size.
+class USB3BulkTransferTX(LiteXModule):
+    """Stream of transfers -> Bulk IN (32-bit user side): one transfer per stream packet, zero-length
+    packet after a transfer of a multiple of the max packet size."""
+    def __init__(self, bulk_in):
+        self.sink = sink = stream.Endpoint(endpoint_layout(32)) # i
+
+        # # #
+
         tx        = bulk_in.sink
-        tx_bytes  = Signal(max=MAX_PACKET_SIZE) # Frame bytes, modulo the max packet size.
+        tx_bytes  = Signal(max=MAX_PACKET_SIZE) # Transfer bytes, modulo the max packet size.
         tx_next   = Signal(max=2*MAX_PACKET_SIZE)
         zlp       = Signal()
         self.comb += [
@@ -160,13 +156,17 @@ class USB3CDCECMFunction(LiteXModule):
             ),
         ]
 
-        # Notifications: NETWORK_CONNECTION + CONNECTION_SPEED_CHANGE, when configured and on link
-        # changes.
+# CDC Notifications --------------------------------------------------------------------------------
+
+class CDCNetworkNotifications(LiteXModule):
+    """NETWORK_CONNECTION + CONNECTION_SPEED_CHANGE notifications (CDC ECM/NCM), when configured and
+    on link changes."""
+    def __init__(self, ep0, notif_in, link, comm_interface=0, speed=1_000_000_000):
         def word(b):
             return int.from_bytes(bytes(b), "little")
         speed_bytes = list(speed.to_bytes(4, "little"))
         notification = Array([
-            Cat(C(0xa1, 8), C(CDC_NOTIFY_NETWORK_CONNECTION, 8), self.link, C(0, 15)),
+            Cat(C(0xa1, 8), C(CDC_NOTIFY_NETWORK_CONNECTION, 8), link, C(0, 15)),
             C(word([comm_interface, 0, 0, 0]), 32),
             C(word([0xa1, CDC_NOTIFY_SPEED_CHANGE, 0, 0]), 32),
             C(word([comm_interface, 0, 8, 0]), 32),
@@ -178,9 +178,9 @@ class USB3CDCECMFunction(LiteXModule):
         conf_d  = Signal()
         index   = Signal(3)
         self.sync += [
-            link_d.eq(self.link),
+            link_d.eq(link),
             conf_d.eq(ep0.configured),
-            If((ep0.configured & ~conf_d) | (ep0.configured & (self.link != link_d)),
+            If((ep0.configured & ~conf_d) | (ep0.configured & (link != link_d)),
                 notify.eq(1),
                 index.eq(0),
             ).Elif(notify & notif_in.sink.ready,
@@ -194,4 +194,30 @@ class USB3CDCECMFunction(LiteXModule):
             notif_in.sink.data.eq(notification[index]),
             notif_in.sink.be.eq(0b1111),
             notif_in.sink.last.eq((index == 1) | (index == 5)), # 8-byte, then 16-byte notification.
+        ]
+
+# USB3 CDC-ECM Function ----------------------------------------------------------------------------
+
+class USB3CDCECMFunction(LiteXModule):
+    """CDC-ECM function of a USB3 device (Bulk IN/OUT data endpoints: 32-bit user sides, Bulk OUT
+    with_zlp; notification endpoint): one Ethernet frame per transfer.
+
+    sink  : frames to the host (data: 32-bit words, first byte on data[0:8], be: valid bytes, last:
+            end of frame).
+    source: frames from the host (same layout).
+    link  : network connection status (notified to the host).
+    """
+    def __init__(self, ep0, bulk_in, bulk_out, notif_in, comm_interface=0, speed=1_000_000_000):
+        self.sink   = sink   = stream.Endpoint(endpoint_layout(32)) # i
+        self.source = source = stream.Endpoint(endpoint_layout(32)) # o
+        self.link   = Signal(reset=1)                               # i
+
+        # # #
+
+        self.rx     = rx = USB3BulkTransferRX(bulk_out)
+        self.tx     = tx = USB3BulkTransferTX(bulk_in)
+        self.notify = CDCNetworkNotifications(ep0, notif_in, self.link, comm_interface, speed)
+        self.comb += [
+            rx.source.connect(source),
+            sink.connect(tx.sink),
         ]
