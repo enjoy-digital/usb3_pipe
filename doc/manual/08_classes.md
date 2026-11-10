@@ -19,6 +19,7 @@ attaches to the EP0 and endpoints of an existing core, so several functions can 
 | CDC-ECM | none | `USB3CDCECMFunction` | `cdc_ether`, network interface |
 | UVC | `USB3UVC` | `USB3UVCFunction` | `uvcvideo`, `/dev/videoX` |
 | Mass Storage | `USB3MSC` | none | `usb-storage`, `/dev/sdX` |
+| GUD display | none | `USB3GUDFunction` | `gud`, DRM display and `/dev/fbX` |
 
 The examples of [Examples](#examples) instantiate each class on the boards. The descriptors use
 the vendor ID `0x1d50` and product ID `0x605a` by default.
@@ -353,6 +354,46 @@ soc.usb3_msc = USB3MSC(usb3_phy, sys_clk_freq,
 
 Here `sd_storage` stands for a `USB3MSCStorage` built with `size=None` and `removable=True`, which
 drives `ready` and `capacity` from its medium.
+
+## GUD display {#classes-gud}
+
+A GUD device is a USB display for the Linux `gud` driver (Generic USB Display). The host sends
+pixels over a Bulk OUT endpoint, and the device shows them, for example from a framebuffer on an
+HDMI output. The driver binds on the vendor and product IDs `0x1d50` and `0x614d` and a
+vendor-specific interface.
+
+The function describes a fixed display, so all its requests are constant responses from the
+requests table. It reports one mode, one connected HDMI connector and one pixel format, with no
+EDID and no properties. `add_gud_requests()` builds these responses from LiteX video timings.
+
+| Request | Response |
+|-------------------------------|--------------------------------------------|
+| `GET_DESCRIPTOR` | magic, version 1, `FULL_UPDATE`, one frame as buffer size |
+| `GET_FORMATS` | one pixel format, `RGB565` by default |
+| `GET_CONNECTORS`, `GET_CONNECTOR_STATUS` | one HDMI connector, connected |
+| `GET_CONNECTOR_MODES` | one preferred mode from the video timings |
+| `GET_PROPERTIES`, `GET_CONNECTOR_PROPERTIES`, `GET_CONNECTOR_EDID` | empty |
+| `SET_*` | accepted |
+
+The `FULL_UPDATE` flag asks the host for full frames. Each Bulk OUT transfer is then one whole frame,
+in the pixel format and in raster order. The host sends `SET_BUFFER` only after a failed transfer,
+to resynchronize. `USB3GUDFunction` gives the frame data as a stream and a pulse on `SET_BUFFER`:
+the design writes the stream to its framebuffer and restarts at the frame start on the pulse.
+
+```python
+descriptors = USB3Descriptors(vid=GUD_VID, pid=GUD_PID,
+    interfaces=gud_interfaces(0, out_ept=1, max_burst=16))
+frame_size = add_gud_requests(descriptors, video_timings["1280x720@60Hz"])
+core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
+    endpoints=[USB3BulkOUT(ept=1, max_burst=16)])
+gud  = USB3GUDFunction(core.ep0, core.endpoints[0])
+# gud.source: frame data, gud.start: frame resynchronization.
+```
+
+The `RGB565` byte order of the host matches the `rgb565` format of the LiteX video framebuffer, so
+the data goes to memory unchanged. On the ECPIX-5, a full 720p frame takes 8.5 ms (216 MB/s).
+The X server of the NVIDIA proprietary driver does not drive GUD displays and can crash when one
+appears. Test there without the kernel driver, from libusb.
 
 ## Composite devices {#classes-composite}
 
