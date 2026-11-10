@@ -41,6 +41,7 @@ from usb3_core.link      import USB3LinkLayer
 from usb3_core.iso       import USB3IsoIN
 from usb3_core.protocol  import USB3ProtocolLayer
 from usb3_core.control   import USB3EndpointControl
+from usb3_core.descriptors import USB3InterfaceDescriptor
 from usb3_core.trace     import USB3CoreTrace, USB3LinkTrace
 
 # USB3 Device Core ---------------------------------------------------------------------------------
@@ -94,11 +95,20 @@ class USB3DeviceCore(LiteXModule):
             with_handler = with_ep0_handler))
         self.comb += ep0.reset.eq(link.reset)
 
-        # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT)).
+        # Endpoints (Sequence Numbers reset on link reset, SET_CONFIGURATION, CLEAR_FEATURE(HALT) and
+        # SET_INTERFACE of their interface: 9.4.10).
+        ep_interfaces = {}
+        for interface in descriptors.interfaces:
+            if isinstance(interface, USB3InterfaceDescriptor):
+                for epd in interface.endpoints:
+                    ep_interfaces.setdefault((epd.ept, epd.direction), set()).add(interface.number)
         for ep in endpoints:
             self.add_module(name=f"ep{ep.ept}_{['out', 'in'][ep.direction]}", module=ep)
+            set_interface = [ep0.set_interface & (ep0.interface == n)
+                for n in sorted(ep_interfaces.get((ep.ept, ep.direction), []))]
             self.comb += ep.reset_seq.eq(link.reset | ep0.reset_seqs |
-                (ep0.clear_halt & (ep0.clear_ept == ep.ept) & (ep0.clear_dir == ep.direction)))
+                (ep0.clear_halt & (ep0.clear_ept == ep.ept) & (ep0.clear_dir == ep.direction)) |
+                Reduce("OR", set_interface + [0]))
 
         # Protocol Layer.
         self.protocol = ResetInserter()(USB3ProtocolLayer(link, [ep0] + endpoints, ep0.dev_addr))
