@@ -25,7 +25,7 @@ protocol concepts are explained in [USB 3 in a nutshell](#usb3-primer).
 | Max burst | 2, 4, 8 or 16 packets (Bulk); 1, 2, 4, 8 or 16 packets (Isochronous IN) |
 | Max packet size | 1024 bytes (Bulk, Isochronous), 512 bytes (EP0) |
 | Power management | U3 (suspend) always; U1 and U2 with `with_lpm` |
-| Device classes | Vendor Bulk, CDC-ACM, UVC, Mass Storage, composite devices |
+| Device classes | Vendor Bulk, CDC-ACM, CDC-ECM, UVC, Mass Storage, composite devices |
 | Top-level class | `USB3DeviceCore` in `usb3_core/device.py` |
 
 ## Architecture {#core-overview}
@@ -127,11 +127,15 @@ The two directions do not treat packet boundaries the same way:
 
 - **Bulk IN**: the endpoint cuts a stream packet longer than 1024 bytes into maximum-size packets.
   A last packet shorter than 1024 bytes is a short packet and ends the host transfer. The endpoint
-  never adds a zero-length packet, so a stream packet of exactly N x 1024 bytes does not end the
-  transfer.
+  adds no zero-length packet by itself, so a stream packet of exactly N x 1024 bytes does not end
+  the transfer. User logic ends it with a zero-length packet: a stream packet of one word, `be` at
+  0 and `last` set.
 - **Bulk OUT**: each USB packet the host sends, 1024 bytes at most, comes out as one stream packet
   ended by `last`. The host transfer boundaries are not visible; a protocol on top of Bulk OUT
-  carries its own lengths. Zero-length packets are dropped.
+  carries its own lengths. Zero-length packets are dropped by default.
+- **Bulk OUT with `with_zlp`**: a zero-length packet comes out as one word with `be` at 0 and
+  `last` set. User logic sees it as an end of transfer marker, as the CDC-ECM function needs for
+  a frame of exactly N x 1024 bytes.
 
 ### Packet slots {#core-slots}
 
@@ -483,6 +487,7 @@ The table below lists every module of `usb3_core/`.
 | `wishbone.py` | `USB3EP0Wishbone` | Wishbone master over EP0 vendor requests |
 | `bridge.py` | `USB3BytePacker`, `USB3ByteUnpacker` | Endpoint words to and from byte streams |
 | `cdc_acm.py` | `USB3CDCACM` | CDC-ACM serial port device |
+| `cdc_ecm.py` | `USB3CDCECMFunction` | CDC-ECM network adapter function |
 | `uvc.py` | `USB3UVC` | UVC camera device |
 | `msc.py` | `USB3MSC`, `USB3MSCSCSI` | Mass Storage device and SCSI engine |
 | `msc_storage.py` | `USB3MSCRAMStorage`, `USB3MSCDRAM` | Block RAM and DRAM storages of the Mass Storage device |
@@ -500,10 +505,11 @@ The table below lists every module of `usb3_core/`.
   packets, no arbitration weight handling.
 - 64-bit and 128-bit words for the Bulk endpoints only; the other endpoints stay 32-bit. The
   CDC-ACM and Mass Storage device classes run on any link layer width through the endpoint
-  converters. The `uvc`, `uvc_iso` and `composite` examples are built on the 32-bit link layer
-  only.
+  converters. The CDC-ECM function works on 32-bit endpoints. The `uvc`, `uvc_iso` and
+  `composite` examples are built on the 32-bit link layer only.
 - No Isochronous OUT endpoint, no Streams. An Interrupt IN endpoint is declared with a Bulk IN
-  endpoint behind it, as the CDC-ACM notification endpoint, which never sends.
+  endpoint behind it, as the CDC-ACM notification endpoint, which never sends, and the CDC-ECM
+  notification endpoint.
 - No endpoint halt: SET_FEATURE(ENDPOINT_HALT) is accepted without effect.
 - U1 and U2 entry is host-initiated only, and validated in simulation only. U3 entry and exit
   (Linux autosuspend and resume) are validated on hardware.

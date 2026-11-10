@@ -34,13 +34,13 @@ BANKS = [
     ("usb3_gen2",         "Gen 2 bring-up",                "add_usb3_gen2_rx", "bench/usb3_soc.py"),
 ]
 
-# Notes printed after the title of a bank family, for registers whose definitions carry no
-# description.
+# Notes printed after the title of a bank family: what the register descriptions do not say
+# (shared interface, where the contents are described).
 NOTES = {
     "usb3_gen2": ["The snapshot banks share one interface: `arm` starts a capture, `trigger` selects",
                   "its stop condition, `done` tells when the buffer is full, then `index` selects an",
-                  "entry and `data0` to `dataN` read it. Their registers carry no description in the",
-                  "source; [Debugging](#debugging) describes what each snapshot holds."],
+                  "entry and `data0` to `dataN` read it. [Debugging](#debugging) describes what each",
+                  "snapshot holds."],
 }
 
 # Opening paragraph of the appendix and the sentence that ends the access paragraph.

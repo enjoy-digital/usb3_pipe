@@ -1,7 +1,8 @@
 # Device classes {#classes}
 
 This chapter describes the complete devices built on the device core: vendor Bulk, CDC-ACM serial
-port, UVC camera and Mass Storage, and how to combine them into one composite device. Each one
+port, CDC-ECM network adapter, UVC camera and Mass Storage, and how to combine them into one
+composite device. Each one
 works with the standard Linux drivers, so the host needs no software beyond the usual tools. Read
 [Device core architecture](#core-architecture) first for the endpoints and the control endpoint.
 
@@ -15,6 +16,7 @@ attaches to the EP0 and endpoints of an existing core, so several functions can 
 |------------|---------------|---------------------------|-------------------------|
 | Vendor Bulk | none | none | usbfs (libusb) |
 | CDC-ACM | `USB3CDCACM` | `USB3CDCACMFunction` | `cdc_acm`, `/dev/ttyACMx` |
+| CDC-ECM | none | `USB3CDCECMFunction` | `cdc_ether`, network interface |
 | UVC | `USB3UVC` | `USB3UVCFunction` | `uvcvideo`, `/dev/videoX` |
 | Mass Storage | `USB3MSC` | none | `usb-storage`, `/dev/sdX` |
 
@@ -23,8 +25,8 @@ the vendor ID `0x1d50` and product ID `0x605a` by default.
 
 The CDC-ACM and Mass Storage device classes follow the width of the link layer, taken from the PHY
 `link_words`. Their Bulk endpoints are as wide as the link layer, and their 32-bit logic connects
-through the [Endpoint converters](#core-converters). The UVC classes and the `composite` example
-use 32-bit endpoints, so these examples are built on the 32-bit link layer.
+through the [Endpoint converters](#core-converters). The UVC classes, the CDC-ECM function and
+the `composite` example use 32-bit endpoints, so they are built on the 32-bit link layer.
 
 ## Vendor Bulk {#classes-bulk}
 
@@ -82,6 +84,89 @@ self.uart     = UART(self.usb3_acm)
 
 On the host, open the port with `litex_term /dev/ttyACM0`. For the `cdc_uartbone` example, bridge
 the SoC bus with `litex_server --uart --uart-port /dev/ttyACM0` instead.
+
+## CDC-ECM network adapter {#classes-ecm}
+
+A CDC-ECM device appears on Linux as an Ethernet interface, with the standard `cdc_ether` driver.
+Ethernet frames move between the host and the FPGA as on a network card, so the FPGA side can
+bridge them to an Ethernet MAC or terminate them in its own network stack. `USB3CDCECMFunction`
+is a function class: it attaches to the EP0 and endpoints of a core built as a composite device.
+
+| Item | Value |
+|-----------------------|-------------------------------------------------------------------|
+| Specification | CDC ECM 1.2 (Ethernet Control Model) |
+| Interfaces | Communication (class `0x02`, subclass `0x06`), Data (class `0x0a`), grouped by an IAD |
+| Data alternate settings | 0 without endpoints, 1 with Bulk IN and Bulk OUT |
+| Endpoints | EP1 Bulk IN, EP2 Bulk OUT (data), EP3 Interrupt IN (notifications) |
+| Class requests | SET_ETHERNET_PACKET_FILTER (accepted, no filtering) |
+| Max segment size | 1514 bytes: one Ethernet frame without its FCS |
+| Frame streams | 32-bit `sink` and `source`, one stream packet per frame |
+| Status | `link`: network connection reported to the host |
+
+Each frame is one host transfer. Toward the host, the function sends the frame as maximum-size
+packets and a short last packet. A frame of exactly N x 1024 bytes is followed by a zero-length
+packet, so that the host sees its end.
+
+From the host, a short packet or a zero-length packet ends the frame. The Bulk OUT endpoint
+therefore needs `with_zlp=True`, which turns a zero-length packet into an end marker (see
+[The user stream](#core-stream)). The function holds one word back, because a full last packet
+only ends the frame when the zero-length packet that follows arrives.
+
+The notification endpoint sends two notifications when the host configures the device and on
+every change of `link`. NETWORK_CONNECTION carries the connection state; CONNECTION_SPEED_CHANGE
+carries the `speed` parameter as both the upstream and the downstream bit rate.
+
+| Parameter | Default | Meaning |
+|--------------------|-----------------|----------------------------------------------|
+| `comm_interface` | 0 | Communication interface; data interface on the next number |
+| `speed` | 1000000000 | Bit rate in the CONNECTION_SPEED_CHANGE notification |
+| `mac_string` | 4 | String index of the MAC address (`cdc_ecm_interfaces()`) |
+| `max_burst` | 8 | Max burst of the data endpoints (`cdc_ecm_interfaces()`) |
+
+The MAC address goes in a string descriptor of 12 hexadecimal digits. `add_cdc_ecm_strings()` adds
+it and returns its index. The host gives that address to its network interface, so the FPGA side
+uses another one. The code below builds the device, with the frames from the host looped back to
+it through a FIFO.
+
+```python
+from litex.soc.interconnect import stream
+
+from usb3_core.common      import endpoint_layout
+from usb3_core.device      import USB3DeviceCore
+from usb3_core.descriptors import USB3Descriptors, DEVICE_CLASS_IAD
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
+from usb3_core.cdc_ecm     import *
+
+descriptors = USB3Descriptors(device_class=DEVICE_CLASS_IAD)
+mac = add_cdc_ecm_strings(descriptors, 0x02eccc000001)
+descriptors.interfaces = cdc_ecm_interfaces(0, notif_ept=3, in_ept=1,
+    out_ept=2, mac_string=mac)
+add_cdc_ecm_requests(descriptors)
+core = USB3DeviceCore(phy, sys_clk_freq, descriptors,
+    endpoints = [
+        USB3BulkIN(ept=1,  max_burst=8),                # Frames to the host.
+        USB3BulkOUT(ept=2, max_burst=8, with_zlp=True), # Frames from the host.
+        USB3BulkIN(ept=3,  max_burst=2),                # Notifications.
+    ],
+    with_ep0_handler = True)
+eps = core.endpoints
+ecm  = USB3CDCECMFunction(core.ep0, eps[0], eps[1], eps[2])
+echo = stream.SyncFIFO(endpoint_layout(32), 1024, buffered=True)
+self.comb += [
+    ecm.source.connect(echo.sink),
+    echo.source.connect(ecm.sink),
+]
+```
+
+The function works on 32-bit endpoints, so this device needs a 32-bit link layer. On the host,
+with a locally administered MAC address as here, the interface appears as `usb0`, or as `enx`
+followed by the MAC address with predictable interface names. Bring it up and configure it as any
+Ethernet interface:
+
+```sh
+ip -br link
+sudo ip link set usb0 up
+```
 
 ## UVC camera {#classes-uvc}
 
@@ -154,14 +239,16 @@ ffplay -f v4l2 -input_format yuyv422 -video_size 1920x1080 \
 
 A Mass Storage device appears on Linux as a disk, `/dev/sdX`, with the standard `usb-storage`
 driver. `USB3MSC` implements the Bulk-Only Transport and a SCSI command engine on top of a
-storage: block RAM for a small disk, or DRAM for a large one.
+storage: block RAM for a small disk, or DRAM for a large one. With a list of storages, the device
+has one logical unit (LUN) per storage, and the host sees one disk per LUN.
 
 | Item | Value |
 |-----------------------|-------------------------------------------------------------------|
 | Interface | Class `0x08`, subclass `0x06` (SCSI transparent), protocol `0x50` (Bulk-Only) |
 | Endpoints | EP1 Bulk IN, EP2 Bulk OUT, max burst 8 |
 | Endpoint width | Link layer width; 32-bit SCSI engine through the converters |
-| Class requests | Get Max LUN (one LUN), Bulk-Only Mass Storage Reset |
+| Class requests | Get Max LUN (number of storages minus one), Bulk-Only Mass Storage Reset |
+| Logical units | One per storage, selected by the LUN field of each CBW |
 | Block size | 512 bytes |
 | Storages | Block RAM (`USB3MSCRAMStorage`, 512 KiB by default), DRAM (`USB3MSCDRAM`) |
 
@@ -185,16 +272,25 @@ that follows therefore returns the written data.
 | REQUEST SENSE | Sense of the last command |
 | INQUIRY | Removable direct-access device, vendor `EnjoyDig` |
 | MODE SENSE(6) | Constant response, not write-protected |
+| START STOP UNIT | Accepted, no effect |
 | PREVENT ALLOW MEDIUM REMOVAL | Accepted |
 | READ FORMAT CAPACITIES | Formatted medium, capacity of the storage |
-| READ CAPACITY(10) | Last block and block size |
+| READ CAPACITY(10) | Last block of the storage `capacity`, block size |
 | READ(10), WRITE(10) | Block transfers through the storage |
 | SYNCHRONIZE CACHE(10) | Accepted |
 | Other commands | Fail with ILLEGAL REQUEST; their data phase is padded or discarded |
 
-A READ(10) or WRITE(10) beyond the last block fails with ILLEGAL REQUEST. When the storage is not
-ready, for example a DRAM still being initialized, commands fail with NOT READY and the host
-retries.
+A READ(10) or WRITE(10) beyond the last block fails with ILLEGAL REQUEST. A command to a LUN the
+device does not have fails with ILLEGAL REQUEST and LOGICAL UNIT NOT SUPPORTED.
+
+When the storage is not ready, commands fail with NOT READY and the host retries. The additional
+sense tells why: LOGICAL UNIT NOT READY for a storage becoming ready, such as a DRAM still being
+initialized, and MEDIUM NOT PRESENT for a removable storage without its medium, such as an empty
+SD card slot. Linux sends START STOP UNIT to such a LUN, which is why the engine accepts it.
+
+When a storage becomes ready, the next command to its LUN fails once with UNIT ATTENTION and
+MEDIUM MAY HAVE CHANGED. The host then reads the capacity again, so a medium inserted at runtime
+shows up with its size. INQUIRY and REQUEST SENSE do not consume this UNIT ATTENTION.
 
 ### Storages {#classes-msc-storage}
 
@@ -205,7 +301,11 @@ storage only needs to implement it:
   block count;
 - `source` and `sink`: 32-bit streams of read and write data;
 - `ready`: the storage is available;
-- `idle`: no command running, write data committed.
+- `idle`: no command running, write data committed;
+- `capacity`: the size in blocks, constant for a storage built with a `size`, driven by the
+  storage itself when built with `size=None` (an SD card or a SATA drive detected at runtime).
+
+A storage built with `removable=True` reports MEDIUM NOT PRESENT when it is not ready.
 
 | Storage | Medium | Initial content |
 |----------------------------|------------------------------------|-------------------------------|
@@ -234,6 +334,25 @@ soc.usb3_msc = USB3MSC(usb3_phy, sys_clk_freq, storage=storage)
 sudo mkfs.vfat /dev/sdX
 udisksctl mount -b /dev/sdX
 ```
+
+### Several LUNs {#classes-msc-luns}
+
+`USB3MSC` takes a list of storages for `storage`, and then a list of INQUIRY product strings for
+`inquiry_product`, one per LUN. Fixed storages and storages detected at runtime can share one
+device, each with its own ready state and capacity.
+
+```python
+from usb3_core.msc         import USB3MSC
+from usb3_core.msc_storage import USB3MSCRAMStorage
+
+# LUN 0: 512 KiB block RAM disk; LUN 1: a removable storage of the design.
+soc.usb3_msc = USB3MSC(usb3_phy, sys_clk_freq,
+    storage         = [USB3MSCRAMStorage(512*1024), sd_storage],
+    inquiry_product = ["USB3-PIPE RAMDisk", "USB3-PIPE SDCard"])
+```
+
+Here `sd_storage` stands for a `USB3MSCStorage` built with `size=None` and `removable=True`, which
+drives `ready` and `capacity` from its medium.
 
 ## Composite devices {#classes-composite}
 

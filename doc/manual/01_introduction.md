@@ -56,9 +56,9 @@ edge and an adapter board.
 | PHY | LFPS, training sequences, 8b/10b and 128b/132b coding, scrambling, clock compensation, polarity, LTSSM with Recovery, U1, U2, U3, Hot Reset, Warm Reset, Compliance and Loopback |
 | Link layer | Header packet flow control, retries, link management packets, timers, SuperSpeedPlus operation |
 | Protocol layer | Control endpoint, Bulk IN and OUT with bursts, Isochronous IN, U1 and U2 power management (option) |
-| Device classes | Vendor Bulk, CDC-ACM serial port, UVC camera (Bulk or Isochronous), Mass Storage (block RAM or DRAM), composite devices |
+| Device classes | Vendor Bulk, CDC-ACM serial port, CDC-ECM network adapter, UVC camera (Bulk or Isochronous), Mass Storage (block RAM or DRAM, several LUNs), composite devices |
 | Datapath | 32-bit link words at 125 MHz, or 64 and 128-bit words for Gen 2 bandwidth and slow fabrics |
-| Host drivers | Standard Linux drivers: usbfs, `cdc_acm`, `uvcvideo`, `usb-storage` |
+| Host drivers | Standard Linux drivers: usbfs, `cdc_acm`, `cdc_ether`, `uvcvideo`, `usb-storage` |
 | Debug | Link state history and counters, transceiver controls, header packet and link traces, LiteScope probe groups |
 | Verification | Python host model, unit and system tests, Verilator simulation of host, PHYs and device |
 
@@ -108,8 +108,8 @@ Other limits of the device core:
 - Function remote wakeup, latency tolerance messages and precision time measurement are not
   supported.
 - The 64-bit and 128-bit link interfaces serve the Bulk endpoints, and the Mass Storage and
-  CDC-ACM classes through endpoint converters; the UVC class and the Isochronous endpoint stay on
-  32-bit words (see [Endpoint converters](#core-converters)).
+  CDC-ACM classes through endpoint converters; the UVC class, the CDC-ECM function and the
+  Isochronous endpoint stay on 32-bit words (see [Endpoint converters](#core-converters)).
 
 ## Repository layout {#intro-layout}
 
