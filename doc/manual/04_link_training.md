@@ -150,7 +150,8 @@ The negotiated operation is the highest common one: Gen 1x1, Gen 1x2, Gen 2x1 or
 table 7-14). After 16 plain Polling.LFPS bursts received and 4 SCD1 sent, the partner is a
 SuperSpeed port. That port has counted the SCD1 bursts as Polling.LFPS and may already be in
 Polling.RxEQ, so the LTSSM sends 4 more Polling.LFPS bursts and follows it without waiting for
-another burst. Without matching LBPMs within 12 ms, SuperSpeedPlus Polling fails.
+another burst. The negotiated rate and lane count are then cleared. Without matching LBPMs within
+12 ms, SuperSpeedPlus Polling fails.
 
 When Gen 2 is negotiated, the transceiver switches to 10 Gbps before Polling.RxEQ. The rest of the
 training uses the Gen 2 TSEQ, TS1 and TS2 inside 128b/132b blocks (`Gen2PIPE`).
