@@ -118,7 +118,7 @@ class USB3LTSSM(LiteXModule):
         # SuperSpeedPlus Polling (ssp=True, SSPPolling below, 7.5.4.3-7.5.4.6) ---------------------
         # In Polling.LFPS, ssp_polling runs the SSPPolling substates (SCD1/SCD2, LBPM PortMatch/
         # PortConfig) instead of the SuperSpeed Polling.LFPS handshake: ssp_done exits to
-        # Polling.RxEQ, ssp_fallback (SuperSpeed partner) continues with the SuperSpeed handshake.
+        # Polling.RxEQ, ssp_fallback (SuperSpeed partner) after 4 Polling.LFPS bursts sent.
         self.ssp_polling  = Signal() # o
         self.ssp_done     = Signal() # i
         self.ssp_fallback = Signal() # i
@@ -418,23 +418,35 @@ class USB3LTSSM(LiteXModule):
                 NextState("Compliance")
             )
         )
-        ss_handshake = (self.lfps_tx_count >= tx_lfps_count)
         if ssp:
+            # SuperSpeedPlus Polling done -> Polling.RxEQ. SuperSpeed partner (ssp_fallback: 16
+            # consecutive Polling.LFPS bursts received without SCD, after 4 SCD1 = 16 Polling.LFPS
+            # bursts sent): the SuperSpeed handshake (7.5.4.3.2) only misses the 4 Polling.LFPS
+            # bursts sent after receiving one, sent before Polling.RxEQ without waiting for more
+            # Polling.LFPS (the partner counted the SCD1 bursts and may already have left).
             polling_lfps = polling_lfps.Elif(self.ssp_done,
                 NextValue(polling_lfps_ok, 1),
                 NextState("Polling.RxEQ"),
+            ).Elif(self.ssp_fallback,
+                If(~rx_lfps_seen,
+                    NextValue(rx_lfps_seen, 1),
+                    NextValue(tx_lfps_count, self.lfps_tx_count + 4)
+                ).Elif(self.lfps_tx_count >= tx_lfps_count,
+                    NextValue(polling_lfps_ok, 1),
+                    NextState("Polling.RxEQ"),
+                )
             )
-            ss_handshake = self.ssp_fallback & ss_handshake
-        polling_lfps = polling_lfps.Elif(ss_handshake,
-            If(self.lfps_rx_polling & ~rx_lfps_seen,
-                NextValue(rx_lfps_seen, 1),
-                NextValue(tx_lfps_count, self.lfps_tx_count + 4)
-            ),
-            If(rx_lfps_seen,
-                NextValue(polling_lfps_ok, 1),
-                NextState("Polling.RxEQ"),
+        else:
+            polling_lfps = polling_lfps.Elif(self.lfps_tx_count >= tx_lfps_count,
+                If(self.lfps_rx_polling & ~rx_lfps_seen,
+                    NextValue(rx_lfps_seen, 1),
+                    NextValue(tx_lfps_count, self.lfps_tx_count + 4)
+                ),
+                If(rx_lfps_seen,
+                    NextValue(polling_lfps_ok, 1),
+                    NextState("Polling.RxEQ"),
+                )
             )
-        )
         fsm.act("Polling.LFPS",
             self.lfps_tx_idle.eq(1),
             t_polling_lfps.wait.eq(with_timers),
@@ -1173,8 +1185,9 @@ class SSPPolling(LiteXModule):
     Polling.RxEQ (Gen 2 TSEQ/TS1/TS2 with SYNC/SDS, not yet in USB3LTSSM).
 
     16 consecutive Polling.LFPS bursts received without SCD (SuperSpeed partner, 7.5.4.3.1) after 4
-    SCD1 sent: ss_fallback (level until start is released), the LTSSM continues with the SuperSpeed
-    Polling.LFPS handshake. tPollingLBPMLFPSTimeout (12ms) in PortMatch/PortConfig: fail.
+    SCD1 sent: ss_fallback (level until start is released), the LTSSM sends 4 Polling.LFPS bursts
+    and exits to Polling.RxEQ (SuperSpeed Polling.LFPS handshake). tPollingLBPMLFPSTimeout (12ms) in
+    PortMatch/PortConfig: fail.
 
     Not implemented: tPollingSCDLFPSTimeout, re-timers presence announcement/RT Config, PortMatch
     re-entry/capability fallback after a training failure (Table 7-15).
