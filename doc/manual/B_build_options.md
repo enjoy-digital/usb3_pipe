@@ -163,6 +163,7 @@ Numbers are in cycles of the 133 MHz simulation clock unless stated.
 | `--dev-link-ppm` | none | Device link clock from its own generator with this offset |
 | `--dev-loopback-depth` | 512 | Depth of the device Bulk loopback buffer (words) |
 | `--dev-no-u1u2` | off | Device PHY without U1 and U2 |
+| `--dev-ss` | off | With `--gen2-capable`: SuperSpeed device, SuperSpeed fallback of the host |
 | `--output-dir` | `build/sim` | Build directory |
 
 ## Standalone core generator {#opt-gen}

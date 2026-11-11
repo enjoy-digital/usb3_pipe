@@ -428,6 +428,9 @@ class USB3PIPESim(SoCMini):
 
     dev_u1u2=False (lanes=1): Device USB3PHY without U1/U2 (LGO_U1/LGO_U2 rejected).
 
+    dev_ss (lanes=1, gen2_capable): SuperSpeed Device (Device USB3PHY not SuperSpeedPlus capable:
+    no SCD/LBPM), SuperSpeed fallback of the Gen 2 capable Host (7.5.4.3.1).
+
     dev_pipe_cd (lanes=1, Gen 1/Gen 2): Device USB3PHY with its USB3PIPE/SerDes model in the sys
     clock domain and its LTSSM/Link interface/Core at half the frequency (USB3PHY pipe_cd, as on
     FPGAs where the Core can't run at 125MHz), with 64-bit Link Layer words (link_words=2, or
@@ -442,7 +445,8 @@ class USB3PIPESim(SoCMini):
         ssc=False, prbs_words=2**16, max_cycles=2**24, host_skp=True, host_latency=256,
         host_status_gap=64, host_pm=False, host_lpm=False, host_itp=False, lanes=1,
         lane_delays=(0, 1), lane1_word_shift=2, lane_skp=4096, gen2_capable=False, gen2=False,
-        link_words=1, dev_pipe_cd=False, dev_u1u2=True, gen2_data_width=None, host_recovery=False,
+        link_words=1, dev_pipe_cd=False, dev_u1u2=True, dev_ss=False, gen2_data_width=None,
+        host_recovery=False,
         host_hot_reset=0,
         host_burst_out=0, host_burst_len=64, host_burst_stream=0, dev_loopback_depth=512,
         host_lbad_test=False, host_burst_duplex=0, host_burst_duplex_skp=False,
@@ -452,6 +456,7 @@ class USB3PIPESim(SoCMini):
         assert (not gen2) or ((lanes == 1) and gen2_capable)
         assert (lanes == 1) or (not with_core) # Gen 1x2: PRBS Link-Layer stand-ins only.
         assert (not dev_pipe_cd) or (lanes == 1)
+        assert (not dev_ss) or ((lanes == 1) and gen2_capable and (not gen2))
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on
         # hardware) and with 2 lanes, 2 with the PRBS stand-ins.
@@ -522,7 +527,7 @@ class USB3PIPESim(SoCMini):
                 timer_scale          = timer_scale,
                 with_endianness_swap = (lanes == 1),
                 lanes                = lanes,
-                gen2_capable         = gen2_capable,
+                gen2_capable         = gen2_capable and not (dev_ss and name == "dev"),
                 link_words           = link_words if name == "dev" else 1,
                 pipe_cd              = pipe_cd,
                 pipe_clk_freq        = sys_clk_freq,
@@ -659,7 +664,7 @@ class USB3PIPESim(SoCMini):
                         )
                     )
                 ]
-            if (lanes > 1) or gen2_capable:
+            if hasattr(phys[name], "ssp"):
                 self.add_ssp_status(phys[name], name, sync, timer)
             if lanes > 1:
                 self.add_lanes_status(phys[name], name, sync, timer)
@@ -922,6 +927,7 @@ def main():
     parser.add_argument("--host-itp",      action="store_true", help="Host model Isochronous Timestamp Packets between the transfers.")
     parser.add_argument("--dev-pipe-cd",   action="store_true", help="Device LTSSM/Link Layer/Core at half the PIPE frequency (USB3PHY pipe_cd, 64-bit Link Layer words).")
     parser.add_argument("--gen2-data-width", default=None, type=int, help="Gen 2 raw words width of the SerDes models (default: 40, ex: 80 as GW5 GTR12 1:4 at 125MHz).")
+    parser.add_argument("--dev-ss",        action="store_true", help="With --gen2-capable: SuperSpeed Device (not SuperSpeedPlus capable), SuperSpeed fallback of the Host.")
     parser.add_argument("--dev-no-u1u2",   action="store_true", help="Device USB3PHY without U1/U2 Link Power Management.")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
@@ -955,6 +961,7 @@ def main():
         link_words            = int(args.link_words),
         dev_pipe_cd           = args.dev_pipe_cd,
         dev_u1u2              = not args.dev_no_u1u2,
+        dev_ss                = args.dev_ss,
         gen2_data_width       = args.gen2_data_width,
         host_recovery         = args.host_recovery,
         host_hot_reset        = args.host_hot_reset,

@@ -503,7 +503,9 @@ class USB3PHY(LiteXModule):
                 MultiReg(ssp.tx_active, pipe.lfps_tx_ssp,      self.pipe_cd),
                 MultiReg(ssp.tx_lfps,   pipe.lfps_tx_ssp_lfps, self.pipe_cd),
             ]
-        self.sync += If(ssp.done,
+        # Updated on each SuperSpeedPlus Polling, also on the SuperSpeed fallback (x2/gen2 = 0:
+        # not kept from a previous partner).
+        self.sync += If(ssp.done | ssp.ss_fallback,
             self.x2.eq(ssp.x2),
             self.gen2.eq(ssp.gen2),
         )
