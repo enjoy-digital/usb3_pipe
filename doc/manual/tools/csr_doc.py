@@ -58,7 +58,9 @@ def _csr_entry(csr, csr_json, bank, base):
     if isinstance(csr, CSRStorage):
         access, reset = "rw", _const(csr.storage.reset)
     elif isinstance(csr, CSRStatus):
-        access, reset = "ro", None
+        # A CSRStatus with read_only=False is also written by software (ex: write 1 to clear the
+        # pending bits of an EventManager).
+        access, reset = ("ro" if csr.read_only else "rw"), None
     else:
         access, reset = "wo", None
     fields = []
@@ -168,8 +170,9 @@ def generate():
         argv = " ".join(f"`{a}`" for a in s["argv"])
         out.append(f"| `{s['config']}` | `{s['target']}` {argv} |")
     out += ["",
-            "Access is `rw` for a register written by software (`CSRStorage`), `ro` for a status",
-            "(`CSRStatus`) and `wo` for a write-only strobe (`CSR`). The reset value of a `rw`",
+            "Access is `rw` for a register written by software (`CSRStorage`, or a `CSRStatus` that",
+            "software also writes, such as event pending bits cleared by writing 1), `ro` for a status",
+            "(`CSRStatus`) and `wo` for a write-only strobe (`CSR`). The reset value of a `CSRStorage`",
             "register ends its description. A register wider than 32 bits takes several",
             "32-bit words of the bus, most significant word first. " + project.USAGE[0]] + project.USAGE[1:] + [""]
     def owner(name):

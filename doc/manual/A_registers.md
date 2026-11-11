@@ -13,8 +13,9 @@ of the bank; the base addresses depend on the SoC and are in the `csr.csv` of a 
 | `acorn_bench` | `acorn` `--with-serdes-debug` `--example` `bench` |
 | `xcku3p_gen2_bench` | `alibaba_xcku3p` `--with-serdes-debug` `--example` `bench` `--gen2-capable` |
 
-Access is `rw` for a register written by software (`CSRStorage`), `ro` for a status
-(`CSRStatus`) and `wo` for a write-only strobe (`CSR`). The reset value of a `rw`
+Access is `rw` for a register written by software (`CSRStorage`, or a `CSRStatus` that
+software also writes, such as event pending bits cleared by writing 1), `ro` for a status
+(`CSRStatus`) and `wo` for a write-only strobe (`CSR`). The reset value of a `CSRStorage`
 register ends its description. A register wider than 32 bits takes several
 32-bit words of the bus, most significant word first. The tools of `bench/` use these
 names through the `csr.csv` of the build, so they rarely need the offsets.
