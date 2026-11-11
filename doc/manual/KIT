@@ -1,8 +1,8 @@
 # Manual kit (doc/manual/tools/kit.py): version and checksums of the kit files. Do not
 # edit: run kit.py update after changing a kit file, kit.py sync to copy the kit.
-version: 2026-11-10-936180d4
+version: 2026-11-11-57146cf1
 
-6c78c08b89051bc249fc4cdbec48bce7a895af518f7dcb4e12e08065c54e539a  .github/workflows/doc.yml
+501a3c9676ba9d21b9824c13df27d6d4579d4a21cc4bd0781696e1ee0b263e99  .github/workflows/doc.yml
 57ff8c196ea43e58caf0e52d7a2f16f4a5a52c7e86edb4f578f66d912fa525a8  doc/diagrams/.gitignore
 fde8a7c8a6d1b68b26d86bb608aa1836f4f19abd875bcebac84c25d8fc76b6dd  doc/diagrams/README.md
 5c0fe7cef4109b57412c02efab7a77c4c56bf60e8bfd0c23d85b810c2517746e  doc/diagrams/build.py
@@ -26,7 +26,7 @@ b7a2fb5830518f27433a395e75413ce778f4169aff50b3b4a8bad44fb678face  doc/manual/the
 b1d7119d2dbbd3c59557abc992fab0534a386091e7052f8e6f9a3291b28c17c3  doc/manual/tools/appendix.lua
 f10b7d745d9b72411bd4e33133ead9b0a41e20b582019b1eb881ca5d8bbb7651  doc/manual/tools/breakcode.lua
 49df389dfdd43f56153146c6cfb3f1fa8b5afc9dc3140b3a67f276fc1a9d332a  doc/manual/tools/cover.py
-6f97c90f73f92fa01f7b53cbfe568ab191ba794de5be3abe44700c12edca2ead  doc/manual/tools/csr_doc.py
+db55acf96c71c3f6d05b442518f0f09502133016e4eaa20978d843c5afe8c1ad  doc/manual/tools/csr_doc.py
 f2db1bb87de94eddfb612bdb73e2035e250b02043086c0c83e879fe7c4bff734  doc/manual/tools/kit.py
 403dca247f32c41e9c8d63b7b80aa4a88315217f2613c5b4ceca9be754a08ad3  doc/manual/tools/svg2pdf.lua
 2acddac50f9d929ac5c1439b5cbaea9a429316b84b69d899e9b2b9dcce1ae2c6  doc/manual/tools/tables.py
