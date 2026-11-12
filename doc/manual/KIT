@@ -1,8 +1,8 @@
 # Manual kit (doc/manual/tools/kit.py): version and checksums of the kit files. Do not
 # edit: run kit.py update after changing a kit file, kit.py sync to copy the kit.
-version: 2026-11-11-57146cf1
+version: 2026-11-12-53c23272
 
-501a3c9676ba9d21b9824c13df27d6d4579d4a21cc4bd0781696e1ee0b263e99  .github/workflows/doc.yml
+5ace2b5983aba1862f44f7acd4ffd3819c7eb8e1fbb739cf3992cc7b05dcd1e9  .github/workflows/doc.yml
 57ff8c196ea43e58caf0e52d7a2f16f4a5a52c7e86edb4f578f66d912fa525a8  doc/diagrams/.gitignore
 fde8a7c8a6d1b68b26d86bb608aa1836f4f19abd875bcebac84c25d8fc76b6dd  doc/diagrams/README.md
 5c0fe7cef4109b57412c02efab7a77c4c56bf60e8bfd0c23d85b810c2517746e  doc/diagrams/build.py
