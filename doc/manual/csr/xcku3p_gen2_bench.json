@@ -1448,12 +1448,12 @@
    },
    {
     "access": "rw",
-    "description": "DRP Address (9 bits).",
+    "description": "DRP Address (10 bits).",
     "fields": [],
     "name": "drp_addr",
     "offset": 20,
     "reset": 0,
-    "size": 9
+    "size": 10
    },
    {
     "access": "rw",
