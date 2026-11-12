@@ -52,7 +52,7 @@ edge and an adapter board.
 
 | Area | Features |
 |--------------------|------------------------------------------------------------------------|
-| Speeds | Gen 1x1 (5 Gbps) on every supported FPGA; Gen 2x1 (10 Gbps) on Kintex UltraScale+ GTY; Gen 1x2 in simulation |
+| Speeds | Gen 1x1 (5 Gbps) on every supported FPGA; Gen 2x1 (10 Gbps) on Kintex UltraScale+ GTY; Gen 1x2 PHY (experimental) |
 | PHY | LFPS, training sequences, 8b/10b and 128b/132b coding, scrambling, clock compensation, polarity, LTSSM with Recovery, U1, U2, U3, Hot Reset, Warm Reset, Compliance and Loopback |
 | Link layer | Header packet flow control, retries, link management packets, timers, SuperSpeedPlus operation |
 | Protocol layer | Control endpoint, Bulk IN and OUT with bursts, Isochronous IN, U1 and U2 power management (option) |
@@ -100,7 +100,8 @@ USB 2 pair of the cable is left unused, so the host must have a working SuperSpe
 
 Other limits of the device core:
 
-- Gen 2x2 is not implemented, and Gen 1x2 runs in simulation only.
+- Gen 2x2 is not implemented. Gen 1x2 is experimental: the PHY runs between two boards, and the
+  device core has no link layer for two lanes.
 - Bulk, Control and Isochronous IN endpoints are supported. Isochronous OUT and Bulk Streams are
   not.
 - U1 and U2 are rejected by default; with the `with_lpm` option they are accepted, validated in

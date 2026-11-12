@@ -3,8 +3,10 @@
 **Status**: **Gen 1x1** (SuperSpeed, 5Gbps) and **Gen 2x1** (SuperSpeedPlus, 10Gbps) work on hardware
 (Gen 2x1 on UltraScale+ GTY: enumeration, Bulk transfers up to ~880MB/s, full duplex, see the
 [hardware milestones](#gen-2x1-hardware-milestones); on Gowin GW5AST-138B GTR12: in bring-up, [next
-steps](#next-steps)). **Gen 1x2** (2x5Gbps): PHY in simulation only (no SuperSpeedPlus Link Layer on
-two lanes, no hardware). **Gen 2x2** (2x10Gbps): not started.
+steps](#next-steps)). **Gen 1x2** (2x5Gbps, experimental): PHY validated between two LiteX Acorn
+Baseboard Minis with SFP DAC cables and PRBS Link-Layer stand-ins ([Gen 1x2 on
+hardware](#gen-1x2-on-hardware)), not yet with a USB host; no SuperSpeedPlus Link Layer on two
+lanes. **Gen 2x2** (2x10Gbps): not started.
 
 This document lists what Gen 2x1 (SuperSpeedPlus 10Gbps, 128b/132b, one lane) and Gen 1x2
 (SuperSpeedPlus 2x5Gbps, 8b/10b, two lanes) require, layer by layer, what was done and found during
@@ -77,7 +79,8 @@ parameters of the flow control state, the framer/parser are word based (data_wid
 
 The building blocks below were first developed and verified in simulation (Acorn GTP: 6.6Gbps max,
 single lane), the Gen 2x1 ones were then validated on the XCKU3P ([hardware
-milestones](#gen-2x1-hardware-milestones)); the Gen 1x2 ones are still simulation only.
+milestones](#gen-2x1-hardware-milestones)), the Gen 1x2 PHY between two Acorn Minis ([Gen 1x2 on
+hardware](#gen-1x2-on-hardware)).
 
 ### Gen 2x1 PHY building blocks (`usb3_pipe/common.py`/`coding.py`/`scrambling.py`/`datapath.py`)
 
@@ -143,17 +146,39 @@ milestones](#gen-2x1-hardware-milestones)); the Gen 1x2 ones are still simulatio
   only (SuperSpeedPlus Polling LFPS through the Lane 0 `LFPSUnit`, Lane 1 in electrical idle,
   6.13.12), Ordered Sets on both lanes, TS1/TS2 required on both lanes (6.13.6), per lane scrambler
   seeds FFFFh/8000h (6.13.5), **per lane polarity** (6.13.7), per lane SKP removal, **lanes deskew**
-  on the TS1/TS2 COM words (re-acquired after each TSEQ/TS1 phase, markers paired by arrival time
-  within 1 word), **data striping** aligned to Lane 0 (6.13.4), 64-bit/8-bit link words.
-- `lanes.py`: `LaneDeskew(max_skew)` pairs periodic markers by arrival timestamp.
+  on the TS1/TS2 COM words, **data striping** aligned to Lane 0 (6.13.4), 64-bit/8-bit link words,
+  **TX lanes in lockstep** (Logical Idle striped with the data), **single lane fallback** (Gen 1x1
+  negotiated: Lane 0 only, 32-bit words on `sink_x1`/`source_x1`), **lanes swap** (Configuration
+  Lane detected from the partner's Polling.LFPS, also in Compliance), Recovery in U0 on a deskew
+  lost, a lane in electrical idle for 10us or a lane realigned, RX re-initialization of a lane with
+  continuous decode errors, runtime Gen 1x2 capability (`x2_enable`).
+- `lanes.py`: `LaneDeskew` pairs the first marker of each lane after a gap without markers (TSEQ,
+  Logical Idle), whatever the lanes latencies; a single mismatch at the end of an Ordered Sets
+  stream is tolerated, a lane shifted in U0 loses the pairing. `LaneSwap`: logical lanes on the
+  physical SerDes.
+- `prbs.py`: PRBS Link-Layer stand-ins (`PRBSPacketGenerator`/`PRBSPacketChecker`, `PRBSLinkTester`
+  with CSRs for hardware link tests), `debug.py` `USB3LanesDebug` (lanes status and counters, U0
+  exits requested by the lanes), LiteScope groups `lanes`/`realign`.
 - `sim.py --lanes 2` (Verilator): Host and Device `USB3PHY(lanes=2)` (4 SerDes models) negotiate
   Gen 1x2 (SCD1/SCD2, LBPM), train to U0 and exchange 64-bit PRBS packets without errors with
-  lane-to-lane skew (Lane 0 or Lane 1 late, word shifts), Lane 1 TX polarity inverted, extra SKP
-  Ordered Sets on a single lane at a time, +-300ppm (`test/test_phy.py` `TestPHYX2`, extra
-  configurations with `pytest -m slow`).
+  lane-to-lane skew (Lane 0 or Lane 1 late, word shifts), Lane 1 or all lanes TX polarity inverted,
+  extra SKP Ordered Sets on a single lane at a time, +-300ppm, crossed lanes (`--lanes-crossed`),
+  Gen 1x1 fallback (`--dev-mode x1|ss`, `--dev-x2-disable`), long Logical Idle gaps
+  (`test/test_phy.py` `TestPHYX2`, extra configurations with `pytest -m slow`).
 - Unit tests: `test/test_lfps_ssp.py` (SCD, LBPM), `test/test_ltssm_ssp.py` (x2/x2 -> Gen 1x2,
-  x2/x1 -> Gen 1x1, SS partner fallback), `test/test_lanes.py` (periodic marker deskew in both skew
-  directions).
+  x2/x1 -> Gen 1x1, SS partner fallback), `test/test_lanes.py` (striping lockstep, deskew after a
+  gap in both skew directions, lanes swap), `test/test_prbs.py`, `test/test_debug.py`.
+
+### Gen 1x2 on hardware
+
+Two LiteX Acorn Baseboard Minis (Acorn CLE-215+, Artix7 GTP), SFP-0 (Lane 0) and SFP-1 (Lane 1) of
+each board linked by two SFP DAC cables, one board in each role, the PRBS Link-Layer stand-ins on
+64-bit words (the Acorn two lanes targets are not in the repository yet). Gen 1x2 to U0, 610MB/s
+per direction without errors, retrains, crossed cables (lanes swap), one cable unplugged/replugged,
+20 of 20 bitstream loads; single lane fallback (Gen 1x1): 303.9MB/s per direction without errors.
+Found on hardware and fixed: a single deskew mismatch at the end of an Ordered Sets stream, the
+Recovery on a deskew lost/lane idle/lane realigned in U0, the RX re-initialization of a lane with
+continuous decode errors, the lanes swap in Compliance.
 
 ### Approximated / not verified
 
@@ -169,8 +194,7 @@ after Polling.PortConfig, timing at 250MHz (`Gen2TX` DC Balance pipelined). Rema
 - SSP Polling: no tPollingSCDLFPSTimeout, no re-timer presence announcement/RT Config (bit 7 always
   de-asserted), no Polling.PortMatch re-entry/fallback after a training failure (Table 7-15), no
   cPollingTimeout/eSS.Disabled handling.
-- `USB3PHY(lanes=2)`: Gen 1x1 negotiated (x2 = 0) is reported but the datapath stays x2 (no fallback
-  to a single lane datapath), the two lanes TX must run in lockstep (same clock, same SKP schedule),
+- `USB3PHY(lanes=2)`: the two lanes TX must run in lockstep (same clock, same SKP schedule),
   the Recovery/U1/U2/U3 flows use the Gen 1x1 LTSSM on the Configuration Lane (Ux exit, Ping.LFPS on
   Lane 0 as required, but not exercised in x2 simulation), Lane 1 Rx.Detect/Loopback/Compliance per
   lane not handled. The x2 simulation PRBS packets are separated by 0-3 cycles of Logical Idle:
@@ -273,9 +297,9 @@ needed a host port power cycle: capability changes between trainings are a test-
    ~1.18GB/s on the line): wider/faster Link Layer words for the last ~25%; 64-bit words for the other
    endpoints/device classes (UVC, MSC); U1/U2 on hardware (not enabled by the bench host); Gen 2
    SerDes clocking on Kintex7 GTX/UltraScale GTH.
-2. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY done in simulation (`USB3PHY(lanes=2)`);
-   remaining: single lane fallback, SSP Link Layer on the x2 datapath, Type-C CC/Configuration Lane,
-   hardware validation.
+2. Gen 1x2 on Artix7/Kintex7 with a Type-C breakout: PHY validated between two Acorn Minis
+   (`USB3PHY(lanes=2)`); remaining: SSP Link Layer on the x2 datapath, a USB host (SFP2USB adapter
+   at Gen 1x1, a dual SFP to USB-C breakout with a Gen 1x2 host).
 3. Gen 2x2 (20Gbps) on UltraScale+ GTY: combination of both, 7 buffers.
 4. Gen 2x1 on Gowin GW5AST (Tang Mega 138K Pro, `bench/sipeed_tang_mega_138k_pro.py`, build flow
    and options in [Supported FPGAs and boards](../manual/09_boards.md)): Gen 1 is validated on

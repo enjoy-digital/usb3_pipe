@@ -151,6 +151,7 @@ The main options are below; [Build options](#build-options) lists them all.
 | `--gen2-capable` | Advertise and negotiate Gen 2 in the SuperSpeedPlus polling |
 | `--gen2` | Train to U0 at Gen 2, 128b/132b blocks |
 | `--lanes 2` | Gen 1x2: two lanes with skew and per-lane polarity, PRBS stand-ins |
+| `--dev-mode`, `--lanes-crossed` | With `--lanes 2`: Gen 1x1 fallback, flipped USB Type-C plug |
 | `--link-words N` | Device link layer on 32, 64 or 128-bit words |
 | `--dev-pipe-cd` | Device LTSSM, link layer and core at half the PIPE frequency |
 | `--host-pm`, `--host-lpm` | Host U1 and U2 requests or entries after the enumeration |

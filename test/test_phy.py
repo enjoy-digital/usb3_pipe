@@ -439,10 +439,16 @@ CONFIGS_SLOW = {
     "no_skew"        : ["--lane1-delay", "0", "--lane1-word-shift", "0"],
     "ppm_m300"       : ["--ppm", "-300"],
     "ppm_p300"       : ["--ppm", "300"],
+    "long_gaps"      : ["--prbs-gap-bits", "6"],
+    # Lane 0 late by a word, Lane 1 word shift (lanes latencies: COM words 2 words apart, half the
+    # TS period).
+    "lane0_late_shift": ["--lane0-delay", "1", "--lane1-delay", "0", "--lane1-word-shift", "2"],
 }
 
 class TestPHYX2(unittest.TestCase):
-    def run_sim(self, name, args):
+    def run_sim(self, name, args, mode="x2", swap=False):
+        # mode: x2 (Gen 1x2 negotiated), x1 (Gen 1x1 negotiated by two Gen 1x2 PHYs, Device not x2
+        # capable) or ss (Gen 1x1 SuperSpeed Device, SuperSpeed fallback of the Host).
         cmd = [sys.executable, str(ROOT / "sim.py"), "--lanes", "2",
             "--output-dir", str(get_output_dir(self, name))] + args
         try:
@@ -454,27 +460,66 @@ class TestPHYX2(unittest.TestCase):
         tail = "\n---- tail ----\n" + out[-4000:]
         self.assertEqual(p.returncode, 0, f"{name}: Simulation failed." + tail)
         self.assertNotIn("Simulation timeout", out, f"{name}: No PRBS completion." + tail)
+        x2 = int(mode == "x2")
+        # Lanes swap detected by the Device only with crossed lanes (the Host keeps its lanes).
+        self.assertEqual(len(re.findall(r"DEV\s*lanes swap: 1", out)), int(swap), tail)
+        self.assertNotRegex(out, r"HOST\s*lanes swap", tail)
         for side in ["HOST", r"DEV\s"]:
-            # SuperSpeedPlus Polling done with Gen 1x2 negotiated.
-            self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: 1, gen2: 0\)", tail)
-            # Single link training to U0, lanes deskewed.
+            # SuperSpeedPlus Polling done with Gen 1x2/Gen 1x1 negotiated (SuperSpeed fallback of
+            # the Host with a SuperSpeed Device).
+            if mode == "ss":
+                if side == "HOST":
+                    self.assertRegex(out, side + r"\s*SSP entering SS-FALLBACK state", tail)
+            else:
+                self.assertRegex(out, side + r"\s*SSP entering DONE state \(x2: %d, gen2: 0\)" % x2, tail)
+            # Single link training to U0, lanes deskewed (Gen 1x2).
             u0 = re.findall(side + r"\s*entering U0 state", out)
             self.assertEqual(len(u0), 1, f"{name}: {side} entered U0 {len(u0)} times." + tail)
             self.assertNotRegex(out, side + r"\s*entering (Recovery|eSS|Polling.ExitTo|Compliance)",
                 tail)
-            self.assertRegex(out, side + r"\s*lanes deskewed", tail)
+            if x2:
+                self.assertRegex(out, side + r"\s*lanes deskewed", tail)
         for side in ["HOST", "DEV"]:
-            m = re.search(side + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors, x2: (\d)",
+            m = re.search(side + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors, x2:\s*(\d)",
                 out)
             self.assertIsNotNone(m, f"{name}: No {side} PRBS report." + tail)
             self.assertGreater(int(m.group(2)), 0)
             self.assertEqual(int(m.group(3)), 0, f"{name}: {side} PRBS errors." + tail)
-            self.assertEqual(int(m.group(4)), 1)
+            self.assertEqual(int(m.group(4)), x2)
 
     def test_phy_x2(self):
         # Device RX Lane 1 late by 2 Symbols (1 word delay, 2 Symbols word shift), Host Lane 1 TX
         # inverted, extra SKP Ordered Sets alternately on Lane 1/Lane 0.
         self.run_sim("nominal", [])
+
+    def test_phy_x2_fallback_x1(self):
+        # Device not Gen 1x2 capable: Gen 1x1 negotiated (LBPM), single lane on Lane 0 (Lane 1 in
+        # electrical idle), extra SKP Ordered Sets on the Host Lane 0 (framing re-alignment).
+        self.run_sim("fallback_x1", ["--dev-mode", "x1"], mode="x1")
+
+    def test_phy_x2_crossed(self):
+        # Flipped USB Type-C plug: Host Lane 0/1 on the Device SerDes 1/0, the Device detects the
+        # Configuration Lane (lanes swap) from the Host Polling.LFPS.
+        self.run_sim("crossed", ["--lanes-crossed"], swap=True)
+
+    def test_phy_x2_crossed_fallback_x1(self):
+        # Flipped plug, Gen 1x1 negotiated: single lane on the Device SerDes 1.
+        self.run_sim("crossed_x1", ["--lanes-crossed", "--dev-mode", "x1"], mode="x1", swap=True)
+
+    def test_phy_x2_tx_inverted(self):
+        # All the lanes TX inverted on both PHYs (as the LiteX Acorn Baseboard Mini SFP lanes): the
+        # four RX polarities flipped in Polling.Active (Lane 1 polarity from its TS1, 6.13.7).
+        self.run_sim("tx_inverted", ["--lanes-tx-inverted"])
+
+    def test_phy_x2_x1_runtime(self):
+        # Device built Gen 1x2 capable, Gen 1x2 disabled at runtime (x2_enable = 0): Gen 1x1
+        # negotiated, single lane on Lane 0, flipped plug and inverted lanes.
+        self.run_sim("x1_runtime", ["--dev-x2-disable", "--lanes-crossed", "--lanes-tx-inverted"],
+            mode="x1", swap=True)
+
+    def test_phy_x2_fallback_ss(self):
+        # Gen 1x1 SuperSpeed Device (no SCD): SuperSpeed fallback of the Host, Lane 0 only.
+        self.run_sim("fallback_ss", ["--dev-mode", "ss"], mode="ss")
 
     @pytest.mark.slow
     def test_phy_x2_configs(self):

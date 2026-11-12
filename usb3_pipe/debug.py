@@ -4,9 +4,9 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
-"""USB3 PHY debug (doc/manual: Debugging): LTSSM state history and counters (USB3PHYDebug), RX
-errors (USB3RXErrorsDebug), SerDes controls and measurements (USB3SerDesDebug), LiteScope probes
-groups (usb3_analyzer_groups).
+"""USB3 PHY debug (doc/manual: Debugging): LTSSM state history and counters (USB3PHYDebug), Gen 1x2
+lanes status/counters (USB3LanesDebug), RX errors (USB3RXErrorsDebug), SerDes controls and
+measurements (USB3SerDesDebug), LiteScope probes groups (usb3_analyzer_groups).
 """
 
 from migen import *
@@ -52,7 +52,7 @@ class USB3PHYDebug(LiteXModule):
     """
     def __init__(self, phy, serdes, sys_clk_freq):
         ltssm  = phy.ltssm
-        pipe   = phy.pipe
+        pipe   = phy.pipes[0] # Configuration Lane (Lane 0) with 2 lanes.
         cd     = phy.pipe_cd
         events = pipe if cd is None else ltssm
 
@@ -198,6 +198,88 @@ class USB3PHYDebug(LiteXModule):
             self.sync += signal_d.eq(signal)
             event = (signal & ~signal_d) if edge else signal
             self.sync += If(clear,
+                csr.status.eq(0)
+            ).Elif(event & (csr.status != (2**32 - 1)),
+                csr.status.eq(csr.status + 1)
+            )
+
+# USB3 Lanes Debug ---------------------------------------------------------------------------------
+
+class USB3LanesDebug(LiteXModule):
+    """USB3 Gen 1x2 Lanes Debug (CSRs, hardware bring-up of USB3PHY(lanes=2)), with USB3PHYDebug on
+    the Configuration Lane (Lane 0):
+    - Status: negotiated x2/gen2, lanes deskewed/swapped, per lane SerDes ready/RX idle/RX polarity.
+    - Per lane event counters (TS1/TS1 inverted/TS2 detections, RX errors cycles) and deskew
+      acquisitions.
+    """
+    def __init__(self, phy, serdes):
+        assert len(serdes) == 2
+        self._clear   = CSR() # Clear counters (write).
+        self._control = CSRStorage(fields=[
+            CSRField("x2_enable", size=1, offset=0, reset=1,
+                description="Gen 1x2 advertised in the SuperSpeedPlus Polling (0: Gen 1x1 only), from the next training (retrain), with a PHY built x2 capable."),
+        ])
+        self._status = CSRStatus(fields=[
+            CSRField("x2",             size=1, offset=0, description="Gen 1x2 negotiated (SuperSpeedPlus Polling)."),
+            CSRField("gen2",           size=1, offset=1, description="Gen 2 negotiated."),
+            CSRField("deskew_aligned", size=1, offset=2, description="Lanes deskewed."),
+            CSRField("lane_swap",      size=1, offset=3, description="Lanes swapped (Configuration Lane on SerDes 1)."),
+            CSRField("ready",          size=2, offset=4, description="SerDes ready (per lane)."),
+            CSRField("rx_idle",        size=2, offset=6, description="SerDes RX idle (per lane)."),
+            CSRField("rx_polarity",    size=2, offset=8, description="SerDes RX polarity (per lane)."),
+        ])
+
+        # # #
+
+        self.comb += [
+            self._status.fields.x2.eq(phy.x2),
+            self._status.fields.gen2.eq(phy.gen2),
+            self._status.fields.deskew_aligned.eq(phy.deskew_aligned),
+            self._status.fields.lane_swap.eq(phy.lane_swap),
+            self._status.fields.ready.eq(Cat(*[s.ready for s in serdes])),
+            self._status.fields.rx_idle.eq(Cat(*[s.rx_idle for s in serdes])),
+            self._status.fields.rx_polarity.eq(Cat(*[s.rx_polarity for s in serdes])),
+        ]
+
+        if hasattr(phy, "x2_enable"):
+            self.comb += phy.x2_enable.eq(self._control.fields.x2_enable)
+
+        # Event Counters.
+        events = [("deskew", phy.deskew_aligned, 1)]
+        with_triggers = hasattr(phy, "lanes_idle") # USB3PHY(lanes=2) Recovery triggers.
+        if with_triggers:
+            u0 = phy.ltssm.u0
+            events += [
+                # U0 exits requested by the lanes (Recovery): deskew lost, lane in electrical idle.
+                ("deskew_lost_u0", u0 & phy.lanes_deskew_lost, 1),
+                ("lane_idle_u0",   u0 & phy.lanes_idle,        1),
+                ("realign_u0",     phy.lanes_realign,          0),
+            ]
+        for lane, (pipe, s) in enumerate(zip(phy.pipes, serdes)):
+            events += [
+                # Name,                          Signal,             Edge (1) or Level (0).
+                (f"lane{lane}_ts1",              pipe.ts_rx_ts1,     1),
+                (f"lane{lane}_ts1_inv",          pipe.ts_rx_ts1_inv, 1),
+                (f"lane{lane}_ts2",              pipe.ts_rx_ts2,     1),
+                (f"lane{lane}_rx_errors_cycles", s.rx_errors,        0),
+            ]
+            if with_triggers:
+                events += [(f"lane{lane}_rx_idle_u0_cycles", u0 & phy.x2 & s.rx_idle, 0)]
+            # SerDes RX status: elastic buffer errors, comma realignments (physical SerDes), RX
+            # re-initializations on continuous decode errors.
+            for name in ["rx_buferror", "rx_realign"]:
+                if hasattr(s, name):
+                    events += [(f"lane{lane}_{name}", getattr(s, name), 0)]
+            if hasattr(phy, "rx_errors_reinit"):
+                events += [(f"lane{lane}_rx_errors_reinit", phy.rx_errors_reinit[lane], 0)]
+        for name, signal, edge in events:
+            csr = CSRStatus(32, name=f"{name}_count",
+                description=f"{name} {'events' if edge else 'cycles'} count (saturating).")
+            setattr(self, f"_{name}_count", csr)
+            signal_d = Signal()
+            self.sync += signal_d.eq(signal)
+            event = (signal & ~signal_d) if edge else signal
+            self.sync += If(self._clear.re,
                 csr.status.eq(0)
             ).Elif(event & (csr.status != (2**32 - 1)),
                 csr.status.eq(csr.status + 1)
@@ -426,7 +508,7 @@ def gen2_rx_analyzer_signals(rx_datapath):
 
 # USB3 Analyzer Groups -----------------------------------------------------------------------------
 
-USB3_ANALYZER_GROUPS = ["link", "lfps", "ts", "datapath", "phase", "u3"]
+USB3_ANALYZER_GROUPS = ["link", "lfps", "ts", "datapath", "phase", "u3", "lanes", "realign"]
 
 def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
     """LiteScope probes groups of a USB3PHY/USB3SerDes (bench/usb3_analyzer.py), returns a dict
@@ -436,10 +518,15 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
     - ts       : LTSSM + TS detections/generation, SerDes RX/TX streams.
     - datapath : LTSSM + SerDes and PHY RX/TX streams, SKP removal.
     - phase    : LTSSM + RX vs TX clocks phase (requires serdes_debug: USB3SerDesDebug).
+    - lanes    : LTSSM + Gen 1x2 lanes words at the deskew input, deskew pairing, destriped words,
+                 lanes TX words to the SerDes.
+    - realign  : LTSSM + Gen 1x2 lanes RX words at the deskew input, deskew pairing, lanes Recovery
+                 triggers, both lanes SerDes RX status (comma realignments, decode errors, idle):
+                 a lane realigned in U0 (narrower than lanes: no TX/destriped words).
     - u3       : LTSSM + U3 exit: LFPS TX/RX, TS1 detection, SerDes RX stream, RX vs TX clocks phase
                  (requires serdes_debug).
     """
-    pipe  = phy.pipe
+    pipe  = phy.pipes[0] # Configuration Lane (Lane 0) with 2 lanes.
     ltssm = phy.ltssm
     link_signals = [
         phy.ltssm_state,
@@ -477,6 +564,29 @@ def usb3_analyzer_groups(phy, serdes, serdes_debug=None):
             phy.source, phy.sink,
         ],
     }
+    if hasattr(phy, "deskew"):
+        # Gen 1x2 (lanes=2): both lanes words at the deskew input (after the per lane word alignment
+        # and SKP removal), deskew pairing (heads: marker at the FIFOs outputs) and destriped words.
+        deskew = phy.deskew
+        groups["lanes"] = link_signals + [
+            phy.x2, phy.lane_swap, deskew.aligned, deskew.clear, *deskew.heads,
+            *[getattr(deskew.sinks[lane], name) for lane in range(2) for name in ["valid", "data", "ctrl"]],
+            phy.source.valid, phy.source.data, phy.source.ctrl,
+            # TX: both lanes words to the SerDes (TS/scrambled data, before SKP insertion/8b10b).
+            pipe.ts_tx_ts1, pipe.ts_tx_ts2, phy.pipes[1].ts_tx_ts2,
+            *[getattr(phy.lane_swap_unit.lanes[lane], name) for lane in range(2) for name in ["tx_idle"]],
+            *[getattr(phy.lane_swap_unit.lanes[lane].sink, name) for lane in range(2)
+                for name in ["valid", "ready", "data", "ctrl"]],
+        ]
+        # Lanes RX words at the deskew input, lanes Recovery triggers (U0 exits requested by the
+        # lanes) and the physical SerDes RX status of both lanes (comma realignments, decode
+        # errors, electrical idle): a lane realigned in U0 (usb3_analyzer.py --trigger lanes_realign).
+        groups["realign"] = link_signals + [
+            phy.x2, phy.lane_swap, deskew.aligned, deskew.clear, *deskew.heads,
+            *[getattr(deskew.sinks[lane], name) for lane in range(2) for name in ["valid", "data", "ctrl"]],
+        ] + [getattr(phy, name) for name in ["lanes_realign", "lanes_deskew_lost", "lanes_idle"]
+            if hasattr(phy, name)] + [getattr(s, name) for s in getattr(phy, "lanes_phys_serdes", [])
+            for name in ["rx_realign", "rx_errors", "rx_idle"] if hasattr(s, name)]
     if serdes_debug is not None:
         groups["phase"] = link_signals + [
             serdes_debug.rx_tx_phase,
