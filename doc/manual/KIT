@@ -1,14 +1,14 @@
 # Manual kit (doc/manual/tools/kit.py): version and checksums of the kit files. Do not
 # edit: run kit.py update after changing a kit file, kit.py sync to copy the kit.
-version: 2026-11-12-95efcfea
+version: 2026-11-12-a8e53782
 
 5ace2b5983aba1862f44f7acd4ffd3819c7eb8e1fbb739cf3992cc7b05dcd1e9  .github/workflows/doc.yml
 57ff8c196ea43e58caf0e52d7a2f16f4a5a52c7e86edb4f578f66d912fa525a8  doc/diagrams/.gitignore
 fde8a7c8a6d1b68b26d86bb608aa1836f4f19abd875bcebac84c25d8fc76b6dd  doc/diagrams/README.md
 5c0fe7cef4109b57412c02efab7a77c4c56bf60e8bfd0c23d85b810c2517746e  doc/diagrams/build.py
 9c633f6472d06f370272b30a52cccef4bab15f568de6002d38b3ff0c588171a8  doc/diagrams/svgdiag.py
-19ff2a9befcb551702e6fe436cf77d3d9123fa4d558aeb431c727044cf548479  doc/manual/E_maintenance.md
-c6a2ee05bc2a32bed591030bb33261fa9af4c105327b73d84501f1f1d32778ab  doc/manual/README.md
+c39ba3e3606851ee751ede7c47cd31d7ba1df686a6f4b04121837501f88b36e1  doc/manual/E_maintenance.md
+71b96fa088ef6a31045492f5c25127bf39139daa3cf5cd8eabdcc718c4acac97  doc/manual/README.md
 acb7f091ee83b1362dd4bc06ab7339493cb7c496cf932401159ef1e3beb1a26a  doc/manual/STYLE.md
 8d796ac9715365ed408efc15b062f022ac27583b714edb03bd77b8cc3aaa1bbf  doc/manual/Z_appendix.md
 7eaa2e3fb2c3e297df178de44b9057b97a95d1c2e005563efb0ccfe559050b68  doc/manual/build.py
