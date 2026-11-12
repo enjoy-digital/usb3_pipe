@@ -3,8 +3,8 @@ name: doc
 # Manual of the project (doc/manual, doc/diagrams; part of the manual kit, the same in every core):
 # - check: on every push and pull request, figures up to date and manual sources consistent (links,
 #   anchors, images, table widths), no LaTeX needed.
-# - nightly: builds the PDF and HTML manual from master and publishes them on the rolling
-#   "manual-nightly" pre-release (not in the source tree). Skipped when master has not changed since
+# - nightly: builds the PDF and HTML manual from the default branch and publishes them on the rolling
+#   "manual-nightly" pre-release (not in the source tree). Skipped when it has not changed since
 #   the last publication, always run by hand (workflow_dispatch).
 
 on:
@@ -51,10 +51,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
-      # Skip the scheduled build when master is the commit of the last publication.
+      # Skip the scheduled build when the default branch is the commit of the last publication.
       - name: Check For Changes
         id: changes
         run: |
@@ -62,7 +62,7 @@ jobs:
           last=$(gh release view "$TAG" --json body --jq .body 2>/dev/null | grep -oE '[0-9a-f]{40}' | head -n1 || true)
           if [ "${{ github.event_name }}" = "schedule" ] && [ "$head" = "$last" ]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
-            echo "master unchanged since the last manual ($head), nothing to do."
+            echo "${{ github.event.repository.default_branch }} unchanged since the last manual ($head), nothing to do."
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
@@ -104,12 +104,12 @@ jobs:
           head=$(git rev-parse HEAD)
           name=$(python3 doc/manual/build.py --print name)
           title=$(python3 doc/manual/build.py --print title)
-          notes="$title manual, generated $(date -u +%Y-%m-%d) from master $head.
+          notes="$title manual, generated $(date -u +%Y-%m-%d) from ${{ github.event.repository.default_branch }} $head.
 
           - PDF: https://github.com/${{ github.repository }}/releases/download/$TAG/$name.pdf
           - HTML (self-contained, download and open): https://github.com/${{ github.repository }}/releases/download/$TAG/$name.html
 
-          Rebuilt every night when master changes (.github/workflows/doc.yml)."
+          Rebuilt every night when the default branch changes (.github/workflows/doc.yml)."
           git tag -f "$TAG" "$head"
           git push -f origin "refs/tags/$TAG"
           if gh release view "$TAG" > /dev/null 2>&1; then
