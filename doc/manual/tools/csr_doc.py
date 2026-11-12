@@ -29,12 +29,15 @@ SNAPSHOT_DIR = os.path.join(REPO_ROOT, "doc", "manual", "csr")
 APPENDIX     = os.path.join(REPO_ROOT, "doc", "manual", "A_registers.md")
 
 # Project configuration (doc/manual/registers.py): CONFIGS (designs to elaborate), BANKS (prefix,
-# title, origin, path), NOTES, INTRO, USAGE, MAIN_BANK and elaborate(name, repo_root).
+# title, origin, path), NOTES, ACCESS, INTRO, USAGE, MAIN_BANK and elaborate(name, repo_root).
+# ACCESS (optional) overrides the access of registers by full name (ex: {"i2c_master_rxtx": "rw"}):
+# a plain CSR is documented as a write-only strobe, but some designs also drive its read value.
 sys.path.insert(0, os.path.join(REPO_ROOT, "doc", "manual"))
 import registers as project  # noqa: E402
 CONFIGS  = project.CONFIGS
 BANKS    = project.BANKS
 NOTES    = getattr(project, "NOTES", {})
+ACCESS   = getattr(project, "ACCESS", {})
 PREFIXES = [b[0] for b in BANKS]
 
 # Dump ---------------------------------------------------------------------------------------------
@@ -63,6 +66,7 @@ def _csr_entry(csr, csr_json, bank, base):
         access, reset = ("ro" if csr.read_only else "rw"), None
     else:
         access, reset = "wo", None
+    access = ACCESS.get(full, access)
     fields = []
     for f in getattr(csr, "fields", None) and csr.fields.fields or []:
         fields.append({
