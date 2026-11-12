@@ -35,9 +35,9 @@ Outputs are written to `build/doc/<name>.pdf` and `build/doc/<name>.html`, `<nam
 
 - `check`, on every push and pull request: `doc/diagrams/build.py --check` (figures up to date, no
   layout warning) and `doc/manual/build.py --check` (links, anchors, images, table widths).
-- `nightly`, every night on `master` (and on demand with `gh workflow run doc.yml`): builds the PDF
-  and HTML and publishes them on the rolling `manual-nightly` pre-release of the repository,
-  whose notes record the commit. A night without a new commit on `master` is skipped.
+- `nightly`, every night on the default branch, `master` or `main` (and on demand with
+  `gh workflow run doc.yml`): builds the PDF and HTML and publishes them on the rolling
+  `manual-nightly` pre-release of the repository, whose notes record the commit. A night without a new commit on the default branch is skipped.
 
 ## Layout
 

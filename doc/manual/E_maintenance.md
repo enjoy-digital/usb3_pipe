@@ -36,10 +36,10 @@ file can be copied or published alone.
 ## Continuous integration and publication {#maint-ci}
 
 Every push and pull request runs the figure and source checks (`.github/workflows/doc.yml`, job
-`check`), so a broken link or a stale figure fails the pull request. Every night, when `master` has
-new commits, the job `nightly` builds the PDF and HTML and replaces the assets of the
-`manual-nightly` pre-release of the repository. The manual is therefore never committed: the
-release always holds the manual of the latest `master`, and its notes give the commit.
+`check`), so a broken link or a stale figure fails the pull request. Every night, when the default
+branch (`master` or `main`) has new commits, the job `nightly` builds the PDF and HTML and replaces
+the assets of the `manual-nightly` pre-release of the repository. The manual is therefore never committed: the
+release always holds the manual of the latest default branch, and its notes give the commit.
 
 ## Changing the manual {#maint-changes}
 
