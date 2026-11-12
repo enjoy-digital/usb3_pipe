@@ -19,7 +19,7 @@ transceiver wrappers in [Transceivers](#transceivers).
 | Item                 | Value                                                                 |
 |----------------------|-----------------------------------------------------------------------|
 | Top-level class      | `USB3PHY` (`usb3_pipe/phy.py`)                                        |
-| Operating modes      | Gen 1x1 (5 Gbps), Gen 2x1 (10 Gbps), Gen 1x2 (simulation only)        |
+| Operating modes      | Gen 1x1 (5 Gbps), Gen 2x1 (10 Gbps), Gen 1x2 PHY (experimental)       |
 | Link interface       | 32-bit words (4 symbols), 64-bit pairs or 128-bit quads (`link_words`) |
 | Link clock           | `sys`, 125 MHz or more; lower with `pipe_cd` and 64-bit words         |
 | Transceivers         | Artix-7 GTP, Kintex-7 GTX, Kintex UltraScale+ GTY, Gowin GTR12, ECP5 DCU |
@@ -68,10 +68,10 @@ transceiver files are described in [Datapath](#datapath) and [Transceivers](#tra
 | `framing.py`     | `Gen2LinkTX`, `Gen2LinkRX`, `WordsToPairs`         | Gen 2 packet framing, 64-bit word pairs helpers             |
 | `common.py`      | `Symbol`, `OrderedSet`, `AsyncFIFO`                | Symbols, Ordered Sets, LTSSM to PIPE signal list, FIFOs     |
 | `crc.py`         | `CRC5`, `CRC16`, `CRC32`                           | CRCs of the link layer packets                              |
-| `lanes.py`       | `LaneStriper`, `LaneDestriper`, `LaneDeskew`       | Gen 1x2 lane striping and deskew                            |
+| `lanes.py`       | `LaneStriper`, `LaneDeskew`, `LaneSwap`            | Gen 1x2 lane striping, deskew and lane swap                 |
 | `serdes.py`      | `USB3SerDes`, `GW5USB3SerDes`, `ECP5USB3SerDes`    | Transceiver wrappers: AMD, Gowin and Lattice                |
 | `gw5/`           | TOML files, `gen_toml.py`                          | Gowin GTR12 register configurations                         |
-| `debug.py`       | `USB3PHYDebug`, `USB3SerDesDebug`                  | Debug registers and LiteScope groups                        |
+| `debug.py`       | `USB3PHYDebug`, `USB3LanesDebug`                   | Debug registers and LiteScope groups                        |
 | `gen.py`         | `USB3PIPECore`                                     | Standalone Verilog core generator `usb3_pipe_gen`           |
 
 The standalone generator wraps the PHY in a Verilog module for designs outside LiteX; it is
@@ -320,19 +320,33 @@ its own PIPE under a single LTSSM. Lane 0 is the configuration lane: it alone ca
 and the SuperSpeedPlus Polling, while lane 1 stays in electrical idle.
 
 The link words are 64-bit and split symbol by symbol: even symbols on lane 0, odd symbols on
-lane 1 (`LaneStriper`). On receive, `LaneDeskew` aligns the lanes on the Ordered Sets, which both
-lanes send at the same time, and `LaneDestriper` rebuilds the words. Each lane has its own
-scrambler seed and its own polarity.
+lane 1 (`LaneStriper`). Both lanes transmit in lockstep: the Logical Idle is striped with the data,
+so a lane never sends a word the other lane does not send. Each lane has its own scrambler seed
+and its own polarity.
 
-Gen 1x2 is validated in simulation only. The PHY does not fall back to Gen 1x1 on lane 0, and
-the device core has no SuperSpeedPlus link layer for two lanes.
+On receive, the deskew pairs the first COM symbols of each lane after a gap, the TSEQ before the
+TS1 or the Logical Idle before a Recovery, whatever the lanes latencies (`LaneDeskew`). The
+destriper then rebuilds the words (`LaneDestriper`). In U0 the PHY goes to Recovery when the
+deskew is lost, when a lane stays in electrical idle for 10 µs, or when a lane realigns its words.
+A lane that keeps decoding errors is re-initialized.
+
+The device finds which receiver gets the configuration lane from the partner's Polling LFPS and
+swaps the lanes, as a flipped USB Type-C plug needs (`LaneSwap`). When the partner is not Gen 1x2
+capable, the link trains at Gen 1x1 on lane 0, and the 32-bit words of that lane are on
+`sink_x1` and `source_x1`. The `x2_enable` input withdraws the Gen 1x2 capability for the next
+training.
+
+The Gen 1x2 PHY is experimental. It is validated between two LiteX Acorn Baseboard Minis with SFP
+DAC cables and PRBS stand-ins, not yet with a USB host. The device core has no SuperSpeedPlus link
+layer for two lanes.
 
 ## Limitations {#phy-limitations}
 
 - Hardware: Gen 1x1 validated on the Artix-7 GTP, Kintex UltraScale+ GTY, Gowin GTR12 and ECP5
   DCU (the Kintex-7 GTX is build-tested). Gen 2x1 is validated on the Kintex UltraScale+ GTY and
   in bring-up on the Gowin GW5AST GTR12.
-  Gen 1x2 runs in simulation only; Gen 2x2 is not started.
+  The Gen 1x2 PHY runs between two Artix-7 GTP boards, not yet with a USB host; Gen 2x2 is not
+  started.
 - With `pipe_cd`, Gen 1 is validated on hardware; Gen 2 runs in simulation and is in bring-up.
   Its throughput, a little below the 125 MHz targets, is measured in [Performance](#performance).
 - Gen 2 has no elastic buffer: the Gen 2 receive path runs in the recovered clock domain. Gen 2

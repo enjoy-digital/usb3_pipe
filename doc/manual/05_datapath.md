@@ -318,7 +318,7 @@ Gen 2 words around it are described with the option in [Slower fabrics: `pipe_cd
 
 Gen 1x2 runs two Gen 1 lanes in parallel, each with its own PIPE, 8b/10b, SKP handling and
 scrambler. The scramblers use a different seed per lane: `FFFFh` on lane 0 and `8000h` on lane 1
-(USB 3.2 section 6.13.5). Striping, deskew and the status of this simulation-only mode are
+(USB 3.2 section 6.13.5). Striping, deskew and the status of this experimental mode are
 described in [Gen 1x2 lanes](#phy-lanes).
 
 ## In the code {#dp-code}

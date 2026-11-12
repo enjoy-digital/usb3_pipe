@@ -151,6 +151,11 @@ Numbers are in cycles of the 133 MHz simulation clock unless stated.
 | `--host-burst-duplex-skp` | off | Full duplex with ACKs behind each OUT packet and SKPs between packets |
 | `--host-lbad-test` | off | Bulk OUT burst with a header CRC error: LBAD, LRTY, retransmission |
 | `--lanes` | 1 | 1 (Gen 1x1) or 2 (Gen 1x2, PRBS stand-ins) |
+| `--dev-mode` | `x2` | Two lanes: device `x2` (Gen 1x2), `x1` (not x2 capable) or `ss` (SuperSpeed device) |
+| `--dev-x2-disable` | off | Two lanes: device Gen 1x2 capability withdrawn at runtime (Gen 1x1) |
+| `--lanes-crossed` | off | Two lanes: host lane 0 on device lane 1 (flipped USB Type-C plug) |
+| `--lanes-tx-inverted` | off | Two lanes: transmit polarity of every lane inverted on both sides |
+| `--prbs-gap-bits` | 4 | Gaps of 0 to 2^N - 1 cycles between the PRBS packets |
 | `--lane0-delay` | 0 | Host to device delay of lane 0 (words, two lanes) |
 | `--lane1-delay` | 1 | Host to device delay of lane 1 (words, two lanes) |
 | `--lane1-word-shift` | 2 | Receive word shift of device lane 1 (symbols, two lanes) |
