@@ -41,6 +41,9 @@ words, then linked to the module that implements it.
   font (`0x1d50`); data rates as `Gbps` and `Mbps`, throughputs as `MB/s` (10^6 bytes per
   second, as the host tools print them), sizes in KiB and MiB, times as "µs", "ns", "ms".
 - No em dashes, no arrows in prose, no "etc." and no "..." in prose; finish the list.
+- No sentence that states what the reader can see or that only announces what follows: "The
+  photograph below shows the board next to a coin", "The table below lists...", "This section
+  describes...". Captions identify figures and tables; a sentence must bring a fact.
 
 ## Structure of a chapter
 
@@ -80,8 +83,9 @@ Part I section of each concept instead of explaining it again.
   smaller font.
 - No sentence in a figure. Box labels are two or three words, arrow labels one to three words;
   the explanation, the formulas and the numbers go in the text or in the caption.
-- Every figure has a caption that states what to look at, and the text refers to it ("the figure
-  below shows...") before the figure appears.
+- Every figure has a caption that identifies it and states what to look at. The text does not
+  announce the figure ("the figure below shows..."): it gives what the figure cannot show (a
+  conclusion, a limit, a number), or nothing.
 - `Diagram.check()` fails the build (`python3 doc/diagrams/build.py --check`) on: a canvas width
   other than 760 px; any label under 10 px; a box label wider or taller than its box; overlapping
   text labels; a shape or a text leaving the canvas; a text overlapping a box it does not belong
