@@ -162,7 +162,7 @@ Fields of `status`:
 | `configured` | 1 | Configured (SET_CONFIGURATION). |
 | `address` | 14:8 | Device Address. |
 
-Fields of `link_state`:
+Fields of `link_state` (a snapshot from the previous system clock):
 
 | Field | Bits | Description |
 |------------------------|---------|------------------------------------------------------|

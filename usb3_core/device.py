@@ -157,6 +157,10 @@ class USB3DeviceCore(LiteXModule):
         ]
         self._link_state   = CSRStatus(fields=[CSRField(name, size=size, description=description)
             for name, size, description in link_state_fields])
+        # The ready handshake includes arbitration and PHY backpressure. Snapshot debug
+        # signals before the CSR read mux so instrumentation does not extend that path.
+        link_state = Signal(len(self.link.dbg_state))
+        self.sync += link_state.eq(self.link.dbg_state)
         # Recovery causes (link dbg_recovery_cause, sampled on the dbg_recovery pulse): last cause
         # and 8-bit saturating counts per cause.
         causes = ["hp_seq", "lgood", "lcrd", "pending_hp", "credit_hp"]
@@ -198,7 +202,7 @@ class USB3DeviceCore(LiteXModule):
             self._tx_retry.status.eq(self.link.tx_retry),
             self._recovery_req.status.eq(self.link.recovery_req),
             *[getattr(self._link_state.fields, name).eq(
-                self.link.dbg_state[offset:offset + size])
+                link_state[offset:offset + size])
                 for name, size, offset in zip(
                     [f[0] for f in link_state_fields],
                     [f[1] for f in link_state_fields],
