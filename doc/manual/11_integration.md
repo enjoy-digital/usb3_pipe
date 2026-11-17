@@ -218,6 +218,15 @@ the host acknowledges them. Each packet slot costs block RAM, and a larger burst
 latency. The vendor examples use 8; 16 gives the best Bulk IN rate on hosts that open windows of
 `max_burst` packets.
 
+**Burst coalescing.** The last full-size IN packet waits briefly for another packet before
+ending its burst. The writer-idle hold is set by `wr_idle_cycles` (positive integer, default 64); short packets bypass it.
+Increasing the hold can avoid End-of-Burst, ERDY and request round trips between sparse packets.
+The stopped writer still releases its final full packet when the hold expires.
+
+The vendor example helper accepts the same setting as `bulk_in_idle_cycles`. Both APIs default
+to 64 cycles. The 100 MHz ECPIX-5 loopback uses 1024 cycles, or 10.24 us: a throughput/latency
+tradeoff for streaming workloads, not a change to the default of other device classes.
+
 **PHY clock domain.** On a fabric that does not reach 125 MHz for the link layer and the device
 core, `pipe_cd` keeps the PHY datapath and the transceiver wrapper in a 125 MHz domain and runs the
 LTSSM, the link layer and the device core in `sys` on 64-bit words. The Tang Mega 138K Pro target

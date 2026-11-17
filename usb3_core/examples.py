@@ -32,7 +32,7 @@ from litex.soc.cores.uart   import UART, Stream2Wishbone
 
 from usb3_core.common      import endpoint_layout
 from usb3_core.device      import USB3DeviceCore
-from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT
+from usb3_core.bulk        import USB3BulkIN, USB3BulkOUT, WR_IDLE_CYCLES
 from usb3_core.descriptors import bulk_descriptors, USB3Descriptors, DEVICE_CLASS_IAD
 from usb3_core.cdc_acm     import USB3CDCACM, USB3CDCACMFunction
 from usb3_core.cdc_acm     import cdc_acm_interfaces, add_cdc_acm_requests
@@ -67,10 +67,11 @@ def add_usb3_console(soc, usb3_acm):
 # USB3 Example -------------------------------------------------------------------------------------
 
 def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=False, max_burst=8,
-    with_trace=True):
+    with_trace=True, bulk_in_idle_cycles=WR_IDLE_CYCLES):
     """Add a USB3 Device Core example design to soc (on usb3_phy), with_lpm: U1/U2 Link Power
     Management, max_burst: Bulk endpoints Max Burst (vendor Bulk examples), with_trace: core
-    traces."""
+    traces. bulk_in_idle_cycles: writer-idle hold in system cycles for the vendor Bulk IN
+    endpoint (loopback/wishbone/bench), default 64."""
     assert example in USB3_EXAMPLES
     # Link Layer words (USB3PHY link_words): 64-bit Bulk endpoints in the vendor Bulk examples, and
     # in the Mass Storage/CDC-ACM ones (32-bit functions through the endpoint converters).
@@ -169,7 +170,8 @@ def add_usb3_example(soc, usb3_phy, sys_clk_freq, example="loopback", with_lpm=F
     else:
         descriptors = bulk_descriptors(max_burst=max_burst)
         endpoints   = [
-            USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw),
+            USB3BulkIN(ept=1,  max_burst=max_burst, data_width=dw,
+                wr_idle_cycles=bulk_in_idle_cycles),
             USB3BulkOUT(ept=2, max_burst=max_burst, data_width=dw),
         ]
         soc.usb3_core = usb3_core = USB3DeviceCore(usb3_phy, sys_clk_freq, descriptors, endpoints,
