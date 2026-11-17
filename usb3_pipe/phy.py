@@ -86,12 +86,12 @@ class LinkWordsCDC(LiteXModule):
     between the packets are dropped and the RX words packed in full pairs (the Link Layer consumes
     one word per cycle outside of the DPP data), the TX packets (last: end of a Link Command, Header
     Packet or DPH + DPP, the Link Layer sends single words at the PIPE words rate/2 outside of the
-    DPP data) are stored and forwarded without Logical Idle inside packets.
-    LGOOD/LCRD/LBAD commands can pass queued packets at packet boundaries; ordering-sensitive
-    commands retain a fence against preceding/following packets. The TX
-    words received by the PIPE while not ready (tx_ready, outside of U0) are dropped: no stale words
-    at the next U0 entry (the Link Layer only sends words in U0, the PIPE tx_ready
-    resynchronization is shorter than the FIFO latency). The RX path has no back-pressure (received
+    DPP data) are stored and forwarded (LinkCommandPacketsBuffer): no Logical Idle inside the
+    packets, LGOOD/LCRD/LBAD output before the buffered packets at the packets boundaries, the other
+    Link Commands fenced (after the previous packets, before the next ones). The TX words received
+    by the PIPE while not ready (tx_ready, outside of U0) are dropped: no stale words at the next U0
+    entry (the Link Layer only sends words in U0, the PIPE tx_ready resynchronization is shorter
+    than the FIFO latency). The RX path has no back-pressure (received
     words at the line rate: the Link Layer reads its words at least at the received words rate).
 
     gen2: Gen 2 capable PHY: deeper RX FIFO (the Link Layer, 64-bit at half the PIPE frequency,
