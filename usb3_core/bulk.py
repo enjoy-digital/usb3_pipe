@@ -47,8 +47,7 @@ class USB3BulkIN(USB3Endpoint):
     """
     def __init__(self, ept, max_burst=8, data_width=32, wr_idle_cycles=WR_IDLE_CYCLES):
         assert max_burst in [2, 4, 8, 16]
-        if not isinstance(wr_idle_cycles, int) or wr_idle_cycles < 1:
-            raise ValueError("wr_idle_cycles must be a positive integer")
+        assert isinstance(wr_idle_cycles, int) and wr_idle_cycles >= 1
         USB3Endpoint.__init__(self, ept, direction=1, data_width=data_width)
         self.max_burst = max_burst
         self.sink  = sink = stream.Endpoint(endpoint_layout(data_width))

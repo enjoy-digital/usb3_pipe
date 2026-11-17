@@ -70,5 +70,5 @@ class TestBulkCoalescing(unittest.TestCase):
 
     def test_invalid_idle_cycles(self):
         for value in [0, -1, None, 1.5]:
-            with self.subTest(value=value), self.assertRaises(ValueError):
+            with self.subTest(value=value), self.assertRaises(AssertionError):
                 USB3BulkIN(ept=1, wr_idle_cycles=value)
