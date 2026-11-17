@@ -258,6 +258,110 @@ class PacketsBuffer(LiteXModule):
             If(packet_out, packets_out.eq(packets_out + 1)),
         ]
 
+
+class LinkCommandPacketsBuffer(LiteXModule):
+    """Gen 1 packet buffer with a packet-boundary fast path for LGOOD/LCRD/LBAD.
+
+    Data packets remain store-and-forward: a DPH and its DPP are never separated.
+    Link Commands keep their mutual order. Commands that change link ordering
+    (notably LRTY) are fenced behind all preceding data/header packets; subsequent
+    packets cannot pass that fence. No packet already selected for output is
+    preempted, including while its first word is held under back-pressure.
+    """
+    def __init__(self, layout, depth=256, command_depth=8):
+        assert 4 <= command_depth <= depth
+        log2_int(command_depth)
+        self.sink   = sink   = stream.Endpoint(layout)
+        self.source = source = stream.Endpoint(layout)
+        self.drop   = Signal()
+
+        # # #
+
+        self.data = data = ResetInserter()(PacketsBuffer(layout, depth))
+        self.commands = commands = ResetInserter()(PacketsBuffer(layout, command_depth))
+        cbits = bits_for(depth)
+        self.descriptors = desc = ResetInserter()(stream.SyncFIFO(
+            [("barrier", cbits), ("fence", 1)], command_depth//2, buffered=True))
+        self.comb += [data.reset.eq(self.drop), commands.reset.eq(self.drop),
+            desc.reset.eq(self.drop)]
+
+        data_in  = Signal(cbits)
+        data_out = Signal(cbits)
+        lc_in    = Signal(cbits)
+        lc_out   = Signal(cbits)
+        in_packet = Signal()
+        in_command = Signal()
+        command = Signal()
+        valid = Signal()
+        accepted = Signal()
+        # Framing word in PHY order: SLC, SLC, SLC, EPF.
+        slc = SLC | (SLC << 8) | (SLC << 16) | (EPF << 24)
+        first_command = (sink.data[:32] == slc) & (sink.ctrl[:4] == 0xf)
+        # LC payload is byte-swapped by the Link Layer, with two identical copies.
+        info = Cat(sink.data[24:32], sink.data[16:24])[:11]
+        fast = (((info & 0x7f0) == 0x000) | ((info & 0x7f8) == 0x080) |
+            (info == 0x180))
+        self.comb += [
+            command.eq(Mux(in_packet, in_command, first_command)),
+            valid.eq(sink.valid & (in_packet | sink.first) & ~self.drop),
+            sink.connect(data.sink, omit={"valid", "ready"}),
+            sink.connect(commands.sink, omit={"valid", "ready"}),
+            data.sink.valid.eq(valid & ~command),
+            commands.sink.valid.eq(valid & command & desc.sink.ready),
+            sink.ready.eq(self.drop | (~in_packet & ~sink.first) |
+                Mux(command, commands.sink.ready & desc.sink.ready, data.sink.ready)),
+            accepted.eq(valid & sink.ready),
+            desc.sink.valid.eq(accepted & command & sink.last),
+            desc.sink.barrier.eq(data_in),
+            desc.sink.fence.eq(~fast),
+        ]
+
+        busy = Signal()
+        selected = Signal()
+        command_pending = Signal()
+        command_ready = Signal()
+        data_allowed = Signal()
+        ended = Signal()
+        self.comb += [
+            command_pending.eq(lc_in != lc_out),
+            command_ready.eq(commands.source.valid & desc.source.valid &
+                (~desc.source.fence | (data_out == desc.source.barrier))),
+            # Wait across descriptor prefetch bubbles, and never pass a fence.
+            data_allowed.eq(~command_pending | (desc.source.valid &
+                desc.source.fence & (data_out != desc.source.barrier))),
+            source.valid.eq(busy & Mux(selected, commands.source.valid, data.source.valid) &
+                ~self.drop),
+            data.source.ready.eq(busy & ~selected & source.ready & ~self.drop),
+            commands.source.ready.eq(busy & selected & source.ready & ~self.drop),
+            ended.eq(source.valid & source.ready & source.last),
+            desc.source.ready.eq(ended & selected),
+        ]
+        for name in ["first", "last"] + [name for name, _ in layout]:
+            self.comb += getattr(source, name).eq(Mux(selected,
+                getattr(commands.source, name), getattr(data.source, name)))
+        self.sync += If(self.drop,
+            data_in.eq(0), data_out.eq(0), lc_in.eq(0), lc_out.eq(0),
+            in_packet.eq(0), in_command.eq(0), busy.eq(0), selected.eq(0),
+        ).Else(
+            If(accepted,
+                in_packet.eq(~sink.last),
+                If(~in_packet, in_command.eq(first_command)),
+                If(sink.last,
+                    If(command, lc_in.eq(lc_in + 1)).Else(data_in.eq(data_in + 1))
+                )
+            ),
+            If(~busy,
+                If(command_ready,
+                    selected.eq(1), busy.eq(1)
+                ).Elif(data_allowed & data.source.valid,
+                    selected.eq(0), busy.eq(1)
+                )
+            ).Elif(ended,
+                busy.eq(0),
+                If(selected, lc_out.eq(lc_out + 1)).Else(data_out.eq(data_out + 1))
+            )
+        )
+
 class WordsWindow(LiteXModule):
     """Link word pairs (gen2_link_layout, word 0 first) -> window of the next two words (w0/c0,
     w1/c1, n: 0-2 available words), consume: words consumed this cycle (0-n). nwords: entries and

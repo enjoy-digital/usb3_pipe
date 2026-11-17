@@ -26,7 +26,7 @@ from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, LaneSwap, lane_layout, link_layout
 from usb3_pipe.datapath   import RXWordAligner
 from usb3_pipe.framing    import gen2_link_layout, WordsToPairs, PairsToWords, WordsPacker
-from usb3_pipe.framing    import PacketsBuffer, LogicalIdleFilter, WordsNarrower
+from usb3_pipe.framing    import LinkCommandPacketsBuffer, LogicalIdleFilter, WordsNarrower
 
 # LTSSM <-> PIPE -----------------------------------------------------------------------------------
 
@@ -86,7 +86,9 @@ class LinkWordsCDC(LiteXModule):
     between the packets are dropped and the RX words packed in full pairs (the Link Layer consumes
     one word per cycle outside of the DPP data), the TX packets (last: end of a Link Command, Header
     Packet or DPH + DPP, the Link Layer sends single words at the PIPE words rate/2 outside of the
-    DPP data) are stored and forwarded (PacketsBuffer): no Logical Idle inside the packets. The TX
+    DPP data) are stored and forwarded without Logical Idle inside packets.
+    LGOOD/LCRD/LBAD commands can pass queued packets at packet boundaries; ordering-sensitive
+    commands retain a fence against preceding/following packets. The TX
     words received by the PIPE while not ready (tx_ready, outside of U0) are dropped: no stale words
     at the next U0 entry (the Link Layer only sends words in U0, the PIPE tx_ready
     resynchronization is shorter than the FIFO latency). The RX path has no back-pressure (received
@@ -117,7 +119,8 @@ class LinkWordsCDC(LiteXModule):
                 pipe.source.ready.eq(1),
             ]
         else:
-            self.tx_packets = tx_packets = ClockDomainsRenamer(pipe_cd)(PacketsBuffer(layout))
+            self.tx_packets = tx_packets = ClockDomainsRenamer(pipe_cd)(
+                LinkCommandPacketsBuffer(layout))
             to_words = ClockDomainsRenamer(pipe_cd)(PairsToWords())
             # Registered PIPE output (timings: framing aligner to the Logical Idle filter decoding).
             rx_pipe  = ClockDomainsRenamer(pipe_cd)(stream.Buffer([("data", 32), ("ctrl", 4)]))
