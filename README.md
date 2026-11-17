@@ -72,7 +72,7 @@ Gen 2x1 on UltraScale+ GTY and on Gowin GTR12 with 64/128-bit Link Layer words.*
 | [Acorn CLE-215+](https://github.com/enjoy-digital/litex-acorn-baseboard) on the LiteX Acorn Baseboard | Artix7 GTP | `bench/acorn.py` | Gen 1 validated, main development target |
 | Alibaba Cloud XCKU3P | UltraScale+ GTY | `bench/alibaba_xcku3p.py` | Gen 1 and Gen 2 validated, main Gen 2 target |
 | [Sipeed Tang Mega 138K Pro](https://wiki.sipeed.com/hardware/en/tang/tang-mega-138k/mega-138k-pro.html) | Gowin GW5AST GTR12 | `bench/sipeed_tang_mega_138k_pro.py` | Gen 1 validated |
-| [LambdaConcept ECPIX-5](https://shop.lambdaconcept.com/home/46-ecpix-5.html) | Lattice ECP5-5G DCU | `bench/lambdaconcept_ecpix5.py` | Gen 1 validated: IN 434MB/s, OUT 449MB/s (on-board USB-C, open source toolchain) |
+| [LambdaConcept ECPIX-5](https://shop.lambdaconcept.com/home/46-ecpix-5.html) | Lattice ECP5-5G DCU | `bench/lambdaconcept_ecpix5.py` | Gen 1 validated: IN 434MB/s, OUT 449MB/s; queued loopback 432MB/s per direction at 100MHz (on-board USB-C, open source toolchain) |
 | Gowin GW5AT-15 | Gowin GTR12 | SerDes in `usb3_pipe/gw5`, no target | Gen 1 validated: IN ~400MB/s (direct USB-C) |
 | [KC705](https://www.xilinx.com/products/boards-and-kits/ek-k7-kc705-g.html) | Kintex7 GTX | `bench/kc705.py` | Build-tested, hardware validation in progress |
 

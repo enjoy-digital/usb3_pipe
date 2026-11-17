@@ -2,7 +2,7 @@
 
 This appendix gathers the measured throughputs and the FPGA resources of the project. Use it to
 size a design and to know what to expect on a board before building. All throughputs are
-measured with a Linux xHCI host and the standard tools of the repository.
+measured with a Linux xHCI host and, unless noted, the standard tools of the repository.
 
 ## Test conditions {#perf-conditions}
 
@@ -44,6 +44,33 @@ on the ECPIX-5. The ECPIX-5 and GW5AT-15 numbers are measured with a max burst o
 | UVC, Isochronous, 1280x720 and 1920x1080 at 30 fps | 30.01 fps, complete frames |
 | Mass Storage RAM disk, READ(10) and WRITE(10) | 186 and 227 MB/s, single command |
 | CDC-ACM with UARTBone | about 6000 register reads per second |
+
+### ECPIX-5 queued loopback at 100 MHz {#perf-ecpix5-loopback}
+
+A 100 MHz link/core, 125 MHz PIPE, 64-bit link interface and max burst 16 were tested on
+an ECPIX-5 with 800 MT/s DDR3. A Rust host tool queued sixteen 64 KiB transfers per endpoint
+and verified every byte. The host used an Intel Raptor Lake xHCI root port and direct USB-C.
+
+| Transmit crossing | Measured window | Loopback payload per direction | Aggregate OUT + IN |
+|------------------------------|-----------------|--------------------------|--------------------|
+| Single packet FIFO | 30 s | 359.58 MB/s | 719.15 MB/s |
+| Packet-boundary Link Command priority | 120 s | 385.46 MB/s | 770.92 MB/s |
+| Priority + 1024-cycle bulk IN coalescing | 120 s | 432.13 MB/s | 864.27 MB/s |
+
+The command queue removes acknowledgement delays behind buffered data packets. The improvement
+is 7.2 %, reaching 77.1 % of the Gen 1 coding ceiling. The 120 s run verified 47.03 GB including
+two seconds of warmup, with no data errors, LBAD, retry or Recovery requests. With command priority in place, a longer bulk IN writer-idle threshold avoids ending bursts
+on ordinary sparse input gaps. The 1024-cycle setting reaches 86.4 % of the coding ceiling,
+verifying 52.72 GB including warmup with zero payload errors. Full-packet idle latency is
+bounded at 10.24 µs at 100 MHz; short packets bypass that delay. The generic default remains
+64 cycles. Host queue tuning alone reached about 386 MB/s. Both full 512 MiB memory patterns
+passed after each of three JTAG reloads of the final image.
+
+Registering the device core's link-state snapshot before the register read mux removes live
+arbitration from the bus read path. With identical BIOS contents and ordinary nextpnr seed 1,
+the complete ECPIX-5 image reaches 103.78 MHz versus 99.91 MHz before the snapshot.
+The 120 s loopback measurement above includes this change. Debug reads lag by one system clock;
+packet latency and throughput are unchanged. Placement remains seed sensitive.
 
 ## Gen 2 (10 Gbps) {#perf-gen2}
 
