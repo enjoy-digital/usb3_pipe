@@ -400,17 +400,18 @@ def add_usb3_profile(soc, phy):
     soc.comb += soc.usb3_profile.status.eq(Cat(*counts))
 
 def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
-    with_serdes_debug = False,
-    with_core         = True,
-    example           = "loopback",
-    with_lpm          = False,
-    max_burst         = 8,
-    link_words        = 1,
-    with_debug        = True,
-    with_profile      = True,
-    with_trace        = True,
-    phy_cd            = None,
-    phy_clk_freq      = None):
+    with_serdes_debug   = False,
+    with_core           = True,
+    example             = "loopback",
+    with_lpm            = False,
+    max_burst           = 8,
+    bulk_in_idle_cycles = 64,
+    link_words          = 1,
+    with_debug          = True,
+    with_profile        = True,
+    with_trace          = True,
+    phy_cd              = None,
+    phy_clk_freq        = None):
     """Add a USB3 device on serdes to soc: USB3PHY + debug, USB3 Device Core example design
     (with_core) and LEDs (SerDes ready, U0, Recovery).
 
@@ -462,7 +463,7 @@ def add_usb3_device(soc, serdes, leds=[], leds_inverted=False,
     # USB3 Core (Example design) -------------------------------------------------------------------
     if with_core:
         add_usb3_example(soc, usb3_phy, sys_clk_freq, example=example, with_lpm=with_lpm,
-            max_burst=max_burst, with_trace=with_trace)
+            max_burst=max_burst, with_trace=with_trace, bulk_in_idle_cycles=bulk_in_idle_cycles)
     else:
         soc.comb += usb3_phy.source.ready.eq(1)
 
@@ -516,6 +517,7 @@ def usb3_soc_args(parser, output_dir, with_uartbone=True):
     parser.add_argument("--with-lpm",          action="store_true", help="U1/U2 Link Power Management (loopback/bench examples).")
     parser.add_argument("--lean",              action="store_true", help="No PHY debug, throughput profile and core trace (timings).")
     parser.add_argument("--max-burst",         default=8, type=int, help="Bulk endpoints Max Burst (loopback/bench examples).", choices=[2, 4, 8, 16])
+    parser.add_argument("--bulk-in-idle-cycles", default=64, type=int, help="Bulk IN writer-idle hold in sys cycles (loopback/bench examples).")
     parser.add_argument("--link-words",        default=1, type=int, help="Link Layer words: 1 (32-bit), 2 (64-bit) or 4 (128-bit, Gen 2 with wide SerDes words), loopback/bench examples: Gen 2 bandwidth.", choices=[1, 2, 4])
     parser.add_argument("--with-serdes-debug", action="store_true", help="Enable SerDes debug (TX/loopback controls, clocks/RX errors measurements).")
     parser.add_argument("--with-analyzer",     action="store_true", help="Enable LiteScope Analyzer.")
@@ -532,15 +534,16 @@ def usb3_soc_argdict(args):
         "analyzer_group"    : args.analyzer_group,
         "analyzer_csv"      : os.path.join(args.output_dir, "analyzer.csv"),
         "usb3_kwargs"       : {
-            "with_serdes_debug" : args.with_serdes_debug,
-            "with_core"         : not args.no_core,
-            "example"           : args.example,
-            "with_lpm"          : args.with_lpm,
-            "max_burst"         : args.max_burst,
-            "link_words"        : args.link_words,
-            "with_debug"        : not args.lean,
-            "with_profile"      : not args.lean,
-            "with_trace"        : not args.lean,
+            "with_serdes_debug"   : args.with_serdes_debug,
+            "with_core"           : not args.no_core,
+            "example"             : args.example,
+            "with_lpm"            : args.with_lpm,
+            "max_burst"           : args.max_burst,
+            "bulk_in_idle_cycles" : args.bulk_in_idle_cycles,
+            "link_words"          : args.link_words,
+            "with_debug"          : not args.lean,
+            "with_profile"        : not args.lean,
+            "with_trace"          : not args.lean,
         },
     }
 
