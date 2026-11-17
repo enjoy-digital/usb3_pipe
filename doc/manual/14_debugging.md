@@ -66,9 +66,8 @@ starts its own `litex_server` on port 1240 (`--port`): stop any other server on 
 ./bench/acorn_run.py --build-dir build/acorn_dbg --attempts 20
 ```
 
-The device core's `link_state` register is sampled once per system clock before the register
-read mux. Its fields describe the previous cycle together; live transmit arbitration does not
-feed the bus read path. This diagnostic delay does not change packet handshakes or throughput.
+The `link_state` register is registered: its fields show the Link Layer state of the previous
+system clock cycle, all sampled together.
 
 ## The host side {#debug-host}
 

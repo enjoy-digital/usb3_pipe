@@ -318,10 +318,9 @@ The transmit crossing buffers complete packets before releasing them, so a slowe
 cannot insert Idle Symbols inside a packet. A Data Packet Header stays contiguous with its
 payload, as required by USB 3.2 section 7.2.1.2.3.
 
-Acknowledgements and credits use a separate command queue. They can pass queued data packets
-at packet boundaries, reducing acknowledgement latency while data is buffered. A selected
-packet is never interrupted. Commands retain their mutual order; retry and power-management
-commands also wait for preceding packets and block following packets. The queues reset on drop.
+Link Commands have their own queue. LGOOD, LCRD and LBAD go out before the buffered packets, at a
+packet boundary, so acknowledgements and credits are not delayed behind Data Packets. The other
+Link Commands, such as LRTY, keep their place between the packets (`LinkCommandPacketsBuffer`).
 
 ## Gen 1x2 lanes {#dp-lanes}
 
