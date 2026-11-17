@@ -155,10 +155,12 @@ class USB3DeviceCore(LiteXModule):
             ("tx_full",         1, "Tx Header Buffers full."),
             ("rx_seq",          4, "Next Header Sequence Number expected."),
         ]
-        self._link_state   = CSRStatus(fields=[CSRField(name, size=size, description=description)
-            for name, size, description in link_state_fields])
-        # The ready handshake includes arbitration and PHY backpressure. Snapshot debug
-        # signals before the CSR read mux so instrumentation does not extend that path.
+        self._link_state   = CSRStatus(
+            description = "Link Layer state, registered (previous system clock).",
+            fields      = [CSRField(name, size=size, description=description)
+                for name, size, description in link_state_fields])
+        # Link Layer state registered (timings: TX arbitration/PHY back-pressure not on the CSR read
+        # path).
         link_state = Signal(len(self.link.dbg_state))
         self.sync += link_state.eq(self.link.dbg_state)
         # Recovery causes (link dbg_recovery_cause, sampled on the dbg_recovery pulse): last cause

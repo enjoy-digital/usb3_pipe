@@ -333,7 +333,7 @@
    },
    {
     "access": "ro",
-    "description": "",
+    "description": "Link Layer state, registered (previous system clock).",
     "fields": [
      {
       "description": "Next Header Sequence Number to send.",
