@@ -2,7 +2,7 @@
 
 This appendix gathers the measured throughputs and the FPGA resources of the project. Use it to
 size a design and to know what to expect on a board before building. All throughputs are
-measured with a Linux xHCI host and the standard tools of the repository.
+measured with a Linux xHCI host and, unless noted, the standard tools of the repository.
 
 ## Test conditions {#perf-conditions}
 
@@ -44,6 +44,21 @@ on the ECPIX-5. The ECPIX-5 and GW5AT-15 numbers are measured with a max burst o
 | UVC, Isochronous, 1280x720 and 1920x1080 at 30 fps | 30.01 fps, complete frames |
 | Mass Storage RAM disk, READ(10) and WRITE(10) | 186 and 227 MB/s, single command |
 | CDC-ACM with UARTBone | about 6000 register reads per second |
+
+### ECPIX-5 full duplex loopback {#perf-ecpix5-loopback}
+
+The ECPIX-5 reaches 432 MB/s per direction in full duplex Bulk loopback, 86 % of the Gen 1
+ceiling after 8b/10b coding. An external host tool queued sixteen 64 KiB transfers per endpoint
+and checked every byte for 120 s: no data errors, LBAD, retry or Recovery.
+
+| Configuration | Per direction | OUT + IN |
+|---|---|---|
+| Single TX packet buffer, 64-cycle Bulk IN hold | 360 MB/s | 719 MB/s |
+| Link Commands priority, 64-cycle hold | 385 MB/s | 771 MB/s |
+| Link Commands priority, 1024-cycle hold | 432 MB/s | 864 MB/s |
+
+The bench target builds this configuration with `--sys-clk-freq 100e6 --link-words 2
+--max-burst 16 --bulk-in-idle-cycles 1024 --lean`; timing at 100 MHz depends on the placement seed.
 
 ## Gen 2 (10 Gbps) {#perf-gen2}
 

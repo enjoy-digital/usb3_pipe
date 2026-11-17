@@ -314,6 +314,14 @@ runs in its own clock domain at 125 MHz and hands 64-bit word pairs to a slower 
 of that crossing (`LinkWordsCDC`: Logical Idle filter, packets buffer, receive throttling) and the
 Gen 2 words around it are described with the option in [Slower fabrics: `pipe_cd`](#phy-pipe-cd).
 
+The transmit crossing buffers complete packets before releasing them, so a slower fabric
+cannot insert Idle Symbols inside a packet. A Data Packet Header stays contiguous with its
+payload, as required by USB 3.2 section 7.2.1.2.3.
+
+Link Commands have their own queue. LGOOD, LCRD and LBAD go out before the buffered packets, at a
+packet boundary, so acknowledgements and credits are not delayed behind Data Packets. The other
+Link Commands, such as LRTY, keep their place between the packets (`LinkCommandPacketsBuffer`).
+
 ## Gen 1x2 lanes {#dp-lanes}
 
 Gen 1x2 runs two Gen 1 lanes in parallel, each with its own PIPE, 8b/10b, SKP handling and
@@ -333,7 +341,7 @@ described in [Gen 1x2 lanes](#phy-lanes).
 | Scramblers | `scrambling.py` | `Scrambler`, `Descrambler`, `Gen2Scrambler` |
 | Gen 2 framing | `framing.py` | `Gen2LinkTX`, `Gen2LinkRX` |
 | CRCs | `crc.py` | `CRC5`, `CRC16`, `CRC32` |
-| `pipe_cd` crossing | `phy.py`, `framing.py` | `LinkWordsCDC`, `LogicalIdleFilter`, `PacketsBuffer` |
+| `pipe_cd` crossing | `phy.py`, `framing.py` | `LinkWordsCDC`, `LogicalIdleFilter`, `LinkCommandPacketsBuffer` |
 | Lanes | `lanes.py` | `LaneStriper`, `LaneDestriper`, `LaneDeskew` |
 | Symbols, Ordered Sets | `common.py` | `TS1`, `TS2`, `TSEQ`, Gen 2 constants |
 

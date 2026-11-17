@@ -41,9 +41,13 @@ class USB3BulkIN(USB3Endpoint):
     flush: drop the buffered packets (and the packet being written), ex: stream restarted. The
     packets already sent (DPHs out) are kept until acknowledged (or retried/reset): the Sequence
     Numbers stay in sync with the host.
+    wr_idle_cycles: hold the last full-size packet across writer gaps for up to this many
+    system cycles (default 64). Short packets bypass the hold; a stopped writer is eventually
+    flushed. A larger value coalesces sparse packets at the cost of full-packet latency.
     """
-    def __init__(self, ept, max_burst=8, data_width=32):
+    def __init__(self, ept, max_burst=8, data_width=32, wr_idle_cycles=WR_IDLE_CYCLES):
         assert max_burst in [2, 4, 8, 16]
+        assert isinstance(wr_idle_cycles, int) and wr_idle_cycles >= 1
         USB3Endpoint.__init__(self, ept, direction=1, data_width=data_width)
         self.max_burst = max_burst
         self.sink  = sink = stream.Endpoint(endpoint_layout(data_width))
@@ -119,12 +123,12 @@ class USB3BulkIN(USB3Endpoint):
         snd_last = Signal() # Last written packet.
         # Writer activity: while the user is writing, the last written max size packet is held until
         # the next one is written (burst continued instead of an EOB and a flow control round trip).
-        wr_idle  = Signal(max=WR_IDLE_CYCLES + 1)
+        wr_idle  = Signal(max=wr_idle_cycles + 1)
         wr_busy  = Signal()
-        self.sync += If(sink.valid, wr_idle.eq(0)).Elif(wr_idle != WR_IDLE_CYCLES,
+        self.sync += If(sink.valid, wr_idle.eq(0)).Elif(wr_idle != wr_idle_cycles,
             wr_idle.eq(wr_idle + 1))
         self.comb += [
-            wr_busy.eq(sink.valid | (wr_idle != WR_IDLE_CYCLES)),
+            wr_busy.eq(sink.valid | (wr_idle != wr_idle_cycles)),
             snd_last.eq(snd_next == wr_ptr),
             avail.eq((snd_ptr != wr_ptr) & ~flushing &
                 ~(snd_last & wr_busy & (snd_len == MAX_PACKET_SIZE))),

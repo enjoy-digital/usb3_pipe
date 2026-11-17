@@ -129,7 +129,7 @@ Bank `usb3_core`.
 | `rx_lbad` | `0x0038` | 16 | ro | LBAD sent (Header Packets RX errors). |
 | `tx_retry` | `0x003c` | 16 | ro | LBAD received (Header Packets resent). |
 | `recovery_req` | `0x0040` | 16 | ro | Recovery requests (timeouts, errors). |
-| `link_state` | `0x0044` | 31 | ro | See the fields below. |
+| `link_state` | `0x0044` | 31 | ro | Link Layer state, registered (previous system clock). |
 | `recovery_cause` | `0x0048` | 48 | ro | See the fields below. |
 | `recovery_` `request` | `0x0050` | 1 | wo | Write strobe. |
 | `rx_errors` | `0x0054` | 32 | ro | See the fields below. |

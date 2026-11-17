@@ -218,6 +218,14 @@ the host acknowledges them. Each packet slot costs block RAM, and a larger burst
 latency. The vendor examples use 8; 16 gives the best Bulk IN rate on hosts that open windows of
 `max_burst` packets.
 
+**Burst coalescing.** A Bulk IN endpoint holds its last full-size packet while the writer
+pauses, so a short gap in the data does not end the burst (End of Burst, ERDY, new request). The
+hold is `wr_idle_cycles` system clock cycles, 64 by default; a short packet is sent at once.
+
+A longer hold helps streaming designs with irregular writers, at the cost of latency on the last
+packet: 1024 cycles is 10.24 µs at 100 MHz. The example designs take it as `bulk_in_idle_cycles`,
+and the bench targets as `--bulk-in-idle-cycles`.
+
 **PHY clock domain.** On a fabric that does not reach 125 MHz for the link layer and the device
 core, `pipe_cd` keeps the PHY datapath and the transceiver wrapper in a 125 MHz domain and runs the
 LTSSM, the link layer and the device core in `sys` on 64-bit words. The Tang Mega 138K Pro target

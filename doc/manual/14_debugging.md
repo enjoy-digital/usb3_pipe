@@ -66,6 +66,9 @@ starts its own `litex_server` on port 1240 (`--port`): stop any other server on 
 ./bench/acorn_run.py --build-dir build/acorn_dbg --attempts 20
 ```
 
+The `link_state` register is registered: its fields show the Link Layer state of the previous
+system clock cycle, all sampled together.
+
 ## The host side {#debug-host}
 
 Without root access, the host view comes from the kernel log and from sysfs. The kernel log is
