@@ -21,7 +21,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import K, COM, SKP, AsyncFIFO, Buffer
+from usb3_pipe.common     import K, COM, SKP, SUB, AsyncFIFO, Buffer
 from usb3_pipe.common     import BLOCK_HEADER_DATA, BLOCK_HEADER_CONTROL, GEN2_SKP_TX_SYMBOLS
 from usb3_pipe.common     import GEN2_SKP, GEN2_SKPEND, GEN2_SDS, GEN2_TS1, GEN2_TS2, GEN2_TSEQ
 from usb3_pipe.common     import GEN2_IDLE
@@ -129,8 +129,21 @@ class RXWordAligner(LiteXModule):
 
     Align RX Words by analyzing the location of the alignment markers (COM by default, configurable
     K-codes) in the RX stream.
+
+    ordered_sets: COM markers runs of the Ordered Sets (4 COM Symbols for the TS1/TS2), a run
+    shortened by errors on its first Symbols kept on the current alignment (default: with the COM
+    markers only; not with the Link Layer framing markers).
+
+    With ordered_sets, a wrong alignment kept by that rule is also corrected: after a lane shifted by
+    k Symbols (1-2) while every Ordered Set has its first k COM Symbols received as decode errors
+    (K28.4), the shortened COM runs start on the wrong alignment and keep it (output: a word ending
+    with k K28.4, then a word starting with 4-k COM Symbols and other Symbols: a lane stays k Symbols
+    off, with Gen 1x2 the lanes deskew never pairs again). That output pattern moves the alignment k Symbols earlier
+    (the K28.4 Symbols are the first COM Symbols of the run).
     """
-    def __init__(self, markers=(COM,)):
+    def __init__(self, markers=(COM,), ordered_sets=None):
+        if ordered_sets is None:
+            ordered_sets = (list(markers) == [COM])
         self.enable = Signal(reset=1)
         self.sink   = sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
         self.source = source = stream.Endpoint([("data", 32), ("ctrl", 4)])
@@ -170,22 +183,111 @@ class RXWordAligner(LiteXModule):
         #   alignment is complete, the new alignment on this cycle would drop its first symbols: end
         #   of a packet followed by a packet shifted by SKP Ordered Sets). The symbols of the run
         #   word before the run (Logical Idle) are skipped.
+        # ordered_sets: the new alignment only when the run covers the Symbol at the current
+        # alignment of the word after the run start (this word for a run earlier, the next word for
+        # a run later), where a 4 COM run on the current alignment ends: a run starting k Symbols
+        # late and ending there is a TS1/TS2 whose first k COM Symbols were received with errors
+        # (on hardware the first COM Symbols of the TS1/TS2 are often corrupted, as K28.4
+        # substitutions or other Symbols), the alignment is kept. Without it, the alignment moved
+        # k Symbols later, back on the next Ordered Set, or never after the last TS2 before the
+        # Logical Idle (a lane k Symbols off in U0). A real alignment change (SKP removal, symbol
+        # slip) moves full 4 COM runs, which always cover that Symbol. Single marker runs (TSEQ: one
+        # COM per Ordered Set) always move the alignment.
         run_start     = Signal()
         alignment_sel = Signal(2)
+        pending       = Signal()
+        pending_al    = Signal(2)
+        covered       = Signal()
+        if ordered_sets:
+            # Single marker runs (ex: TSEQ, 1 COM) always move the alignment.
+            marker_a     = Signal()
+            single       = Signal()
+            pending_run2 = Signal()
+            run2         = Signal()
+            self.comb += [
+                marker_a.eq(Array([marker[i] for i in range(4)])[alignment_d]),
+                run2.eq(Array([marker[i+1] for i in range(3)] + [0])[alignment]),
+                If(pending,
+                    single.eq(Mux(pending_al == 3, ~marker[0], ~pending_run2))
+                ).Else(
+                    single.eq(~run2)
+                ),
+                covered.eq(marker_a | single),
+            ]
+            self.sync += If(sink.valid & sink.ready & ~pending, pending_run2.eq(run2))
+        else:
+            self.comb += covered.eq(1)
         self.comb += [
-            run_start.eq(self.enable & (marker != 0) & ~marker_d[3]),
+            run_start.eq(self.enable & (marker != 0) & ~marker_d[3] & ~pending),
             alignment_sel.eq(alignment_d),
-            If(run_start & (alignment < alignment_d),
+            If(run_start & (alignment < alignment_d) & covered,
                 alignment_sel.eq(alignment)
-            )
+            ),
+            If(pending & covered,
+                alignment_sel.eq(pending_al)
+            ),
         ]
+        later = Signal()
+        self.comb += later.eq(run_start & (alignment > alignment_d))
         self.sync += If(sink.valid & sink.ready,
-            If(run_start,
+            pending.eq(0),
+            If(pending,
+                alignment_d.eq(alignment_sel)
+            ).Elif(later & int(ordered_sets),
+                pending.eq(1),
+                pending_al.eq(alignment),
+            ).Elif(run_start & ((alignment == alignment_d) | covered),
                 alignment_d.eq(alignment)
             ).Else(
                 alignment_d.eq(alignment_sel)
             )
         )
+
+        # Wrong alignment kept on shortened COM runs (see above): the output word registered first
+        # (timing: the alignment selection to the Symbol compares otherwise),
+        # its features registered, the correction two words later (in the TS body).
+        if ordered_sets:
+            out_ok   = Signal()
+            out_data = Signal(32)
+            out_ctrl = Signal(4)
+            trail    = Signal(2) # K28.4 Symbols ending the word (1-2, else 0).
+            lead     = Signal(3) # COM Symbols starting the word, then another Symbol (2-3).
+            trail_r  = Signal(2)
+            trail_rr = Signal(2)
+            lead_r   = Signal(3)
+            fix      = Signal()
+            sym_is   = lambda i, v: out_ctrl[i] & (out_data[8*i:8*(i+1)] == v.value)
+            self.comb += [
+                out_ok.eq(source.valid & source.ready),
+                If(sym_is(3, SUB) & sym_is(2, SUB) & ~sym_is(1, SUB) & ~sym_is(1, COM),
+                    trail.eq(2)
+                ).Elif(sym_is(3, SUB) & ~sym_is(2, SUB) & ~sym_is(2, COM),
+                    trail.eq(1)
+                ),
+                If(sym_is(0, COM) & sym_is(1, COM) & sym_is(2, COM) & ~sym_is(3, COM),
+                    lead.eq(3)
+                ).Elif(sym_is(0, COM) & sym_is(1, COM) & ~sym_is(2, COM),
+                    lead.eq(2)
+                ),
+                fix.eq((trail_rr != 0) & (lead_r + trail_rr == 4)),
+            ]
+            self.sync += [
+                If(out_ok,
+                    out_data.eq(source.data),
+                    out_ctrl.eq(source.ctrl),
+                    trail_r.eq(trail),
+                    trail_rr.eq(trail_r),
+                    lead_r.eq(lead),
+                ),
+                If(fix,
+                    # Correction applied once (the features cleared).
+                    alignment_d.eq(alignment_d - trail_rr),
+                    pending.eq(0),
+                    trail_r.eq(0),
+                    trail_rr.eq(0),
+                    lead_r.eq(0),
+                ),
+            ]
 
         # Data selection
         data = Cat(buf.source.data, sink.data)

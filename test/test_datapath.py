@@ -159,6 +159,111 @@ class TestDatapath(unittest.TestCase):
                 start = dut.words.index(expected[0])
                 self.assertEqual(dut.words[start:start + len(expected)], expected)
 
+    def test_rx_word_aligner_keeps_alignment_on_com_errors(self):
+        # The first 1-2 COM Symbols of a TS1 received with errors (K28.4 substituted or another
+        # Symbol, two Acorn Minis): the alignment is kept (it moved 1-2 Symbols later, on the first
+        # intact COM, and stayed there when it was the last Ordered Set before the Logical Idle).
+        rng  = random.Random(0)
+        data = lambda n: [(rng.randrange(256), 0) for _ in range(n)]
+        SUB_ = (K(28, 4), 1)
+        ts1  = words_to_symbols(ordered_set_words(TS1))
+        for kind, error in [("sub", SUB_), ("data", (0x4a, 0))]:
+          for errors in [1, 2]:
+            for offset in range(4):
+                with self.subTest(kind=kind, errors=errors, offset=offset):
+                    bad = [error]*errors + ts1[errors:]
+                    aligned  = ts1*4 + bad + data(16) + ts1 + bad + data(16)
+                    wire     = symbols_to_words(data(offset) + aligned + data(4 - offset))
+                    expected = symbols_to_words(aligned)
+
+                    def generator(dut):
+                        for d, c in wire:
+                            yield dut.sink.valid.eq(1)
+                            yield dut.sink.data.eq(d)
+                            yield dut.sink.ctrl.eq(c)
+                            yield
+                        yield dut.sink.valid.eq(0)
+
+                    def checker(dut):
+                        dut.words = yield from stream_monitor(dut.source, len(wire) - 1,
+                            timeout=4*len(wire))
+
+                    dut = RXWordAligner()
+                    run_simulation(dut, [generator(dut), checker(dut)])
+                    start = dut.words.index(expected[0])
+                    self.assertEqual(dut.words[start:start + len(expected)], expected)
+
+    def test_rx_word_aligner_follows_shift(self):
+        # A real alignment change between Ordered Sets (ex: 1-3 Symbols removed): the alignment
+        # follows on the first shifted TS1 (full 4 COM run).
+        rng  = random.Random(1)
+        ts1  = words_to_symbols(ordered_set_words(TS1))
+        for offset in range(4):
+            for shift in range(1, 4):
+                with self.subTest(offset=offset, shift=shift):
+                    before = ts1*4
+                    after  = ts1*4
+                    wire   = [(rng.randrange(256), 0) for _ in range(offset)] + before[:-shift] + after
+                    wire  += [(0x00, 0)]*((-len(wire)) % 4) + [(0x00, 0)]*4
+                    words  = symbols_to_words(wire)
+
+                    def generator(dut):
+                        for d, c in words:
+                            yield dut.sink.valid.eq(1)
+                            yield dut.sink.data.eq(d)
+                            yield dut.sink.ctrl.eq(c)
+                            yield
+                        yield dut.sink.valid.eq(0)
+
+                    def checker(dut):
+                        dut.words = yield from stream_monitor(dut.source, len(words) - 1,
+                            timeout=4*len(words))
+
+                    dut = RXWordAligner()
+                    run_simulation(dut, [generator(dut), checker(dut)])
+                    expected = symbols_to_words(after)
+                    n = len(expected)
+                    found = [i for i in range(len(before)//4 - 2, len(dut.words) - n + 1)
+                        if dut.words[i:i + n] == expected]
+                    self.assertNotEqual(found, [], dut.words)
+
+    def test_rx_word_aligner_escapes_shift_kept_on_com_errors(self):
+        # A lane shifted by 1-2 Symbols while every TS1 has its first 1-2 COM Symbols received as
+        # K28.4 (Gen 1x2 lane on hardware, Hot Reset loops): the shortened COM runs start
+        # on the shifted alignment and kept it (partial COM words, the lanes deskew never paired
+        # again). The output pattern (a word ending with the K28.4 Symbols, then one starting with the
+        # remaining COM Symbols) moves the alignment back: whole COM words again.
+        rng = random.Random(2)
+        SUB_ = (K(28, 4), 1)
+        ts1  = words_to_symbols(ordered_set_words(TS1))
+        com  = (K(28, 5), 1)
+        for errors in [1, 2]:
+            for offset in range(4):
+                with self.subTest(errors=errors, offset=offset):
+                    bad    = [SUB_]*errors + ts1[errors:]
+                    before = ts1*4 + [(rng.randrange(256), 0) for _ in range(32)]
+                    wire   = [(rng.randrange(256), 0) for _ in range(offset)] + before[:-errors] + bad*12
+                    wire  += [(0x00, 0)]*((-len(wire)) % 4) + [(0x00, 0)]*4
+                    words  = symbols_to_words(wire)
+
+                    def generator(dut):
+                        for d, c in words:
+                            yield dut.sink.valid.eq(1)
+                            yield dut.sink.data.eq(d)
+                            yield dut.sink.ctrl.eq(c)
+                            yield
+                        yield dut.sink.valid.eq(0)
+
+                    def checker(dut):
+                        dut.words = yield from stream_monitor(dut.source, len(words) - 1,
+                            timeout=4*len(words))
+
+                    dut = RXWordAligner()
+                    run_simulation(dut, [generator(dut), checker(dut)])
+                    # The last Ordered Sets: their COM run (K28.4 + COM) as one word.
+                    head = symbols_to_words(bad)[0]
+                    tail = dut.words[-4*len(bad)//4*4:]
+                    self.assertGreaterEqual(tail.count(head), 3, dut.words[-24:])
     def test_rx_skip_remover(self):
         datas_input = [
             0x0302013c, 0x07060504, 0x0b0a0908, 0x0f0e0d0c,
