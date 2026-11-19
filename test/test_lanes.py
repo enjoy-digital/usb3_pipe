@@ -116,10 +116,10 @@ class TestLanes(unittest.TestCase):
         run_simulation(dut, [lane_gen(dut, 0), lane_gen(dut, 1), checker(dut)])
         self.assertEqual(out, [marker_word] + words)
 
-    def run_deskew(self, lanes, cycles=300):
+    def run_deskew(self, lanes, cycles=300, error_symbol=None):
         class DUT(LiteXModule):
             def __init__(self):
-                self.deskew    = LaneDeskew(0xbcbcbcbc, 0b1111)
+                self.deskew    = LaneDeskew(0xbcbcbcbc, 0b1111, error_symbol=error_symbol)
                 self.destriper = LaneDestriper()
                 for lane in range(2):
                     self.comb += self.deskew.sources[lane].connect(self.destriper.sinks[lane])
@@ -226,6 +226,195 @@ class TestLanes(unittest.TestCase):
         trace = self.run_deskew_aligned([lane0, lane1])
         self.assertEqual(trace[-1][0], 1)
         self.assertEqual(self.run_deskew([lane0, lane1])[-len(idle):], idle)
+
+    def test_deskew_late_lane_overflow(self):
+        # Lane 1 not word aligned yet while Lane 0 already receives the TS Ordered Sets (Tang Mega
+        # 138K Pro Lane 1, t16o): Lane 1 garbage (no marker: counted as a gap), its first marker
+        # 10 Ordered Sets after Lane 0's. Lane 0's first marker held while armed fills its FIFO
+        # (words dropped): the pairing would join Lane 1's first marker with a stale Lane 0 one, the
+        # destriped words then off by Ordered Sets (markers every 4 words: never seen as a mismatch).
+        # The overflow clears the search: re-armed on the next gap (Logical Idle), the next TS paired.
+        rng    = random.Random(5)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        def ts(n):
+            r = []
+            for _ in range(n):
+                r += [marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        gap, first = [(0, 0)]*20, ts(30)
+        idle = [(0, 0)]*24
+        last = ts(4)
+        data = [(rng.getrandbits(64), rng.getrandbits(8) & 0x7f) for _ in range(16)]
+        late = 40 # Lane 1 words before its word alignment (Lane 0 already in its TS).
+        garbage = [(rng.getrandbits(32) & 0x7f7f7f7f, 0) for _ in range(late)]
+        lane0 = [self.stripe(w, 0) for w in gap + first + idle + last + data]
+        lane1 = [self.stripe(w, 1) for w in gap] + garbage + \
+            [self.stripe(w, 1) for w in first[late:] + idle + last + data]
+        out = self.run_deskew([lane0, lane1], cycles=400)
+        self.assertEqual(out, last + data)
+
+    def test_deskew_late_lane_errors_no_gap(self):
+        # Lane 1 not word aligned yet (garbage with decode errors substituted, K28.4) while Lane 0
+        # already receives the TS Ordered Sets, its first marker one Ordered Set later than Lane 0's
+        # (within the FIFOs depth: no overflow, t16s). The garbage with errors is not a gap and
+        # disarms a search armed before it: no pairing until a clean gap on both lanes (Logical
+        # Idle), the next TS paired.
+        rng    = random.Random(6)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        sub    = (0x9c9c9c9c9c9c9c9c, 0xff)
+        def ts(n):
+            r = []
+            for _ in range(n):
+                r += [marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        gap, first = [(0, 0)]*20, ts(10)
+        idle = [(0, 0)]*24
+        last = ts(4)
+        data = [(rng.getrandbits(64), rng.getrandbits(8) & 0x7f) for _ in range(16)]
+        late = 4 # One Ordered Set.
+        garbage = [self.stripe(sub, 1) if i % 3 == 0 else (rng.getrandbits(32) & 0x7f7f7f7f, 0)
+            for i in range(24 + late)]
+        for armed in [False, True]:
+            # armed: a clean gap on both lanes first (search armed before the garbage, disarmed by
+            # its error words).
+            pre = [(0, 0)]*20 if armed else []
+            lane0 = [self.stripe(w, 0) for w in pre + [(0, 0)]*24 + first + idle + last + data]
+            lane1 = [self.stripe(w, 1) for w in pre] + garbage + \
+                [self.stripe(w, 1) for w in first[late:] + idle + last + data]
+            out = self.run_deskew([lane0, lane1], cycles=400, error_symbol=0x9c)
+            self.assertEqual(out, last + data, f"armed={armed}")
+        lane0 = [self.stripe(w, 0) for w in [(0, 0)]*24 + first + idle + last + data]
+        lane1 = garbage + [self.stripe(w, 1) for w in first[late:] + idle + last + data]
+        # Without the error Symbol check, the garbage is a gap: the lanes paired one Ordered Set apart,
+        # seen at the end of the TS stream (a marker against Logical Idle): pairing cleared, the next
+        # TS paired.
+        out = self.run_deskew([lane0, lane1], cycles=400)
+        self.assertEqual(out[-len(last + data):], last + data)
+
+    def test_deskew_os_apart_end_of_stream(self):
+        # Lane 1 paired one TS Ordered Set early (its first marker lost without a decode error: Tang
+        # Mega 138K Pro, t25): identical TS Ordered Sets, no mismatch until the end of the stream, where
+        # Lane 0's last marker meets Lane 1's Logical Idle (plain data word): pairing cleared at once,
+        # re-armed on the gap (deskew lost, Recovery).
+        rng    = random.Random(9)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        def ts(n):
+            r = []
+            for _ in range(n):
+                r += [marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        gap, first = [(0, 0)]*20, ts(8)
+        idle = [(rng.getrandbits(64), 0) for _ in range(40)]
+        lane0 = [self.stripe(w, 0) for w in gap + first + idle]
+        lane1 = [self.stripe(w, 1) for w in gap + [(0, 0)]*4 + first[4:] + idle + [(0, 0)]*4]
+        trace = self.run_deskew_aligned([lane0, lane1])
+        aligned = [a for a, _ in trace]
+        self.assertIn(1, aligned)                    # Paired (one Ordered Set apart).
+        lost = len(aligned) - aligned[::-1].index(1)
+        self.assertLess(lost, len(gap + first) + 8)  # Cleared at the end of the TS stream.
+        self.assertEqual(trace[-1], (0, 1))          # Re-armed on the gap.
+
+    def test_deskew_first_com_errors_armed(self):
+        # Search armed on a gap, the first COM Symbols of the first TS Ordered Set received as K28.4
+        # on both lanes (hardware, after an idle period): corrupted marker words, paired (t16u: the
+        # search disarmed, the lanes were never paired again).
+        rng    = random.Random(7)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        bad    = (0xbcbcbcbcbcbc9c9c, 0xff) # First 2 COMs as K28.4.
+        def ts(n, first_bad=False):
+            r = []
+            for i in range(n):
+                r += [bad if (first_bad and i == 0) else marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        gap  = [(0, 0)]*20
+        tss  = ts(6, first_bad=True)
+        data = [(rng.getrandbits(64), rng.getrandbits(8) & 0x7f) for _ in range(16)]
+        stream = gap + tss + data
+        lanes = [[(0, 0)] + [self.stripe(w, 0) for w in stream], [self.stripe(w, 1) for w in stream]]
+        out = self.run_deskew(lanes, error_symbol=0x9c)
+        self.assertEqual(len(out), len(tss + data))
+        self.assertEqual(out[1:], tss[1:] + data)
+
+    def test_deskew_first_com_errors_one_lane(self):
+        # First COM Symbols of the first TS Ordered Set received as K28.4 on Lane 0 only: the
+        # corrupted marker word is a marker, paired with Lane 1's first marker (not with Lane 0's
+        # next one: the lanes an Ordered Set apart, t16v).
+        rng    = random.Random(8)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        def ts(n):
+            r = []
+            for _ in range(n):
+                r += [marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        gap  = [(0, 0)]*20
+        tss  = ts(6)
+        data = [(rng.getrandbits(64), rng.getrandbits(8) & 0x7f) for _ in range(16)]
+        stream = gap + tss + data
+        lane0 = [self.stripe(w, 0) for w in stream]
+        lane0[len(gap)] = (0xbcbc9c9c, 0xf) # Lane 0 first marker: 2 COMs as K28.4.
+        lane1 = [self.stripe(w, 1) for w in stream]
+        out = self.run_deskew([[(0, 0)] + lane0, lane1], error_symbol=0x9c)
+        self.assertEqual(len(out), len(tss + data))
+        self.assertEqual(out[1:], tss[1:] + data)
+
+    def test_deskew_trailing_error_before_first_marker(self):
+        # Search armed on a gap, the word before the first marker word on a lane ending with K28.4
+        # (the Symbol before the first COM, or the first COM Symbols of a shifted lane, received as
+        # errors): not an error word disarming the search (the next word is a marker), the first TS
+        # Ordered Set paired (Tang Mega 138K Pro t45: disarmed, no gap again before U0, the lanes
+        # never paired). An error word followed by a non-marker word still disarms (no pairing on
+        # the TS stream without a new gap).
+        rng    = random.Random(10)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        def ts(n):
+            r = []
+            for _ in range(n):
+                r += [marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        gap  = [(0, 0)]*20
+        tss  = ts(6)
+        data = [(rng.getrandbits(64), rng.getrandbits(8) & 0x7f) for _ in range(16)]
+        stream = gap + tss + data
+        for lane, word in [(0, (0x9c000000, 0b1000)), (1, (0x9c9c0000, 0b1100)), (1, (0x9c9c9c9c, 0xf))]:
+            with self.subTest(lane=lane, word=hex(word[0])):
+                lanes = [[self.stripe(w, n) for w in stream] for n in range(2)]
+                lanes[lane][len(gap) - 1] = word
+                out = self.run_deskew(lanes, error_symbol=0x9c)
+                self.assertEqual(out, tss + data)
+        # Error words in quick succession before the marker word (more than the isolated errors
+        # budget, a lane not word aligned yet): disarms.
+        lanes = [[self.stripe(w, n) for w in stream] for n in range(2)]
+        for k in range(2, 6):
+            lanes[1][len(gap) - k] = (0x009c0000, 0b0100)
+        self.assertEqual(self.run_deskew(lanes, error_symbol=0x9c), [])
+
+    def test_deskew_isolated_errors_in_gap(self):
+        # Search armed on a gap, then isolated error words in the Logical Idle before the first TS
+        # burst on both lanes (Acorn Mini TX -> Tang Mega 138K Pro: a K28.4, then K28.4 K28.4 D0.0
+        # D0.0 ~50 words before each burst, t48): the search stays armed, the first TS paired (they
+        # disarmed it before the first markers of every Recovery: Hot Reset loops until a retrain).
+        rng    = random.Random(11)
+        marker = (0xbcbcbcbcbcbcbcbc, 0xff)
+        def ts(n):
+            r = []
+            for _ in range(n):
+                r += [marker] + [(rng.getrandbits(64), 0) for _ in range(3)]
+            return r
+        tss  = ts(6)
+        data = [(rng.getrandbits(64), rng.getrandbits(8) & 0x7f) for _ in range(16)]
+        # Fewer than a gap of Logical Idle words between the error words and the burst (hardware: no
+        # gap reached again before the markers, the receiver coming out of electrical idle).
+        single = (0x009c0000, 0b0100)
+        pair   = (0x00009c9c, 0b0011)
+        for errors in [[single], [single, pair], [single, pair, single]]:
+            with self.subTest(errors=len(errors)):
+                stream = [(0, 0)]*20
+                for w in errors:
+                    stream += [w] + [(0, 0)]*5
+                stream += [(0, 0)]*3 + tss + data
+                lanes = [[self.stripe(w, n) for w in stream] for n in range(2)]
+                out = self.run_deskew(lanes, error_symbol=0x9c)
+                self.assertEqual(out, tss + data)
 
     def test_deskew_lost_on_lane_shift(self):
         # Lane 0 one word late from the middle of the TS stream (word dropped on Lane 1: lanes no

@@ -17,7 +17,7 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common     import COM, SHP, SDP, SLC, LTSSM_PIPE_INTERFACE, EndiannessSwap, AsyncFIFO
+from usb3_pipe.common     import COM, SUB, SHP, SDP, SLC, LTSSM_PIPE_INTERFACE, EndiannessSwap, AsyncFIFO
 from usb3_pipe.common     import Buffer
 from usb3_pipe.core       import USB3PIPE, Gen2PIPE, GEN2_PIPE_INTERFACE
 from usb3_pipe.datapath   import GEN2_DATA_WIDTH
@@ -973,7 +973,10 @@ class USB3PHY(LiteXModule):
         # without COM words on both lanes (TSEQ in Polling.RxEQ, Logical Idle before Recovery), the
         # same TS1 Ordered Set on both lanes whatever the lanes latencies (6.4ns max lane-to-lane skew
         # at the receiver, Table 6-34, + per lane word alignment/SKP removal/RX buffers latencies).
-        self.deskew    = deskew    = LaneDeskew(COM.value*0x01010101, 0b1111, depth=deskew_depth)
+        # RX 8b/10b errors substituted with K28.4 (SUB): corrupted COM words still markers, error words
+        # disarming the search (LaneDeskew error_symbol).
+        self.deskew    = deskew    = LaneDeskew(COM.value*0x01010101, 0b1111, depth=deskew_depth,
+            error_symbol=SUB.value)
         self.destriper = destriper = LaneDestriper()
         self.comb += pipes[1].source.connect(deskew.sinks[1])
         for lane in range(2):

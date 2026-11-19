@@ -325,8 +325,22 @@ so a lane never sends a word the other lane does not send. Each lane has its own
 and its own polarity.
 
 On receive, the deskew pairs the first COM symbols of each lane after a gap, the TSEQ before the
-TS1 or the Logical Idle before a Recovery, whatever the lanes latencies (`LaneDeskew`). The
-destriper then rebuilds the words (`LaneDestriper`). In U0 the PHY goes to Recovery when the
+TS1 or the Logical Idle before a Recovery, whatever the lanes latencies (`LaneDeskew`).
+
+The deskew also handles symbols received with 8b/10b errors, which the PHY replaces with K28.4:
+
+- A COM word with some of its symbols replaced still counts as a marker. The first COM symbols of a
+  TS1 after an idle period often arrive with errors.
+- Other words with errors disarm the search. A lane that is not word aligned yet receives garbage,
+  and its first marker would otherwise be paired with a later TS1 of the other lane.
+- There are two exceptions: a word that ends with K28.4 right before a COM word, and up to three
+  isolated error words once a lane has reached its gap. Recovery and Hot Reset send no gap, so
+  disarming at that point would leave the lanes unpaired until the next retrain.
+
+A FIFO overflow, or a marker against a plain data word, clears the pairing. Either one means the
+lanes were paired a TS1 apart: identical TS1s would otherwise hide this until the end of the burst.
+
+The destriper then rebuilds the words (`LaneDestriper`). In U0 the PHY goes to Recovery when the
 deskew is lost, when a lane stays in electrical idle for 10 µs, or when a lane realigns its words.
 A lane that keeps decoding errors is re-initialized.
 
