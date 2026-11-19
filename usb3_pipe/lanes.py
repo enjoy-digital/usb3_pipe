@@ -95,13 +95,31 @@ class LaneDeskew(LiteXModule):
     changed after the pairing, a mismatch at each Ordered Set) restart the search (armed on the next
     gap), as clear (ex: a lane in electrical idle). A single mismatch is tolerated: the last markers of
     an Ordered Sets stream one word apart on the lanes (ex: a decode error substituted at the end of
-    the TS2 Ordered Sets on one lane, Logical Idle after them: two Acorn Minis), the lanes still
-    paired.
+    the TS2 Ordered Sets on one lane, Logical Idle after them), the lanes still paired. A marker
+    against a plain data word (no K Symbol: Logical Idle or a TS body word, not a corrupted marker)
+    clears the pairing at once: the lanes were paired Ordered Sets apart (identical TS Ordered Sets
+    hide it until the end of the stream).
 
     The sinks are never held (continuous lanes streams, a held lane would overflow the SerDes RX
-    buffers): words received with a full FIFO are dropped.
+    buffers): words received with a full FIFO are dropped. A word dropped while armed (a lane held on
+    its first marker more than depth words: the other lane's first marker is not the same one) or
+    while aligned (the lanes skewed beyond depth) clears the pairing and flushes the FIFOs: a stale
+    marker would otherwise be paired, the lanes Ordered Sets apart.
+
+    error_symbol: K Symbol substituted for the RX 8b/10b errors (K28.4, 6.3.1.4). A word with one is not
+    counted in a gap and disarms an armed search (a lane not word aligned yet receives garbage: as a
+    gap, its first marker would be paired with a later Ordered Set of the other lane), with these
+    exceptions seen on hardware:
+    - A marker word with some of its Symbols as error_symbol is a marker: the first COM Symbols of a
+      TS Ordered Set after an idle period often arrive with errors, on one or both lanes.
+    - An error word ending with error_symbol followed by a marker word: the Symbol before the first
+      COM, or the first COM Symbols on a lane shifted by the word alignment.
+    - Up to max_isolated error words once a lane reached its gap: isolated errors in a Logical Idle as
+      the receiver leaves electrical idle, before the first TS Ordered Set of a Recovery (no gap again
+      before its markers: the lanes would stay unpaired until a retrain).
+    Garbage from a lane not word aligned yet has error words in quick succession: still disarms.
     """
-    def __init__(self, marker_data, marker_ctrl, depth=8, gap=16):
+    def __init__(self, marker_data, marker_ctrl, depth=8, gap=16, error_symbol=None, max_isolated=3):
         self.sinks   = sinks   = [stream.Endpoint(lane_layout()) for _ in range(2)]
         self.sources = sources = [stream.Endpoint(lane_layout()) for _ in range(2)]
         self.aligned = aligned = Signal() # o
@@ -110,62 +128,155 @@ class LaneDeskew(LiteXModule):
 
         # # #
 
-        self.fifos = fifos = [stream.SyncFIFO(lane_layout(), depth) for _ in range(2)]
+        nsym = len(sinks[0].ctrl)
+        assert 0 <= max_isolated <= 3
+
+        # Marker word: the marker, or with error_symbol the marker with some of its Symbols received
+        # as error_symbol (at least one marker Symbol left).
+        def marker_match(data, ctrl):
+            if error_symbol is None:
+                return (data == marker_data) & (ctrl == marker_ctrl)
+            sym = marker_data & 0xff
+            assert marker_data == int.from_bytes(bytes([sym])*nsym, "little")
+            assert marker_ctrl == 2**nsym - 1
+            is_m = [data[8*i:8*(i+1)] == sym          for i in range(nsym)]
+            is_e = [data[8*i:8*(i+1)] == error_symbol for i in range(nsym)]
+            return ((ctrl == marker_ctrl) &
+                Reduce("AND", [m | e for m, e in zip(is_m, is_e)]) & Reduce("OR", is_m))
+
+        # FIFOs, with the marker/plain flags stored with the words (the heads are a single FIFO output
+        # bit, not a word compare: timing), flushed on an overflow clear.
+        flush = Signal()
+        self.fifos = fifos = [ResetInserter()(stream.SyncFIFO(lane_layout() + [("marker", 1), ("plain", 1)],
+            depth, buffered=True)) for _ in range(2)]
         self.submodules += fifos
-        heads = []
-        gaps  = []
+        self.comb += [fifo.reset.eq(flush) for fifo in fifos]
+
+        # Per lane inputs, registered with their marker/error flags (timing: the Symbol compares in
+        # their own cycle).
+        heads   = []
+        gaps    = []
+        disarms = []
+        inputs  = []
         for lane in range(2):
-            head      = Signal()
-            gap_count = Signal(max=gap + 1)
-            marker_in = Signal()
+            head       = Signal()
+            gap_count  = Signal(max=gap + 1)
+            marker_c   = Signal()
+            error_c    = Signal()
+            trail_c    = Signal()
+            valid_in   = Signal()
+            data_in    = Signal(len(sinks[lane].data))
+            ctrl_in    = Signal(len(sinks[lane].ctrl))
+            marker_in  = Signal()
+            plain_in   = Signal()
+            error_in   = Signal()
+            trail_in   = Signal()
+            trail_hold = Signal()
+            tolerated  = Signal(2) # Isolated error words tolerated since the gap was reached.
+            isolated   = Signal()  # Error word tolerated (gap reached, budget left).
             self.comb += [
-                sinks[lane].connect(fifos[lane].sink, omit={"ready"}),
                 sinks[lane].ready.eq(1),
-                marker_in.eq((sinks[lane].data == marker_data) & (sinks[lane].ctrl == marker_ctrl)),
-                head.eq(fifos[lane].source.valid &
-                    (fifos[lane].source.data == marker_data) &
-                    (fifos[lane].source.ctrl == marker_ctrl)),
+                marker_c.eq(marker_match(sinks[lane].data, sinks[lane].ctrl)),
             ]
-            # Words without marker received on the lane (saturated to gap).
-            self.sync += If(sinks[lane].valid,
+            if error_symbol is not None:
+                is_e = [sinks[lane].ctrl[i] & (sinks[lane].data[8*i:8*(i+1)] == error_symbol)
+                    for i in range(nsym)]
+                self.comb += [
+                    error_c.eq(Reduce("OR", is_e)),
+                    # Error Symbols only as a run ending the word.
+                    trail_c.eq(is_e[-1] & Reduce("AND", [~is_e[i] | is_e[i+1] for i in range(nsym - 1)])),
+                ]
+            self.sync += [
+                valid_in.eq(sinks[lane].valid),
+                data_in.eq(sinks[lane].data),
+                ctrl_in.eq(sinks[lane].ctrl),
+                marker_in.eq(marker_c),
+                plain_in.eq(sinks[lane].ctrl == 0),
+                error_in.eq(error_c),
+                trail_in.eq(trail_c),
+            ]
+            self.comb += [
+                fifos[lane].sink.valid.eq(valid_in),
+                fifos[lane].sink.data.eq(data_in),
+                fifos[lane].sink.ctrl.eq(ctrl_in),
+                fifos[lane].sink.marker.eq(marker_in),
+                fifos[lane].sink.plain.eq(plain_in),
+                head.eq(fifos[lane].source.valid & fifos[lane].source.marker),
+            ]
+            inputs.append(valid_in)
+            heads.append(head)
+            # Words without marker nor error Symbol received on the lane (saturated to gap); once the
+            # gap is reached, up to max_isolated error words neither break it nor disarm the search.
+            self.comb += isolated.eq((gap_count == gap) & (tolerated != max_isolated))
+            self.sync += If(valid_in,
                 If(marker_in,
-                    gap_count.eq(0)
+                    gap_count.eq(0),
+                    tolerated.eq(0),
+                ).Elif(error_in & isolated,
+                    tolerated.eq(tolerated + 1)
+                ).Elif(error_in,
+                    gap_count.eq(0),
+                    tolerated.eq(0),
                 ).Elif(gap_count != gap,
                     gap_count.eq(gap_count + 1)
                 )
             )
-            heads.append(head)
             gaps.append(gap_count == gap)
+            # Error word (not a corrupted marker word) disarming an armed search; with its error
+            # Symbols ending it, decided on the next word (not followed by a marker word).
+            disarm = Signal()
+            self.sync += If(valid_in, trail_hold.eq(error_in & ~marker_in & trail_in & ~isolated))
+            self.comb += disarm.eq(valid_in & (
+                (error_in & ~marker_in & ~trail_in & ~isolated) | (trail_hold & ~marker_in)))
+            disarms.append(disarm)
         self.heads = heads
 
         # Search armed after a gap on both lanes (no marker in the FIFOs, dropped while searching),
         # first markers paired; aligned until the markers are no longer paired (second mismatch
-        # without paired markers in between).
+        # without paired markers in between, or a marker against a plain data word).
         both     = Signal()
         mismatch = Signal()
-        self.comb += both.eq(fifos[0].source.valid & fifos[1].source.valid)
+        overflow = Signal() # A word received with a full FIFO (dropped).
+        plain    = [Signal() for n in range(2)]
+        # Pairs released while aligned, with their head flags, registered (timing).
+        pair_r   = Signal()
+        head_r   = [Signal() for n in range(2)]
+        plain_r  = [Signal() for n in range(2)]
+        self.comb += [
+            both.eq(fifos[0].source.valid & fifos[1].source.valid),
+            overflow.eq(Reduce("OR", [inputs[n] & ~fifos[n].sink.ready for n in range(2)])),
+            flush.eq(overflow & (armed | aligned)),
+            *[plain[n].eq(fifos[n].source.valid & fifos[n].source.plain) for n in range(2)],
+        ]
         self.sync += [
-            If(self.clear,
+            If(self.clear | flush,
                 aligned.eq(0),
                 armed.eq(0),
                 mismatch.eq(0)
             ).Elif(~aligned,
                 mismatch.eq(0),
-                If(gaps[0] & gaps[1],
+                If(disarms[0] | disarms[1],
+                    armed.eq(0)
+                ).Elif(gaps[0] & gaps[1],
                     armed.eq(1)
                 ).Elif(armed & heads[0] & heads[1],
                     aligned.eq(1),
                     armed.eq(0)
                 )
-            ).Elif(both & (heads[0] != heads[1]),
-                If(mismatch,
+            ).Elif(pair_r & (head_r[0] != head_r[1]),
+                If(mismatch | (head_r[0] & plain_r[1]) | (head_r[1] & plain_r[0]),
                     aligned.eq(0)
                 ).Else(
                     mismatch.eq(1)
                 )
-            ).Elif(both & heads[0] & heads[1],
+            ).Elif(pair_r & head_r[0] & head_r[1],
                 mismatch.eq(0)
             )
+        ]
+        self.sync += [
+            pair_r.eq(aligned & both & ~self.clear & ~flush),
+            *[head_r[n].eq(heads[n])  for n in range(2)],
+            *[plain_r[n].eq(plain[n]) for n in range(2)],
         ]
         for lane in range(2):
             self.comb += [
