@@ -140,7 +140,11 @@ The stages are, in order:
 3. **Width conversion**: 2 or 4 symbols per cycle to 32-bit words.
 4. **SKP removal and CDC FIFO**: see [Clock compensation](#dp-skp).
 5. **Word aligner**: rotates the words so that a COM falls on symbol 0 (`RXWordAligner`). The
-   alignment is updated only at the start of a run of COMs.
+   alignment is updated only at the start of a run of COMs. The first COM symbols of a TS1/TS2
+   are often received with errors. A shortened COM run that ends where a 4-COM run on the current
+   alignment would end therefore keeps the alignment, instead of moving it 1 or 2 symbols later. A
+   word ending with K28.4, followed by a word starting with the remaining COM symbols, shows a
+   wrong alignment kept by that rule, and moves the alignment back.
 6. **Descrambler**: see [Gen 1 scrambling](#dp-scrambling).
 7. **Framing aligner**: a second word aligner, on the framing symbols SHP, SDP and SLC. In U0 no COM
    is received to realign the words. The partner aligns its packets on its own words, which
