@@ -492,6 +492,38 @@ class TestPHYX2(unittest.TestCase):
         # inverted, extra SKP Ordered Sets alternately on Lane 1/Lane 0.
         self.run_sim("nominal", [])
 
+    def run_skp_error(self, name, direction, lane):
+        # One SKP Symbol received with an error on a single lane in U0 (8b/10b error, kept by the
+        # SKP removal): the lane is shifted by one Symbol from the other lane, without any COM word
+        # in U0 to detect it. The odd SKP run triggers a Recovery, the lanes are deskewed again on
+        # the TS1 and the receiver's PRBS completes without error (without the check: no Recovery,
+        # every destriped word corrupted). The partner's PRBS stream is cut by the Recovery.
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--lanes", "2",
+            "--lane-skp-error", f"3000,{direction},{lane}",
+            "--output-dir", str(get_output_dir(self, name))]
+        p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, timeout=1200)
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, tail)
+        self.assertNotIn("Simulation timeout", out, tail)
+        rx = {"h2d": "DEV", "d2h": "HOST"}[direction]
+        self.assertRegex(out, r"LANE SKP SYMBOL ERROR", tail)
+        self.assertRegex(out, rx + r"\s*lanes odd SKP run", tail)
+        for side in ["HOST", r"DEV\s"]:
+            self.assertEqual(len(re.findall(side + r"\s*entering Recovery.Active state", out)), 1, tail)
+            self.assertEqual(len(re.findall(side + r"\s*entering U0 state", out)), 2, tail)
+        self.assertEqual(len(re.findall(r"lanes deskewed", out)), 3, tail)
+        m = re.search(rx + r" PRBS:\s+(\d+) words,\s+(\d+) packets,\s+(\d+) errors, x2:\s*1", out)
+        self.assertIsNotNone(m, tail)
+        self.assertEqual(int(m.group(3)), 0, tail)
+
+    def test_phy_x2_skp_error(self):
+        self.run_skp_error("phy_x2_skp_error", "h2d", 1)
+
+    def test_phy_x2_skp_error_d2h(self):
+        self.run_skp_error("phy_x2_skp_error_d2h", "d2h", 0)
+
     def test_phy_x2_fallback_x1(self):
         # Device not Gen 1x2 capable: Gen 1x1 negotiated (LBPM), single lane on Lane 0 (Lane 1 in
         # electrical idle), extra SKP Ordered Sets on the Host Lane 0 (framing re-alignment).

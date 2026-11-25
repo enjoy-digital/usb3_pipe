@@ -111,6 +111,8 @@ class USB3SerDesModel(USB3SerDes):
         tx_datapath = TXDatapath(phy_dw=nwords*8)
         rx_datapath = RXDatapath(phy_dw=nwords*8, clock_domain=rx_clock_domain)
         self.submodules += tx_datapath, rx_datapath
+        self.rx_datapath = rx_datapath     # USB3SerDes.add_rx_skp_check.
+        self.rx_cd       = rx_clock_domain
         self.comb += [
             self.sink.connect(tx_datapath.sink),
             tx_datapath.skp_enable.eq(self.tx_skp_enable),
@@ -332,7 +334,7 @@ class USB3PIPESim(SoCMini):
         gen2_data_width=None, host_recovery=False, host_hot_reset=0,
         host_burst_out=0, host_burst_len=64, host_burst_stream=0, dev_loopback_depth=512,
         host_lbad_test=False, host_burst_duplex=0, host_burst_duplex_skp=False,
-        host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None):
+        host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None, lane_skp_error=None):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -539,7 +541,8 @@ class USB3PIPESim(SoCMini):
         if lanes == 1:
             serdeses["host"][0].connect(serdeses["dev"][0])
         else:
-            self.add_lanes_connection(serdeses, phys, cds, lane_delays, lane_skp, lanes_crossed)
+            self.add_lanes_connection(serdeses, phys, cds, lane_delays, lane_skp, lanes_crossed,
+                lane_skp_error)
 
         # Simulation Timer.
         timer = Signal(32)
@@ -723,9 +726,56 @@ class USB3PIPESim(SoCMini):
             If(report, Finish())
         ]
 
-    def add_lanes_connection(self, serdeses, phys, cds, lane_delays, lane_skp, lanes_crossed=False):
+    def add_lanes_connection(self, serdeses, phys, cds, lane_delays, lane_skp, lanes_crossed=False,
+        lane_skp_error=None):
         """Gen 1x2 Host <--> Device lanes connection (Host -> Device lanes delayed), Host Lane i on the
-        Device SerDes 1 - i with lanes_crossed (flipped USB Type-C plug)."""
+        Device SerDes 1 - i with lanes_crossed (flipped USB Type-C plug).
+
+        lane_skp_error: (cycles, direction, lane): one SKP Symbol of a single lane corrupted on the
+        line (one bit flipped: 8b/10b decode error), on the first SKP Symbol sent on Host Lane lane
+        (direction "h2d": Host -> Device, "d2h": Device -> Host) at least cycles after the Host U0
+        entry. The lane's SKP removal then keeps one more Symbol than the other lane's: the lanes
+        are no longer deskewed, without any COM word in U0 to detect it."""
+        def skp_corrupt(tx, name, lane):
+            # Returns the line word of tx, with the SKP Symbol error injected when selected.
+            if lane_skp_error is None:
+                return tx.data
+            cycles, direction, err_lane = lane_skp_error
+            if (name, lane) != ({"h2d": "host", "d2h": "dev"}[direction],
+                err_lane if direction == "h2d" else err_lane ^ int(lanes_crossed)):
+                return tx.data
+            sync   = getattr(self.sync, cds[name])
+            count  = Signal(32)
+            armed  = Signal()
+            done   = Signal()
+            u0     = phys["host"].u0
+            # K28.1 (SKP) 10-bit codes (both running disparities, both bit orders).
+            codes  = [0b0011111001, 0b1100000110, 0b1001111100, 0b0110000011]
+            nsym   = len(tx.data)//10
+            is_skp = Signal(nsym)
+            for i in range(nsym):
+                self.comb += is_skp[i].eq(Reduce("OR", [tx.data[10*i:10*(i+1)] == c for c in codes]))
+            first  = Signal(max=max(nsym, 2))
+            for i in reversed(range(nsym)):
+                self.comb += If(is_skp[i], first.eq(i))
+            hit    = Signal()
+            self.comb += hit.eq(armed & ~done & (is_skp != 0))
+            sync += [
+                If(u0 & ~armed, count.eq(count + 1)),
+                If(count == cycles, armed.eq(1)),
+                If(hit,
+                    done.eq(1),
+                    Display("[%08d] LANE SKP SYMBOL ERROR ({} Host Lane {}, symbol %d)".format(
+                        direction, err_lane), self.lane_timer, first),
+                ),
+            ]
+            data  = Signal(len(tx.data))
+            flips = Array([C(1 << (10*i), len(tx.data)) for i in range(nsym)])
+            self.comb += data.eq(Mux(hit, tx.data ^ flips[first], tx.data))
+            return data
+
+        self.lane_timer = Signal(32)
+        self.sync += self.lane_timer.eq(self.lane_timer + 1)
         for lane in range(2):
             h = serdeses["host"][lane]
             if lane >= len(serdeses["dev"]):
@@ -733,17 +783,24 @@ class USB3PIPESim(SoCMini):
                 self.comb += h.rx_idle.eq(1)
                 continue
             d = serdeses["dev"][lane ^ int(lanes_crossed)]
-            self.comb += d.tx.connect(h.rx)
+            self.comb += [
+                d.tx.connect(h.rx, omit={"data"}),
+                h.rx.data.eq(skp_corrupt(d.tx, "dev", lane ^ int(lanes_crossed))),
+            ]
+            h_tx = skp_corrupt(h.tx, "host", lane)
             n = lane_delays[lane]
             if n > 0:
                 delay = [Signal(len(h.tx.data)) for _ in range(n)]
                 sync  = getattr(self.sync, cds["host"])
-                sync += delay[0].eq(h.tx.data)
+                sync += delay[0].eq(h_tx)
                 for i in range(1, n):
                     sync += delay[i].eq(delay[i-1])
                 self.comb += d.rx.data.eq(delay[-1])
             else:
-                self.comb += h.tx.connect(d.rx)
+                self.comb += [
+                    h.tx.connect(d.rx, omit={"data"}),
+                    d.rx.data.eq(h_tx),
+                ]
             self.specials += MultiReg(h.tx_idle, d.rx_idle)
             self.specials += MultiReg(d.tx_idle, h.rx_idle)
 
@@ -790,6 +847,9 @@ class USB3PIPESim(SoCMini):
         sync += If(phy.deskew_aligned & ~aligned_d,
             Display("[%08d] {} lanes deskewed".format(label), timer)
         )
+        sync += If(phy.lanes_skp_odd,
+            Display("[%08d] {} lanes odd SKP run (lane shifted by its SKP removal)".format(label), timer)
+        )
         swap_d = Signal()
         sync += swap_d.eq(phy.lane_swap)
         sync += If(phy.lane_swap != swap_d,
@@ -823,6 +883,7 @@ def main():
     parser.add_argument("--lanes-crossed", action="store_true",   help="--lanes 2: Host Lane 0/1 on the Device SerDes 1/0 (flipped USB Type-C plug, Device lanes swap).")
     parser.add_argument("--lanes-tx-inverted", action="store_true", help="--lanes 2: All the lanes TX inverted on both PHYs (LiteX Acorn Baseboard Mini SFP lanes).")
     parser.add_argument("--prbs-gap-bits", default=4,           help="Gaps of 0 to 2**N - 1 cycles between the PRBS packets (--no-core/--lanes 2).")
+    parser.add_argument("--lane-skp-error", default=None, help="--lanes 2: CYCLES,DIR,LANE: one SKP Symbol error on Host Lane LANE (DIR h2d: Host -> Device, d2h: Device -> Host), CYCLES after the Host U0 entry.")
     parser.add_argument("--lane-skp",      default=4096,        help="Extra Host Lane 1/Lane 0 SKP Ordered Sets period (cycles, 0: disabled, --lanes 2).")
     parser.add_argument("--gen2-capable",  action="store_true", help="Gen 2x1 capability advertised/negotiated in the SuperSpeedPlus Polling (--lanes 1).")
     parser.add_argument("--gen2",          action="store_true", help="Gen 2 training to U0 on raw words (implies --gen2-capable).")
@@ -872,6 +933,7 @@ def main():
         lane_delays           = (int(args.lane0_delay), int(args.lane1_delay)),
         lane1_word_shift      = int(args.lane1_word_shift),
         lane_skp              = int(args.lane_skp),
+        lane_skp_error        = None if args.lane_skp_error is None else (lambda c, d, l: (int(c), d, int(l)))(*args.lane_skp_error.split(",")),
         dev_mode              = args.dev_mode,
         lanes_crossed         = args.lanes_crossed,
         lanes_tx_inverted     = args.lanes_tx_inverted,
