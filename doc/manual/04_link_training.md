@@ -90,6 +90,11 @@ symbol of TS1 and TS2 has three flags: Hot Reset (bit 0), Loopback (bit 2) and D
 (bit 3). The PHY decodes them from the received TS2 and sets them in its own TS2 on request of the
 LTSSM.
 
+A bit error on the link configuration symbol can still decode as a valid symbol. The PHY therefore
+reports the flags only when two consecutive TS2 carry the same link configuration, and a TS2
+detection needs 8 identical TS2 (USB 3.2 7.5.4.9.2). A single corrupted TS2 does not send the
+port to Loopback or Hot Reset.
+
 A receiver whose differential pair is swapped sees an inverted TS1: the D10.2 symbols become
 D21.5. The PHY detects both forms (`TS1`, `TS1_INV`), and the LTSSM inverts the receive polarity
 in Polling.Active when it sees the inverted one.

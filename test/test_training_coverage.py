@@ -305,7 +305,8 @@ class TestTSUnitRX(unittest.TestCase):
             ("7_ts1_ts2_8_ts1",     spec_words("TS1")*7 + spec_words("TS2") + spec_words("TS1")*8, (1, 0, 0)),
             ("ts1_ts2_alternating", (spec_words("TS1") + spec_words("TS2"))*8,          (0, 0, 0)),
             ("4_ts1_4_ts1_inv",     spec_words("TS1")*4 + spec_words("TS1_INV")*4,      (0, 0, 0)),
-            ("4_ts2_4_ts2_lf",      spec_words("TS2")*4 + spec_words("TS2", 0x01)*4,    (0, 0, 1)),
+            # Link Functionality changed: not 8 identical TS2s (7.5.4.9.2).
+            ("4_ts2_4_ts2_lf",      spec_words("TS2")*4 + spec_words("TS2", 0x01)*4,    (0, 0, 0)),
         ]
         for name, words, expected in cases:
             with self.subTest(name):
