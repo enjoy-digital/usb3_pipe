@@ -1003,3 +1003,4 @@ class PHYStandIn:
         self.source_lc     = None
         self.rx_throttle   = Constant(0, 1)
         self.rx_t2_credits = 4
+        self.ssp_lane_speed = 10

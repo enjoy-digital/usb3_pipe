@@ -136,6 +136,8 @@ and spread spectrum clocking can be applied to the device side.
 ./sim.py --gen2
 # Device link layer and core at half the PIPE frequency (slow fabrics)
 ./sim.py --dev-pipe-cd
+# Gen 1x2: SuperSpeedPlus link layer and device core on two lanes
+./sim.py --lanes 2 --lanes-core
 # Waveforms in build/sim/gateware/
 ./sim.py --trace --trace-start 0 --trace-end 200000
 ```
@@ -152,6 +154,7 @@ The main options are below; [Build options](#build-options) lists them all.
 | `--gen2` | Train to U0 at Gen 2, 128b/132b blocks |
 | `--lanes 2` | Gen 1x2: two lanes with skew and per-lane polarity, PRBS stand-ins |
 | `--dev-mode`, `--lanes-crossed` | With `--lanes 2`: Gen 1x1 fallback, flipped USB Type-C plug |
+| `--lanes-core` | With `--lanes 2`: host script and device core (`--dev-mode x1`, `ss`: Gen 1x1) |
 | `--link-words N` | Device link layer on 32, 64 or 128-bit words |
 | `--dev-pipe-cd` | Device LTSSM, link layer and core at half the PIPE frequency |
 | `--host-pm`, `--host-lpm` | Host U1 and U2 requests or entries after the enumeration |

@@ -18,6 +18,7 @@
 - LanesPacketAligner : destriped 64-bit link words -> link words pairs of the packets (any packet
                   placement, each packet starting on a 32-bit word, Logical Idle removed).
 - LanesTXPacker : link words pairs -> 64-bit link words for the striper (packets on 64-bit words).
+- LanesTXSymbolShift : 64-bit link words delayed by 1-7 symbols (test: packets at any position).
 """
 
 from migen import *
@@ -721,3 +722,38 @@ class LanesTXPacker(LiteXModule):
                 )
             )
         ]
+
+# Lanes TX Symbol Shift ----------------------------------------------------------------------------
+
+class LanesTXSymbolShift(LiteXModule):
+    """64-bit link words delayed by shift symbols (1-7, Logical Idle symbols before the first word,
+    the end of the last word of a burst flushed with Logical Idle symbols): packets starting at
+    any symbol position of the 64-bit words (on Lane 1 with an odd shift), as from a partner not
+    keeping its packets on 64-bit words. Test of the receivers (sim.py --lanes-tx-shift)."""
+    def __init__(self, shift):
+        assert 1 <= shift <= 7
+        self.sink   = sink   = stream.Endpoint(link_layout())
+        self.source = source = stream.Endpoint(link_layout())
+
+        # # #
+
+        prev_data = Signal(64)
+        prev_ctrl = Signal(8)
+        pending   = Signal() # End of the previous word not sent yet.
+        cur_data  = Mux(sink.valid, sink.data, 0)
+        cur_ctrl  = Mux(sink.valid, sink.ctrl, 0)
+        data      = Cat(prev_data, cur_data)
+        ctrl      = Cat(prev_ctrl, cur_ctrl)
+        self.comb += [
+            source.valid.eq(sink.valid | pending),
+            source.data.eq(data[8*(8 - shift):8*(16 - shift)]),
+            source.ctrl.eq(ctrl[8 - shift:16 - shift]),
+            source.first.eq(sink.first),
+            source.last.eq(~sink.valid | sink.last),
+            sink.ready.eq(source.ready),
+        ]
+        self.sync += If(source.valid & source.ready,
+            prev_data.eq(cur_data),
+            prev_ctrl.eq(cur_ctrl),
+            pending.eq(sink.valid),
+        )
