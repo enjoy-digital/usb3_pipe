@@ -496,5 +496,207 @@ class TestLanes(unittest.TestCase):
             self.assertEqual((yield dut.swap), 0)
         run_simulation(dut, generator())
 
+    # x2 Link interface building blocks --------------------------------------------------------------
+
+    @staticmethod
+    def x2_packets(rng, n=24):
+        """Gen 1 Link Layer packets as lists of (word, ctrl) link words (Symbol 0 in the LSBs):
+        Header Packets (SHP + 4 words), Link Commands (SLC + 1 word), DPHs + DPPs (zero data words
+        included, END framing)."""
+        def framing(k):
+            return (k | (k << 8) | (k << 16) | (0xf7 << 24), 0b1111) # 3 K Symbols + EPF.
+        SHP, SLC, SDP, END = 0xfb, 0xfe, 0x5c, 0xfd # K27.7, K30.7, K28.2, K29.7.
+        packets = []
+        for _ in range(n):
+            kind = rng.choice(["hp", "lc", "dp"])
+            if kind == "hp":
+                packets.append([framing(SHP)] + [(rng.getrandbits(32) | 1, 0) for _ in range(4)])
+            elif kind == "lc":
+                packets.append([framing(SLC), (rng.getrandbits(32) | 1, 0)])
+            else:
+                dpp = [(rng.choice([0, rng.getrandbits(32)]), 0) for _ in range(rng.randint(1, 12))]
+                packets.append([framing(SHP)] + [(rng.getrandbits(32) | 1, 0) for _ in range(4)] +
+                    [framing(SDP)] + dpp + [framing(END)])
+        return packets
+
+    def test_tx_packer(self):
+        # Packets as link words pairs (1 or 2 words, a pair never spans two packets), random gaps on
+        # both sides: 64-bit words with the packets words in order, never two packets in a word, a
+        # Logical Idle word only after the last word of a packet, first/last on the packets words.
+        rng     = random.Random(3)
+        packets = self.x2_packets(rng)
+        pairs   = []
+        for p in packets:
+            i = 0
+            while i < len(p):
+                n = 2 if (i + 1 < len(p)) and rng.random() < 0.6 else 1
+                pairs.append((p[i:i+n], i == 0, i + n == len(p)))
+                i += n
+        dut = LaneTXPacker()
+        out = []
+        def source_gen():
+            for words, first, last in pairs:
+                while rng.random() < 0.3:
+                    yield dut.sink.valid.eq(0)
+                    yield
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(sum(w << (32*i) for i, (w, c) in enumerate(words)))
+                yield dut.sink.ctrl.eq(sum(c << (4*i) for i, (w, c) in enumerate(words)))
+                yield dut.sink.words.eq(len(words))
+                yield dut.sink.first.eq(first)
+                yield dut.sink.last.eq(last)
+                yield
+                while not (yield dut.sink.ready):
+                    yield
+            yield dut.sink.valid.eq(0)
+        def sink_gen():
+            for _ in range(2000):
+                ready = rng.random() < 0.7
+                yield dut.source.ready.eq(ready)
+                yield
+                if ready and (yield dut.source.valid):
+                    out.append(((yield dut.source.data), (yield dut.source.ctrl),
+                        (yield dut.source.first), (yield dut.source.last)))
+        run_simulation(dut, [source_gen(), sink_gen()])
+        got, current = [], None
+        for data, ctrl, first, last in out:
+            words = [(data & 0xffffffff, ctrl & 0xf), (data >> 32, ctrl >> 4)]
+            if first:
+                self.assertIsNone(current)
+                current = []
+            self.assertIsNotNone(current)
+            current.append(words[0])
+            if last:
+                # Second word: last word of the packet or a Logical Idle word after it.
+                if words[1] != (0, 0) or len(current) + 1 <= len(packets[len(got)]) and \
+                    packets[len(got)][len(current)] == (0, 0):
+                    current.append(words[1])
+                if current[-1] == (0, 0) and len(current) > len(packets[len(got)]):
+                    current.pop()
+                got.append(current)
+                current = None
+            else:
+                current.append(words[1])
+        self.assertEqual(got, packets)
+
+    @staticmethod
+    def x2_symbol_packets(rng, n=32):
+        """Gen 1 Link Layer packets as lists of (byte, k) symbols: Header Packets (20 symbols), Link
+        Commands (8 symbols), DPHs + DPPs of any length (1-40 data bytes, END or EDB framing)."""
+        SHP, SLC, SDP, END, EDB, EPF = 0xfb, 0xfe, 0x5c, 0xfd, 0x7c, 0xf7
+        def framing(k):
+            return [(k, 1)]*3 + [(EPF, 1)]
+        def data(n):
+            return [(rng.getrandbits(8), 0) for _ in range(n)]
+        packets = []
+        for _ in range(n):
+            kind = rng.choice(["hp", "lc", "dp"])
+            if kind == "hp":
+                packets.append(framing(SHP) + data(16))
+            elif kind == "lc":
+                packets.append(framing(SLC) + data(4))
+            else:
+                packets.append(framing(SHP) + data(16))
+                packets.append(framing(SDP) + data(rng.randint(1, 40) + 4) +
+                    framing(rng.choice([END, EDB])))
+        return packets
+
+    def run_packet_aligner(self, packets, symbols, gaps):
+        """Symbols (8 per cycle, valid gaps every gaps cycles): output words checked against the
+        packets, each packet completed with Logical Idle symbols to a multiple of 4 symbols."""
+        symbols = symbols + [(0, 0)]*(-len(symbols) % 8 + 16)
+        dut = LaneRXAligner()
+        out = []
+        overflow = []
+        def gen():
+            cycle = 0
+            for i in range(0, len(symbols), 8):
+                while gaps and (cycle % gaps == gaps - 1):
+                    yield dut.sink.valid.eq(0)
+                    yield
+                    cycle += 1
+                yield dut.sink.valid.eq(1)
+                yield dut.sink.data.eq(sum(symbols[i+k][0] << (8*k) for k in range(8)))
+                yield dut.sink.ctrl.eq(sum(symbols[i+k][1] << k for k in range(8)))
+                yield
+                cycle += 1
+            yield dut.sink.valid.eq(0)
+            for _ in range(16):
+                yield
+        @passive
+        def mon():
+            while True:
+                yield
+                if (yield dut.overflow):
+                    overflow.append(1)
+                if (yield dut.source.valid):
+                    n = (yield dut.source.words)
+                    data, ctrl = (yield dut.source.data), (yield dut.source.ctrl)
+                    out.extend([((data >> (8*k)) & 0xff, (ctrl >> k) & 1) for k in range(4*n)])
+        run_simulation(dut, [gen(), mon()])
+        if packets is None:
+            return out, bool(overflow)
+        expected = []
+        for p in packets:
+            expected += p + [(0, 0)]*(-len(p) % 4)
+        self.assertEqual(out, expected)
+        self.assertEqual(overflow, [])
+
+    def test_packet_aligner(self):
+        # Packets at any symbol position, 0-9 Logical Idle symbols between them (DPPs of any length,
+        # next packet right after the end of a DPP included), valid gaps: the packets symbols only,
+        # each packet starting on a 32-bit word (last word completed with Logical Idle symbols).
+        rng     = random.Random(5)
+        packets = self.x2_symbol_packets(rng)
+        symbols = [(0, 0)]*rng.randint(0, 7)
+        for p in packets:
+            symbols += [(0, 0)]*rng.randint(0, 9) + p
+        self.run_packet_aligner(packets, symbols, gaps=5)
+
+    def test_packet_aligner_back_to_back(self):
+        # Packets back to back (no Logical Idle), every starting symbol position: completions of the
+        # DPPs absorbed by the words FIFOs.
+        for offset in range(8):
+            rng     = random.Random(6 + offset)
+            packets = self.x2_symbol_packets(rng, n=12)
+            symbols = [(0, 0)]*offset + [s for p in packets for s in p]
+            self.run_packet_aligner(packets, symbols, gaps=8)
+
+    def test_packet_aligner_overflow(self):
+        # Back to back DPHs + DPPs of odd lengths without Logical Idle nor valid gaps (completions
+        # not absorbed): overflow, words FIFOs flushed. The packets received after it are complete
+        # and in order (without the flush, the banks are no longer read in their write order).
+        hp = self.x2_symbol_packets(random.Random(0), n=1)[0][:20]
+        for offset in range(8):
+            with self.subTest(offset=offset):
+                rng   = random.Random(8 + offset)
+                burst = []
+                for _ in range(rng.randint(60, 90)):
+                    burst += hp + [(0x5c, 1)]*3 + [(0xf7, 1)]
+                    burst += [(0x55, 0)]*(rng.choice([1, 2, 3, 5, 6, 7]) + 4)
+                    burst += [(0xfd, 1)]*3 + [(0xf7, 1)]
+                packets = self.x2_symbol_packets(rng, n=16)
+                symbols = [(0, 0)]*offset + burst + [(0, 0)]*64
+                for p in packets:
+                    symbols += [(0, 0)]*rng.randint(0, 9) + p
+                expected = []
+                for p in packets:
+                    expected += p + [(0, 0)]*(-len(p) % 4)
+                out, overflow = self.run_packet_aligner(None, symbols, gaps=0)
+                self.assertTrue(overflow)
+                self.assertEqual(out[-len(expected):], expected)
+
+    def test_packet_aligner_tx_packer(self):
+        # Packets of a LaneTXPacker partner (64-bit words, framing on 32-bit words, idle words):
+        # unchanged.
+        rng     = random.Random(7)
+        packets = self.x2_symbol_packets(rng)
+        symbols = []
+        for p in packets:
+            p = p + [(0, 0)]*(-len(p) % 4)
+            symbols += [(0, 0)]*(4*rng.randint(0, 3)) + p
+            symbols += [(0, 0)]*(-len(symbols) % 8)
+        self.run_packet_aligner(packets, symbols, gaps=0)
+
 if __name__ == "__main__":
     unittest.main()
