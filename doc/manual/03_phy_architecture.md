@@ -345,6 +345,10 @@ lanes were paired a TS1 apart: identical TS1s would otherwise hide this until th
 
 The destriper then rebuilds the words (`LaneDestriper`). In U0 the PHY goes to Recovery when the
 deskew is lost, when a lane stays in electrical idle for 10 µs, or when a lane realigns its words.
+It also goes to Recovery on a run of SKP symbols of odd length on a lane (`RXSKPChecker`). A SKP
+Ordered Set is 2 SKP symbols, so an odd run means a SKP symbol received with an error and kept by
+the SKP removal, or another symbol received as a SKP and removed. The lane is then one symbol off
+the other lane, and U0 has no COM word to show it.
 A lane that keeps decoding errors is re-initialized.
 
 The device finds which receiver gets the configuration lane from the partner's Polling LFPS and

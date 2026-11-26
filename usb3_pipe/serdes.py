@@ -19,7 +19,7 @@ from litex.soc.interconnect import stream
 
 from usb3_pipe.common   import Buffer
 from usb3_pipe.datapath import RXErrorSubstitution, RXErrorMonitor, RXIdleFilter
-from usb3_pipe.datapath import TXDatapath, RXDatapath
+from usb3_pipe.datapath import TXDatapath, RXDatapath, RXSKPChecker
 
 # USB3 Serializer/Deserializer ---------------------------------------------------------------------
 
@@ -160,6 +160,19 @@ class USB3SerDes(LiteXModule):
             platform.add_period_constraint(xcvr.cd_tx.clk, 1e9/xcvr.tx_clk_freq)
         platform.add_period_constraint(xcvr.cd_rx.clk, 1e9/xcvr.rx_clk_freq)
         platform.add_false_path_constraints(sys_clk, xcvr.cd_tx.clk, xcvr.cd_rx.clk)
+
+    def add_rx_skp_checker(self):
+        """SKP runs of odd length at the SKP removal input (RXSKPChecker), rx_skp_odd pulse in sys.
+        Added by USB3PHY(lanes=2): a lane shifted from the other lane in U0."""
+        rx_cd = getattr(self, "rx_cd", "rx")
+        self.rx_skp_odd     = Signal() # o: Odd SKP run (sys pulse).
+        self.rx_skp_checker = ClockDomainsRenamer(rx_cd)(
+            RXSKPChecker(self.rx_datapath.skip_remover.sink))
+        self.rx_skp_ps      = PulseSynchronizer(rx_cd, "sys")
+        self.comb += [
+            self.rx_skp_ps.i.eq(self.rx_skp_checker.odd),
+            self.rx_skp_odd.eq(self.rx_skp_ps.o),
+        ]
 
 # Xilinx Kintex7 USB3 Serializer/Deserializer ------------------------------------------------------
 
