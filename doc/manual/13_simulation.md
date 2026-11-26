@@ -159,7 +159,7 @@ The main options are below; [Build options](#build-options) lists them all.
 | `--lanes-core` | With `--lanes 2`: host script and device core (`--dev-mode x1`, `ss`: Gen 1x1) |
 | `--lane-skp-error` | With `--lanes 2`: `CYCLES,DIR,LANE`, one SKP symbol error on a lane after U0 |
 | `--link-words N` | Device link layer on 32, 64 or 128-bit words |
-| `--dev-pipe-cd` | Device LTSSM, link layer and core at half the PIPE frequency |
+| `--dev-pipe-cd` | Device LTSSM, link layer and core at half the PIPE frequency; with `--lanes 2`, the device LTSSM only (PRBS stand-ins with the lanes logic) |
 | `--host-pm`, `--host-lpm` | Host U1 and U2 requests or entries after the enumeration |
 | `--host-recovery` | Host-directed Recovery from U0 after the script |
 | `--host-hot-reset N` | `N` host-directed Hot Resets from U0, back to back |

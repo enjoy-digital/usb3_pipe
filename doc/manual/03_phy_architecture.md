@@ -241,6 +241,13 @@ On the Tang Mega 138K Pro, the PIPE runs on the GTR12 transmit clock, so the tra
 no crossing at all. The ECPIX-5 target does the same on the DCU transmit clock, with `sys` at
 83.33 MHz.
 
+With `lanes=2` (Gen 1 only), `pipe_cd` moves the whole lanes logic into `pipe_cd`: the two PIPEs,
+the lanes swap, the striping, the deskew and the destriping, and the receive error monitors. Only
+the LTSSM and the SuperSpeedPlus polling stay in `sys`. The lanes logic sees the LTSSM through
+resynchronized signals, its controls crossing as one group as above. There is no link words
+crossing: `sink`, `source`, `sink_x1` and `source_x1` are in `pipe_cd`, where the caller places
+what uses them.
+
 ## Parameters {#phy-parameters}
 
 The table below lists the parameters of `USB3PHY`.

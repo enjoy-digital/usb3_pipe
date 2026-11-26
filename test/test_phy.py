@@ -658,6 +658,18 @@ class TestPHYX2(unittest.TestCase):
         # Configuration Lane (lanes swap) from the Host Polling.LFPS.
         self.run_sim("crossed", ["--lanes-crossed"], swap=True)
 
+    def test_phy_x2_dev_pipe_cd(self):
+        # Device Gen 1x2 lanes logic (PIPEs, lanes datapath) and PRBS stand-ins at the SerDes
+        # frequency, its LTSSM/SuperSpeedPlus Polling at half of it (USB3PHY lanes=2 pipe_cd),
+        # crossed and inverted lanes.
+        self.run_sim("dev_pipe_cd", ["--dev-pipe-cd", "--lanes-crossed", "--lanes-tx-inverted"],
+            swap=True)
+
+    def test_phy_x2_dev_pipe_cd_x1(self):
+        # The same, Gen 1x1 negotiated (single lane on the swapped Lane 0).
+        self.run_sim("dev_pipe_cd_x1", ["--dev-pipe-cd", "--dev-x2-disable", "--lanes-crossed"],
+            mode="x1", swap=True)
+
     def test_phy_x2_crossed_fallback_x1(self):
         # Flipped plug, Gen 1x1 negotiated: single lane on the Device SerDes 1.
         self.run_sim("crossed_x1", ["--lanes-crossed", "--dev-mode", "x1"], mode="x1", swap=True)

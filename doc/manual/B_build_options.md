@@ -168,7 +168,7 @@ Numbers are in cycles of the 133 MHz simulation clock unless stated.
 | `--gen2` | off | Training to U0 at Gen 2 on raw words (implies the previous option) |
 | `--gen2-data-width` | 40 | Gen 2 raw word width of the transceiver models (80 as the GTR12) |
 | `--link-words` | 1 | Device link layer words: 1, 2 or 4 (4 needs `--dev-pipe-cd`, `--gen2` and `--gen2-data-width 80`) |
-| `--dev-pipe-cd` | off | Device LTSSM, link layer and core at half the PIPE frequency |
+| `--dev-pipe-cd` | off | Device LTSSM, link layer and core at half the PIPE frequency (two lanes: the LTSSM, PRBS stand-ins only) |
 | `--dev-link-ppm` | none | Device link clock from its own generator with this offset |
 | `--dev-loopback-depth` | 512 | Depth of the device Bulk loopback buffer (words) |
 | `--dev-no-u1u2` | off | Device PHY without U1 and U2 |

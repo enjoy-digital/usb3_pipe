@@ -214,6 +214,7 @@ class USB3LanesDebug(LiteXModule):
     """
     def __init__(self, phy, serdes):
         assert len(serdes) == 2
+        assert getattr(phy, "pipe_cd", None) is None, "USB3LanesDebug: lanes logic in sys only (no pipe_cd)."
         self._clear   = CSR() # Clear counters (write).
         self._control = CSRStorage(fields=[
             CSRField("x2_enable", size=1, offset=0, reset=1,

@@ -335,7 +335,8 @@ class USB3PIPESim(SoCMini):
     dev_pipe_cd (lanes=1, Gen 1/Gen 2): Device USB3PHY with its USB3PIPE/SerDes model in the sys
     clock domain and its LTSSM/Link interface/Core at half the frequency (USB3PHY pipe_cd, as on
     FPGAs where the Core can't run at 125MHz), with 64-bit Link Layer words (link_words=2, or
-    128-bit: link_words=4 at Gen 2 with wide raw words).
+    128-bit: link_words=4 at Gen 2 with wide raw words). With lanes=2 (PRBS stand-ins): the Device
+    lanes logic and its PRBS stand-ins in the sys clock domain, its LTSSM at half the frequency.
 
     gen2 (lanes=1, gen2_capable): SerDes models with Gen 2 raw words, the training continues at
     Gen 2 (Gen2PIPE: TSEQ/TS1/TS2 128b/132b blocks, SDS/Logical Idle) to U0, Link Layer packets
@@ -368,7 +369,7 @@ class USB3PIPESim(SoCMini):
         x2_link = (dev_mode == "x2") and not dev_x2_disable
         ssp_x2 = with_core and (lanes == 2) and x2_link # SuperSpeedPlus at Gen 1x2.
         x1 = (lanes == 2) and not x2_link # Gen 1x1 negotiated by the Gen 1x2 Host.
-        assert (not dev_pipe_cd) or (lanes == 1)
+        assert (not dev_pipe_cd) or (lanes == 1) or (not with_core), "--dev-pipe-cd --lanes 2: PRBS stand-ins."
         assert (not dev_ss) or ((lanes == 1) and gen2_capable and (not gen2))
         sys_clk_freq = int(133e6)
         # SerDes models data width: 4 symbols per clock with the core (full PIPE rate, as on
@@ -413,7 +414,8 @@ class USB3PIPESim(SoCMini):
                 ]
             ltssm_cds["dev"] = "dev_link"
             # Words pairs (or quads: --link-words 4, Gen 2 wide words).
-            link_words = max(link_words, 2)
+            if lanes == 1:
+                link_words = max(link_words, 2)
 
         # USB3 Host (Host = Downstream Port) / Device (Device = Upstream Port).
         phys     = {}
@@ -559,16 +561,23 @@ class USB3PIPESim(SoCMini):
                 # Gen 1x1 negotiated by a Gen 1x2 PHY: 32-bit words on its Lane 0 interface.
                 width = 32 if x1 else 32*lanes
                 sink, source = (phy.sink_x1, phy.source_x1) if (x1 and lanes_n == 2) else (phy.sink, phy.source)
-                generator = renamer(PRBSPacketGenerator(
+                # Gen 1x2 lanes in pipe_cd: the PRBS stand-ins on the lanes interface (pipe_cd).
+                prbs_renamer = renamer
+                prbs_enable  = ltssm.u0
+                if (pipe_cd is not None) and (lanes_n == 2):
+                    prbs_renamer = ClockDomainsRenamer({"sys": cds[name]})
+                    prbs_enable  = Signal()
+                    self.specials += MultiReg(ltssm.u0, prbs_enable, cds[name])
+                generator = prbs_renamer(PRBSPacketGenerator(
                     data_width = width,
                     gap_bits   = prbs_gap_bits))
-                checker   = renamer(PRBSPacketChecker(data_width=width))
+                checker   = prbs_renamer(PRBSPacketChecker(data_width=width))
                 self.add_module(name=f"{name}_prbs_generator", module=generator)
                 self.add_module(name=f"{name}_prbs_checker",   module=checker)
                 self.comb += [
-                    generator.enable.eq(ltssm.u0),
+                    generator.enable.eq(prbs_enable),
                     generator.source.connect(sink),
-                    checker.enable.eq(ltssm.u0),
+                    checker.enable.eq(prbs_enable),
                     source.connect(checker.sink),
                 ]
                 checkers[name] = checker
