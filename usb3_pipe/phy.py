@@ -662,15 +662,38 @@ class USB3PHY(LiteXModule):
         PulseSynchronizers (pulses spaced by more than a few sys cycles: Training Sequences
         detections/bursts ends, LFPS detections), lfps_tx_count updated when stable (2 equal
         resynchronized samples: incremented once per LFPS burst)."""
+        # LTSSM controls resynchronized as one group (same pipe_cd cycle for the controls changing in
+        # the same sys cycle): resynchronized one by one, tx_ready/idle_handshake could both read 0
+        # for a cycle at the Idle handshake -> U0 transition (TX scrambler, reset out of both,
+        # restarted in U0: the partner descrambles garbage until the next COM), and the TS requests
+        # vs idle_handshake give a cycle without TS nor scrambled stream.
+        controls = [name for name, width, direction in LTSSM_PIPE_INTERFACE if direction == "o"]
+        self.ltssm_to_pipe(
+            Cat(*[getattr(ltssm, name) for name in controls]),
+            Cat(*[getattr(pipe,  name) for name in controls]), pipe_cd)
         for name, width, direction in LTSSM_PIPE_INTERFACE:
-            if direction == "o":
-                self.ltssm_to_pipe(getattr(ltssm, name), getattr(pipe, name), pipe_cd)
-            else:
+            if direction == "i":
                 self.pipe_to_ltssm(name, getattr(pipe, name), getattr(ltssm, name), pipe_cd)
 
     def ltssm_to_pipe(self, value, pipe_s, pipe_cd):
-        """LTSSM control (level, sys) -> PIPE (pipe_cd)."""
-        self.specials += MultiReg(value, pipe_s, pipe_cd)
+        """LTSSM control(s) (levels, sys) -> PIPE (pipe_cd): level, or controls group (Cat, taken
+        when stable: 2 equal resynchronized samples, the resynchronizers bits being able to land in
+        different pipe_cd cycles)."""
+        width = len(pipe_s)
+        if width > 1:
+            s      = Signal(width)
+            s_d    = Signal(width)
+            stable = Signal()
+            sync   = getattr(self.sync, pipe_cd)
+            self.specials += MultiReg(value, s, pipe_cd)
+            # Registered compare (timings).
+            sync += [
+                s_d.eq(s),
+                stable.eq(s == s_d),
+                If(stable, pipe_s.eq(s_d)),
+            ]
+        else:
+            self.specials += MultiReg(value, pipe_s, pipe_cd)
 
     def pipe_to_ltssm(self, name, pipe_s, ltssm_s, pipe_cd):
         """PIPE status (pipe_cd) -> LTSSM (sys): pulses (LTSSM_PIPE_PULSES), multi-bit values (taken
