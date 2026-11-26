@@ -162,6 +162,7 @@ Numbers are in cycles of the 133 MHz simulation clock unless stated.
 | `--lane1-delay` | 1 | Host to device delay of lane 1 (words, two lanes) |
 | `--lane1-word-shift` | 2 | Receive word shift of device lane 1 (symbols, two lanes) |
 | `--lane-skp` | 4096 | Period of the extra SKPs on one lane (0: none, two lanes) |
+| `--lane-skp-error` | none | Two lanes: `CYCLES,DIR,LANE`, one SKP symbol error on host lane `LANE` (`h2d`, `d2h`) after U0 |
 | `--lane-slip` | none | `CYCLE,LANE[,...]`: 2 symbols dropped by host lane `LANE` at each cycle (two lanes, 0 ppm) |
 | `--gen2-capable` | off | Gen 2 advertised and negotiated in the SuperSpeedPlus polling |
 | `--gen2` | off | Training to U0 at Gen 2 on raw words (implies the previous option) |

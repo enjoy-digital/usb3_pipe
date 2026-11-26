@@ -11,7 +11,10 @@ from migen import *
 
 from litex.gen import *
 
-from usb3_pipe.datapath import RXSKPRemover
+from litex.soc.interconnect import stream
+
+from usb3_pipe.common   import SKP, SUB
+from usb3_pipe.datapath import RXSKPRemover, RXSKPChecker
 
 from test.common import words_to_symbols, symbols_to_words, strip_skp, random_symbols
 from test.common import stream_driver, stream_monitor
@@ -73,6 +76,61 @@ class TestSKP(unittest.TestCase):
         dut = RXSKPRemover()
         run_simulation(dut, [generator(dut), checker(dut)])
         self.assertEqual(dut.words, words)
+
+# SKP runs parity (Gen 1x2: a lane shifted by one Symbol by its SKP removal) -----------------------
+
+class TestSKPChecker(unittest.TestCase):
+    D = (0x00, 0)
+    S = (SKP.value, 1)
+    E = (SUB.value, 1) # SKP Symbol received with an error (RX error substitution).
+
+    def run_checker(self, run):
+        # Run of Symbols ((value, k), in time order) at each Symbol position of the words: returns
+        # the odd pulses count of each position.
+        counts = []
+        for pos in range(4):
+            symbols  = [self.D]*(8 + pos) + run + [self.D]*(16 - pos)
+            symbols += [self.D]*(-len(symbols) % 4)
+            sink = stream.Endpoint([("data", 32), ("ctrl", 4)])
+            dut  = RXSKPChecker(sink)
+            odd  = []
+            def generator():
+                yield sink.valid.eq(1)
+                yield sink.ready.eq(1)
+                for i in range(0, len(symbols), 4):
+                    word = symbols[i:i + 4]
+                    yield sink.data.eq(sum(v << (8*j) for j, (v, k) in enumerate(word)))
+                    yield sink.ctrl.eq(sum(k << j     for j, (v, k) in enumerate(word)))
+                    yield
+                    odd.append((yield dut.odd))
+                yield sink.valid.eq(0)
+                for _ in range(4):
+                    yield
+                    odd.append((yield dut.odd))
+            run_simulation(dut, generator())
+            counts.append(sum(odd))
+        return counts
+
+    def test_even_runs(self):
+        # SKP Ordered Sets (2 Symbols), single or consecutive, runs spanning two words: no odd run.
+        for n in [2, 4, 6]:
+            with self.subTest(n=n):
+                self.assertEqual(self.run_checker([self.S]*n), [0]*4)
+
+    def test_odd_runs(self):
+        # A SKP Symbol with an error (kept by the SKP removal) at any place of the run, a Symbol
+        # received as a SKP: one odd run.
+        S, E = self.S, self.E
+        runs = {
+            "first"   : [E, S, S, S],
+            "last"    : [S, S, S, E],
+            "middle"  : [S, E, S, S],
+            "single"  : [E, S],
+            "phantom" : [S],
+        }
+        for name, run in runs.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.run_checker(run), [1]*4)
 
 if __name__ == "__main__":
     unittest.main()

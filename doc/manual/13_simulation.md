@@ -157,6 +157,7 @@ The main options are below; [Build options](#build-options) lists them all.
 | `--lanes 2` | Gen 1x2: two lanes with skew and per-lane polarity, PRBS stand-ins |
 | `--dev-mode`, `--lanes-crossed` | With `--lanes 2`: Gen 1x1 fallback, flipped USB Type-C plug |
 | `--lanes-core` | With `--lanes 2`: host script and device core (`--dev-mode x1`, `ss`: Gen 1x1) |
+| `--lane-skp-error` | With `--lanes 2`: `CYCLES,DIR,LANE`, one SKP symbol error on a lane after U0 |
 | `--link-words N` | Device link layer on 32, 64 or 128-bit words |
 | `--dev-pipe-cd` | Device LTSSM, link layer and core at half the PIPE frequency |
 | `--host-pm`, `--host-lpm` | Host U1 and U2 requests or entries after the enumeration |

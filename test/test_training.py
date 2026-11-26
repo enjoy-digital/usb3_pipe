@@ -113,6 +113,48 @@ class TestTraining(unittest.TestCase):
         ]
         run_simulation(dut, generators)
 
+    def test_ts2_checker_link_config_corrupted(self):
+        # A single TS2 with a corrupted Link Functionality Symbol (Loopback/Reset bits, a bit error
+        # that still decodes as a valid Symbol) among normal TS2s: config not reported (two
+        # consecutive identical TS2s required), no detection with it (8 identical TS2s), the run
+        # restarted after it. A config carried by consecutive TS2s is reported.
+        ts2_length = len(TS2.to_bytes())//4
+        ts2_words  = [int.from_bytes(TS2.to_bytes()[4*i:4*(i+1)], "little")
+            for i in range(ts2_length)]
+        def ts2(config):
+            words = list(ts2_words)
+            words[1] = (words[1] & ~0xff00) | (config << 8)
+            return words
+        sequence = [ts2(0)]*5 + [ts2(0b0101)] + [ts2(0)]*10 + [ts2(0b0100)]*8
+        log = []
+        def generator(dut):
+            yield dut.sink.valid.eq(1)
+            for n, ordered_set in enumerate(sequence):
+                for j, word in enumerate(ordered_set):
+                    yield dut.sink.ctrl.eq(0b1111 if j == 0 else 0b0000)
+                    yield dut.sink.data.eq(word)
+                    yield
+                    loopback = (yield dut.loopback)
+                    if (yield dut.detected):
+                        log.append(("detected", n, loopback))
+                    if loopback and not any(kind == "loopback" for kind, _, _ in log):
+                        log.append(("loopback", n, 1))
+            for i in range(16):
+                yield
+                if (yield dut.detected):
+                    log.append(("detected", len(sequence), (yield dut.loopback)))
+
+        dut = TSChecker(ordered_set=TS2, n_ordered_sets=8)
+        run_simulation(dut, generator(dut))
+        detections = [(n, lb) for kind, n, lb in log if kind == "detected"]
+        loopbacks  = [n for kind, n, _ in log if kind == "loopback"]
+        # The corrupted TS2 (index 5) restarts the run: 8 identical TS2s at indexes 6-13 (detected
+        # with the next Ordered Set's first words), never Loopback before the Loopback TS2s (16+),
+        # then Loopback reported from the second one and detected after 8 of them.
+        self.assertEqual(loopbacks[0] >= 17, True)
+        self.assertEqual([lb for _, lb in detections], [0, 1])
+        self.assertTrue(all(n >= 13 for n, _ in detections))
+
     def test_ts1_checker_data_error_recovery(self):
         ts1_length = len(TS1.to_bytes())//4
         ts1_words  = [int.from_bytes(TS1.to_bytes()[4*i:4*(i+1)], "little")
