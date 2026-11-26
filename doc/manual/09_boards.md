@@ -139,6 +139,17 @@ The GTP bring-up overrides (`--rxcdr-cfg`, `--gtp-param`, `--lpm-hold`) are list
 [Acorn options](#opt-acorn). With several FTDI adapters connected, select the Acorn explicitly, as
 [Setup](#debug-setup) shows: the programmer picks the first FTDI adapter it finds.
 
+With `--lanes 2`, the Mini runs Gen 1x2 (experimental): lane 0 on SFP-0 and lane 1 on SFP-1, both
+in the same GTP quad and on its PLL. Two Minis linked by two SFP DAC cables (SFP-0 to SFP-0, SFP-1
+to SFP-1) test the link, one board with `--role host` and the other with `--role device`, with the
+PRBS stand-ins of the link layer. `bench/usb3_lanes.py` reads their status and counters through one
+`litex_server` per board. Load the device board last: started alone, it times out to Compliance and
+waits for a Warm Reset (retrain the host board then). With `--lanes-core`, the device board runs
+the device core instead, for a Gen 1x2 USB host through a dual SFP to USB-C breakout. The Gen 1x2
+builds use a GTP transmit post-cursor of 6 and the full transmit swing: the SFP-1 transmit path was
+the weak one between two Minis, and some bitstream loads never trained at Gen 1x2 without the full
+swing.
+
 ## KC705 {#boards-kc705}
 
 The KC705 is the Kintex-7 evaluation board of AMD. Its target uses the GTX transceiver of quad 117

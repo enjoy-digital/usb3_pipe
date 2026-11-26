@@ -61,7 +61,13 @@ options.
 | `--with-dram` | off | DDR3 memory, initialized by the BIOS; needs a CPU, implied by `msc_dram` |
 | `--rxcdr-cfg` | none | GTP clock recovery setting override (hexadecimal) |
 | `--gtp-param` | none | GTP parameter override `NAME=VALUE`, repeatable |
-| `--lpm-hold` | `none` | Hold the GTP equalizer adaptation: `none`, `rxeq` (adapt only in Polling.RxEQ), `always` |
+| `--lpm-hold` | `none` | Hold the GTP equalizer adaptation: `none`, `rxeq` (adapt only in Polling.RxEQ), `always`; `rxeq` with `--lanes 2` |
+| `--tx-postcursor` | 0 | GTP transmit post-cursor pre-emphasis (0 to 31); 6 with `--lanes 2` |
+| `--tx-diffctrl` | transceiver default | GTP transmit swing (0 to 15); 15 with `--lanes 2` |
+| `--lanes` | 1 | 1 (Gen 1x1, SFP-0) or 2 (Gen 1x2 on SFP-0 and SFP-1, Mini only, experimental) |
+| `--role` | `device` | With `--lanes 2`: PHY role, `device` or `host` (one board in each role) |
+| `--no-x2` | off | With `--lanes 2`: not Gen 1x2 capable, Gen 1x1 negotiated on SFP-0 |
+| `--lanes-core` | off | With `--lanes 2`, device role: the device core (`--example`) instead of the PRBS stand-ins |
 
 The `msc_dram` example is only available on the Acorn, the only target with a DRAM controller.
 
