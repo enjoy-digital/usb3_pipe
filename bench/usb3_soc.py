@@ -494,8 +494,10 @@ USB3_X2_EXAMPLES = ["loopback", "wishbone", "bench", "cdc_uartbone", "console", 
 def add_usb3_lanes_link(soc, serdes, role="device", x2_capable=True, leds=[], leds_inverted=False,
     with_core = False,
     example   = "loopback",
-    with_lpm  = False,
-    max_burst = 8):
+    with_lpm     = False,
+    max_burst    = 8,
+    phy_cd       = None,
+    phy_clk_freq = None):
     """Add a Gen 1x2 link on serdes (two lanes, Lane 0: Configuration Lane) to soc: USB3PHY(lanes=2)
     in the Host or Device role, debug (USB3PHYDebug on Lane 0, USB3LanesDebug), PRBS Link-Layer
     stand-ins (PRBSLinkTester on the 64-bit link words) and LEDs (SerDes ready, U0, x2 negotiated).
@@ -509,11 +511,19 @@ def add_usb3_lanes_link(soc, serdes, role="device", x2_capable=True, leds=[], le
     - examples with 64-bit Link Layer words (USB3_X2_EXAMPLES): USB3PHYX2Link, SuperSpeedPlus at
       Gen 1x2, SuperSpeed at Gen 1x1 with a Gen 1x1 host.
     - other examples: USB3PHYX1Link, the PHY not Gen 1x2 capable (Gen 1x1).
-    LEDs with the core: SerDes ready, U0, lanes swapped."""
+    LEDs with the core: SerDes ready, U0, lanes swapped.
+
+    phy_cd: the PHY lanes logic (PIPEs, lanes datapath, SerDes renamed by the caller) and the PRBS
+    stand-ins in phy_cd at phy_clk_freq, the LTSSM/SoC in sys (USB3PHY lanes=2 pipe_cd: FPGAs where
+    the LTSSM can't reach the lanes frequency, ex: Tang Mega 138K Pro). With the core: examples with
+    64-bit link words only (USB3PHYX2Link on a pipe_cd PHY: its lanes side in phy_cd, the Link
+    Layer/Core in sys)."""
     sys_clk_freq = soc.sys_clk_freq
     assert len(serdes) == 2
     assert (not with_core) or (role == "device"), "with_core: Device role only."
     x2_link = with_core and (example in USB3_X2_EXAMPLES)
+    assert (phy_cd is None) or (not with_core) or x2_link, \
+        f"phy_cd: PRBS stand-ins or the Device Core with {', '.join(USB3_X2_EXAMPLES)}."
     if with_core and not x2_link:
         x2_capable = False # Link Layer on 32-bit words: Gen 1x1 only.
 
@@ -528,7 +538,9 @@ def add_usb3_lanes_link(soc, serdes, role="device", x2_capable=True, leds=[], le
         role                 = role,
         with_endianness_swap = False,
         lanes                = 2,
-        x2_capable           = x2_capable)
+        x2_capable           = x2_capable,
+        pipe_cd              = phy_cd,
+        pipe_clk_freq        = phy_clk_freq)
     if not with_core:
         soc.comb += usb3_phy.link_activity.eq(1) # No Link Layer: no PM activity.
 
@@ -539,14 +551,16 @@ def add_usb3_lanes_link(soc, serdes, role="device", x2_capable=True, leds=[], le
     if with_core:
         # USB3 Device Core -------------------------------------------------------------------------
         if x2_link:
-            soc.usb3_link = usb3_link = USB3PHYX2Link(usb3_phy)
+            # phy_cd: RX buffer of 512 pairs (Link Layer at half the lanes frequency, throttled).
+            soc.usb3_link = usb3_link = USB3PHYX2Link(usb3_phy,
+                rx_buffer_depth=64 if phy_cd is None else 512)
         else:
             soc.usb3_link = usb3_link = USB3PHYX1Link(usb3_phy)
         add_usb3_example(soc, usb3_link, sys_clk_freq, example=example, with_lpm=with_lpm,
             max_burst=max_burst)
     else:
         # PRBS Link-Layer Stand-Ins ----------------------------------------------------------------
-        soc.usb3_prbs = PRBSLinkTester(usb3_phy, data_width=64)
+        soc.usb3_prbs = PRBSLinkTester(usb3_phy, data_width=64, cd=phy_cd or "sys")
 
     # Leds -----------------------------------------------------------------------------------------
     status = usb3_phy.lane_swap if with_core else usb3_phy.x2

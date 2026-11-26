@@ -211,10 +211,13 @@ class USB3LanesDebug(LiteXModule):
     - Status: negotiated x2/gen2, lanes deskewed/swapped, per lane SerDes ready/RX idle/RX polarity.
     - Per lane event counters (TS1/TS1 inverted/TS2 detections, RX errors cycles) and deskew
       acquisitions.
+
+    With a USB3PHY in pipe_cd (lanes logic in that clock domain): the status resynchronized to sys
+    (quasi-static levels), no event counters.
     """
     def __init__(self, phy, serdes):
         assert len(serdes) == 2
-        assert getattr(phy, "pipe_cd", None) is None, "USB3LanesDebug: lanes logic in sys only (no pipe_cd)."
+        pipe_cd = getattr(phy, "pipe_cd", None)
         self._clear   = CSR() # Clear counters (write).
         self._control = CSRStorage(fields=[
             CSRField("x2_enable", size=1, offset=0, reset=1,
@@ -232,18 +235,28 @@ class USB3LanesDebug(LiteXModule):
 
         # # #
 
-        self.comb += [
-            self._status.fields.x2.eq(phy.x2),
-            self._status.fields.gen2.eq(phy.gen2),
-            self._status.fields.deskew_aligned.eq(phy.deskew_aligned),
-            self._status.fields.lane_swap.eq(phy.lane_swap),
-            self._status.fields.ready.eq(Cat(*[s.ready for s in serdes])),
-            self._status.fields.rx_idle.eq(Cat(*[s.rx_idle for s in serdes])),
-            self._status.fields.rx_polarity.eq(Cat(*[s.rx_polarity for s in serdes])),
+        status = [
+            (self._status.fields.x2,             phy.x2),
+            (self._status.fields.gen2,           phy.gen2),
+            (self._status.fields.deskew_aligned, phy.deskew_aligned),
+            (self._status.fields.lane_swap,      phy.lane_swap),
+            (self._status.fields.ready,          Cat(*[s.ready for s in serdes])),
+            (self._status.fields.rx_idle,        Cat(*[s.rx_idle for s in serdes])),
+            (self._status.fields.rx_polarity,    Cat(*[s.rx_polarity for s in serdes])),
         ]
+        for field, value in status:
+            if pipe_cd is None:
+                self.comb += field.eq(value)
+            else:
+                value_cd = Signal(len(field))
+                self.comb += value_cd.eq(value)
+                self.specials += MultiReg(value_cd, field)
 
         if hasattr(phy, "x2_enable"):
             self.comb += phy.x2_enable.eq(self._control.fields.x2_enable)
+
+        if pipe_cd is not None:
+            return
 
         # Event Counters.
         events = [("deskew", phy.deskew_aligned, 1)]

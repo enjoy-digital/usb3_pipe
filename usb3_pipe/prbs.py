@@ -13,6 +13,7 @@ hardware link tests: bench/acorn.py --lanes 2).
 """
 
 from migen import *
+from migen.genlib.cdc import MultiReg, BusSynchronizer
 
 from litex.gen import *
 
@@ -187,8 +188,12 @@ class PRBSLinkTester(LiteXModule):
     Gen 1x2 PHY (USB3PHY(lanes=2), data_width=64): a second generator/checker (32-bit words) on the
     Lane 0 interface (sink_x1/source_x1) when Gen 1x1 is negotiated (x2 = 0, single lane fallback),
     the counters are the ones of the negotiated mode (words of 8 bytes with x2, 4 bytes without).
+
+    cd: clock domain of the PHY link interface (USB3PHY(lanes=2) with pipe_cd: its lanes interface),
+    the generators/checkers in it, the CSRs in sys (enable/u0/x2 resynchronized, counters through
+    BusSynchronizers).
     """
-    def __init__(self, phy, data_width=32, gap_bits=4):
+    def __init__(self, phy, data_width=32, gap_bits=4, cd="sys"):
         self._control = CSRStorage(fields=[
             CSRField("enable", size=1, offset=0, reset=1, description="Send/check packets in U0."),
         ])
@@ -200,18 +205,24 @@ class PRBSLinkTester(LiteXModule):
         # # #
 
         enable = Signal()
-        self.comb += enable.eq(self._control.fields.enable & phy.u0)
         x1 = hasattr(phy, "sink_x1") # Gen 1x2 PHY: single lane fallback interface.
         x2 = Signal(reset=1)
-        if x1:
-            self.comb += x2.eq(phy.x2)
+        if cd == "sys":
+            self.comb += enable.eq(self._control.fields.enable & phy.u0)
+            if x1:
+                self.comb += x2.eq(phy.x2)
+        else:
+            self.specials += MultiReg(self._control.fields.enable & phy.u0, enable, cd)
+            if x1:
+                self.specials += MultiReg(phy.x2, x2, cd, reset=1)
         paths = [(data_width, phy.sink, phy.source, x2)]
         if x1:
             paths.append((32, phy.sink_x1, phy.source_x1, ~x2))
         generators, checkers = [], []
+        renamer = (lambda m: m) if cd == "sys" else ClockDomainsRenamer(cd)
         for width, sink, source, active in paths:
-            generator = PRBSPacketGenerator(width, gap_bits)
-            checker   = PRBSPacketChecker(width)
+            generator = renamer(PRBSPacketGenerator(width, gap_bits))
+            checker   = renamer(PRBSPacketChecker(width))
             self.submodules += generator, checker
             self.comb += [
                 generator.enable.eq(enable & active),
@@ -224,9 +235,17 @@ class PRBSLinkTester(LiteXModule):
         self.generator, self.checker = generators[0], checkers[0]
         def counter(a, b):
             return a if not x1 else Mux(x2, a, b)
-        self.comb += [
-            self._tx_words.status.eq(  counter(generators[0].words,   generators[-1].words)),
-            self._rx_words.status.eq(  counter(checkers[0].words,     checkers[-1].words)),
-            self._rx_packets.status.eq(counter(checkers[0].packets,   checkers[-1].packets)),
-            self._rx_errors.status.eq( counter(checkers[0].errors,    checkers[-1].errors)),
+        counters = [
+            (self._tx_words,   counter(generators[0].words,   generators[-1].words)),
+            (self._rx_words,   counter(checkers[0].words,     checkers[-1].words)),
+            (self._rx_packets, counter(checkers[0].packets,   checkers[-1].packets)),
+            (self._rx_errors,  counter(checkers[0].errors,    checkers[-1].errors)),
         ]
+        for csr, value in counters:
+            if cd == "sys":
+                self.comb += csr.status.eq(value)
+            else:
+                value_cd = Signal(32)
+                bs = BusSynchronizer(32, cd, "sys")
+                self.submodules += bs
+                self.comb += [value_cd.eq(value), bs.i.eq(value_cd), csr.status.eq(bs.o)]

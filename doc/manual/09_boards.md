@@ -253,6 +253,17 @@ so the code only accepts them with `--sys-clk-freq 125e6`. The bring-up options 
 
 Bulk IN reaches about 400 MB/s with a burst of 16 packets.
 
+With `--lanes 2`, the dock runs Gen 1x2 (experimental): lane 0 on SFP0 and lane 1 on SFP1, the
+two lanes of quad Q1 in one GTR12 instance ([Two lanes of a quad](#gt-gowin-x2)), lane 1 on the
+lane 0 transmit clock. The lanes logic runs at 125 MHz on that clock and the LTSSM and the SoC at
+62.5 MHz (the PHY in `pipe_cd`). The board pairs with an Acorn Mini built with `--lanes 2`, one
+board in each role (`--role`), with the PRBS stand-ins of the link layer, or as a device with the
+device core (`--lanes-core`, examples with 64-bit link words). `bench/usb3_lanes.py` reads its
+status. Each pairing was tested in the fork with an Acorn Mini (Tang host and Tang device): PRBS
+with no errors at about 610 MB/s, and the Tang device core 400 runs over 20 bitstream loads with
+the data checked. The 125 MHz lanes clock is met on some place options only, and the result changes
+with the design: check the Max Frequency Summary of each build (`--place-option`).
+
 ### Gen 2 bring-up {#boards-tang-gen2}
 
 Gen 2 on this board is in bring-up. The 10 Gbps rate on the Q1 lanes needs the CPLL with the

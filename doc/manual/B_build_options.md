@@ -103,8 +103,12 @@ The `msc_dram` example is only available on the Acorn, the only target with a DR
 | `--with-gen2-debug` | off | Gen 2 receive monitor on the raw words |
 | `--with-gtr12-debug` | off | GTR12 and PIPE bring-up debug |
 | `--with-gtr12-analyzer` | off | LiteScope on the raw GTR12 receive words |
-| `--place-option` | 2 | Gowin place algorithm: 0, 1 or 2 |
+| `--place-option` | 2 | Gowin place algorithm: 0 to 4; 3 with `--lanes 2` and the PRBS stand-ins |
 | `--route-option` | 1 | Gowin route algorithm: 0, 1 or 2 |
+| `--lanes` | 1 | 1 (Gen 1x1, `--sfp`) or 2 (Gen 1x2 on SFP0 and SFP1, experimental) |
+| `--role` | `device` | With `--lanes 2`: PHY role, `device` or `host` (one board in each role) |
+| `--no-x2` | off | With `--lanes 2`: not Gen 1x2 capable, Gen 1x1 negotiated on SFP0 |
+| `--lanes-core` | off | With `--lanes 2`, device role: the device core (`--example`, 64-bit link words) instead of the PRBS stand-ins |
 
 With the default 62.5 MHz system clock, the link words are 2 at least and U1 and U2 are only built
 with `--with-lpm`; the throughput profile is left out.

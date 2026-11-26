@@ -29,6 +29,7 @@ import common # Repository root on the path.
 
 from migen import *
 from migen.genlib.cdc import MultiReg, PulseSynchronizer
+from migen.genlib.resetsync import AsyncResetSynchronizer
 
 from litex.gen import *
 
@@ -45,7 +46,7 @@ from usb3_pipe.framing  import Gen2LinkRX, SHP, SLC
 from usb3_pipe.debug    import Gen2RXDebug
 from usb3_pipe.crc      import CRC16Words, CRC5
 
-from usb3_soc import USB3BaseSoC, add_usb3_device, usb3_analyzer, CountSync
+from usb3_soc import USB3BaseSoC, add_usb3_device, add_usb3_lanes_link, usb3_analyzer, CountSync
 from usb3_soc import usb3_soc_args, usb3_soc_argdict, usb3_soc_build
 
 class _CRG(LiteXModule):
@@ -658,6 +659,91 @@ class USB3SoC(USB3BaseSoC):
         # Transitions counts: rx_elecidle, astat[0:6], stat[0:13] (16-bit each, wrapping).
         self.add_indexed_status("gtr12_transitions", Cat(*counts))
 
+# Gen 1x2 (two lanes) ------------------------------------------------------------------------------
+
+class USB3X2SoC(USB3BaseSoC):
+    """Gen 1x2 on the dock SFP0 (Lane 0, GTR12 Q1 lane 0) and SFP1 (Lane 1, Q1 lane 1): PRBS Link-Layer
+    stand-ins or, with lanes_core (Device role), the Device Core example, as the Acorn --lanes 2
+    builds (add_usb3_lanes_link). x2_capable=False: Gen 1x1 on SFP0.
+
+    Clocking (USB3PHY lanes=2 pipe_cd: the LTSSM and the SoC don't reach 125MHz on the GW5A): the
+    lanes logic (PIPEs, lanes datapath, SerDes logic) and the PRBS stand-ins or the USB3PHYX2Link
+    lanes side in "pipe" on the Lane 0 TX clock (125MHz), the LTSSM/SoC (and Link Layer/Device Core)
+    in sys at 62.5MHz, the GTR12 control/UPAR in sys.
+
+    The two lanes share the quad: one GTR12 instance, one register configuration with both lanes
+    (gw5_usb3_csr_config_x2), one UPAR (TX Electrical Idle writes of both lanes arbitrated)."""
+    def __init__(self, platform, refclk="100M", csr_config=None, role="device", x2_capable=True,
+        lanes_core=False, example="loopback", with_analyzer=False, analyzer_group="link",
+        analyzer_csv="analyzer.csv", **kwargs):
+        # LTSSM/SoC (and Device Core) at 62.5MHz, lanes logic at 125MHz.
+        sys_clk_freq   = 62.5e6
+        lanes_clk_freq = 125e6
+
+        # CRG / SoC --------------------------------------------------------------------------------
+        self.crg = _CRG(platform, sys_clk_freq)
+        self.cd_gtr12 = ClockDomain()
+        self.cd_pipe  = ClockDomain()
+        self.comb += [
+            self.cd_gtr12.clk.eq(self.crg.cd_sys.clk),
+            self.cd_gtr12.rst.eq(self.crg.cd_sys.rst),
+        ]
+        gtr12_clk = self.crg.cd_sys.clk
+        USB3BaseSoC.__init__(self, platform, sys_clk_freq, **kwargs)
+
+        # SFPs -------------------------------------------------------------------------------------
+        for n in range(2):
+            self.comb += platform.request("sfp", n).tx_disable.eq(0)
+
+        # USB3 SerDes (Q1 lanes 0/1) ---------------------------------------------------------------
+        if csr_config is None:
+            from usb3_pipe.gw5 import gw5_usb3_csr_config_x2
+            csr_config = gw5_usb3_csr_config_x2(refclk)
+        usb3_serdes = []
+        for lane in range(2):
+            serdes = GW5USB3SerDes(platform,
+                sys_clk       = gtr12_clk, # Asynchronous to the TX/RX clocks.
+                sys_clk_freq  = lanes_clk_freq,
+                lane          = lane,
+                upar_clk      = gtr12_clk,
+                xcvr_cd       = "gtr12",
+                xcvr_clk_freq = sys_clk_freq,
+                tx_cdc        = False, # SerDes logic on the Lane 0 TX clock.
+                refclk        = refclk,
+                csr_config    = csr_config if lane == 0 else None,
+                quad_owner    = None if lane == 0 else usb3_serdes[0],
+                tx_clk        = None if lane == 0 else usb3_serdes[0].gtr12.cd_tx.clk)
+            usb3_serdes.append(serdes)
+        gtr12 = usb3_serdes[0].gtr12
+        # Lanes clock (pipe): the Lane 0 TX clock net itself (no alias: GowinSynthesis merges
+        # aliases, the constraints then miss their nets), asynchronous to the lanes RX clocks and to
+        # sys.
+        self.cd_pipe.clk = gtr12.cd_tx.clk
+        platform.add_false_path_constraints(gtr12.cd_tx.clk,
+            *[serdes.gtr12.cd_rx.clk for serdes in usb3_serdes])
+        self.specials += AsyncResetSynchronizer(self.cd_pipe, self.crg.cd_sys.rst | ~gtr12.pll_lock)
+        usb3_serdes = [ClockDomainsRenamer({"sys": "pipe"})(serdes) for serdes in usb3_serdes]
+
+        # USB3 (PHY, Debug, Core or PRBS, Leds) ----------------------------------------------------
+        add_usb3_lanes_link(self, usb3_serdes,
+            role          = role,
+            x2_capable    = x2_capable,
+            leds          = [platform.request("led_n", i) for i in range(3)],
+            leds_inverted = True,
+            with_core     = lanes_core,
+            example       = example,
+            phy_cd        = "pipe",
+            phy_clk_freq  = lanes_clk_freq)
+
+        # GTR12 status, UPAR access.
+        for serdes in usb3_serdes:
+            serdes.gtr12.add_status_csr()
+        gtr12.upar.add_csr()
+
+        # Analyzer ---------------------------------------------------------------------------------
+        if with_analyzer:
+            self.analyzer = usb3_analyzer(self, analyzer_group, analyzer_csv)
+
 def main():
     parser = argparse.ArgumentParser(
         description="USB3-PIPE on the Sipeed Tang Mega 138K Pro (Gowin GW5AST-138B GTR12).")
@@ -675,16 +761,49 @@ def main():
     parser.add_argument("--with-gen2-debug",     action="store_true", help="Gen 2 bring-up debug (RX monitor on the raw RX words: alignment, blocks/Ordered Sets counters).")
     parser.add_argument("--with-gtr12-debug",    action="store_true", help="GTR12/PIPE bring-up debug (transitions, RX snapshots, SSP status).")
     parser.add_argument("--with-gtr12-analyzer", action="store_true", help="LiteScope Analyzer on the GTR12 raw RX words.")
-    parser.add_argument("--place-option",   default=2, type=int, help="Gowin place algorithm.", choices=[0, 1, 2])
+    parser.add_argument("--place-option",   default=None, type=int, help="Gowin place algorithm (default: 3 with --lanes 2 and the PRBS stand-ins, else 2).", choices=[0, 1, 2, 3, 4])
     parser.add_argument("--route-option",   default=1, type=int, help="Gowin route algorithm.", choices=[0, 1, 2])
+    x2_group = parser.add_argument_group(title="Gen 1x2 (two lanes, SFP0/SFP1: two boards link tests, as bench/acorn.py --lanes 2)")
+    x2_group.add_argument("--lanes",      default=1, type=int, help="Lanes: 1 (Gen 1x1, --sfp) or 2 (Gen 1x2: Lane 0 on SFP0, Lane 1 on SFP1).", choices=[1, 2])
+    x2_group.add_argument("--role",       default="device",    help="USB3PHY role with --lanes 2.", choices=["device", "host"])
+    x2_group.add_argument("--no-x2",      action="store_true", help="--lanes 2: not Gen 1x2 capable (Gen 1x1 on SFP0).")
+    x2_group.add_argument("--lanes-core", action="store_true", help="--lanes 2, Device role: Device Core example (--example, 64-bit link words) instead of the PRBS stand-ins.")
     usb3_soc_args(parser, output_dir="build/sipeed_tang_mega_138k_pro")
     args = parser.parse_args()
+    if args.lanes == 1:
+        assert args.role == "device", "--role host requires --lanes 2."
+        assert not args.no_x2, "--no-x2 requires --lanes 2."
+        assert not args.lanes_core, "--lanes-core requires --lanes 2."
 
     platform = sipeed_tang_mega_138k_pro.Platform(toolchain="gowin")
-    # Place & Route options for timings (Gowin SUG100: timing driven by default).
+    # Place & Route options for timings (Gowin SUG100: timing driven by default). --lanes 2 PRBS
+    # stand-ins builds: lanes clock 118.5/125.1/113.0/126.1/112.0MHz for place options 0-4 (hardware
+    # builds, the result changes with the design: check the Max Frequency Summary).
+    if args.place_option is None:
+        args.place_option = 3 if (args.lanes == 2 and not args.lanes_core) else 2
     platform.toolchain.options["place_option"]        = args.place_option
     platform.toolchain.options["route_option"]        = args.route_option
     platform.toolchain.options["replicate_resources"] = 1
+    if args.lanes == 2:
+        unsupported = ["pll", "gen2_capable", "with_gtr12_debug", "with_gtr12_analyzer",
+            "with_gen2_debug", "with_ltssm_history", "with_tx_check", "with_tx_raw_check", "with_trace"]
+        for name in unsupported:
+            assert not getattr(args, name), f"--lanes 2: --{name.replace('_', '-')} not supported."
+        assert args.sfp == 0, "--lanes 2: SFP0/SFP1 (Lane 0 on SFP0)."
+        assert args.cpu_type is None, "--lanes 2: no CPU."
+        assert args.refclk == "100M", "--lanes 2: 100MHz REFCLK1."
+        usb3_args = usb3_soc_argdict(args)
+        example   = usb3_args.pop("usb3_kwargs", {}).get("example", "loopback")
+        soc = USB3X2SoC(platform,
+            refclk     = args.refclk,
+            csr_config = None if args.serdes_csr is None else open(args.serdes_csr).read(),
+            role       = args.role,
+            x2_capable = not args.no_x2,
+            lanes_core = args.lanes_core,
+            example    = example,
+            **usb3_args)
+        usb3_soc_build(parser, args, soc)
+        return
     soc = USB3SoC(platform,
         sys_clk_freq        = args.sys_clk_freq,
         sfp                 = args.sfp,
