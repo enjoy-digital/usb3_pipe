@@ -246,7 +246,10 @@ the lanes swap, the striping, the deskew and the destriping, and the receive err
 the LTSSM and the SuperSpeedPlus polling stay in `sys`. The lanes logic sees the LTSSM through
 resynchronized signals, its controls crossing as one group as above. There is no link words
 crossing: `sink`, `source`, `sink_x1` and `source_x1` are in `pipe_cd`, where the caller places
-what uses them.
+what uses them. `USB3PHYX2Link` on such a PHY keeps its packer, packets buffers and packet aligner
+in `pipe_cd` and gives the link layer its word pairs in `sys` through asynchronous FIFOs. The
+receive FIFO takes the words at the line rate without back-pressure; from a quarter full,
+`rx_throttle` makes the link layer hold its receive credits.
 
 ## Parameters {#phy-parameters}
 
