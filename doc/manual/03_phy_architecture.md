@@ -163,6 +163,7 @@ feature is absent, so that a link layer can adapt at elaboration time (`USB3PHY_
 | `ssp_capable`   | Gen 2 possible: the link layer applies the SuperSpeedPlus rules            |
 | `rx_throttle`   | With `pipe_cd`: received words buffered, receive credits held              |
 | `rx_t2_credits` | Type 2 credits the partner may hold: 4 (no limit) or a runtime signal      |
+| `ssp_lane_speed` | SuperSpeedPlus lane speed in the BOS: 10 Gbps (Gen 2), 5 (Gen 1x2)       |
 
 ## Clock domains {#phy-clocks}
 
@@ -359,8 +360,14 @@ capable, the link trains at Gen 1x1 on lane 0, and the 32-bit words of that lane
 training.
 
 The Gen 1x2 PHY is experimental. It is validated between two LiteX Acorn Baseboard Minis with SFP
-DAC cables and PRBS stand-ins, not yet with a USB host. The device core has no SuperSpeedPlus link
-layer for two lanes yet. Two blocks prepare its link interface, which carries one or two 32-bit
+DAC cables and PRBS stand-ins, not yet with a USB host.
+
+Two adapters give the device core its link interface. `USB3PHYX2Link` runs the SuperSpeedPlus
+link layer on 64-bit word pairs at Gen 1x2 and the SuperSpeed one on lane 0 at Gen 1x1, as
+negotiated; the device core then advertises a SuperSpeedPlus lane speed of 5 Gbps.
+`USB3PHYX1Link` gives a Gen 1x1 link layer the lane 0 interface only. Outside U0, the
+`USB3PHYX2Link` transmit words are dropped, so that nothing held from before a Recovery is sent
+ahead of the next advertisement. Two blocks make its Gen 1x2 path, which carries one or two 32-bit
 link words per cycle:
 
 - On transmit, `LaneTXPacker` packs the words into 64-bit link words. A 64-bit word never holds
@@ -370,7 +377,8 @@ link words per cycle:
   any number of Logical Idle symbols before it. `LaneRXAligner` finds the packets from their
   framing symbols, removes the Logical Idle between them and pads the last word of each packet with
   Logical Idle symbols, so that each packet starts on a 32-bit word for the link layer, as on the
-  Gen 1x1 path.
+  Gen 1x1 path. `USB3PHYX2Link` resets it outside U0, where a packet cut by the U0 exit would
+  otherwise leave its parser inside that packet.
 
 ## Limitations {#phy-limitations}
 

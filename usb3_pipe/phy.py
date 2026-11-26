@@ -24,9 +24,10 @@ from usb3_pipe.datapath   import GEN2_DATA_WIDTH
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, LaneSwap, lane_layout, link_layout
+from usb3_pipe.lanes      import LaneTXPacker, LaneRXAligner, LaneTXSymbolShift
 from usb3_pipe.datapath   import RXWordAligner
 from usb3_pipe.framing    import gen2_link_layout, WordsToPairs, PairsToWords, WordsPacker
-from usb3_pipe.framing    import LinkCommandPacketsBuffer, LogicalIdleFilter, WordsNarrower
+from usb3_pipe.framing    import PacketsBuffer, LinkCommandPacketsBuffer, LogicalIdleFilter, WordsNarrower
 
 # LTSSM <-> PIPE -----------------------------------------------------------------------------------
 
@@ -248,6 +249,7 @@ USB3PHY_LINK_INTERFACE = [
     ("source_lc",     "LGOOD_n/LCRD_x Link Commands words not behind the RX words, enabled by source_lc_enable (None without)."),
     ("rx_throttle",   "RX words buffered (pipe_cd): Rx Header Buffer credits held (0 without)."),
     ("rx_t2_credits", "Type 2 credits the partner may hold: 4 (no limit) or a Signal (runtime)."),
+    ("ssp_lane_speed", "SuperSpeedPlus lane speed (Gbps, BOS): 10 (Gen 2), 5 (Gen 1x2 Link interface)."),
 ]
 
 # PIPE -> LTSSM status pulses (LTSSM_PIPE_INTERFACE inputs, others are levels).
@@ -300,7 +302,8 @@ class USB3PHY(LiteXModule):
     - Capabilities and flow control (see USB3PHY_LINK_INTERFACE), always defined: `link_words`,
       `with_u1u2`, `ssp_capable`/`gen2_active` (Gen 2 operation), `source_lc` (fast Link Commands
       path with `source_lc_enable`, None without), `rx_throttle` (RX words buffered with pipe_cd:
-      Rx Header Buffer credits held), `rx_t2_credits` (Type 2 credits the partner may hold).
+      Rx Header Buffer credits held), `rx_t2_credits` (Type 2 credits the partner may hold),
+      `ssp_lane_speed` (SuperSpeedPlus lane speed in the BOS: 10, 5 with USB3PHYX2Link).
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
         timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8, link_words=1,
@@ -330,6 +333,7 @@ class USB3PHY(LiteXModule):
         self.source_lc     = None
         self.rx_throttle   = Constant(0, 1)
         self.rx_t2_credits = 4 # Type 2 credits (SuperSpeedPlus) the partner may hold, 4: no limit.
+        self.ssp_lane_speed = 10 # Gbps (Gen 2).
 
         # PIPE(s) / LTSSM --------------------------------------------------------------------------
         if lanes == 1:
@@ -1084,3 +1088,163 @@ class USB3PHY(LiteXModule):
             source_x1.valid.eq(framing_aligner.source.valid & ltssm.rx_ready & ~x2),
             framing_aligner.source.ready.eq(source_x1.ready | ~ltssm.rx_ready | x2),
         ]
+
+# USB3 PHY Gen 1x1 Link Interface (Gen 1x2 PHY) ----------------------------------------------------
+
+class USB3PHYX1Link(LiteXModule):
+    """Gen 1x1 Link interface of a USB3PHY(lanes=2): its single lane (Lane 0, Configuration Lane)
+    interface seen as a USB3PHY(lanes=1) by a Gen 1 Link Layer (USB3DeviceCore, Host model).
+
+    sink/source: 32-bit/4-bit link words of sink_x1/source_x1 (endianness swapped with
+    with_endianness_swap, as USB3PHY(lanes=1) by default), the status/Link-Layer control signals are
+    the ones of the USB3PHY (same Signal objects). Only valid when Gen 1x1 is negotiated (x2 = 0):
+    build the USB3PHY with x2_capable=False for a Gen 1 Link Layer (USB3PHYX2Link: a SuperSpeedPlus
+    Link Layer, Gen 1x2 or Gen 1x1 as negotiated).
+    """
+    def __init__(self, phy, with_endianness_swap=True):
+        assert len(phy.pipes) == 2
+        object.__setattr__(self, "phy", phy) # Reference only (not a submodule).
+        self.sink   = stream.Endpoint([("data", 32), ("ctrl", 4)])
+        self.source = stream.Endpoint([("data", 32), ("ctrl", 4)])
+
+        # # #
+
+        if with_endianness_swap:
+            self.sink_swap   = EndiannessSwap(self.sink, phy.sink_x1)
+            self.source_swap = EndiannessSwap(phy.source_x1, self.source)
+        else:
+            self.comb += [
+                self.sink.connect(phy.sink_x1),
+                phy.source_x1.connect(self.source),
+            ]
+
+        # Status / Link-Layer control signals: the USB3PHY ones.
+        for name in USB3PHY_STATUS + [name for name, _ in USB3PHY_LINK_CTRL] + ["u2_timeout",
+            "ready", "ltssm_state", "x2", "gen2", "lane_swap"]:
+            setattr(self, name, getattr(phy, name))
+        self.ltssm_states = phy.ltssm_states
+
+        # Link interface (USB3PHY_LINK_INTERFACE): Gen 1x1, SuperSpeed operation.
+        self.link_words     = 1
+        self.with_u1u2      = phy.with_u1u2
+        self.ssp_capable    = False
+        self.gen2_active    = Constant(0, 1)
+        self.source_lc      = None
+        self.rx_throttle    = Constant(0, 1)
+        self.rx_t2_credits  = 4
+        self.ssp_lane_speed = 10
+
+# USB3 PHY Gen 1x2 Link Interface ------------------------------------------------------------------
+
+class USB3PHYX2Link(LiteXModule):
+    """Link interface of a USB3PHY(lanes=2) for a SuperSpeedPlus Link Layer (USB3DeviceCore with
+    words pairs: link_words = 2), Gen 1x2 or Gen 1x1 as negotiated.
+
+    sink/source: link words pairs (1 or 2 words per entry, word 0 first, each word endianness swapped
+    as USB3PHY(lanes=1) by default), gen2_active (USB3PHY_LINK_INTERFACE: SuperSpeedPlus operation of
+    the Link Layer): Gen 1x2 negotiated (x2), ssp_lane_speed: 5Gbps.
+    - Gen 1x2 (x2 = 1): TX: words pairs packed into 64-bit link words (LaneTXPacker: a 64-bit word
+      never holds two packets) and stored and forwarded by packets (PacketsBuffer: the lanes take 8
+      symbols per cycle, a packet is transmitted without Logical Idle inside it), striped on both
+      lanes (packets first/last: SKP Ordered Sets between the packets on both lanes, 6.4.3.2). RX:
+      destriped 64-bit link words parsed into packets (LaneRXAligner: packets at any symbol
+      position, 6.13.4, each packet starting on a 32-bit word, Logical Idle removed) and buffered (rx_buffer_depth pairs: the Link Layer consumes one word per cycle outside of the
+      DPP data, the lanes deliver two).
+    - Gen 1x1 (x2 = 0): single lane (Lane 0, Configuration Lane) words (sink_x1/source_x1), one word
+      per entry, SuperSpeed operation (Gen 1x1 is SuperSpeed, 7.1.1).
+    The status/Link-Layer control signals are the ones of the USB3PHY (same Signal objects).
+    tx_symbol_shift (test only): Gen 1x2 TX packets delayed by 1-7 symbols (LaneTXSymbolShift).
+
+    """
+    def __init__(self, phy, with_endianness_swap=True, rx_buffer_depth=64, tx_buffer_depth=256,
+        tx_symbol_shift=0):
+        assert len(phy.pipes) == 2
+        object.__setattr__(self, "phy", phy) # Reference only (not a submodule).
+        self.link_words     = 2
+        self.ssp_lane_speed = 5      # Lane speed (Gbps, SuperSpeedPlus USB Device Capability).
+        self.sink           = sink   = stream.Endpoint(gen2_link_layout())
+        self.source         = source = stream.Endpoint(gen2_link_layout())
+        self.rx_overflow    = Signal() # o: RX buffer/packet aligner overflow (sticky).
+        self.rx_drop        = Signal() # o: RX buffer entry dropped (full buffer, pulse).
+
+        # # #
+
+        x2 = phy.x2
+
+        # Endianness (per word) --------------------------------------------------------------------
+        tx = stream.Endpoint(gen2_link_layout())
+        rx = stream.Endpoint(gen2_link_layout())
+        if with_endianness_swap:
+            self.tx_swap = EndiannessSwap(sink, tx, word_bytes=4)
+            self.rx_swap = EndiannessSwap(rx, source, word_bytes=4)
+        else:
+            self.comb += [sink.connect(tx), rx.connect(source)]
+
+        # TX ---------------------------------------------------------------------------------------
+        # Out of U0 (PHY not TX ready), the TX words are dropped (as the Gen 1x1 TX packets): a word
+        # held by the packer or packets buffered when the link left U0 (Recovery, Hot Reset) would
+        # be sent at the next U0 entry before the Link Layer Advertisement (two Acorn Minis, scripted
+        # host: the LCSTART of an Advertisement cut by a U0 exit, sent with the next Advertisement:
+        # its LGOOD_n lost, a Device PENDING_HP_TIMER Recovery).
+        self.tx_packer = tx_packer = ResetInserter()(LaneTXPacker())
+        self.tx_buffer = tx_buffer = PacketsBuffer(link_layout(), depth=tx_buffer_depth)
+        self.comb += [
+            tx_packer.reset.eq(~phy.tx_ready),
+            tx_buffer.drop.eq(~phy.tx_ready),
+        ]
+        self.tx_words  = tx_words  = PairsToWords()
+        self.comb += [
+            If(x2,
+                tx.connect(tx_packer.sink),
+            ).Else(
+                tx.connect(tx_words.sink),
+            ),
+            tx_packer.source.connect(tx_buffer.sink),
+            tx_words.source.connect(phy.sink_x1),
+        ]
+
+        if tx_symbol_shift:
+            # Test: packets at any symbol position (receivers of the partner).
+            self.tx_shift = tx_shift = LaneTXSymbolShift(tx_symbol_shift)
+            self.comb += [
+                tx_buffer.source.connect(tx_shift.sink),
+                tx_shift.source.connect(phy.sink),
+            ]
+        else:
+            self.comb += tx_buffer.source.connect(phy.sink)
+
+        # RX ---------------------------------------------------------------------------------------
+        # Out of U0 (PHY not RX ready, no words), the aligner is reset: its parser state is kept
+        # when the words stop in a packet (U0 exit), the first packet after the U0 re-entry would
+        # be lost.
+        self.rx_aligner = rx_aligner = ResetInserter()(LaneRXAligner())
+        self.comb += rx_aligner.reset.eq(~phy.rx_ready)
+        self.rx_buffer  = rx_buffer  = stream.SyncFIFO(gen2_link_layout(), rx_buffer_depth, buffered=True)
+        self.rx_pairs   = rx_pairs   = WordsToPairs()
+        self.comb += [
+            phy.source.connect(rx_aligner.sink),
+            rx_aligner.source.connect(rx_buffer.sink),
+            phy.source_x1.connect(rx_pairs.sink),
+            If(x2,
+                rx_buffer.source.connect(rx),
+            ).Else(
+                rx_pairs.source.connect(rx),
+            ),
+        ]
+        self.comb += self.rx_drop.eq(rx_aligner.source.valid & ~rx_buffer.sink.ready)
+        self.sync += If(self.rx_drop | rx_aligner.overflow, self.rx_overflow.eq(1))
+
+        # Status / Link-Layer control signals: the USB3PHY ones.
+        for name in USB3PHY_STATUS + [name for name, _ in USB3PHY_LINK_CTRL] + ["u2_timeout",
+            "ready", "ltssm_state", "x2", "gen2", "lane_swap"]:
+            setattr(self, name, getattr(phy, name))
+        self.ltssm_states = phy.ltssm_states
+
+        # Link interface (USB3PHY_LINK_INTERFACE): SuperSpeedPlus operation at Gen 1x2 (gen2_active
+        # is the SuperSpeedPlus operation of the Link Layer: x2 here).
+        self.with_u1u2      = phy.with_u1u2
+        self.ssp_capable    = True
+        self.gen2_active    = phy.x2
+        self.source_lc      = None
+        self.rx_throttle    = Constant(0, 1)
+        self.rx_t2_credits  = 4
