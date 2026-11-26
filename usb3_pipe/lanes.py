@@ -15,6 +15,9 @@
                   lockstep (the two sources must be consumed together, ex: by a LaneDestriper).
 - LaneSwap      : logical lanes on two physical SerDes (USB Type-C plug orientation), Configuration
                   Lane detection from the partner's Polling.LFPS.
+- LanesPacketAligner : destriped 64-bit link words -> link words pairs of the packets (any packet
+                  placement, each packet starting on a 32-bit word, Logical Idle removed).
+- LanesTXPacker : link words pairs -> 64-bit link words for the striper (packets on 64-bit words).
 """
 
 from migen import *
@@ -22,6 +25,8 @@ from migen import *
 from litex.gen import *
 
 from litex.soc.interconnect import stream
+
+from usb3_pipe.common import SHP, SDP, SLC, EPF
 
 # Layouts ------------------------------------------------------------------------------------------
 
@@ -362,3 +367,357 @@ class LaneSwap(LiteXModule):
                     swap.eq(0)
                 )
             )
+
+# Lanes Framing Aligner ----------------------------------------------------------------------------
+
+def link_pairs_layout():
+    """Link words pairs (words: 1 or 2 valid words, word 0 first: data[0:32]/ctrl[0:4])."""
+    return [("data", 64), ("ctrl", 8), ("words", 2)]
+
+class LanesPacketAligner(LiteXModule):
+    """64-bit link words (destriped lanes, Symbol 0 on data[0:8]) -> link words pairs of the
+    packets only, each packet starting on a 32-bit word (as RXWordAligner + LogicalIdleFilter for
+    Gen 1x1), for packets at any symbol position of the 64-bit words (they may start on either
+    lane, 6.13.4) with any number of Logical Idle symbols between them (none included).
+
+    Symbols parser (8 symbols per cycle): a packet starts on a SHP/SLC/SDP K-symbol outside of a
+    packet: Header Packet: 20 symbols (framing, 12-byte header, CRC-16, Link Control Word), Link
+    Command: 8 symbols, DPP: from the SDP framing to the EPF of its END/EDB framing (7.2.1,
+    7.2.4). A word holds the symbols of at most two packets (the end of one, the start of the
+    next). Each packet's output words are the 32-bit slices of the symbols stream from its start
+    (rotation: start symbol modulo 4, words taken from a two words window), its last word
+    completed with Logical Idle symbols (00h data, as received from a partner keeping its packets
+    on 32-bit words): a packet always starts on a 32-bit word, Logical Idle between the packets
+    removed. Up to 4 words per cycle (end of a packet, its completed last word, start of the next)
+    written in rotation to 4 word FIFOs (buffer_symbols/4 words each), up to two words per cycle
+    on the output (registered, no back-pressure). Timing: no per symbol placement from a buffer
+    level (the previous symbols buffer did not reach 125MHz on the Tang Mega 138K Pro, t28); the
+    completions add up to 3 symbols per packet, absorbed by the FIFOs (overflow: sticky flag,
+    never with Logical Idle or a SKP Ordered Set every few packets).
+
+    Not handled (as the Gen 1x1 path): a corrupted first framing symbol (the packet is then taken
+    from the next symbol, misaligned: CRC error and retry by the Link Layer), a corrupted EPF at
+    the end of a DPP (the DPP ends at the next EPF), a K EPF symbol right after the framing of a DPP
+    starting in the same word (not its end; impossible in a valid DPP: data, CRC-32 and END first)."""
+    def __init__(self, buffer_symbols=32):
+        assert buffer_symbols % 4 == 0
+        self.sink     = sink   = stream.Endpoint(link_layout())
+        self.source   = source = stream.Endpoint(link_pairs_layout())
+        self.overflow = Signal() # o: Symbols buffer overflow (sticky).
+
+        # # #
+
+        IDLE, FIXED, DPP_FRAMING, DPP = range(4)
+
+        # Symbols parser (registered: symbol, keep, end of packet) ---------------------------------
+        mode  = Signal(2)
+        count = Signal(5)
+        sym   = [Signal(9, name=f"sym{i}")  for i in range(8)] # {k, data}.
+        keep  = [Signal(name=f"keep{i}")    for i in range(8)] # Packet symbol.
+        last  = [Signal(name=f"last{i}")    for i in range(8)] # Last symbol of a packet.
+        valid = Signal()
+        self.comb += sink.ready.eq(1)
+
+        # Input registered with the framing K-symbols decoded (timing: the 64-bit words come
+        # straight from the lanes destriping/deskew FIFOs).
+        in_valid = Signal()
+        in_data  = Signal(64)
+        in_ctrl  = Signal(8)
+        in_k     = {s: [Signal(name=f"is_{n}{i}") for i in range(8)]
+            for s, n in [(SHP, "shp"), (SLC, "slc"), (SDP, "sdp"), (EPF, "epf")]}
+        self.sync += [
+            in_valid.eq(sink.valid),
+            in_data.eq(sink.data),
+            in_ctrl.eq(sink.ctrl),
+        ]
+        for i in range(8):
+            for s in in_k:
+                self.sync += in_k[s][i].eq(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == s.value))
+
+        # Parser without a chain of 8 dependent symbol steps (timing): a word holds at most the end
+        # of the current packet then the start of one packet (a packet is 8 symbols or more), the
+        # end found from the count (Header Packet/Link Command) or the first EPF (DPP), the start by
+        # a priority encoder after it. count: symbols of the current packet (FIXED) or of its DPP
+        # framing (DPP_FRAMING) from the word's symbol 0.
+        def first(bits):
+            """(found, index) of the first set bit (priority encoder)."""
+            found, index = Signal(), Signal(3)
+            self.comb += found.eq(Reduce("OR", bits))
+            for i in reversed(range(8)):
+                self.comb += If(bits[i], index.eq(i))
+            return found, index
+        is_start = [in_k[SHP][i] | in_k[SLC][i] | in_k[SDP][i] for i in range(8)]
+        # End of the current packet in this word (ended, e).
+        epf_from = Signal(4) # First symbol of the EPF search (DPP: 0, DPP_FRAMING: after it).
+        self.comb += epf_from.eq(Mux(mode == DPP_FRAMING, count, 0))
+        epf_found, epf_index = first([in_k[EPF][i] & (i >= epf_from) for i in range(8)])
+        ended = Signal()
+        e     = Signal(3)
+        self.comb += Case(mode, {
+            IDLE:        ended.eq(0),
+            FIXED:       [ended.eq(count <= 8), e.eq(count - 1)],
+            DPP_FRAMING: [ended.eq((count <= 8) & epf_found), e.eq(epf_index)],
+            DPP:         [ended.eq(epf_found), e.eq(epf_index)],
+        })
+        # Start of a packet after it (or from symbol 0 out of a packet): started, s, kind.
+        # The start search does not depend on the end found in this word (timing, t29: two chained
+        # priority encoders): no SHP/SLC/SDP K-symbol inside a packet's remaining symbols but its
+        # framing (FIXED/DPP_FRAMING: the first count symbols; a DPP: only END K-symbols before its
+        # EPF).
+        start_ok = [Signal(name=f"start_ok{i}") for i in range(8)]
+        for i in range(8):
+            self.comb += start_ok[i].eq(is_start[i] &
+                ((mode == IDLE) | (mode == DPP) | (count <= i)))
+        started, s_index = first(start_ok)
+        s_shp = Signal()
+        s_slc = Signal()
+        self.comb += [
+            s_shp.eq(Array(in_k[SHP])[s_index]),
+            s_slc.eq(Array(in_k[SLC])[s_index]),
+        ]
+        in_packet = Signal()
+        self.comb += in_packet.eq(mode != IDLE)
+        for i in range(8):
+            data, k = in_data[8*i:8*(i+1)], in_ctrl[i]
+            _keep = Signal(name=f"keep_c{i}")
+            _last = Signal(name=f"last_c{i}")
+            self.comb += [
+                _keep.eq((in_packet & (~ended | (i <= e))) | (started & (i >= s_index))),
+                # Last symbol: end of the current packet, or of a Link Command starting at symbol 0.
+                _last.eq((ended & (e == i)) | ((i == 7) & started & s_slc & (s_index == 0))),
+            ]
+            self.sync += [
+                sym[i].eq(Cat(data, k)),
+                keep[i].eq(in_valid & _keep),
+                last[i].eq(in_valid & _last),
+            ]
+        # State at the end of the word.
+        nm = Signal(2)
+        nc = Signal(5)
+        self.comb += [
+            nm.eq(mode), nc.eq(count - 8),
+            If(started,
+                If(s_shp,
+                    nm.eq(FIXED), nc.eq(12 + s_index),       # 20 symbols from s.
+                ).Elif(s_slc,
+                    nm.eq(Mux(s_index == 0, IDLE, FIXED)), nc.eq(s_index), # 8 symbols from s.
+                ).Else(
+                    nm.eq(Mux(s_index > 4, DPP_FRAMING, DPP)), nc.eq(s_index - 4), # Framing: 4.
+                )
+            ).Elif(ended | (mode == IDLE),
+                nm.eq(IDLE),
+            ).Elif(mode == DPP_FRAMING,
+                nm.eq(DPP), # Framing (3 symbols at most) ended in this word.
+            ),
+        ]
+        self.sync += [
+            valid.eq(in_valid),
+            If(in_valid,
+                mode.eq(nm),
+                count.eq(nc),
+            )
+        ]
+
+        # Packets word ends (registered with the symbols) -------------------------------------------
+        # A word holds the symbols of at most two packets: A, the current packet (continued, or started
+        # in this word out of a packet), and B, a packet started after the end of A. A packet's output
+        # words are the 32-bit slices of the symbols stream from its start (rotation r: its start
+        # symbol modulo 4), its last word completed with Logical Idle symbols.
+        r_cur = Signal(2) # Rotation of the current packet.
+        a_act = Signal()  # A in this word.
+        a_r   = Signal(2) # A rotation.
+        a_new = Signal()  # A started in this word, at a_s.
+        a_s   = Signal(3)
+        a_end = Signal()  # A ended in this word, at a_e.
+        a_e   = Signal(3)
+        b_new = Signal()  # B started in this word (after the end of A), at b_s.
+        b_s   = Signal(3)
+        self.sync += [
+            If(in_valid & started, r_cur.eq(s_index[:2])),
+            If(in_packet,
+                a_act.eq(in_valid),
+                a_r.eq(r_cur),
+                a_new.eq(0),
+                a_end.eq(ended),
+                a_e.eq(e),
+                b_new.eq(in_valid & started),
+                b_s.eq(s_index),
+            ).Else(
+                a_act.eq(in_valid & started),
+                a_r.eq(s_index[:2]),
+                a_new.eq(1),
+                a_s.eq(s_index),
+                # Link Command starting at symbol 0: ends in this word.
+                a_end.eq(s_slc & (s_index == 0)),
+                a_e.eq(7),
+                b_new.eq(0),
+            )
+        ]
+        # Previous word (window: previous word symbols -8..-1, this word 0..7).
+        prev = [Signal(9, name=f"prev{i}") for i in range(8)]
+        self.sync += If(valid, *[prev[i].eq(sym[i]) for i in range(8)])
+        def win(p):
+            return prev[p + 8] if p < 0 else (sym[p] if p < 8 else Constant(0, 9))
+
+        # Word candidates (registered) --------------------------------------------------------------
+        # A: words ending at i1 = (r+3)%4 and i1+4 in this word, and with A ending in this word, its
+        # last word (ending at i1+8, completed); B: its first word when complete in this word.
+        def word(syms):
+            return Cat(*[x[:8] for x in syms]), Cat(*[x[8] for x in syms])
+        cand_d = [Signal(32, name=f"cand_d{k}") for k in range(4)]
+        cand_c = [Signal(4,  name=f"cand_c{k}") for k in range(4)]
+        cand_v = [Signal(name=f"cand_v{k}")     for k in range(4)]
+        cases  = {}
+        for r in range(4):
+            i1 = (r + 3) % 4
+            stmts = []
+            for k in range(3):
+                ws = i1 - 3 + 4*k # Word start symbol.
+                syms = []
+                for p in range(ws, ws + 4):
+                    x = win(p)
+                    if p >= 0:
+                        # Past the end of A: Logical Idle (completion).
+                        m = Signal(9, name=f"m{r}_{k}_{p - ws}")
+                        self.comb += m.eq(Mux(a_end & (p > a_e), 0, x) if p < 8 else 0)
+                        x = m
+                    syms.append(x)
+                d, c = word(syms)
+                v_new = (a_s <= ws) if ws >= 0 else 0
+                v_end = (ws <= a_e) if ws <= 7 else 0
+                v = a_act & (~a_new | v_new) & (~a_end | v_end)
+                if k == 2:
+                    v = v & a_end # Last word only (completed).
+                stmts += [cand_d[k].eq(d), cand_c[k].eq(c), cand_v[k].eq(v)]
+            cases[r] = stmts
+        self.sync += Case(a_r, cases)
+        b_cases = {}
+        for bs in range(1, 5):
+            d, c = word([sym[p] for p in range(bs, bs + 4)])
+            b_cases[bs] = [cand_d[3].eq(d), cand_c[3].eq(c), cand_v[3].eq(b_new)]
+        b_cases["default"] = cand_v[3].eq(0)
+        self.sync += Case(b_s, b_cases)
+
+        # Words FIFOs (4 banks written in rotation, up to 4 words per cycle) -------------------------
+        word_layout = [("data", 32), ("ctrl", 4)]
+        banks = [stream.SyncFIFO(word_layout, buffer_symbols//4) for _ in range(4)]
+        self.submodules += banks
+        wp  = Signal(2)
+        pos = [Signal(2, name=f"pos{k}") for k in range(4)]
+        self.comb += [
+            pos[0].eq(wp),
+            pos[1].eq(wp + cand_v[0]),
+            pos[2].eq(wp + cand_v[0] + cand_v[1]),
+            pos[3].eq(wp + cand_v[0] + cand_v[1] + cand_v[2]),
+        ]
+        self.sync += wp.eq(wp + cand_v[0] + cand_v[1] + cand_v[2] + cand_v[3])
+        for b, bank in enumerate(banks):
+            sel = If(cand_v[0] & (pos[0] == b), bank.sink.valid.eq(1), bank.sink.data.eq(cand_d[0]),
+                bank.sink.ctrl.eq(cand_c[0]))
+            for k in range(1, 4):
+                sel = sel.Elif(cand_v[k] & (pos[k] == b), bank.sink.valid.eq(1),
+                    bank.sink.data.eq(cand_d[k]), bank.sink.ctrl.eq(cand_c[k]))
+            self.comb += sel
+            self.sync += If(bank.sink.valid & ~bank.sink.ready, self.overflow.eq(1))
+
+        # Output: up to two words per cycle (registered) ----------------------------------------------
+        rp  = Signal(2)
+        rp1 = Signal(2)
+        self.comb += rp1.eq(rp + 1)
+        v0  = Signal()
+        v1  = Signal()
+        self.comb += [
+            v0.eq(Array(bk.source.valid for bk in banks)[rp]),
+            v1.eq(v0 & Array(bk.source.valid for bk in banks)[rp1]),
+        ]
+        for b, bank in enumerate(banks):
+            self.comb += bank.source.ready.eq((v0 & (rp == b)) | (v1 & (rp1 == b)))
+        self.sync += [
+            source.valid.eq(v0),
+            source.words.eq(Mux(v1, 2, 1)),
+            source.data.eq(Cat(Array(bk.source.data for bk in banks)[rp],
+                               Array(bk.source.data for bk in banks)[rp1])),
+            source.ctrl.eq(Cat(Array(bk.source.ctrl for bk in banks)[rp],
+                               Array(bk.source.ctrl for bk in banks)[rp1])),
+            rp.eq(rp + v0 + v1),
+        ]
+
+# Lanes TX Packer ----------------------------------------------------------------------------------
+
+class LanesTXPacker(LiteXModule):
+    """Link words pairs (1 or 2 words per entry, packets first/last, a pair never spans two packets)
+    -> 64-bit link words for the striped lanes (two words per entry, packets first/last): a 64-bit
+    word never holds words of two packets, the word after the last word of a packet is a Logical Idle
+    word (both lanes end the packets together: SKP Ordered Sets inserted on both lanes between the
+    packets, 6.4.3.2). Up to two words per cycle (pairs of two words, or a held word + one word)."""
+    def __init__(self):
+        self.sink   = sink   = stream.Endpoint(link_pairs_layout())
+        self.source = source = stream.Endpoint(link_layout())
+
+        # # #
+
+        held       = Signal()
+        held_first = Signal()
+        held_last  = Signal()
+        held_data  = Signal(32, reset_less=True)
+        held_ctrl  = Signal(4,  reset_less=True)
+        two = sink.words == 2
+
+        # Outputs.
+        self.comb += [
+            If(held & held_last,
+                # Held last word of a packet + Logical Idle word.
+                source.valid.eq(1),
+                source.data.eq(Cat(held_data, Constant(0, 32))),
+                source.ctrl.eq(Cat(held_ctrl, Constant(0, 4))),
+                source.first.eq(held_first),
+                source.last.eq(1),
+            ).Elif(held,
+                # Held word + first word of the entry.
+                source.valid.eq(sink.valid),
+                source.data.eq(Cat(held_data, sink.data[0:32])),
+                source.ctrl.eq(Cat(held_ctrl, sink.ctrl[0:4])),
+                source.first.eq(held_first),
+                source.last.eq(sink.last & ~two),
+                sink.ready.eq(source.ready),
+            ).Elif(two,
+                source.valid.eq(sink.valid),
+                source.data.eq(sink.data),
+                source.ctrl.eq(sink.ctrl),
+                source.first.eq(sink.first),
+                source.last.eq(sink.last),
+                sink.ready.eq(source.ready),
+            ).Elif(sink.last,
+                # Last word of a packet alone + Logical Idle word.
+                source.valid.eq(sink.valid),
+                source.data.eq(Cat(sink.data[0:32], Constant(0, 32))),
+                source.ctrl.eq(Cat(sink.ctrl[0:4], Constant(0, 4))),
+                source.first.eq(sink.first),
+                source.last.eq(1),
+                sink.ready.eq(source.ready),
+            ).Else(
+                # Word alone (not last): held.
+                sink.ready.eq(1),
+            )
+        ]
+        # Held word.
+        self.sync += [
+            If(source.valid & source.ready,
+                held.eq(0)
+            ),
+            If(sink.valid & sink.ready,
+                If(held & two,
+                    held.eq(1),
+                    held_first.eq(0),
+                    held_last.eq(sink.last),
+                    held_data.eq(sink.data[32:64]),
+                    held_ctrl.eq(sink.ctrl[4:8]),
+                ).Elif(~held & ~two & ~sink.last,
+                    held.eq(1),
+                    held_first.eq(sink.first),
+                    held_last.eq(0),
+                    held_data.eq(sink.data[0:32]),
+                    held_ctrl.eq(sink.ctrl[0:4]),
+                )
+            )
+        ]

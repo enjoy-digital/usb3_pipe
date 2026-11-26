@@ -68,7 +68,7 @@ transceiver files are described in [Datapath](#datapath) and [Transceivers](#tra
 | `framing.py`     | `Gen2LinkTX`, `Gen2LinkRX`, `WordsToPairs`         | Gen 2 packet framing, 64-bit word pairs helpers             |
 | `common.py`      | `Symbol`, `OrderedSet`, `AsyncFIFO`                | Symbols, Ordered Sets, LTSSM to PIPE signal list, FIFOs     |
 | `crc.py`         | `CRC5`, `CRC16`, `CRC32`                           | CRCs of the link layer packets                              |
-| `lanes.py`       | `LaneStriper`, `LaneDeskew`, `LaneSwap`            | Gen 1x2 lane striping, deskew and lane swap                 |
+| `lanes.py`       | `LaneStriper`, `LaneDeskew`, `LanesPacketAligner`  | Gen 1x2 lane striping, deskew, lanes swap, packet alignment |
 | `serdes.py`      | `USB3SerDes`, `GW5USB3SerDes`, `ECP5USB3SerDes`    | Transceiver wrappers: AMD, Gowin and Lattice                |
 | `gw5/`           | TOML files, `gen_toml.py`                          | Gowin GTR12 register configurations                         |
 | `debug.py`       | `USB3PHYDebug`, `USB3LanesDebug`                   | Debug registers and LiteScope groups                        |
@@ -352,7 +352,17 @@ training.
 
 The Gen 1x2 PHY is experimental. It is validated between two LiteX Acorn Baseboard Minis with SFP
 DAC cables and PRBS stand-ins, not yet with a USB host. The device core has no SuperSpeedPlus link
-layer for two lanes.
+layer for two lanes yet. Two blocks prepare its link interface, which carries one or two 32-bit
+link words per cycle:
+
+- On transmit, `LanesTXPacker` packs the words into 64-bit link words. A 64-bit word never holds
+  words of two packets, and the word after the last word of a packet is a Logical Idle word. Both
+  lanes then end the packets together, so SKP Ordered Sets go on both lanes between the packets.
+- On receive, a partner may start a packet at any symbol of the 64-bit words, on either lane, with
+  any number of Logical Idle symbols before it. `LanesPacketAligner` finds the packets from their
+  framing symbols, removes the Logical Idle between them and pads the last word of each packet with
+  Logical Idle symbols, so that each packet starts on a 32-bit word for the link layer, as on the
+  Gen 1x1 path.
 
 ## Limitations {#phy-limitations}
 
