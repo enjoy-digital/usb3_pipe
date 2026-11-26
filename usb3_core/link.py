@@ -10,9 +10,10 @@
 - Header Packets flow control (7.2.4.1): Header Sequence Numbers, Rx/Tx Header Buffers and credits
   (LGOOD_n/LCRD_x), LBAD/LRTY retries, Header Sequence Number/Rx Header Buffer Credit
   Advertisements on each U0 entry (link state kept across Recovery).
-- SuperSpeedPlus operation (phy.gen2_active, Gen 2x1, 7.2.4.1): 4-bit Header Sequence Numbers,
-  Type 1/Type 2 Rx Header Buffer Credits (LCRD1_x/LCRD2_x, 4 each), Type 2: asynchronous DPs (TT:
-  Control/Bulk), Transfer Type (TT) set in the transmitted ACK TPs/DPHs (ssp_tt: {ept: TT}).
+- SuperSpeedPlus operation (phy.gen2_active: Gen 2x1, or Gen 1x2 through USB3PHYX2Link, 7.2.4.1):
+  4-bit Header Sequence Numbers, Type 1/Type 2 Rx Header Buffer Credits (LCRD1_x/LCRD2_x, 4 each),
+  Type 2: asynchronous DPs (TT: Control/Bulk), Transfer Type (TT) set in the transmitted ACK
+  TPs/DPHs (ssp_tt: {ept: TT}).
 - Timers: PENDING_HP_TIMER (10us), CREDIT_HP_TIMER (Recovery on timeout), U0 LUP keep-alive.
 - LMPs (8.4): Port Capability/Configuration (Response), Set Link Function (Force_LinkPM_Accept),
   U2 Inactivity Timeout.

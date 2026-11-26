@@ -269,7 +269,8 @@ Companion with its max burst. Interfaces can carry class-specific descriptors an
 settings; raw byte lists insert Interface Association Descriptors (IADs).
 
 The BOS always carries the USB 2.0 Extension and the SuperSpeed USB Device Capability. With a
-Gen 2 capable PHY, the core adds the SuperSpeedPlus USB Device Capability. With `with_lpm`, it
+Gen 2 capable PHY, the core adds the SuperSpeedPlus USB Device Capability, with a lane speed of
+10 Gbps; on the Gen 1x2 link interface (`USB3PHYX2Link`), with a lane speed of 5 Gbps. With `with_lpm`, it
 advertises non-zero U1 and U2 exit latencies.
 
 | Argument | Default | Meaning |
@@ -500,7 +501,8 @@ The table below lists every module of `usb3_core/`.
 
 ## Limitations {#core-limits}
 
-- Gen 1x1 and Gen 2x1 only; no Gen 1x2 or Gen 2x2 link layer.
+- Gen 1x1, Gen 2x1 and Gen 1x2 (experimental, through `USB3PHYX2Link` on 64-bit words); no Gen
+  2x2 link layer.
 - SuperSpeedPlus device features are limited to what a device needs: no hub support, no deferred
   packets, no arbitration weight handling.
 - 64-bit and 128-bit words for the Bulk endpoints only; the other endpoints stay 32-bit. The

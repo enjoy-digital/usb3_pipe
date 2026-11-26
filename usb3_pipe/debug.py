@@ -214,6 +214,7 @@ class USB3LanesDebug(LiteXModule):
     """
     def __init__(self, phy, serdes):
         assert len(serdes) == 2
+        assert getattr(phy, "pipe_cd", None) is None, "USB3LanesDebug: lanes logic in sys only (no pipe_cd)."
         self._clear   = CSR() # Clear counters (write).
         self._control = CSRStorage(fields=[
             CSRField("x2_enable", size=1, offset=0, reset=1,
@@ -254,6 +255,8 @@ class USB3LanesDebug(LiteXModule):
                 ("deskew_lost_u0", u0 & phy.lanes_deskew_lost, 1),
                 ("lane_idle_u0",   u0 & phy.lanes_idle,        1),
                 ("realign_u0",     phy.lanes_realign,          0),
+                # Deskew cleared on a partial COM word (lane shifted since the pairing).
+                ("com_slip",       phy.lanes_com_slip,         0),
             ]
         for lane, (pipe, s) in enumerate(zip(phy.pipes, serdes)):
             events += [

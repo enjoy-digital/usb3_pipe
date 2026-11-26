@@ -445,6 +445,145 @@ CONFIGS_SLOW = {
     "lane0_late_shift": ["--lane0-delay", "1", "--lane1-delay", "0", "--lane1-word-shift", "2"],
 }
 
+class TestPHYX2Core(unittest.TestCase):
+    """Gen 1x2 PHYs with the Host script/Device Core on USB3PHYX2Link (sim.py --lanes 2 --lanes-core):
+    SuperSpeedPlus at Gen 1x2, or Gen 1x1 on Lane 0, enumeration and Bulk loopback."""
+    def run_sim(self, name, args):
+        cmd = [sys.executable, str(ROOT / "sim.py"), "--lanes", "2", "--lanes-core",
+            "--output-dir", str(get_output_dir(self, name))] + args
+        try:
+            p = subprocess.run(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=1200)
+        except subprocess.TimeoutExpired:
+            self.fail(f"{name}: Simulation timeout.")
+        out  = p.stdout or ""
+        tail = "\n---- tail ----\n" + out[-4000:]
+        self.assertEqual(p.returncode, 0, f"{name}: Simulation failed." + tail)
+        self.assertIn("HOST script done", out, tail)
+        self.assertNotIn("Simulation timeout", out, tail)
+        self.assertRegex(out, r"HOST\s*entering U0 state", tail)
+        self.assertRegex(out, r"DEV\s*entering U0 state", tail)
+        return out
+
+    def test_core_x2(self):
+        # Gen 1x2: SuperSpeedPlus Link Layer (4-bit HSEQ, Type 1/Type 2 credits) on the striped lanes,
+        # 64-bit Device endpoints.
+        out = self.run_sim("core_x2", ["--dev-mode", "x2"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 1, gen2: 0\)")
+        self.assertRegex(out, r"DEV\s*lanes deskewed")
+
+    def test_core_x2_dev_pipe_cd(self):
+        # Gen 1x2 Device with its lanes logic and USB3PHYX2Link lanes side (TX packer/packets
+        # buffers, RX packet aligner) in the PIPE domain, its LTSSM/Link Layer/Core at half the
+        # frequency (words pairs through AsyncFIFOs, RX throttling), crossed lanes.
+        out = self.run_sim("core_x2_dev_pipe_cd", ["--dev-mode", "x2", "--dev-pipe-cd", "--lanes-crossed"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 1, gen2: 0\)")
+        self.assertNotIn("DEV  Link Layer Recovery request", out)
+
+    def test_core_x2_dev_pipe_cd_x1(self):
+        # The same, Gen 1x1 negotiated (Device not x2 capable): Lane 0 words through the CDC (TX
+        # packets stored and forwarded, no Logical Idle inside a packet).
+        out = self.run_sim("core_x2_dev_pipe_cd_x1", ["--dev-mode", "x1", "--dev-pipe-cd"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 0, gen2: 0\)")
+        self.assertNotIn("DEV  Link Layer Recovery request", out)
+
+    def test_core_x2_crossed(self):
+        # Gen 1x2 with a flipped USB Type-C plug (lanes swap).
+        out = self.run_sim("core_x2_crossed", ["--dev-mode", "x2", "--lanes-crossed"])
+        self.assertRegex(out, r"DEV\s*lanes swap: 1")
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 1, gen2: 0\)")
+
+    def test_core_x2_hot_resets(self):
+        # Gen 1x2 Acorn Mini lanes (crossed, TX inverted), Host directed to 4 back to back Hot
+        # Resets after the script, each one at the U0 entry after the previous one (as the hardware
+        # scripted host between its runs): HotReset.Active entries skewed by the Recovery, each
+        # side leaving HotReset.Active only after a full Reset=0 TS2 burst sent (7.5.12.2), all
+        # back to U0 (no tHotResetActiveTimeout/tHotResetExitTimeout to eSS.Inactive).
+        out = self.run_sim("core_x2_hot_resets", ["--dev-mode", "x2", "--lanes-crossed",
+            "--lanes-tx-inverted", "--host-hot-reset", "4"])
+        tail = "\n---- tail ----\n" + out[-4000:]
+        for side in ["HOST", r"DEV\s"]:
+            self.assertEqual(len(re.findall(side + r"\s*entering HotReset.Exit state", out)), 4, tail)
+            self.assertNotRegex(out, side + r"\s*entering eSS.Inactive", tail)
+
+    def test_core_x2_lane_slip(self):
+        # Host Lane 1 losing 2 Symbols (one 16-bit transceiver word) in Polling.Idle, after its last
+        # TS2 (two Acorn Minis: a lane 2 Symbols off at the start of its last TS2): the deskew
+        # stays paired (single end of burst mismatch tolerated), every destriped word corrupted in
+        # U0. The partial COM word of the next TS clears the deskew; without it, no COM in U0 to
+        # detect the shifted lane: Device PENDING_HP_TIMER Recoveries, the script never done.
+        out = self.run_sim("core_x2_lane_slip", ["--dev-mode", "x2", "--lanes-crossed",
+            "--lanes-tx-inverted", "--lane-slip", "598360,1", "--max-cycles", "3000000"])
+        self.assertRegex(out, r"HOST LANE\s+1 RX SLIP")
+        self.assertRegex(out, r"HOST\s*lanes partial COM word")
+        self.assertNotIn("DEV  Link Layer Recovery request", out)
+
+    def test_core_x2_lane_slip_recovery_idle(self):
+        # Then Host Lane 1 losing 2 more Symbols after the last COM of the Device's Recovery TS2s,
+        # the Host in Recovery.Idle, the Device already in U0: the Host lane descrambler out of
+        # step never sees the Idle Symbols; the Device Recovery TS1 (PENDING_HP_TIMER) bring the
+        # Host back to Recovery.Active. Without it: the Host in Recovery.Idle until
+        # tRecoveryIdleTimeout, eSS.Inactive on both sides and a retrain through Polling.
+        out = self.run_sim("core_x2_lane_slip_recovery_idle", ["--dev-mode", "x2", "--lanes-crossed",
+            "--lanes-tx-inverted", "--lane-slip", "598360,1,598655,1", "--max-cycles", "3000000"])
+        self.assertRegex(out, r"\[00598655\] HOST LANE\s+1 RX SLIP")
+        self.assertNotRegex(out, r"(HOST|DEV)\s*entering eSS.Inactive state")
+
+    def test_core_x2_tx_shift(self):
+        # Gen 1x2 with the Host/Device TX packets delayed by 3 symbols: packets starting on Lane 1,
+        # at any symbol position of the 64-bit words (LaneRXAligner).
+        out = self.run_sim("core_x2_tx_shift", ["--dev-mode", "x2", "--lanes-tx-shift", "3"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 1, gen2: 0\)")
+
+    @pytest.mark.slow
+    def test_core_x2_tx_shift_6(self):
+        # Gen 1x2 with the TX packets delayed by 6 symbols (packets starting on Lane 0, second half
+        # of the 64-bit words).
+        out = self.run_sim("core_x2_tx_shift_6", ["--dev-mode", "x2", "--lanes-tx-shift", "6"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 1, gen2: 0\)")
+
+    @pytest.mark.slow
+    def test_core_x2_lpm(self):
+        # Gen 1x2: U1/U2 entries/exits (x2 PM timers) and Recovery to U0.
+        out = self.run_sim("core_x2_lpm", ["--dev-mode", "x2", "--host-lpm"])
+        self.assertRegex(out, r"DEV\s*entering U2 state")
+
+    def test_core_x1(self):
+        # Device USB3PHY(lanes=2) not x2 capable: Gen 1x1 negotiated, Device Core on Lane 0.
+        out = self.run_sim("core_x1", ["--dev-mode", "x1"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 0, gen2: 0\)")
+
+    def test_core_x1_crossed(self):
+        # Flipped USB Type-C plug: Configuration Lane on the Device SerDes 1 (lanes swap).
+        out = self.run_sim("core_x1_crossed", ["--dev-mode", "x1", "--lanes-crossed"])
+        self.assertRegex(out, r"DEV\s*lanes swap: 1")
+
+    def test_core_x1_runtime(self):
+        # Device built Gen 1x2 capable (USB3PHYX2Link), Gen 1x2 disabled at runtime (x2_enable,
+        # bench/usb3_lanes.py x2-disable): Gen 1x1 negotiated, SuperSpeed operation, script done.
+        out = self.run_sim("core_x1_runtime", ["--dev-mode", "x2", "--dev-x2-disable",
+            "--no-host-skp", "--lanes-crossed", "--lanes-tx-inverted"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 0, gen2: 0\)")
+
+    def test_core_x1_data(self):
+        # Gen 1x1 negotiated on the Acorn Mini lanes (crossed, TX inverted), script without SKP
+        # Ordered Sets requests and with the Bulk IN data checked (as the hardware scripted host
+        # at Gen 1x1, bench/acorn.py --role host --no-x2 --lanes-core).
+        out = self.run_sim("core_x1_data", ["--dev-mode", "x1", "--no-host-skp", "--lanes-crossed",
+            "--lanes-tx-inverted"])
+        self.assertRegex(out, r"DEV\s*SSP entering DONE state \(x2: 0, gen2: 0\)")
+
+    def test_core_ss(self):
+        # Gen 1x2 Host PHY with a Gen 1x1 SuperSpeed Device (SuperSpeed fallback of the Host).
+        out = self.run_sim("core_ss", ["--dev-mode", "ss"])
+        self.assertRegex(out, r"HOST\s*SSP entering SS-FALLBACK state")
+
+    @pytest.mark.slow
+    def test_core_x1_lpm(self):
+        # U1/U2 entries/exits (LFPS on the Configuration Lane) and Recovery to U0.
+        out = self.run_sim("core_x1_lpm", ["--dev-mode", "x1", "--host-lpm"])
+        self.assertRegex(out, r"DEV\s*entering U2 state")
+
 class TestPHYX2(unittest.TestCase):
     def run_sim(self, name, args, mode="x2", swap=False):
         # mode: x2 (Gen 1x2 negotiated), x1 (Gen 1x1 negotiated by two Gen 1x2 PHYs, Device not x2
@@ -533,6 +672,18 @@ class TestPHYX2(unittest.TestCase):
         # Flipped USB Type-C plug: Host Lane 0/1 on the Device SerDes 1/0, the Device detects the
         # Configuration Lane (lanes swap) from the Host Polling.LFPS.
         self.run_sim("crossed", ["--lanes-crossed"], swap=True)
+
+    def test_phy_x2_dev_pipe_cd(self):
+        # Device Gen 1x2 lanes logic (PIPEs, lanes datapath) and PRBS stand-ins at the SerDes
+        # frequency, its LTSSM/SuperSpeedPlus Polling at half of it (USB3PHY lanes=2 pipe_cd),
+        # crossed and inverted lanes.
+        self.run_sim("dev_pipe_cd", ["--dev-pipe-cd", "--lanes-crossed", "--lanes-tx-inverted"],
+            swap=True)
+
+    def test_phy_x2_dev_pipe_cd_x1(self):
+        # The same, Gen 1x1 negotiated (single lane on the swapped Lane 0).
+        self.run_sim("dev_pipe_cd_x1", ["--dev-pipe-cd", "--dev-x2-disable", "--lanes-crossed"],
+            mode="x1", swap=True)
 
     def test_phy_x2_crossed_fallback_x1(self):
         # Flipped plug, Gen 1x1 negotiated: single lane on the Device SerDes 1.

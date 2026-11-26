@@ -163,6 +163,7 @@ feature is absent, so that a link layer can adapt at elaboration time (`USB3PHY_
 | `ssp_capable`   | Gen 2 possible: the link layer applies the SuperSpeedPlus rules            |
 | `rx_throttle`   | With `pipe_cd`: received words buffered, receive credits held              |
 | `rx_t2_credits` | Type 2 credits the partner may hold: 4 (no limit) or a runtime signal      |
+| `ssp_lane_speed` | SuperSpeedPlus lane speed in the BOS: 10 Gbps (Gen 2), 5 (Gen 1x2)       |
 
 ## Clock domains {#phy-clocks}
 
@@ -239,6 +240,16 @@ framing runs in `pipe_cd` and feeds the same receive FIFO. With 80-bit raw words
 On the Tang Mega 138K Pro, the PIPE runs on the GTR12 transmit clock, so the transmit path needs
 no crossing at all. The ECPIX-5 target does the same on the DCU transmit clock, with `sys` at
 83.33 MHz.
+
+With `lanes=2` (Gen 1 only), `pipe_cd` moves the whole lanes logic into `pipe_cd`: the two PIPEs,
+the lanes swap, the striping, the deskew and the destriping, and the receive error monitors. Only
+the LTSSM and the SuperSpeedPlus polling stay in `sys`. The lanes logic sees the LTSSM through
+resynchronized signals, its controls crossing as one group as above. There is no link words
+crossing: `sink`, `source`, `sink_x1` and `source_x1` are in `pipe_cd`, where the caller places
+what uses them. `USB3PHYX2Link` on such a PHY keeps its packer, packets buffers and packet aligner
+in `pipe_cd` and gives the link layer its word pairs in `sys` through asynchronous FIFOs. The
+receive FIFO takes the words at the line rate without back-pressure; from a quarter full,
+`rx_throttle` makes the link layer hold its receive credits.
 
 ## Parameters {#phy-parameters}
 
@@ -352,6 +363,13 @@ the SKP removal, or another symbol received as a SKP and removed. The lane is th
 the other lane, and U0 has no COM word to show it.
 A lane that keeps decoding errors is re-initialized.
 
+A lane can also lose a transceiver word at the start of its last TS2 and keep the 4 COM symbols of
+the next Ordered Sets 2 symbols late. The deskew tolerates that single mismatch at the end of the
+burst and stays paired, so every destriped word in U0 is corrupted, and U0 has no COM symbols to
+show it. A deskewed word that starts with COM symbols followed by other symbols, on one lane only,
+therefore clears the pairing (`lanes_com_slip`): Recovery follows, and the deskew is acquired
+again on its TS1. Words with a single COM symbol (TSEQ) do not count.
+
 The device finds which receiver gets the configuration lane from the partner's Polling LFPS and
 swaps the lanes, as a flipped USB Type-C plug needs (`LaneSwap`). When the partner is not Gen 1x2
 capable, the link trains at Gen 1x1 on lane 0, and the 32-bit words of that lane are on
@@ -359,8 +377,14 @@ capable, the link trains at Gen 1x1 on lane 0, and the 32-bit words of that lane
 training.
 
 The Gen 1x2 PHY is experimental. It is validated between two LiteX Acorn Baseboard Minis with SFP
-DAC cables and PRBS stand-ins, not yet with a USB host. The device core has no SuperSpeedPlus link
-layer for two lanes yet. Two blocks prepare its link interface, which carries one or two 32-bit
+DAC cables and PRBS stand-ins, not yet with a USB host.
+
+Two adapters give the device core its link interface. `USB3PHYX2Link` runs the SuperSpeedPlus
+link layer on 64-bit word pairs at Gen 1x2 and the SuperSpeed one on lane 0 at Gen 1x1, as
+negotiated; the device core then advertises a SuperSpeedPlus lane speed of 5 Gbps.
+`USB3PHYX1Link` gives a Gen 1x1 link layer the lane 0 interface only. Outside U0, the
+`USB3PHYX2Link` transmit words are dropped, so that nothing held from before a Recovery is sent
+ahead of the next advertisement. Two blocks make its Gen 1x2 path, which carries one or two 32-bit
 link words per cycle:
 
 - On transmit, `LaneTXPacker` packs the words into 64-bit link words. A 64-bit word never holds
@@ -370,7 +394,8 @@ link words per cycle:
   any number of Logical Idle symbols before it. `LaneRXAligner` finds the packets from their
   framing symbols, removes the Logical Idle between them and pads the last word of each packet with
   Logical Idle symbols, so that each packet starts on a 32-bit word for the link layer, as on the
-  Gen 1x1 path.
+  Gen 1x1 path. `USB3PHYX2Link` resets it outside U0, where a packet cut by the U0 exit would
+  otherwise leave its parser inside that packet.
 
 ## Limitations {#phy-limitations}
 
