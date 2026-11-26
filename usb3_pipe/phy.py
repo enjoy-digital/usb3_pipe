@@ -1019,8 +1019,8 @@ class USB3PHY(LiteXModule):
         self.lanes_skp_odd = Signal() # o: Odd SKP run on a lane in U0 (x2).
         skp_odd = []
         for s in self.lanes_phys_serdes:
-            if hasattr(s, "rx_datapath") and hasattr(s, "add_rx_skp_check"):
-                s.add_rx_skp_check()
+            if hasattr(s, "rx_datapath"):
+                s.add_rx_skp_checker()
                 skp_odd.append(s.rx_skp_odd)
         if skp_odd:
             self.comb += self.lanes_skp_odd.eq(x2 & ltssm.u0 & Reduce("OR", skp_odd))
