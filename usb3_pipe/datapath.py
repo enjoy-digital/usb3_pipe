@@ -385,28 +385,39 @@ class RXErrorMonitor(LiteXModule):
     A LFPS signal (10-50MHz square wave, Table 6-29) sampled at the 5Gbps line rate never decodes as
     valid 8b/10b symbols while SuperSpeed data does: this is used to differentiate a Warm Reset LFPS
     from data, both seen as a non electrical idle line.
+
+    extra: other RX errors (clock_domain), counted as decode errors (ex: transceiver RX words not
+    delivered, the last decoded word then repeated as valid symbols); `decode_errors` reports the
+    decode errors only (`errors` without extra).
     """
-    def __init__(self, decoders, clock_domain="sys", window=256):
-        self.errors = Signal() # o
+    def __init__(self, decoders, clock_domain="sys", window=256, extra=None):
+        self.errors        = Signal() # o
+        self.decode_errors = Signal() # o
 
         # # #
 
-        invalid = Signal()
-        errors  = Signal()
-        count   = Signal(max=window + 1)
-        self.comb += invalid.eq(Reduce("OR", [decoder.invalid for decoder in decoders]))
         sync = getattr(self.sync, clock_domain)
-        sync += [
-            If(invalid,
-                count.eq(window),
-                errors.eq(1),
-            ).Elif(count != 0,
-                count.eq(count - 1),
-            ).Else(
-                errors.eq(0),
-            )
-        ]
-        self.specials += MultiReg(errors, self.errors)
+        decode_invalid = Signal()
+        self.comb += decode_invalid.eq(Reduce("OR", [decoder.invalid for decoder in decoders]))
+        monitors = [(decode_invalid, self.decode_errors)]
+        if extra is not None:
+            monitors += [(decode_invalid | extra, self.errors)]
+        for invalid, output in monitors:
+            errors = Signal()
+            count  = Signal(max=window + 1)
+            sync += [
+                If(invalid,
+                    count.eq(window),
+                    errors.eq(1),
+                ).Elif(count != 0,
+                    count.eq(count - 1),
+                ).Else(
+                    errors.eq(0),
+                )
+            ]
+            self.specials += MultiReg(errors, output)
+        if extra is None:
+            self.comb += self.errors.eq(self.decode_errors)
 
 # RX Idle Filter -----------------------------------------------------------------------------------
 

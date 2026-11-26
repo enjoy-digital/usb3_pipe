@@ -71,6 +71,50 @@ def gw5_usb3_csr_config(lane, rate="5G", refclk="100M", position="Q1", pll=None)
         csr_config = gw5_csr_overrides(csr_config, GW5AT15_Q0_QPLL0_OVERRIDES)
     return csr_config
 
+def gw5_csr_merge_lanes(csr_ln0, csr_ln1):
+    """Q1 lanes 0 and 1 register configuration from the lane 0 and lane 1 configurations (same quad
+    settings, generated from the same TOML with one lane enabled): the writes common to both kept in
+    place, the differing blocks in order (lane 0 writes then lane 1 writes), without the writes of a
+    configuration to the other lane's cfg_ln (its power down), the quad writes to a same register
+    with different values merged (OR: cfg_quad_cmn lanes bits, FPCS clock root preload)."""
+    import difflib
+    write = re.compile(r"upar_write_driver\((0x[0-9a-fA-F]+),(0x[0-9a-fA-F]+)\)\s*#\s*(\S+)")
+    a = csr_ln0.splitlines()
+    b = csr_ln1.splitlines()
+    def parse(line):
+        m = write.search(line)
+        return (int(m.group(1), 16), int(m.group(2), 16), m.group(3)) if m else None
+    def other_lane_power_down(line, lane):
+        w = parse(line)
+        return (w is not None) and w[2].startswith(f"q1.ln{1 - lane}.cfg_ln") and \
+            (w[1] & 0xff == 0x55 or (w[1] >> 16) & 0xff == 0x55)
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            out += a[i1:i2]
+            continue
+        la = [l for l in a[i1:i2] if not other_lane_power_down(l, 0)]
+        lb = [l for l in b[j1:j2] if not other_lane_power_down(l, 1)]
+        # Quad registers written with different values: one write, values ORed.
+        for n, line in enumerate(la):
+            wa = parse(line)
+            if wa is None or not wa[2].startswith("q1.") or wa[2].startswith("q1.ln"):
+                continue
+            for m, other in enumerate(lb):
+                wb = parse(other)
+                if wb is not None and wb[0] == wa[0]:
+                    la[n] = f"upar_write_driver(0x{wa[0]:06x},0x{wa[1] | wb[1]:08X}) # {wa[2]}"
+                    del lb[m]
+                    break
+        out += la + lb
+    return "\n".join(out) + "\n"
+
+def gw5_usb3_csr_config_x2(refclk="100M"):
+    """GTR12 register configuration of the GW5AST-138B Q1 lanes 0 and 1 at 5G (Gen 1x2, QPLL1, 100MHz
+    REFCLK1): the lane 0 and lane 1 configurations merged (gw5_csr_merge_lanes)."""
+    assert refclk == "100M", "Gen 1x2: 100MHz REFCLK1."
+    return gw5_csr_merge_lanes(gw5_usb3_csr_config(0, "5G", refclk), gw5_usb3_csr_config(1, "5G", refclk))
+
 def gw5_usb3_rate_writes(lane, refclk="100M", pll="QPLL1", clk_freq=62.5e6):
     """Register writes of the 5G <-> 10G rate change of a Q1 lane: [(addr, value_5g, value_10g)],
     the writes of the 5G and 10G configurations that differ (same writes sequence). CPLL: the writes

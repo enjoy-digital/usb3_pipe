@@ -158,9 +158,11 @@ class USB3Descriptors:
         self.with_ssp       = False
         self.class_requests = [] # (bmRequestType, bRequest, IN response bytes or None).
 
-    def enable_ssp(self):
-        """SuperSpeedPlus (Gen 2x1) capable: SuperSpeedPlus USB Device Capability in the BOS."""
-        self.with_ssp = True
+    def enable_ssp(self, lane_speed=10):
+        """SuperSpeedPlus capable: SuperSpeedPlus USB Device Capability in the BOS, lane speed (Gbps):
+        10 (Gen 2x1) or 5 (Gen 1x2: 2 lanes at 5Gbps, the lane count is negotiated)."""
+        self.with_ssp       = True
+        self.ssp_lane_speed = lane_speed
 
     def enable_lpm(self):
         """U1/U2 supported (Link Layer accepting LGO_U1/LGO_U2): non-zero exit latencies."""
@@ -196,11 +198,12 @@ class USB3Descriptors:
         n_caps   = 2
         if self.with_ssp:
             # SuperSpeedPlus USB Device Capability (9.6.2.5): one Sublink Speed ID (0), symmetric
-            # RX/TX attributes, 10Gbps (LSE: Gb/s, LSM: 10), SuperSpeedPlus protocol, 1 RX/TX lane
-            # minimum.
+            # RX/TX attributes, lane speed of 10Gbps (Gen 2) or 5Gbps (Gen 1x2) (LSE: Gb/s, LSM),
+            # SuperSpeedPlus protocol, 1 RX/TX lane minimum.
+            lsm     = self.ssp_lane_speed
             attrs   = [
-                (0 << 0) | (3 << 4) | (0b00 << 6) | (1 << 14) | (10 << 16), # RX.
-                (0 << 0) | (3 << 4) | (0b10 << 6) | (1 << 14) | (10 << 16), # TX.
+                (0 << 0) | (3 << 4) | (0b00 << 6) | (1 << 14) | (lsm << 16), # RX.
+                (0 << 0) | (3 << 4) | (0b10 << 6) | (1 << 14) | (lsm << 16), # TX.
             ]
             ssp_cap = [12 + 4*len(attrs), DESC_DEVICE_CAP, 0x0a, 0x00] + \
                 le32((len(attrs) - 1) | (0 << 5)) + le16((0 << 0) | (1 << 8) | (1 << 12)) + le16(0)

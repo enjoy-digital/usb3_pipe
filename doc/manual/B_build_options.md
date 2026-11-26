@@ -61,7 +61,13 @@ options.
 | `--with-dram` | off | DDR3 memory, initialized by the BIOS; needs a CPU, implied by `msc_dram` |
 | `--rxcdr-cfg` | none | GTP clock recovery setting override (hexadecimal) |
 | `--gtp-param` | none | GTP parameter override `NAME=VALUE`, repeatable |
-| `--lpm-hold` | `none` | Hold the GTP equalizer adaptation: `none`, `rxeq` (adapt only in Polling.RxEQ), `always` |
+| `--lpm-hold` | `none` | Hold the GTP equalizer adaptation: `none`, `rxeq` (adapt only in Polling.RxEQ), `always`; `rxeq` with `--lanes 2` |
+| `--tx-postcursor` | 0 | GTP transmit post-cursor pre-emphasis (0 to 31); 6 with `--lanes 2` |
+| `--tx-diffctrl` | transceiver default | GTP transmit swing (0 to 15); 15 with `--lanes 2` |
+| `--lanes` | 1 | 1 (Gen 1x1, SFP-0) or 2 (Gen 1x2 on SFP-0 and SFP-1, Mini only, experimental) |
+| `--role` | `device` | With `--lanes 2`: PHY role, `device` or `host` (one board in each role) |
+| `--no-x2` | off | With `--lanes 2`: not Gen 1x2 capable, Gen 1x1 negotiated on SFP-0 |
+| `--lanes-core` | off | With `--lanes 2`, device role: the device core (`--example`) instead of the PRBS stand-ins |
 
 The `msc_dram` example is only available on the Acorn, the only target with a DRAM controller.
 
@@ -97,8 +103,12 @@ The `msc_dram` example is only available on the Acorn, the only target with a DR
 | `--with-gen2-debug` | off | Gen 2 receive monitor on the raw words |
 | `--with-gtr12-debug` | off | GTR12 and PIPE bring-up debug |
 | `--with-gtr12-analyzer` | off | LiteScope on the raw GTR12 receive words |
-| `--place-option` | 2 | Gowin place algorithm: 0, 1 or 2 |
+| `--place-option` | 2 | Gowin place algorithm: 0 to 4; 3 with `--lanes 2` and the PRBS stand-ins |
 | `--route-option` | 1 | Gowin route algorithm: 0, 1 or 2 |
+| `--lanes` | 1 | 1 (Gen 1x1, `--sfp`) or 2 (Gen 1x2 on SFP0 and SFP1, experimental) |
+| `--role` | `device` | With `--lanes 2`: PHY role, `device` or `host` (one board in each role) |
+| `--no-x2` | off | With `--lanes 2`: not Gen 1x2 capable, Gen 1x1 negotiated on SFP0 |
+| `--lanes-core` | off | With `--lanes 2`, device role: the device core (`--example`, 64-bit link words) instead of the PRBS stand-ins |
 
 With the default 62.5 MHz system clock, the link words are 2 at least and U1 and U2 are only built
 with `--with-lpm`; the throughput profile is left out.
@@ -151,21 +161,24 @@ Numbers are in cycles of the 133 MHz simulation clock unless stated.
 | `--host-burst-duplex-skp` | off | Full duplex with ACKs behind each OUT packet and SKPs between packets |
 | `--host-lbad-test` | off | Bulk OUT burst with a header CRC error: LBAD, LRTY, retransmission |
 | `--lanes` | 1 | 1 (Gen 1x1) or 2 (Gen 1x2, PRBS stand-ins) |
+| `--lanes-core` | off | Two lanes: host script and device core instead of the PRBS stand-ins |
 | `--dev-mode` | `x2` | Two lanes: device `x2` (Gen 1x2), `x1` (not x2 capable) or `ss` (SuperSpeed device) |
 | `--dev-x2-disable` | off | Two lanes: device Gen 1x2 capability withdrawn at runtime (Gen 1x1) |
 | `--lanes-crossed` | off | Two lanes: host lane 0 on device lane 1 (flipped USB Type-C plug) |
 | `--lanes-tx-inverted` | off | Two lanes: transmit polarity of every lane inverted on both sides |
+| `--lanes-tx-shift` | 0 | Two lanes with the core: packets delayed by 1 to 7 symbols |
 | `--prbs-gap-bits` | 4 | Gaps of 0 to 2^N - 1 cycles between the PRBS packets |
 | `--lane0-delay` | 0 | Host to device delay of lane 0 (words, two lanes) |
 | `--lane1-delay` | 1 | Host to device delay of lane 1 (words, two lanes) |
 | `--lane1-word-shift` | 2 | Receive word shift of device lane 1 (symbols, two lanes) |
 | `--lane-skp` | 4096 | Period of the extra SKPs on one lane (0: none, two lanes) |
 | `--lane-skp-error` | none | Two lanes: `CYCLES,DIR,LANE`, one SKP symbol error on host lane `LANE` (`h2d`, `d2h`) after U0 |
+| `--lane-slip` | none | `CYCLE,LANE[,...]`: 2 symbols dropped by host lane `LANE` at each cycle (two lanes, 0 ppm) |
 | `--gen2-capable` | off | Gen 2 advertised and negotiated in the SuperSpeedPlus polling |
 | `--gen2` | off | Training to U0 at Gen 2 on raw words (implies the previous option) |
 | `--gen2-data-width` | 40 | Gen 2 raw word width of the transceiver models (80 as the GTR12) |
 | `--link-words` | 1 | Device link layer words: 1, 2 or 4 (4 needs `--dev-pipe-cd`, `--gen2` and `--gen2-data-width 80`) |
-| `--dev-pipe-cd` | off | Device LTSSM, link layer and core at half the PIPE frequency |
+| `--dev-pipe-cd` | off | Device LTSSM, link layer and core at half the PIPE frequency (two lanes: the lanes logic stays at the PIPE frequency) |
 | `--dev-link-ppm` | none | Device link clock from its own generator with this offset |
 | `--dev-loopback-depth` | 512 | Depth of the device Bulk loopback buffer (words) |
 | `--dev-no-u1u2` | off | Device PHY without U1 and U2 |

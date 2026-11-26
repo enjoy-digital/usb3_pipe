@@ -139,6 +139,17 @@ The GTP bring-up overrides (`--rxcdr-cfg`, `--gtp-param`, `--lpm-hold`) are list
 [Acorn options](#opt-acorn). With several FTDI adapters connected, select the Acorn explicitly, as
 [Setup](#debug-setup) shows: the programmer picks the first FTDI adapter it finds.
 
+With `--lanes 2`, the Mini runs Gen 1x2 (experimental): lane 0 on SFP-0 and lane 1 on SFP-1, both
+in the same GTP quad and on its PLL. Two Minis linked by two SFP DAC cables (SFP-0 to SFP-0, SFP-1
+to SFP-1) test the link, one board with `--role host` and the other with `--role device`, with the
+PRBS stand-ins of the link layer. `bench/usb3_lanes.py` reads their status and counters through one
+`litex_server` per board. Load the device board last: started alone, it times out to Compliance and
+waits for a Warm Reset (retrain the host board then). With `--lanes-core`, the device board runs
+the device core instead, for a Gen 1x2 USB host through a dual SFP to USB-C breakout. The Gen 1x2
+builds use a GTP transmit post-cursor of 6 and the full transmit swing: the SFP-1 transmit path was
+the weak one between two Minis, and some bitstream loads never trained at Gen 1x2 without the full
+swing.
+
 ## KC705 {#boards-kc705}
 
 The KC705 is the Kintex-7 evaluation board of AMD. Its target uses the GTX transceiver of quad 117
@@ -241,6 +252,17 @@ so the code only accepts them with `--sys-clk-freq 125e6`. The bring-up options 
 | Stability | 20 s runs, data checked, 0 errors, no LBAD, no Recovery |
 
 Bulk IN reaches about 400 MB/s with a burst of 16 packets.
+
+With `--lanes 2`, the dock runs Gen 1x2 (experimental): lane 0 on SFP0 and lane 1 on SFP1, the
+two lanes of quad Q1 in one GTR12 instance ([Two lanes of a quad](#gt-gowin-x2)), lane 1 on the
+lane 0 transmit clock. The lanes logic runs at 125 MHz on that clock and the LTSSM and the SoC at
+62.5 MHz (the PHY in `pipe_cd`). The board pairs with an Acorn Mini built with `--lanes 2`, one
+board in each role (`--role`), with the PRBS stand-ins of the link layer, or as a device with the
+device core (`--lanes-core`, examples with 64-bit link words). `bench/usb3_lanes.py` reads its
+status. Each pairing was tested in the fork with an Acorn Mini (Tang host and Tang device): PRBS
+with no errors at about 610 MB/s, and the Tang device core 400 runs over 20 bitstream loads with
+the data checked. The 125 MHz lanes clock is met on some place options only, and the result changes
+with the design: check the Max Frequency Summary of each build (`--place-option`).
 
 ### Gen 2 bring-up {#boards-tang-gen2}
 

@@ -202,12 +202,30 @@ port (UPAR):
 - **Equalization at 10 Gbps** (Gen 2, bring-up). The TX FFE and RX CTLE values can be set at
   runtime and are applied at the next rate change ([Debugging](#debugging)).
 
+### Two lanes of a quad (Gen 1x2) {#gt-gowin-x2}
+
+Gen 1x2 on the GW5AST-138B uses Q1 lanes 0 and 1 (the dock's SFP0 and SFP1). Both lanes are in one
+GTR12 quad instance. The lane 1 wrapper takes the lane 0 wrapper as its quad owner
+(`quad_owner`): it adds its lane ports to the owner's instance (`gw5_gtr12_share_quad`) and has no
+register configuration or UPAR of its own. The register configuration enables both lanes: it is the
+lane 0 and lane 1 configurations merged (`gw5_usb3_csr_config_x2`). Writes common to both are kept
+once, the writes of one configuration that power down the other lane are dropped, and the quad
+registers written with different values are ORed. Lane 1 transmits on the lane 0 TX clock
+(`tx_clk`), so the two lanes transmit in lockstep. The TX electrical idle writes of both lanes share
+the quad UPAR through an arbiter (`GW5UPARArbiter`): a lane 1 burst edge can come one UPAR write
+after the lane 0 one.
+
 ### LFPS on the GTR12 {#gt-gowin-lfps}
 
 Constant fabric words did not produce LFPS that the host received. The wrapper therefore sends a
 bit-level square wave with a 24 ns period (41.7 MHz) through the raw TX words whenever the
 transmitter is idle, and makes the bursts by switching the TX driver through UPAR. The RX idle
 indicator is bit 5 of the lane's analog status, inverted (`rx_idle_source="~astat5"`).
+
+During a Warm Reset LFPS, the GTR12 RX interface FIFO may stop delivering words (`RX_VLD_OUT` low).
+The fabric decoders then decode the last word again, which is valid 8b/10b, so the LFPS shows no
+decode error and the Warm Reset is never detected. The wrapper counts 64 or more consecutive rx
+cycles without RX words (`rx_stall`) as RX errors (`RXErrorMonitor` `extra`).
 
 ### Clocking on the GW5A fabric {#gt-gowin-clocking}
 

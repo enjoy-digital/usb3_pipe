@@ -119,6 +119,31 @@ class TestPRBSLinkTester(unittest.TestCase):
                 self.assertEqual((yield tester._rx_errors.status), 0)
         run_simulation(dut, generator())
 
+    def test_lanes_cd(self):
+        # Link interface in its own clock domain (USB3PHY lanes=2 with pipe_cd): generators/checkers
+        # in it, counters read in sys, Gen 1x2 then Gen 1x1.
+        phy    = ClockDomainsRenamer("pipe")(LanesLoopbackPHY())
+        tester = PRBSLinkTester(phy, data_width=64, gap_bits=2, cd="pipe")
+        dut    = Module()
+        dut.clock_domains.cd_pipe = ClockDomain()
+        dut.submodules += phy, tester
+        def generator():
+            for x2 in [1, 0]:
+                yield phy.u0.eq(0)
+                for _ in range(128):
+                    yield
+                yield phy.x2.eq(x2)
+                yield phy.u0.eq(1)
+                for _ in range(16):
+                    yield
+                start = (yield tester._rx_words.status)
+                for _ in range(1000):
+                    yield
+                self.assertGreater((yield tester._rx_words.status) - start, 300)
+                self.assertGreater((yield tester._tx_words.status), 0)
+                self.assertEqual((yield tester._rx_errors.status), 0)
+        run_simulation(dut, generator(), clocks={"sys": 10, "pipe": 7})
+
     def test_32bit(self):
         self.run_tester(32)
 
