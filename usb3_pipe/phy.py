@@ -925,27 +925,32 @@ class USB3PHY(LiteXModule):
     def add_gen2_ltssm_cdc(self, ltssm, pipe, gen2_pipe, gen2_active, pipe_cd):
         """LTSSM (sys) <-> Gen 1 PIPE / Gen2PIPE (pipe_cd) wiring: GEN2_PIPE_INTERFACE controls
         gated by gen2_active then resynchronized to each PIPE, status resynchronized from each PIPE
-        then selected by gen2_active (sys)."""
+        then selected by gen2_active (sys). The controls of both PIPEs are resynchronized as one
+        group (as add_ltssm_pipe_cdc)."""
+        controls = [] # (LTSSM control (sys), PIPE control (pipe_cd)).
         for name, width, direction in LTSSM_PIPE_INTERFACE:
             ltssm_s = getattr(ltssm, name)
             if name == "serdes_rx_align":
-                self.ltssm_to_pipe(ltssm_s & ~gen2_active, pipe.serdes_rx_align, pipe_cd)
+                controls.append((ltssm_s & ~gen2_active, pipe.serdes_rx_align))
             elif name not in GEN2_PIPE_INTERFACE:
                 if direction == "o":
-                    self.ltssm_to_pipe(ltssm_s, getattr(pipe, name), pipe_cd)
+                    controls.append((ltssm_s, getattr(pipe, name)))
                 else:
                     self.pipe_to_ltssm(name, getattr(pipe, name), ltssm_s, pipe_cd)
             elif direction == "o":
                 # Gen 2 RX words kept from Recovery.Idle (rx_keep, Link Layer: processed in U0).
                 gen2_s = (ltssm_s | ltssm.rx_keep) if name == "rx_ready" else ltssm_s
-                self.ltssm_to_pipe(ltssm_s & ~gen2_active, getattr(pipe,      name), pipe_cd)
-                self.ltssm_to_pipe(gen2_s  &  gen2_active, getattr(gen2_pipe, name), pipe_cd)
+                controls.append((ltssm_s & ~gen2_active, getattr(pipe,      name)))
+                controls.append((gen2_s  &  gen2_active, getattr(gen2_pipe, name)))
             else:
                 gen1_s = Signal(width)
                 gen2_s = Signal(width)
                 self.pipe_to_ltssm(name, getattr(pipe,      name), gen1_s, pipe_cd)
                 self.pipe_to_ltssm(name, getattr(gen2_pipe, name), gen2_s, pipe_cd)
                 self.comb += ltssm_s.eq(Mux(gen2_active, gen2_s, gen1_s))
+        self.ltssm_to_pipe(
+            Cat(*[ltssm_s for ltssm_s, pipe_s in controls]),
+            Cat(*[pipe_s  for ltssm_s, pipe_s in controls]), pipe_cd)
 
     def add_lanes_datapath(self, deskew_depth):
         """Gen 1x2 datapath: data striping (6.13.4): 64-bit/8-bit link words (Symbol 0 on
