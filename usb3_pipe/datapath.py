@@ -122,6 +122,47 @@ class RXSKPRemover(LiteXModule):
             ]
         self.comb += Case(sr_bytes, cases)
 
+class RXSKPChecker(LiteXModule):
+    """RX SKP Checker
+
+    Gen 1 SKP Ordered Sets are 2 SKP Symbols, inserted/removed whole (6.4.3): a run of SKP Symbols
+    of odd length is a SKP Symbol received with an error (substituted by the RX error substitution
+    and kept by the SKP removal) or a Symbol received as a SKP: the SKP removal then kept one Symbol
+    more (or one less) than sent. On a Gen 1x2 lane, this shifts the lane by one Symbol from the
+    other lane without any COM word in U0 to detect it (the deskew pairing is checked on the TS1/TS2
+    COM words only): every destriped word is then corrupted until a Recovery.
+
+    sink: the words at the SKP removal input (observed, not consumed). odd: pulse at the end of an
+    odd run.
+    """
+    def __init__(self, sink):
+        self.odd = Signal() # o
+
+        # # #
+
+        # SKP Symbols of the word (registered: timings).
+        valid = Signal()
+        skp   = Signal(4)
+        self.sync += valid.eq(sink.valid & sink.ready)
+        for i in range(4):
+            self.sync += skp[i].eq(sink.ctrl[i] & (sink.data[8*i:8*(i+1)] == SKP.value))
+
+        # Run parity over the Symbols (Symbol 0 first): toggled on a SKP, cleared (and checked) on
+        # the Symbol ending the run.
+        parity = Signal()
+        p      = parity
+        ends   = []
+        for i in range(4):
+            ends.append(~skp[i] & p)
+            p = skp[i] & ~p
+        self.sync += [
+            self.odd.eq(0),
+            If(valid,
+                parity.eq(p),
+                self.odd.eq(Reduce("OR", ends)),
+            ),
+        ]
+
 # RX Aligner ---------------------------------------------------------------------------------------
 
 class RXWordAligner(LiteXModule):

@@ -24,8 +24,7 @@ from usb3_pipe.datapath   import GEN2_DATA_WIDTH
 from usb3_pipe.ltssm      import USB3LTSSM, SSPPolling
 from usb3_pipe.scrambling import LFSR_SEED_LANE0, LFSR_SEED_LANE1
 from usb3_pipe.lanes      import LaneStriper, LaneDestriper, LaneDeskew, LaneSwap, lane_layout, link_layout
-from usb3_pipe.lanes      import LanesTXPacker, LanesPacketAligner, LanesTXSymbolShift
-from usb3_pipe.lanes      import link_pairs_layout
+from usb3_pipe.lanes      import LaneTXPacker, LaneRXAligner, LaneTXSymbolShift
 from usb3_pipe.datapath   import RXWordAligner
 from usb3_pipe.framing    import gen2_link_layout, WordsToPairs, PairsToWords, WordsPacker
 from usb3_pipe.framing    import PacketsBuffer, LinkCommandPacketsBuffer, LogicalIdleFilter, WordsNarrower
@@ -667,15 +666,38 @@ class USB3PHY(LiteXModule):
         PulseSynchronizers (pulses spaced by more than a few sys cycles: Training Sequences
         detections/bursts ends, LFPS detections), lfps_tx_count updated when stable (2 equal
         resynchronized samples: incremented once per LFPS burst)."""
+        # LTSSM controls resynchronized as one group (same pipe_cd cycle for the controls changing in
+        # the same sys cycle): resynchronized one by one, tx_ready/idle_handshake could both read 0
+        # for a cycle at the Idle handshake -> U0 transition (TX scrambler, reset out of both,
+        # restarted in U0: the partner descrambles garbage until the next COM), and the TS requests
+        # vs idle_handshake give a cycle without TS nor scrambled stream.
+        controls = [name for name, width, direction in LTSSM_PIPE_INTERFACE if direction == "o"]
+        self.ltssm_to_pipe(
+            Cat(*[getattr(ltssm, name) for name in controls]),
+            Cat(*[getattr(pipe,  name) for name in controls]), pipe_cd)
         for name, width, direction in LTSSM_PIPE_INTERFACE:
-            if direction == "o":
-                self.ltssm_to_pipe(getattr(ltssm, name), getattr(pipe, name), pipe_cd)
-            else:
+            if direction == "i":
                 self.pipe_to_ltssm(name, getattr(pipe, name), getattr(ltssm, name), pipe_cd)
 
     def ltssm_to_pipe(self, value, pipe_s, pipe_cd):
-        """LTSSM control (level, sys) -> PIPE (pipe_cd)."""
-        self.specials += MultiReg(value, pipe_s, pipe_cd)
+        """LTSSM control(s) (levels, sys) -> PIPE (pipe_cd): level, or controls group (Cat, taken
+        when stable: 2 equal resynchronized samples, the resynchronizers bits being able to land in
+        different pipe_cd cycles)."""
+        width = len(pipe_s)
+        if width > 1:
+            s      = Signal(width)
+            s_d    = Signal(width)
+            stable = Signal()
+            sync   = getattr(self.sync, pipe_cd)
+            self.specials += MultiReg(value, s, pipe_cd)
+            # Registered compare (timings).
+            sync += [
+                s_d.eq(s),
+                stable.eq(s == s_d),
+                If(stable, pipe_s.eq(s_d)),
+            ]
+        else:
+            self.specials += MultiReg(value, pipe_s, pipe_cd)
 
     def pipe_to_ltssm(self, name, pipe_s, ltssm_s, pipe_cd):
         """PIPE status (pipe_cd) -> LTSSM (sys): pulses (LTSSM_PIPE_PULSES), multi-bit values (taken
@@ -907,27 +929,32 @@ class USB3PHY(LiteXModule):
     def add_gen2_ltssm_cdc(self, ltssm, pipe, gen2_pipe, gen2_active, pipe_cd):
         """LTSSM (sys) <-> Gen 1 PIPE / Gen2PIPE (pipe_cd) wiring: GEN2_PIPE_INTERFACE controls
         gated by gen2_active then resynchronized to each PIPE, status resynchronized from each PIPE
-        then selected by gen2_active (sys)."""
+        then selected by gen2_active (sys). The controls of both PIPEs are resynchronized as one
+        group (as add_ltssm_pipe_cdc)."""
+        controls = [] # (LTSSM control (sys), PIPE control (pipe_cd)).
         for name, width, direction in LTSSM_PIPE_INTERFACE:
             ltssm_s = getattr(ltssm, name)
             if name == "serdes_rx_align":
-                self.ltssm_to_pipe(ltssm_s & ~gen2_active, pipe.serdes_rx_align, pipe_cd)
+                controls.append((ltssm_s & ~gen2_active, pipe.serdes_rx_align))
             elif name not in GEN2_PIPE_INTERFACE:
                 if direction == "o":
-                    self.ltssm_to_pipe(ltssm_s, getattr(pipe, name), pipe_cd)
+                    controls.append((ltssm_s, getattr(pipe, name)))
                 else:
                     self.pipe_to_ltssm(name, getattr(pipe, name), ltssm_s, pipe_cd)
             elif direction == "o":
                 # Gen 2 RX words kept from Recovery.Idle (rx_keep, Link Layer: processed in U0).
                 gen2_s = (ltssm_s | ltssm.rx_keep) if name == "rx_ready" else ltssm_s
-                self.ltssm_to_pipe(ltssm_s & ~gen2_active, getattr(pipe,      name), pipe_cd)
-                self.ltssm_to_pipe(gen2_s  &  gen2_active, getattr(gen2_pipe, name), pipe_cd)
+                controls.append((ltssm_s & ~gen2_active, getattr(pipe,      name)))
+                controls.append((gen2_s  &  gen2_active, getattr(gen2_pipe, name)))
             else:
                 gen1_s = Signal(width)
                 gen2_s = Signal(width)
                 self.pipe_to_ltssm(name, getattr(pipe,      name), gen1_s, pipe_cd)
                 self.pipe_to_ltssm(name, getattr(gen2_pipe, name), gen2_s, pipe_cd)
                 self.comb += ltssm_s.eq(Mux(gen2_active, gen2_s, gen1_s))
+        self.ltssm_to_pipe(
+            Cat(*[ltssm_s for ltssm_s, pipe_s in controls]),
+            Cat(*[pipe_s  for ltssm_s, pipe_s in controls]), pipe_cd)
 
     def add_lanes_datapath(self, deskew_depth):
         """Gen 1x2 datapath: data striping (6.13.4): 64-bit/8-bit link words (Symbol 0 on
@@ -1016,6 +1043,20 @@ class USB3PHY(LiteXModule):
         realign = [s.rx_realign for s in self.lanes_phys_serdes if hasattr(s, "rx_realign")]
         if hasattr(self, "rx_errors_reinit"):
             realign += [self.rx_errors_reinit != 0]
+        # A lane shifted by one Symbol by its SKP removal (SKP run of odd length: a SKP Symbol with
+        # an 8b/10b error kept, or a Symbol received as a SKP removed) is also no longer deskewed,
+        # and nothing else detects it in U0 (no COM word): every destriped word corrupted until a
+        # Recovery requested by a Link Layer timeout (Device PENDING_HP_TIMER on two Acorn Minis,
+        # sim.py --lane-skp-error). Same Recovery as a lane realigned in U0.
+        self.lanes_skp_odd = Signal() # o: Odd SKP run on a lane in U0 (x2).
+        skp_odd = []
+        for s in self.lanes_phys_serdes:
+            if hasattr(s, "rx_datapath"):
+                s.add_rx_skp_checker()
+                skp_odd.append(s.rx_skp_odd)
+        if skp_odd:
+            self.comb += self.lanes_skp_odd.eq(x2 & ltssm.u0 & Reduce("OR", skp_odd))
+            realign += [self.lanes_skp_odd]
         self.comb += lanes_realign.eq(Reduce("OR", realign) if realign else 0)
         self.lanes_deskew_lost      = Signal()        # o: Deskew lost trigger (x2, not deskewed).
         self.lanes_idle             = Signal()        # o: Lane idle trigger (x2, lane idle for 10us).
@@ -1102,17 +1143,17 @@ class USB3PHYX2Link(LiteXModule):
     sink/source: link words pairs (1 or 2 words per entry, word 0 first, each word endianness swapped
     as USB3PHY(lanes=1) by default), gen2_active (USB3PHY_LINK_INTERFACE: SuperSpeedPlus operation of
     the Link Layer): Gen 1x2 negotiated (x2), ssp_lane_speed: 5Gbps.
-    - Gen 1x2 (x2 = 1): TX: words pairs packed into 64-bit link words (LanesTXPacker: a 64-bit word
+    - Gen 1x2 (x2 = 1): TX: words pairs packed into 64-bit link words (LaneTXPacker: a 64-bit word
       never holds two packets) and stored and forwarded by packets (PacketsBuffer: the lanes take 8
       symbols per cycle, a packet is transmitted without Logical Idle inside it), striped on both
       lanes (packets first/last: SKP Ordered Sets between the packets on both lanes, 6.4.3.2). RX:
-      destriped 64-bit link words parsed into packets (LanesPacketAligner: packets at any symbol
+      destriped 64-bit link words parsed into packets (LaneRXAligner: packets at any symbol
       position, 6.13.4, each packet starting on a 32-bit word, Logical Idle removed) and buffered (rx_buffer_depth pairs: the Link Layer consumes one word per cycle outside of the
       DPP data, the lanes deliver two).
     - Gen 1x1 (x2 = 0): single lane (Lane 0, Configuration Lane) words (sink_x1/source_x1), one word
       per entry, SuperSpeed operation (Gen 1x1 is SuperSpeed, 7.1.1).
     The status/Link-Layer control signals are the ones of the USB3PHY (same Signal objects).
-    tx_symbol_shift (test only): Gen 1x2 TX packets delayed by 1-7 symbols (LanesTXSymbolShift).
+    tx_symbol_shift (test only): Gen 1x2 TX packets delayed by 1-7 symbols (LaneTXSymbolShift).
 
     """
     def __init__(self, phy, with_endianness_swap=True, rx_buffer_depth=64, tx_buffer_depth=256,
@@ -1121,8 +1162,8 @@ class USB3PHYX2Link(LiteXModule):
         object.__setattr__(self, "phy", phy) # Reference only (not a submodule).
         self.link_words     = 2
         self.ssp_lane_speed = 5      # Lane speed (Gbps, SuperSpeedPlus USB Device Capability).
-        self.sink           = sink   = stream.Endpoint(link_pairs_layout())
-        self.source         = source = stream.Endpoint(link_pairs_layout())
+        self.sink           = sink   = stream.Endpoint(gen2_link_layout())
+        self.source         = source = stream.Endpoint(gen2_link_layout())
         self.rx_overflow    = Signal() # o: RX buffer/packet aligner overflow (sticky).
         self.rx_drop        = Signal() # o: RX buffer entry dropped (full buffer, pulse).
 
@@ -1131,8 +1172,8 @@ class USB3PHYX2Link(LiteXModule):
         x2 = phy.x2
 
         # Endianness (per word) --------------------------------------------------------------------
-        tx = stream.Endpoint(link_pairs_layout())
-        rx = stream.Endpoint(link_pairs_layout())
+        tx = stream.Endpoint(gen2_link_layout())
+        rx = stream.Endpoint(gen2_link_layout())
         if with_endianness_swap:
             self.tx_swap = EndiannessSwap(sink, tx, word_bytes=4)
             self.rx_swap = EndiannessSwap(rx, source, word_bytes=4)
@@ -1145,7 +1186,7 @@ class USB3PHYX2Link(LiteXModule):
         # be sent at the next U0 entry before the Link Layer Advertisement (two Acorn Minis, scripted
         # host: the LCSTART of an Advertisement cut by a U0 exit, sent with the next Advertisement:
         # its LGOOD_n lost, a Device PENDING_HP_TIMER Recovery).
-        self.tx_packer = tx_packer = ResetInserter()(LanesTXPacker())
+        self.tx_packer = tx_packer = ResetInserter()(LaneTXPacker())
         self.tx_buffer = tx_buffer = PacketsBuffer(link_layout(), depth=tx_buffer_depth)
         self.comb += [
             tx_packer.reset.eq(~phy.tx_ready),
@@ -1164,7 +1205,7 @@ class USB3PHYX2Link(LiteXModule):
 
         if tx_symbol_shift:
             # Test: packets at any symbol position (receivers of the partner).
-            self.tx_shift = tx_shift = LanesTXSymbolShift(tx_symbol_shift)
+            self.tx_shift = tx_shift = LaneTXSymbolShift(tx_symbol_shift)
             self.comb += [
                 tx_buffer.source.connect(tx_shift.sink),
                 tx_shift.source.connect(phy.sink),
@@ -1173,8 +1214,12 @@ class USB3PHYX2Link(LiteXModule):
             self.comb += tx_buffer.source.connect(phy.sink)
 
         # RX ---------------------------------------------------------------------------------------
-        self.rx_aligner = rx_aligner = LanesPacketAligner()
-        self.rx_buffer  = rx_buffer  = stream.SyncFIFO(link_pairs_layout(), rx_buffer_depth, buffered=True)
+        # Out of U0 (PHY not RX ready, no words), the aligner is reset: its parser state is kept
+        # when the words stop in a packet (U0 exit), the first packet after the U0 re-entry would
+        # be lost.
+        self.rx_aligner = rx_aligner = ResetInserter()(LaneRXAligner())
+        self.comb += rx_aligner.reset.eq(~phy.rx_ready)
+        self.rx_buffer  = rx_buffer  = stream.SyncFIFO(gen2_link_layout(), rx_buffer_depth, buffered=True)
         self.rx_pairs   = rx_pairs   = WordsToPairs()
         self.comb += [
             phy.source.connect(rx_aligner.sink),

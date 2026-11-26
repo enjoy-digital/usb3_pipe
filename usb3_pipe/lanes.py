@@ -15,10 +15,10 @@
                   lockstep (the two sources must be consumed together, ex: by a LaneDestriper).
 - LaneSwap      : logical lanes on two physical SerDes (USB Type-C plug orientation), Configuration
                   Lane detection from the partner's Polling.LFPS.
-- LanesPacketAligner : destriped 64-bit link words -> link words pairs of the packets (any packet
+- LaneRXAligner : destriped 64-bit link words -> link words pairs of the packets (any packet
                   placement, each packet starting on a 32-bit word, Logical Idle removed).
-- LanesTXPacker : link words pairs -> 64-bit link words for the striper (packets on 64-bit words).
-- LanesTXSymbolShift : 64-bit link words delayed by 1-7 symbols (test: packets at any position).
+- LaneTXPacker  : link words pairs -> 64-bit link words for the striper (packets on 64-bit words).
+- LaneTXSymbolShift : 64-bit link words delayed by 1-7 symbols (test: packets at any position).
 """
 
 from migen import *
@@ -27,7 +27,8 @@ from litex.gen import *
 
 from litex.soc.interconnect import stream
 
-from usb3_pipe.common import SHP, SDP, SLC, EPF
+from usb3_pipe.common  import SHP, SDP, SLC, EPF
+from usb3_pipe.framing import gen2_link_layout
 
 # Layouts ------------------------------------------------------------------------------------------
 
@@ -369,42 +370,43 @@ class LaneSwap(LiteXModule):
                 )
             )
 
-# Lanes Framing Aligner ----------------------------------------------------------------------------
+# Lane RX Aligner ----------------------------------------------------------------------------------
 
-def link_pairs_layout():
-    """Link words pairs (words: 1 or 2 valid words, word 0 first: data[0:32]/ctrl[0:4])."""
-    return [("data", 64), ("ctrl", 8), ("words", 2)]
+class LaneRXAligner(LiteXModule):
+    """64-bit link words (destriped lanes, Symbol 0 on data[0:8]) -> link words pairs
+    (gen2_link_layout) of the packets only, each packet starting on a 32-bit word (as RXWordAligner
+    + LogicalIdleFilter for Gen 1x1), for packets at any symbol position of the 64-bit words (they
+    may start on either lane, 6.13.4) with any number of Logical Idle symbols between them.
 
-class LanesPacketAligner(LiteXModule):
-    """64-bit link words (destriped lanes, Symbol 0 on data[0:8]) -> link words pairs of the
-    packets only, each packet starting on a 32-bit word (as RXWordAligner + LogicalIdleFilter for
-    Gen 1x1), for packets at any symbol position of the 64-bit words (they may start on either
-    lane, 6.13.4) with any number of Logical Idle symbols between them (none included).
+    Parser (8 symbols per cycle): a packet starts on a SHP/SLC/SDP K-symbol outside of a packet.
+    Header Packet: 20 symbols (framing, 12-byte header, CRC-16, Link Control Word), Link Command:
+    8 symbols, DPP: from the SDP framing to the EPF of its END/EDB framing (7.2.1, 7.2.4). A word
+    holds the symbols of at most two packets (the end of one, the start of the next).
 
-    Symbols parser (8 symbols per cycle): a packet starts on a SHP/SLC/SDP K-symbol outside of a
-    packet: Header Packet: 20 symbols (framing, 12-byte header, CRC-16, Link Control Word), Link
-    Command: 8 symbols, DPP: from the SDP framing to the EPF of its END/EDB framing (7.2.1,
-    7.2.4). A word holds the symbols of at most two packets (the end of one, the start of the
-    next). Each packet's output words are the 32-bit slices of the symbols stream from its start
-    (rotation: start symbol modulo 4, words taken from a two words window), its last word
-    completed with Logical Idle symbols (00h data, as received from a partner keeping its packets
-    on 32-bit words): a packet always starts on a 32-bit word, Logical Idle between the packets
-    removed. Up to 4 words per cycle (end of a packet, its completed last word, start of the next)
-    written in rotation to 4 word FIFOs (buffer_symbols/4 words each), up to two words per cycle
-    on the output (registered, no back-pressure). Timing: no per symbol placement from a buffer
-    level (the previous symbols buffer did not reach 125MHz on the Tang Mega 138K Pro, t28); the
-    completions add up to 3 symbols per packet, absorbed by the FIFOs (overflow: sticky flag,
-    never with Logical Idle or a SKP Ordered Set every few packets).
+    Output words: the 32-bit slices of the symbols from the packet's start (rotation: start symbol
+    modulo 4, words taken from a two words window), the last word completed with Logical Idle
+    symbols (00h data, as received from a partner keeping its packets on 32-bit words).
+
+    Buffering: up to 4 words per cycle (end of a packet, its completed last word, start of the
+    next) written in rotation to 4 words FIFOs (depth words each), up to two words per cycle on the
+    output (registered, no back-pressure). The completions add up to 3 symbols per packet, absorbed
+    by the FIFOs: no overflow with Logical Idle or a SKP Ordered Set every few packets. On an
+    overflow, the FIFOs are flushed (buffered words lost: Link Layer retry) and overflow is set
+    (sticky).
+
+    Timing: no chain of 8 dependent symbol steps (one end and one start per word, priority
+    encoders), no per symbol placement from a buffer level (125MHz on the Tang Mega 138K Pro).
 
     Not handled (as the Gen 1x1 path): a corrupted first framing symbol (the packet is then taken
     from the next symbol, misaligned: CRC error and retry by the Link Layer), a corrupted EPF at
     the end of a DPP (the DPP ends at the next EPF), a K EPF symbol right after the framing of a DPP
-    starting in the same word (not its end; impossible in a valid DPP: data, CRC-32 and END first)."""
-    def __init__(self, buffer_symbols=32):
-        assert buffer_symbols % 4 == 0
+    starting in the same word (not its end; impossible in a valid DPP: data, CRC-32 and END first).
+    The parser state is kept when the words stop in a packet (ex: Recovery): the first packet after
+    it can be lost, to be reset by the user (ResetInserter) out of U0."""
+    def __init__(self, depth=8):
         self.sink     = sink   = stream.Endpoint(link_layout())
-        self.source   = source = stream.Endpoint(link_pairs_layout())
-        self.overflow = Signal() # o: Symbols buffer overflow (sticky).
+        self.source   = source = stream.Endpoint(gen2_link_layout())
+        self.overflow = Signal() # o: Words FIFOs overflow (sticky).
 
         # # #
 
@@ -461,7 +463,7 @@ class LanesPacketAligner(LiteXModule):
             DPP:         [ended.eq(epf_found), e.eq(epf_index)],
         })
         # Start of a packet after it (or from symbol 0 out of a packet): started, s, kind.
-        # The start search does not depend on the end found in this word (timing, t29: two chained
+        # The start search does not depend on the end found in this word (timing: no two chained
         # priority encoders): no SHP/SLC/SDP K-symbol inside a packet's remaining symbols but its
         # framing (FIXED/DPP_FRAMING: the first count symbols; a DPP: only END K-symbols before its
         # EPF).
@@ -601,8 +603,14 @@ class LanesPacketAligner(LiteXModule):
 
         # Words FIFOs (4 banks written in rotation, up to 4 words per cycle) -------------------------
         word_layout = [("data", 32), ("ctrl", 4)]
-        banks = [stream.SyncFIFO(word_layout, buffer_symbols//4) for _ in range(4)]
+        banks = [ResetInserter()(stream.SyncFIFO(word_layout, depth)) for _ in range(4)]
         self.submodules += banks
+        # Overflow (a word not written to its bank): words FIFOs flushed (banks and write/read
+        # rotations cleared, else the banks are no longer read in their write order: words
+        # reordered until a reset). The buffered words are lost (Link Layer retry).
+        flush = Signal()
+        self.sync += flush.eq(Reduce("OR", [bank.sink.valid & ~bank.sink.ready for bank in banks]))
+        self.comb += [bank.reset.eq(flush) for bank in banks]
         wp  = Signal(2)
         pos = [Signal(2, name=f"pos{k}") for k in range(4)]
         self.comb += [
@@ -619,7 +627,7 @@ class LanesPacketAligner(LiteXModule):
                 sel = sel.Elif(cand_v[k] & (pos[k] == b), bank.sink.valid.eq(1),
                     bank.sink.data.eq(cand_d[k]), bank.sink.ctrl.eq(cand_c[k]))
             self.comb += sel
-            self.sync += If(bank.sink.valid & ~bank.sink.ready, self.overflow.eq(1))
+        self.sync += If(flush, self.overflow.eq(1), wp.eq(0))
 
         # Output: up to two words per cycle (registered) ----------------------------------------------
         rp  = Signal(2)
@@ -641,18 +649,19 @@ class LanesPacketAligner(LiteXModule):
             source.ctrl.eq(Cat(Array(bk.source.ctrl for bk in banks)[rp],
                                Array(bk.source.ctrl for bk in banks)[rp1])),
             rp.eq(rp + v0 + v1),
+            If(flush, rp.eq(0)),
         ]
 
-# Lanes TX Packer ----------------------------------------------------------------------------------
+# Lane TX Packer -----------------------------------------------------------------------------------
 
-class LanesTXPacker(LiteXModule):
-    """Link words pairs (1 or 2 words per entry, packets first/last, a pair never spans two packets)
+class LaneTXPacker(LiteXModule):
+    """Link words pairs (gen2_link_layout, 1 or 2 words per entry, packets first/last, a pair never spans two packets)
     -> 64-bit link words for the striped lanes (two words per entry, packets first/last): a 64-bit
     word never holds words of two packets, the word after the last word of a packet is a Logical Idle
     word (both lanes end the packets together: SKP Ordered Sets inserted on both lanes between the
     packets, 6.4.3.2). Up to two words per cycle (pairs of two words, or a held word + one word)."""
     def __init__(self):
-        self.sink   = sink   = stream.Endpoint(link_pairs_layout())
+        self.sink   = sink   = stream.Endpoint(gen2_link_layout())
         self.source = source = stream.Endpoint(link_layout())
 
         # # #
@@ -725,7 +734,7 @@ class LanesTXPacker(LiteXModule):
 
 # Lanes TX Symbol Shift ----------------------------------------------------------------------------
 
-class LanesTXSymbolShift(LiteXModule):
+class LaneTXSymbolShift(LiteXModule):
     """64-bit link words delayed by shift symbols (1-7, Logical Idle symbols before the first word,
     the end of the last word of a burst flushed with Logical Idle symbols): packets starting at
     any symbol position of the 64-bit words (on Lane 1 with an odd shift), as from a partner not

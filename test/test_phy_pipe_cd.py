@@ -152,5 +152,33 @@ class TestPHYPipeCD(unittest.TestCase):
 
         self.run_phy(sys_generator, pipe_generators)
 
+class TestLTSSMToPipe(unittest.TestCase):
+    def test_controls_group(self):
+        # USB3PHY.ltssm_to_pipe with a controls group: tx_ready/idle_handshake changing in the same
+        # sys cycle can land in different pipe_cd cycles (untimed resynchronizers). That one cycle
+        # intermediate combination (both 0: TX scrambler reset in U0) is not passed to the PIPE; a
+        # change held 2 cycles or more is.
+        class ControlsDUT(LiteXModule):
+            def __init__(self):
+                self.tx_ready       = Signal()
+                self.idle_handshake = Signal()
+                self.pipe           = Signal(2)
+                USB3PHY.ltssm_to_pipe(self, Cat(self.tx_ready, self.idle_handshake), self.pipe, "sys")
+        dut  = ControlsDUT()
+        seen = []
+        def generator(dut):
+            # Idle handshake, a one cycle gap (skewed resynchronization), U0, U0 left.
+            for tx_ready, idle, cycles in [(0, 0, 4), (0, 1, 8), (0, 0, 1), (1, 0, 8), (0, 0, 8)]:
+                for _ in range(cycles):
+                    yield dut.tx_ready.eq(tx_ready)
+                    yield dut.idle_handshake.eq(idle)
+                    yield
+                    seen.append((yield dut.pipe))
+        run_simulation(dut, generator(dut))
+        start = seen.index(0b10)
+        end   = seen.index(0b01)
+        self.assertTrue(all(s == 0b10 for s in seen[start:end]))
+        self.assertEqual(seen[-1], 0b00)
+
 if __name__ == "__main__":
     unittest.main()

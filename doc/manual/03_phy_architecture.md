@@ -68,7 +68,7 @@ transceiver files are described in [Datapath](#datapath) and [Transceivers](#tra
 | `framing.py`     | `Gen2LinkTX`, `Gen2LinkRX`, `WordsToPairs`         | Gen 2 packet framing, 64-bit word pairs helpers             |
 | `common.py`      | `Symbol`, `OrderedSet`, `AsyncFIFO`                | Symbols, Ordered Sets, LTSSM to PIPE signal list, FIFOs     |
 | `crc.py`         | `CRC5`, `CRC16`, `CRC32`                           | CRCs of the link layer packets                              |
-| `lanes.py`       | `LaneStriper`, `LaneDeskew`, `LanesPacketAligner`  | Gen 1x2 lane striping, deskew, lanes swap, packet alignment |
+| `lanes.py`       | `LaneStriper`, `LaneDeskew`, `LaneRXAligner`       | Gen 1x2 lane striping, deskew, lanes swap, packet alignment |
 | `serdes.py`      | `USB3SerDes`, `GW5USB3SerDes`, `ECP5USB3SerDes`    | Transceiver wrappers: AMD, Gowin and Lattice                |
 | `gw5/`           | TOML files, `gen_toml.py`                          | Gowin GTR12 register configurations                         |
 | `debug.py`       | `USB3PHYDebug`, `USB3LanesDebug`                   | Debug registers and LiteScope groups                        |
@@ -215,7 +215,11 @@ directions (`LinkWordsCDC`); the list below gives how each part works.
 
 - **LTSSM and PIPE**: control and status levels are resynchronized; status pulses go through
   pulse synchronizers. Training sequence requests take effect on Ordered Set boundaries, so a
-  late request never truncates one.
+  late request never truncates one. The LTSSM controls cross as one group, updated only from two
+  equal samples (`ltssm_to_pipe`), to the Gen 1 PIPE and the Gen2PIPE alike. Controls that change
+  in the same `sys` cycle then change in the same `pipe_cd` cycle. Crossing one by one,
+  `tx_ready` and `idle_handshake` could both read 0 for a cycle at the U0 entry, which resets the
+  transmit scrambler in U0.
 - **Receive**: Logical Idle words between packets are dropped and the words packed in full pairs
   (`LogicalIdleFilter`, `WordsPacker`). A deep FIFO in block RAM absorbs the line rate. When it
   is half full, `rx_throttle` makes the link layer hold its receive credits, so the partner stops
@@ -343,6 +347,10 @@ lanes were paired a TS1 apart: identical TS1s would otherwise hide this until th
 
 The destriper then rebuilds the words (`LaneDestriper`). In U0 the PHY goes to Recovery when the
 deskew is lost, when a lane stays in electrical idle for 10 µs, or when a lane realigns its words.
+It also goes to Recovery on a run of SKP symbols of odd length on a lane (`RXSKPChecker`). A SKP
+Ordered Set is 2 SKP symbols, so an odd run means a SKP symbol received with an error and kept by
+the SKP removal, or another symbol received as a SKP and removed. The lane is then one symbol off
+the other lane, and U0 has no COM word to show it.
 A lane that keeps decoding errors is re-initialized.
 
 The device finds which receiver gets the configuration lane from the partner's Polling LFPS and
@@ -362,14 +370,15 @@ negotiated; the device core then advertises a SuperSpeedPlus lane speed of 5 Gbp
 ahead of the next advertisement. Two blocks make its Gen 1x2 path, which carries one or two 32-bit
 link words per cycle:
 
-- On transmit, `LanesTXPacker` packs the words into 64-bit link words. A 64-bit word never holds
+- On transmit, `LaneTXPacker` packs the words into 64-bit link words. A 64-bit word never holds
   words of two packets, and the word after the last word of a packet is a Logical Idle word. Both
   lanes then end the packets together, so SKP Ordered Sets go on both lanes between the packets.
 - On receive, a partner may start a packet at any symbol of the 64-bit words, on either lane, with
-  any number of Logical Idle symbols before it. `LanesPacketAligner` finds the packets from their
+  any number of Logical Idle symbols before it. `LaneRXAligner` finds the packets from their
   framing symbols, removes the Logical Idle between them and pads the last word of each packet with
   Logical Idle symbols, so that each packet starts on a 32-bit word for the link layer, as on the
-  Gen 1x1 path.
+  Gen 1x1 path. `USB3PHYX2Link` resets it outside U0, where a packet cut by the U0 exit would
+  otherwise leave its parser inside that packet.
 
 ## Limitations {#phy-limitations}
 

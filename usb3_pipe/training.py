@@ -123,16 +123,37 @@ class TSChecker(LiteXModule):
         # Bit 0 and bit 2 set simultaneously: all training control bits shall be ignored
         # (6.4.1.1.2). Captured on the Link Functionality word and only reported once the whole
         # Ordered Set has been received without error: TS1/TS2 share the same first symbols, so a
-        # TS1 (or corrupted TS) must not change the reported TS2 config.
-        link_config   = Signal(8)
-        link_config_r = Signal(8, reset_less=True)
-        self.comb += link_config.eq(sink.data[8:16])
+        # TS1 (or corrupted TS) must not change the reported TS2 config. The Link Functionality
+        # Symbol is not compared to a constant: a bit error there can still decode as a valid
+        # Symbol (running disparity errors, measured on hardware), so the config is only reported
+        # when two consecutive Ordered Sets carry the same one, and the N consecutive Ordered Sets
+        # of a detection carry the same one ("identical" TS2, 7.5.4.9.2): a single corrupted TS2
+        # no longer directs Loopback (7.5.4.10.2) or a Hot Reset.
+        link_config      = Signal(8)
+        link_config_r    = Signal(8, reset_less=True)
+        link_config_prev = Signal(8)
+        link_config_seen = Signal() # Previous Ordered Set received without error.
+        os_last          = Signal() # Last word of an Ordered Set received without error.
+        config_same      = Signal() # ... with the config of the previous one.
+        self.comb += [
+            link_config.eq(sink.data[8:16]),
+            os_last.eq(sink.valid & ~error & (port.adr == (mem_depth - 1))),
+            config_same.eq(link_config_seen & (link_config_r == link_config_prev)),
+        ]
+        if not has_link_config:
+            self.comb += config_same.eq(1)
         if has_link_config:
             self.sync += [
                 If(sink.valid & (port.adr == 1),
                     link_config_r.eq(link_config)
                 ),
-                If(sink.valid & ~error & (port.adr == (mem_depth - 1)),
+                If(sink.valid & error,
+                    link_config_seen.eq(0)
+                ).Elif(os_last,
+                    link_config_seen.eq(1),
+                    link_config_prev.eq(link_config_r),
+                ),
+                If(os_last & config_same,
                     If(link_config_r[0] & link_config_r[2],
                         self.reset.eq(0),
                         self.loopback.eq(0),
@@ -163,9 +184,14 @@ class TSChecker(LiteXModule):
         # Count ------------------------------------------------------------------------------------
         count      = Signal(max=mem_depth*n_ordered_sets)
         count_done = (count == (mem_depth*n_ordered_sets - 1))
+        # An Ordered Set with another config than the previous one starts a new run (counted as its
+        # first Ordered Set).
+        config_change = os_last & link_config_seen & ~config_same
         self.sync += [
             If(sink.valid,
-                If(~error & ~count_done,
+                If(config_change & (count >= mem_depth),
+                    count.eq(mem_depth)
+                ).Elif(~error & ~count_done,
                     count.eq(count + 1)
                 ).Else(
                     count.eq(0)
@@ -174,8 +200,9 @@ class TSChecker(LiteXModule):
         ]
 
         # Result -----------------------------------------------------------------------------------
-        # The last word of the last Ordered Set must also be received without error.
-        self.sync += self.detected.eq(sink.valid & ~error & count_done)
+        # The last word of the last Ordered Set must also be received without error (and with the
+        # same config).
+        self.sync += self.detected.eq(sink.valid & ~error & count_done & ~config_change)
 
 # Training Sequence Generator ----------------------------------------------------------------------
 

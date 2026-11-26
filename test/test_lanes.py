@@ -532,7 +532,7 @@ class TestLanes(unittest.TestCase):
                 n = 2 if (i + 1 < len(p)) and rng.random() < 0.6 else 1
                 pairs.append((p[i:i+n], i == 0, i + n == len(p)))
                 i += n
-        dut = LanesTXPacker()
+        dut = LaneTXPacker()
         out = []
         def source_gen():
             for words, first, last in pairs:
@@ -605,7 +605,7 @@ class TestLanes(unittest.TestCase):
         """Symbols (8 per cycle, valid gaps every gaps cycles): output words checked against the
         packets, each packet completed with Logical Idle symbols to a multiple of 4 symbols."""
         symbols = symbols + [(0, 0)]*(-len(symbols) % 8 + 16)
-        dut = LanesPacketAligner()
+        dut = LaneRXAligner()
         out = []
         overflow = []
         def gen():
@@ -634,6 +634,8 @@ class TestLanes(unittest.TestCase):
                     data, ctrl = (yield dut.source.data), (yield dut.source.ctrl)
                     out.extend([((data >> (8*k)) & 0xff, (ctrl >> k) & 1) for k in range(4*n)])
         run_simulation(dut, [gen(), mon()])
+        if packets is None:
+            return out, bool(overflow)
         expected = []
         for p in packets:
             expected += p + [(0, 0)]*(-len(p) % 4)
@@ -653,15 +655,39 @@ class TestLanes(unittest.TestCase):
 
     def test_packet_aligner_back_to_back(self):
         # Packets back to back (no Logical Idle), every starting symbol position: completions of the
-        # DPPs absorbed by the symbols buffer.
+        # DPPs absorbed by the words FIFOs.
         for offset in range(8):
             rng     = random.Random(6 + offset)
             packets = self.x2_symbol_packets(rng, n=12)
             symbols = [(0, 0)]*offset + [s for p in packets for s in p]
             self.run_packet_aligner(packets, symbols, gaps=8)
 
+    def test_packet_aligner_overflow(self):
+        # Back to back DPHs + DPPs of odd lengths without Logical Idle nor valid gaps (completions
+        # not absorbed): overflow, words FIFOs flushed. The packets received after it are complete
+        # and in order (without the flush, the banks are no longer read in their write order).
+        hp = self.x2_symbol_packets(random.Random(0), n=1)[0][:20]
+        for offset in range(8):
+            with self.subTest(offset=offset):
+                rng   = random.Random(8 + offset)
+                burst = []
+                for _ in range(rng.randint(60, 90)):
+                    burst += hp + [(0x5c, 1)]*3 + [(0xf7, 1)]
+                    burst += [(0x55, 0)]*(rng.choice([1, 2, 3, 5, 6, 7]) + 4)
+                    burst += [(0xfd, 1)]*3 + [(0xf7, 1)]
+                packets = self.x2_symbol_packets(rng, n=16)
+                symbols = [(0, 0)]*offset + burst + [(0, 0)]*64
+                for p in packets:
+                    symbols += [(0, 0)]*rng.randint(0, 9) + p
+                expected = []
+                for p in packets:
+                    expected += p + [(0, 0)]*(-len(p) % 4)
+                out, overflow = self.run_packet_aligner(None, symbols, gaps=0)
+                self.assertTrue(overflow)
+                self.assertEqual(out[-len(expected):], expected)
+
     def test_packet_aligner_tx_packer(self):
-        # Packets of a LanesTXPacker partner (64-bit words, framing on 32-bit words, idle words):
+        # Packets of a LaneTXPacker partner (64-bit words, framing on 32-bit words, idle words):
         # unchanged.
         rng     = random.Random(7)
         packets = self.x2_symbol_packets(rng)
