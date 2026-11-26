@@ -256,6 +256,7 @@ debug tools.
 | `usb3_bench.py` | Bulk throughput, IN, OUT or both, with data checks (`bench` example) |
 | `usb3_soak.py` | Long stability run: link counters, enumeration, kernel messages, transfers |
 | `usb3_suspend.py` | Suspend and resume test from U3, with the LTSSM history of each exit |
+| `usb3_lanes.py` | Gen 1x2 link test between two Acorn Minis: lanes status and counters, PRBS errors and rate, retrain with or without Gen 1x2 |
 | `usb3_trace.py` | Dump the header packet trace of the device core |
 | `usb3_debug.py` | PHY status, LTSSM history, retrain, transceiver controls |
 | `usb3_analyzer.py` | LiteScope captures of the PHY and link, and their analysis |

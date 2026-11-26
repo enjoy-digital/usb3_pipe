@@ -995,6 +995,17 @@ class USB3LTSSM(LiteXModule):
         )
 
         # Recovery Idle State (7.5.10.3) -----------------------------------------------------------
+        # Gen 1x2: new TS1 in Recovery.Idle (TS1 detection low once since the entry: the level of
+        # the partner's own Recovery.Active TS1s can still be held at the entry).
+        recovery_idle_ts1 = 0
+        if lanes == 2:
+            ts1_low_seen = Signal()
+            recovery_idle_ts1 = ts1_low_seen & self.ts_rx_ts1
+            self.sync += If(fsm.ongoing("Recovery.Idle"),
+                ts1_low_seen.eq(ts1_low_seen | ~self.ts_rx_ts1)
+            ).Else(
+                ts1_low_seen.eq(0)
+            )
         fsm.act("Recovery.Idle",
             self.rx_keep.eq(1),
             self.ts2_decode.eq(1), # Disable Scrambling bit of the received TS2 (7.5.10.5.1).
@@ -1023,6 +1034,12 @@ class USB3LTSSM(LiteXModule):
             ).Elif(self.idle_handshake_done,
                 # Idle handshake -> U0 (7.5.10.3).
                 NextState("U0")
+            ).Elif(recovery_idle_ts1,
+                # Gen 1x2: TS1 received in Recovery.Idle (partner back in Recovery.Active: after its
+                # U0 entry, a lane descrambler of ours out of step since the last COM never sees the
+                # Idle Symbols) -> Recovery again (the TS1 COMs re-synchronize the descramblers)
+                # instead of tRecoveryIdleTimeout, eSS.Inactive and a retrain.
+                *goto_recovery()
             ).Elif(t_recovery_idle.done,
                 # tRecoveryIdleTimeout (2ms) -> eSS.Inactive (Table 7-12).
                 NextState("eSS.Inactive")

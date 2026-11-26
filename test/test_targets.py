@@ -96,3 +96,25 @@ def test_target_debug(name, tmp_path):
     if "--with-analyzer" in args:
         assert "analyzer_trigger_enable" in csr
         assert (tmp_path / "analyzer.csv").exists()
+
+# Gen 1x2 (Acorn Mini, two lanes) ------------------------------------------------------------------
+
+X2_ARGS = {
+    "acorn_x2_device"      : ["--lanes", "2"],
+    "acorn_x2_host"        : ["--lanes", "2", "--role", "host", "--with-jtagbone"],
+    "acorn_x2_host_no_x2"  : ["--lanes", "2", "--role", "host", "--no-x2"],
+    "acorn_x2_device_core" : ["--lanes", "2", "--lanes-core", "--example", "loopback"],
+    "acorn_x2_device_core_x1" : ["--lanes", "2", "--lanes-core", "--example", "uvc"],
+}
+
+@pytest.mark.parametrize("name", list(X2_ARGS))
+def test_target_x2(name, tmp_path):
+    # Acorn Mini Gen 1x2 builds elaborate (no Vivado): PHY, lanes debug, PRBS stand-ins or the
+    # Device Core.
+    args = X2_ARGS[name]
+    csr  = elaborate("acorn", tmp_path, args)
+    for reg in ["usb3_debug_history_count", "usb3_lanes_debug_status", "usb3_lanes_debug_deskew_count"]:
+        assert reg in csr, reg
+    assert ("usb3_prbs_rx_errors" in csr) == ("--lanes-core" not in args)
+    if "--lanes-core" in args:
+        assert "usb3" in csr
