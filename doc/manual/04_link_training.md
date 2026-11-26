@@ -178,6 +178,12 @@ handshake, or goes to Hot Reset or, on a timeout, to eSS.Inactive.](ltssm_states
 During Recovery.Idle, the partner can already be in U0 and send its first messages. The PHY keeps
 these received words for the link layer (`rx_keep`) so they are not lost.
 
+At Gen 1x2, a lane that loses a transceiver word after the partner's last TS2 leaves its
+descrambler out of step: the Idle symbols are never seen and the Idle handshake never completes.
+The partner, already in U0, then goes back to Recovery. A new TS1 received in Recovery.Idle
+returns the port to Recovery.Active, where the TS1 COM symbols resynchronize the descramblers.
+Otherwise the port waits for tRecoveryIdleTimeout, goes to eSS.Inactive and retrains.
+
 ### Power management {#lt-pm}
 
 The low power states save energy when the link is idle. U1 and U2 are quick to leave; U3 is

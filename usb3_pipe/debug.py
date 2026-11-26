@@ -254,6 +254,8 @@ class USB3LanesDebug(LiteXModule):
                 ("deskew_lost_u0", u0 & phy.lanes_deskew_lost, 1),
                 ("lane_idle_u0",   u0 & phy.lanes_idle,        1),
                 ("realign_u0",     phy.lanes_realign,          0),
+                # Deskew cleared on a partial COM word (lane shifted since the pairing).
+                ("com_slip",       phy.lanes_com_slip,         0),
             ]
         for lane, (pipe, s) in enumerate(zip(phy.pipes, serdes)):
             events += [

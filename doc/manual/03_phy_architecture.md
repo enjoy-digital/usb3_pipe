@@ -345,6 +345,13 @@ The destriper then rebuilds the words (`LaneDestriper`). In U0 the PHY goes to R
 deskew is lost, when a lane stays in electrical idle for 10 µs, or when a lane realigns its words.
 A lane that keeps decoding errors is re-initialized.
 
+A lane can also lose a transceiver word at the start of its last TS2 and keep the 4 COM symbols of
+the next Ordered Sets 2 symbols late. The deskew tolerates that single mismatch at the end of the
+burst and stays paired, so every destriped word in U0 is corrupted, and U0 has no COM symbols to
+show it. A deskewed word that starts with COM symbols followed by other symbols, on one lane only,
+therefore clears the pairing (`lanes_com_slip`): Recovery follows, and the deskew is acquired
+again on its TS1. Words with a single COM symbol (TSEQ) do not count.
+
 The device finds which receiver gets the configuration lane from the partner's Polling LFPS and
 swaps the lanes, as a flipped USB Type-C plug needs (`LaneSwap`). When the partner is not Gen 1x2
 capable, the link trains at Gen 1x1 on lane 0, and the 32-bit words of that lane are on

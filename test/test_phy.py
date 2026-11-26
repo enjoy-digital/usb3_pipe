@@ -491,6 +491,29 @@ class TestPHYX2Core(unittest.TestCase):
             self.assertEqual(len(re.findall(side + r"\s*entering HotReset.Exit state", out)), 4, tail)
             self.assertNotRegex(out, side + r"\s*entering eSS.Inactive", tail)
 
+    def test_core_x2_lane_slip(self):
+        # Host Lane 1 losing 2 Symbols (one 16-bit transceiver word) in Polling.Idle, after its last
+        # TS2 (two Acorn Minis: a lane 2 Symbols off at the start of its last TS2): the deskew
+        # stays paired (single end of burst mismatch tolerated), every destriped word corrupted in
+        # U0. The partial COM word of the next TS clears the deskew; without it, no COM in U0 to
+        # detect the shifted lane: Device PENDING_HP_TIMER Recoveries, the script never done.
+        out = self.run_sim("core_x2_lane_slip", ["--dev-mode", "x2", "--lanes-crossed",
+            "--lanes-tx-inverted", "--lane-slip", "598360,1", "--max-cycles", "3000000"])
+        self.assertRegex(out, r"HOST LANE\s+1 RX SLIP")
+        self.assertRegex(out, r"HOST\s*lanes partial COM word")
+        self.assertNotIn("DEV  Link Layer Recovery request", out)
+
+    def test_core_x2_lane_slip_recovery_idle(self):
+        # Then Host Lane 1 losing 2 more Symbols after the last COM of the Device's Recovery TS2s,
+        # the Host in Recovery.Idle, the Device already in U0: the Host lane descrambler out of
+        # step never sees the Idle Symbols; the Device Recovery TS1 (PENDING_HP_TIMER) bring the
+        # Host back to Recovery.Active. Without it: the Host in Recovery.Idle until
+        # tRecoveryIdleTimeout, eSS.Inactive on both sides and a retrain through Polling.
+        out = self.run_sim("core_x2_lane_slip_recovery_idle", ["--dev-mode", "x2", "--lanes-crossed",
+            "--lanes-tx-inverted", "--lane-slip", "598360,1,598655,1", "--max-cycles", "3000000"])
+        self.assertRegex(out, r"\[00598655\] HOST LANE\s+1 RX SLIP")
+        self.assertNotRegex(out, r"(HOST|DEV)\s*entering eSS.Inactive state")
+
     def test_core_x2_tx_shift(self):
         # Gen 1x2 with the Host/Device TX packets delayed by 3 symbols: packets starting on Lane 1,
         # at any symbol position of the 64-bit words (LanesPacketAligner).

@@ -1017,6 +1017,31 @@ class USB3PHY(LiteXModule):
         if hasattr(self, "rx_errors_reinit"):
             realign += [self.rx_errors_reinit != 0]
         self.comb += lanes_realign.eq(Reduce("OR", realign) if realign else 0)
+        # A lane shifted by 2 Symbols at the end of a TS burst (one 16-bit transceiver word lost by
+        # a lane, two Acorn Minis: its last TS2 starting with 2 COM Symbols instead of 4): the
+        # deskew sees a single head mismatch, tolerated at the end of an Ordered Sets stream, and
+        # stays aligned with the lane 2 Symbols off (every destriped word corrupted in U0, nothing
+        # else detects it: no COM Symbols in U0). After the lane word aligner, the 4 COM Symbols of
+        # a TS1/TS2 are one word: a deskewed word starting with COM Symbols then other Symbols (not
+        # COM nor a substituted decode error) on one lane only (the deskewed lanes words disagree)
+        # is a lane shifted since the pairing: the deskew is cleared (Recovery in U0, re-acquired on
+        # its TS1). Words with a single COM Symbol (TSEQ) are not counted.
+        self.lanes_com_slip = Signal() # o: Partial COM word, lanes deskewed and disagreeing (x2).
+        out_partial = Signal(2)
+        out_mask    = [Signal(4) for _ in range(2)]
+        for lane in range(2):
+            d   = deskew.sources[lane]
+            com = Signal(4)
+            sub = Signal(4)
+            self.comb += [
+                com.eq(Cat(*[d.ctrl[i] & (d.data[8*i:8*(i+1)] == COM.value) for i in range(4)])),
+                sub.eq(Cat(*[d.ctrl[i] & (d.data[8*i:8*(i+1)] == SUB.value) for i in range(4)])),
+                out_mask[lane].eq(com | sub),
+                out_partial[lane].eq(d.valid & com[0] & com[1] & ((com | sub) != 0b1111)),
+            ]
+        # Registered (timing: the deskew cleared one cycle later, the word is corrupted anyway).
+        self.sync += self.lanes_com_slip.eq(x2 & deskew.aligned & (out_partial != 0) &
+            (out_mask[0] != out_mask[1]))
         self.lanes_deskew_lost      = Signal()        # o: Deskew lost trigger (x2, not deskewed).
         self.lanes_idle             = Signal()        # o: Lane idle trigger (x2, lane idle for 10us).
         self.lanes_realign          = Signal()        # o: Lane realigned in U0 (x2).
@@ -1030,7 +1055,7 @@ class USB3PHY(LiteXModule):
             # there until tRecoveryIdleTimeout (2ms, eSS.Inactive), and a Recovery without a gap does
             # not re-arm the deskew (U0 entries/Recoveries loop: two Acorn Minis).
             ltssm.lanes_deskew_lost.eq((self.lanes_deskew_lost & deskew.armed) | self.lanes_idle),
-            deskew.clear.eq(lanes_idle | self.lanes_realign),
+            deskew.clear.eq(lanes_idle | self.lanes_realign | self.lanes_com_slip),
         ]
 
         # RX: Gen 1x1 (Lane 0) ---------------------------------------------------------------------

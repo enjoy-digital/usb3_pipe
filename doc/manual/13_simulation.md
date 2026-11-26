@@ -124,7 +124,9 @@ the word shift apply there.](sim_setup.svg)
 
 The transceiver models (`USB3SerDesModel`) encode and decode 8b/10b, emulate LFPS, polarity and a
 receive word shift, and receive in the clock domain of the partner, as the clock recovery of a real
-transceiver does. The host and device clocks come from separate generators, so a frequency offset
+transceiver does. Their word aligner is always enabled, as in the hardware transceivers, where
+`rx_align` only drives the comma alignment. With two lanes, `--lane-slip` drops 2 symbols on a
+host lane at given cycles, as a transceiver that loses a word. The host and device clocks come from separate generators, so a frequency offset
 and spread spectrum clocking can be applied to the device side.
 
 ```sh

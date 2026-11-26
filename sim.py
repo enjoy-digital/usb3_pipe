@@ -117,7 +117,9 @@ class USB3SerDesModel(USB3SerDes):
             tx_datapath.skp_enable.eq(self.tx_skp_enable),
             rx_datapath.source.connect(self.source)
         ]
-        self.specials += MultiReg(self.rx_align, rx_datapath.word_aligner.enable, rx_clock_domain)
+        # Word aligner always enabled, as on the hardware SerDes (USB3SerDes: rx_align only drives the
+        # transceiver comma alignment): the alignment also moves in the states without rx_align (ex:
+        # Recovery.Idle, a lane shifted after the partner's last TS2).
 
         # 8b10b Encoders/Decoders.
         encoder  = Encoder(nwords, True)
@@ -215,8 +217,16 @@ class USB3SerDesModel(USB3SerDes):
         sync_rx = getattr(self.sync, rx_clock_domain)
         # Previous word in LSBs.
         sync_rx += rx_data_sr.eq(Cat(rx_data_sr[phy_dw:], rx_data[:phy_dw]))
+        # RX symbol offset (rx_word_shift), moved by 2 Symbols on rx_slip (rx clock domain pulse):
+        # 2 Symbols dropped (or repeated past the last offset), as a 16-bit transceiver word lost
+        # by a lane (sim.py --lane-slip).
+        self.rx_slip = Signal()
+        rx_offset    = Signal(max=nwords + 1, reset=rx_word_shift)
+        sync_rx += If(self.rx_slip,
+            rx_offset.eq(Mux(rx_offset + 2 <= nwords, rx_offset + 2, rx_offset - 2)))
         for i in range(nwords):
-            self.comb += decoders[i].input.eq(rx_data_sr[10*(rx_word_shift+i):10*(rx_word_shift+i+1)])
+            self.comb += Case(rx_offset, {s: decoders[i].input.eq(rx_data_sr[10*(s+i):10*(s+i+1)])
+                for s in range(nwords + 1)})
 
         # RX decode errors.
         self.rx_error_monitor = RXErrorMonitor(decoders, clock_domain=rx_clock_domain)
@@ -339,7 +349,7 @@ class USB3PIPESim(SoCMini):
         gen2_data_width=None, host_recovery=False, host_hot_reset=0,
         host_burst_out=0, host_burst_len=64, host_burst_stream=0, dev_loopback_depth=512,
         host_lbad_test=False, host_burst_duplex=0, host_burst_duplex_skp=False,
-        host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None):
+        host_recovery_mid=False, host_recovery_cut=False, dev_link_ppm=None, lane_slip=None):
         assert lanes in [1, 2]
         assert (link_words == 1) or (lanes == 1)
         assert (not gen2) or ((lanes == 1) and gen2_capable)
@@ -600,6 +610,8 @@ class USB3PIPESim(SoCMini):
                 self.add_ssp_status(phys[name], name, sync, timer)
             if len(phys[name].pipes) > 1:
                 self.add_lanes_status(phys[name], name, sync, timer)
+        if lane_slip is not None:
+            self.add_lane_slip(serdeses, cds, timer, lane_slip)
 
         # Simulation End.
         done   = Signal()
@@ -815,6 +827,19 @@ class USB3PIPESim(SoCMini):
                     timer, phy.ssp.x2, phy.ssp.gen2)
             )
 
+    def add_lane_slip(self, serdeses, cds, timer, lane_slip):
+        """lane_slip: (cycle, lane[, cycle, lane...]): 2 Symbols dropped by the Host lane SerDes RX at
+        each cycle (a 16-bit transceiver word lost, 0 ppm: one clock domain)."""
+        assert cds["host"] == cds["dev"] == "sys", "--lane-slip: 0 ppm only."
+        slips = list(zip(lane_slip[0::2], lane_slip[1::2]))
+        for lane in sorted(set(lane for _, lane in slips)):
+            cycles = [cycle for cycle, l in slips if l == lane]
+            self.comb += serdeses["host"][lane].rx_slip.eq(
+                Reduce("OR", [timer == cycle for cycle in cycles]))
+        for cycle, lane in slips:
+            self.sync += If(timer == cycle,
+                Display("[%08d] HOST LANE %d RX SLIP (2 Symbols dropped)", timer, lane))
+
     def add_lanes_status(self, phy, name, sync, timer):
         """Gen 1x2 status: lanes deskew."""
         label = {"host": "HOST", "dev": "DEV "}[name]
@@ -822,6 +847,9 @@ class USB3PIPESim(SoCMini):
         sync += aligned_d.eq(phy.deskew_aligned)
         sync += If(phy.deskew_aligned & ~aligned_d,
             Display("[%08d] {} lanes deskewed".format(label), timer)
+        )
+        sync += If(phy.lanes_com_slip,
+            Display("[%08d] {} lanes partial COM word (lane shifted since the pairing)".format(label), timer)
         )
         swap_d = Signal()
         sync += swap_d.eq(phy.lane_swap)
@@ -880,6 +908,7 @@ def main():
     parser.add_argument("--gen2-data-width", default=None, type=int, help="Gen 2 raw words width of the SerDes models (default: 40, ex: 80 as GW5 GTR12 1:4 at 125MHz).")
     parser.add_argument("--dev-ss",        action="store_true", help="With --gen2-capable: SuperSpeed Device (not SuperSpeedPlus capable), SuperSpeed fallback of the Host.")
     parser.add_argument("--dev-no-u1u2",   action="store_true", help="Device USB3PHY without U1/U2 Link Power Management.")
+    parser.add_argument("--lane-slip",     default=None, help="--lanes 2, 0 ppm: CYCLE,LANE[,CYCLE,LANE...]: 2 Symbols dropped by the Host Lane LANE SerDes RX at each CYCLE (a 16-bit transceiver word lost).")
     parser.add_argument("--output-dir",    default="build/sim", help="Build directory.")
     args = parser.parse_args()
 
@@ -931,7 +960,8 @@ def main():
         host_recovery_cut     = args.host_recovery_cut,
         dev_link_ppm          = args.dev_link_ppm,
         dev_loopback_depth    = int(args.dev_loopback_depth),
-        host_lbad_test        = args.host_lbad_test)
+        host_lbad_test        = args.host_lbad_test,
+        lane_slip             = None if args.lane_slip is None else tuple(int(v) for v in args.lane_slip.split(",")))
     builder = Builder(soc, output_dir=args.output_dir)
     builder.build(sim_config=sim_config,
         # Compiler jobs limited to the CPUs (else one per generated file).
