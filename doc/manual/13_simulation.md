@@ -124,7 +124,9 @@ the word shift apply there.](sim_setup.svg)
 
 The transceiver models (`USB3SerDesModel`) encode and decode 8b/10b, emulate LFPS, polarity and a
 receive word shift, and receive in the clock domain of the partner, as the clock recovery of a real
-transceiver does. The host and device clocks come from separate generators, so a frequency offset
+transceiver does. Their word aligner is always enabled, as in the hardware transceivers, where
+`rx_align` only drives the comma alignment. With two lanes, `--lane-slip` drops 2 symbols on a
+host lane at given cycles, as a transceiver that loses a word. The host and device clocks come from separate generators, so a frequency offset
 and spread spectrum clocking can be applied to the device side.
 
 ```sh
@@ -136,6 +138,8 @@ and spread spectrum clocking can be applied to the device side.
 ./sim.py --gen2
 # Device link layer and core at half the PIPE frequency (slow fabrics)
 ./sim.py --dev-pipe-cd
+# Gen 1x2: SuperSpeedPlus link layer and device core on two lanes
+./sim.py --lanes 2 --lanes-core
 # Waveforms in build/sim/gateware/
 ./sim.py --trace --trace-start 0 --trace-end 200000
 ```
@@ -152,6 +156,7 @@ The main options are below; [Build options](#build-options) lists them all.
 | `--gen2` | Train to U0 at Gen 2, 128b/132b blocks |
 | `--lanes 2` | Gen 1x2: two lanes with skew and per-lane polarity, PRBS stand-ins |
 | `--dev-mode`, `--lanes-crossed` | With `--lanes 2`: Gen 1x1 fallback, flipped USB Type-C plug |
+| `--lanes-core` | With `--lanes 2`: host script and device core (`--dev-mode x1`, `ss`: Gen 1x1) |
 | `--lane-skp-error` | With `--lanes 2`: `CYCLES,DIR,LANE`, one SKP symbol error on a lane after U0 |
 | `--link-words N` | Device link layer on 32, 64 or 128-bit words |
 | `--dev-pipe-cd` | Device LTSSM, link layer and core at half the PIPE frequency |

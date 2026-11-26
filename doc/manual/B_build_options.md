@@ -151,16 +151,19 @@ Numbers are in cycles of the 133 MHz simulation clock unless stated.
 | `--host-burst-duplex-skp` | off | Full duplex with ACKs behind each OUT packet and SKPs between packets |
 | `--host-lbad-test` | off | Bulk OUT burst with a header CRC error: LBAD, LRTY, retransmission |
 | `--lanes` | 1 | 1 (Gen 1x1) or 2 (Gen 1x2, PRBS stand-ins) |
+| `--lanes-core` | off | Two lanes: host script and device core instead of the PRBS stand-ins |
 | `--dev-mode` | `x2` | Two lanes: device `x2` (Gen 1x2), `x1` (not x2 capable) or `ss` (SuperSpeed device) |
 | `--dev-x2-disable` | off | Two lanes: device Gen 1x2 capability withdrawn at runtime (Gen 1x1) |
 | `--lanes-crossed` | off | Two lanes: host lane 0 on device lane 1 (flipped USB Type-C plug) |
 | `--lanes-tx-inverted` | off | Two lanes: transmit polarity of every lane inverted on both sides |
+| `--lanes-tx-shift` | 0 | Two lanes with the core: packets delayed by 1 to 7 symbols |
 | `--prbs-gap-bits` | 4 | Gaps of 0 to 2^N - 1 cycles between the PRBS packets |
 | `--lane0-delay` | 0 | Host to device delay of lane 0 (words, two lanes) |
 | `--lane1-delay` | 1 | Host to device delay of lane 1 (words, two lanes) |
 | `--lane1-word-shift` | 2 | Receive word shift of device lane 1 (symbols, two lanes) |
 | `--lane-skp` | 4096 | Period of the extra SKPs on one lane (0: none, two lanes) |
 | `--lane-skp-error` | none | Two lanes: `CYCLES,DIR,LANE`, one SKP symbol error on host lane `LANE` (`h2d`, `d2h`) after U0 |
+| `--lane-slip` | none | `CYCLE,LANE[,...]`: 2 symbols dropped by host lane `LANE` at each cycle (two lanes, 0 ppm) |
 | `--gen2-capable` | off | Gen 2 advertised and negotiated in the SuperSpeedPlus polling |
 | `--gen2` | off | Training to U0 at Gen 2 on raw words (implies the previous option) |
 | `--gen2-data-width` | 40 | Gen 2 raw word width of the transceiver models (80 as the GTR12) |
