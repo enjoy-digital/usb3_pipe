@@ -49,6 +49,8 @@ class USB3SerDes(LiteXModule):
         self.rx_polarity = Signal()   # i
         self.rx_idle     = Signal()   # o
         self.rx_errors   = Signal()   # o: RX decode errors (Warm Reset LFPS detection).
+        self.rx_errors_hold   = Signal() # i: rx_errors held at 1 (RX re-initialization in progress).
+        self.rx_decode_errors = Signal() # o: RX decode errors only (no hold, no transceiver errors).
 
         self.tx_skp_enable = Signal(reset=1) # i
         self.rx_align      = Signal()        # i
@@ -151,8 +153,15 @@ class USB3SerDes(LiteXModule):
         # At 10Gbps (Gen 2, raw 128b/132b words), the 8b/10b decode errors are always set: Gen 2 RX
         # errors (block alignment lost) instead (a Warm Reset LFPS on a Gen 2 link would otherwise
         # be detected after tResetDelay in U0).
+        # rx_errors_hold: rx_errors held during a RX re-initialization (Gen 1x2 lanes RX errors
+        # re-initializations, see USB3PHY.add_rx_errors_monitors).
         self.comb += self.rx_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
-            self.rx_error_monitor.errors))
+            self.rx_error_monitor.errors) | self.rx_errors_hold)
+        # rx_decode_errors: the Gen 1x2 RX errors re-initializations input, without the transceiver
+        # errors (rx_errors_extra): a GTR12 lane without RX words (CDR not locked) would otherwise be
+        # re-initialized every ~110us, each re-initialization restarting the stall.
+        self.comb += self.rx_decode_errors.eq(Mux(self.rate_10g, self.gen2_rx_errors,
+            self.rx_error_monitor.decode_errors))
 
     def add_timing_constraints(self, platform, sys_clk, xcvr, with_tx=True):
         """Transceiver TX/RX clocks constraints (with_tx: False when the TX clock is shared with

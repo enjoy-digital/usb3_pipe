@@ -111,6 +111,13 @@ class TestRXErrorMonitor(unittest.TestCase):
             for _ in range(8):
                 yield
             self.assertEqual((yield dut.errors), 1)
+            self.assertEqual((yield dut.decode_errors), 0) # Decode errors only.
+            yield decoders[0].invalid.eq(1)
+            yield
+            yield decoders[0].invalid.eq(0)
+            for _ in range(4):
+                yield
+            self.assertEqual((yield dut.decode_errors), 1)
             yield extra.eq(0)
             for _ in range(32):
                 yield

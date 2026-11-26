@@ -458,8 +458,10 @@ class USB3PHY(LiteXModule):
         A lane decoding errors on more than half of the cycles of a window (window cycles, RX not
         idle, LTSSM in a state with continuous symbols: Polling.RxEQ to U0, Recovery) is
         re-initialized (rx_reset for reset_cycles), then not monitored for holdoff (CDR lock).
-        rx_errors_reinit: re-initialization pulses (per lane, debug counters). Returns the per lane
-        rx_reset requests."""
+        The SerDes decode errors are monitored (rx_decode_errors when the SerDes has it: not the
+        transceiver specific errors, ex: GTR12 RX stalls), and its rx_errors held during the
+        re-initialization and holdoff (rx_errors_hold). rx_errors_reinit: re-initialization pulses
+        (per lane, debug counters). Returns the per lane rx_reset requests."""
         ltssm = self.ltssm
         L     = self.lanes_module() # Lanes logic (with pipe_cd: the monitors in pipe_cd).
         self.rx_errors_reinit = Signal(len(serdes)) # o: Re-initialization pulses (lanes logic).
@@ -476,16 +478,27 @@ class USB3PHY(LiteXModule):
             hold    = Signal(max=holdoff_cycles + 1)
             reset   = Signal(max=reset_cycles + 1)
             request = Signal()
+            # Re-initialization/holdoff, idle conditions and errors input registered: the window
+            # counters one cycle behind (timing: Tang Mega 138K Pro lanes clock).
+            busy  = Signal()
+            quiet = Signal()
+            err   = Signal()
             L.sync += [
-                self.rx_errors_reinit[lane].eq(0),
+                busy.eq((reset != 0) | (hold != 0)),
+                quiet.eq(~symbols | s.rx_idle),
+                err.eq(getattr(s, "rx_decode_errors", s.rx_errors)),
+            ]
+            L.sync += [
                 If(reset != 0,
                     reset.eq(reset - 1),
                     hold.eq(holdoff_cycles),
                 ).Elif(hold != 0,
                     hold.eq(hold - 1),
-                    count.eq(0),
-                    errors.eq(0),
-                ).Elif(~symbols | s.rx_idle,
+                ),
+            ]
+            L.sync += [
+                self.rx_errors_reinit[lane].eq(0),
+                If(busy | quiet,
                     count.eq(0),
                     errors.eq(0),
                 ).Elif(count == window,
@@ -497,10 +510,16 @@ class USB3PHY(LiteXModule):
                     )
                 ).Else(
                     count.eq(count + 1),
-                    errors.eq(errors + s.rx_errors),
+                    errors.eq(errors + err),
                 )
             ]
             L.comb += request.eq(reset != 0)
+            # rx_errors held during the re-initialization and its holdoff: a lane receiving a Warm
+            # Reset LFPS in U0 decodes errors continuously and is re-initialized every ~110us, the RX
+            # reset clearing the RX error monitor: the Warm Reset (tResetDelay of continuous LFPS) was
+            # never detected (Tang Mega 138K Pro Gen 1x2).
+            if hasattr(s, "rx_errors_hold"):
+                L.comb += s.rx_errors_hold.eq((reset != 0) | (hold != 0))
             requests.append(request)
         return requests
 

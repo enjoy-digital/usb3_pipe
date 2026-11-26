@@ -361,7 +361,11 @@ It also goes to Recovery on a run of SKP symbols of odd length on a lane (`RXSKP
 Ordered Set is 2 SKP symbols, so an odd run means a SKP symbol received with an error and kept by
 the SKP removal, or another symbol received as a SKP and removed. The lane is then one symbol off
 the other lane, and U0 has no COM word to show it.
-A lane that keeps decoding errors is re-initialized.
+A lane that keeps decoding errors is re-initialized. Only its 8b/10b decode errors count
+(`rx_decode_errors`): a GTR12 lane without RX words (`rx_stall`) would otherwise be
+re-initialized again and again. During a re-initialization and the holdoff after it, the lane
+reports RX errors (`rx_errors_hold`). A Warm Reset LFPS makes the lane decode errors continuously,
+and the RX reset would otherwise clear the evidence the LTSSM needs to detect the Warm Reset.
 
 A lane can also lose a transceiver word at the start of its last TS2 and keep the 4 COM symbols of
 the next Ordered Sets 2 symbols late. The deskew tolerates that single mismatch at the end of the
