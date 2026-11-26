@@ -215,7 +215,7 @@ directions (`LinkWordsCDC`); the list below gives how each part works.
 - **LTSSM and PIPE**: control and status levels are resynchronized; status pulses go through
   pulse synchronizers. Training sequence requests take effect on Ordered Set boundaries, so a
   late request never truncates one. The LTSSM controls cross as one group, updated only from two
-  equal samples (`add_levels_stable`). Controls that change in the same `sys` cycle then change in
+  equal samples (`ltssm_to_pipe`). Controls that change in the same `sys` cycle then change in
   the same `pipe_cd` cycle. Crossing one by one, `tx_ready` and `idle_handshake` could both read 0
   for a cycle at the U0 entry, which resets the transmit scrambler in U0.
 - **Receive**: Logical Idle words between packets are dropped and the words packed in full pairs
