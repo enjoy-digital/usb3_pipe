@@ -96,5 +96,27 @@ class TestRXErrorMonitor(unittest.TestCase):
 
         run_simulation(dut, generator(dut))
 
+    def test_rx_error_monitor_extra(self):
+        # Other RX errors (extra: ex: GTR12 RX words not delivered, decoders seeing valid symbols)
+        # reported as decode errors.
+        decoders = [DecoderStub()]
+        extra    = Signal()
+        dut      = RXErrorMonitor(decoders, window=16, extra=extra)
+
+        def generator(dut):
+            for _ in range(32):
+                yield
+            self.assertEqual((yield dut.errors), 0)
+            yield extra.eq(1)
+            for _ in range(8):
+                yield
+            self.assertEqual((yield dut.errors), 1)
+            yield extra.eq(0)
+            for _ in range(32):
+                yield
+            self.assertEqual((yield dut.errors), 0)
+
+        run_simulation(dut, generator(dut))
+
 if __name__ == "__main__":
     unittest.main()

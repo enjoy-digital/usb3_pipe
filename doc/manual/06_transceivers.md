@@ -209,6 +209,11 @@ bit-level square wave with a 24 ns period (41.7 MHz) through the raw TX words wh
 transmitter is idle, and makes the bursts by switching the TX driver through UPAR. The RX idle
 indicator is bit 5 of the lane's analog status, inverted (`rx_idle_source="~astat5"`).
 
+During a Warm Reset LFPS, the GTR12 RX interface FIFO may stop delivering words (`RX_VLD_OUT` low).
+The fabric decoders then decode the last word again, which is valid 8b/10b, so the LFPS shows no
+decode error and the Warm Reset is never detected. The wrapper counts 64 or more consecutive rx
+cycles without RX words (`rx_stall`) as RX errors (`RXErrorMonitor` `extra`).
+
 ### Clocking on the GW5A fabric {#gt-gowin-clocking}
 
 The GW5A fabric does not run the link layer at 125 MHz. On the Tang Mega 138K Pro target, the PIPE
