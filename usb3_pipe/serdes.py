@@ -525,6 +525,56 @@ class GW5UPARPort:
         self.we     = Signal()
         self.done   = Signal()
 
+class GW5UPARArbiter(LiteXModule):
+    """UPAR user requests (GW5UPARPort list) to a GTR12UPAR (addr/wrdata/we, done): a request (we
+    held until done) is granted to one port until its done, the lowest port first."""
+    def __init__(self, ports, upar):
+        n     = len(ports)
+        grant = Signal(max=max(n, 2))
+        busy  = Signal()
+
+        # # #
+
+        select = If(ports[n - 1].we, grant.eq(n - 1), busy.eq(1))
+        for i in reversed(range(n - 1)):
+            select = If(ports[i].we, grant.eq(i), busy.eq(1)).Else(select)
+        self.sync += If(~busy, select).Elif(upar.done, busy.eq(0))
+        cases = {}
+        for i, port in enumerate(ports):
+            cases[i] = [
+                upar.addr.eq(port.addr),
+                upar.wrdata.eq(port.wrdata),
+                upar.we.eq(busy & port.we),
+            ]
+            self.comb += port.done.eq(busy & (grant == i) & upar.done)
+        self.comb += Case(grant, cases)
+
+def gw5_gtr12_share_quad(owner, gtr12, lane, tx_clk=None):
+    """GTR12 lane (gtr12, LiteICLink GTR12) instantiated in the quad of another one (owner): its lane
+    ports added to the owner's quad instance (its own not instantiated), the quad outputs (QPLLs
+    locks, reference clocks detection) taken from the owner. tx_clk: TX fabric clock of the lane
+    (ex: the owner's TX clock), else its own TX fabric clock output."""
+    prefixes = [f"LN{lane}_", f"LANE{lane}_"]
+    for k, v in gtr12.gtr12_params.items():
+        if any(p in k for p in prefixes) and not isinstance(v, Constant):
+            owner.gtr12_params[k] = v
+    gtr12.do_finalize = lambda: None
+    # Lane CPLL lock from the owner's instance into its own signal: plls_lock then has a single
+    # (combinatorial) driver, not a mix of instance output and assignment (invalid Verilog).
+    cpll_lock = Signal()
+    owner.gtr12_params[f"o_FABRIC_LANE{lane}_CMU_OK_O"] = cpll_lock
+    gtr12.comb += [
+        gtr12.plls_lock.eq(Cat(owner.plls_lock[:2], cpll_lock)),
+        gtr12.refclk_det.eq(owner.refclk_det),
+    ]
+    if tx_clk is not None:
+        del owner.gtr12_params[f"o_LANE{lane}_PCS_TX_O_FABRIC_CLK"]
+        owner.gtr12_params[f"i_LANE{lane}_FABRIC_TX_CLK"] = tx_clk
+        # Alias of tx_clk: not kept, so that synthesis merges it into tx_clk (both kept: the merged
+        # net can take the alias name and lose tx_clk's timing constraint).
+        gtr12.cd_tx.clk.attr.discard(("syn_keep", 1))
+        gtr12.comb += gtr12.cd_tx.clk.eq(tx_clk)
+
 class GW5TXElectricalIdle(LiteXModule):
     """GTR12 lane TX Electrical Idle: the TX driver control register (addr) is written with
     idle_value/active_value through UPAR on each change of idle (asynchronous input), the last
@@ -589,9 +639,16 @@ class GW5USB3SerDes(USB3SerDes):
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, lane=0, rx_idle_source="~astat5",
         with_upar=True, upar_clk=None, xcvr_cd="sys", refclk="100M", csr_config=None, tx_cdc=True,
-        position=None, pll=None, gen2_capable=False, xcvr_clk_freq=None):
+        position=None, pll=None, gen2_capable=False, xcvr_clk_freq=None, quad_owner=None, tx_clk=None):
         USB3SerDes.__init__(self)
         assert with_upar # TX Electrical Idle through UPAR.
+        # quad_owner: GW5USB3SerDes owning the quad (GTR12 instance, register configuration, UPAR) of
+        # this lane (Gen 1x2: two lanes of a quad), tx_clk: TX fabric clock of this lane (ex: the TX
+        # clock of the quad owner lane: lanes TX in lockstep), else its own.
+        assert (quad_owner is None) or (not gen2_capable)
+        assert (tx_clk is None) or (quad_owner is not None)
+        self.xcvr_cd    = xcvr_cd
+        self.upar_ports = [] # UPAR users of the quad (GW5UPARPort), arbitrated (quad owner).
         self.gen2_capable = gen2_capable
         if gen2_capable:
             self.gen2_data_width = 80
@@ -616,8 +673,11 @@ class GW5USB3SerDes(USB3SerDes):
         assert (not gen2_capable) or (position == "Q1") # 10G rate writes: Q1 lanes.
 
         # Transceiver ------------------------------------------------------------------------------
+        if quad_owner is not None:
+            csr_config = "" # Quad owner's configuration.
         if csr_config is None:
             csr_config = gw5_usb3_csr_config(lane, "5G", refclk, position=position, pll=pll)
+        tcl_commands = len(platform.toolchain.additional_tcl_commands)
         gtr12 = GTR12(platform,
             line_rate   = 5e9,
             csr_config  = csr_config,
@@ -629,8 +689,12 @@ class GW5USB3SerDes(USB3SerDes):
             tx_polarity = self.tx_polarity,
             rx_polarity = self.rx_polarity,
             csr_name    = f"usb3_5g_ln{lane}.csr",
-            with_upar   = with_upar,
+            with_upar   = with_upar and (quad_owner is None),
             upar_clk    = upar_clk)
+        if quad_owner is not None:
+            # Lane of the quad owner's GTR12 instance (no configuration file/UPAR of its own).
+            del platform.toolchain.additional_tcl_commands[tcl_commands:]
+            gw5_gtr12_share_quad(quad_owner.gtr12, gtr12, lane, tx_clk=tx_clk)
         # GTR12 control logic (PLL lock resynchronization, resets, UPAR) in xcvr_cd: a free-running
         # clock domain when this SerDes "sys" clock domain is renamed to the GTR12 TX clock.
         if xcvr_cd != "sys":
@@ -713,15 +777,18 @@ class GW5USB3SerDes(USB3SerDes):
             ports = [(rate_sequencer.busy, rate_port), (~rate_sequencer.busy, idle_port)]
         else:
             ports = [(1, idle_port)]
+        upar_port = GW5UPARPort()
         for sel, port in ports:
             self.comb += [
                 If(sel,
-                    gtr12.upar.addr.eq(port.addr),
-                    gtr12.upar.wrdata.eq(port.wrdata),
-                    gtr12.upar.we.eq(port.we),
+                    upar_port.addr.eq(port.addr),
+                    upar_port.wrdata.eq(port.wrdata),
+                    upar_port.we.eq(port.we),
                 ),
-                port.done.eq(sel & gtr12.upar.done),
+                port.done.eq(sel & upar_port.done),
             ]
+        # UPAR user of the quad (the quad owner's UPAR, arbitrated between its lanes: do_finalize).
+        (self if quad_owner is None else quad_owner).upar_ports.append(upar_port)
 
         # LFPS -------------------------------------------------------------------------------------
         rx_idle = Signal()
@@ -756,7 +823,29 @@ class GW5USB3SerDes(USB3SerDes):
         self.add_gw5_lfps_tx(gtr12, raw_width=80 if gen2_capable else 40)
 
         # Timing constraints -----------------------------------------------------------------------
-        self.add_timing_constraints(platform, sys_clk, gtr12)
+        if tx_clk is None:
+            self.add_timing_constraints(platform, sys_clk, gtr12)
+        else:
+            # TX on the given clock (constrained by its owner).
+            platform.add_period_constraint(gtr12.cd_rx.clk, 1e9/gtr12.rx_clk_freq)
+            platform.add_false_path_constraints(sys_clk, gtr12.cd_rx.clk)
+
+    def do_finalize(self):
+        # UPAR users of the quad (this lane, the lanes sharing the quad) to the quad UPAR.
+        if not self.upar_ports:
+            return
+        upar = self.gtr12.upar
+        if len(self.upar_ports) == 1:
+            port = self.upar_ports[0]
+            self.comb += [
+                upar.addr.eq(port.addr),
+                upar.wrdata.eq(port.wrdata),
+                upar.we.eq(port.we),
+                port.done.eq(upar.done),
+            ]
+        else:
+            self.upar_arbiter = ClockDomainsRenamer({"sys": self.xcvr_cd})(
+                GW5UPARArbiter(self.upar_ports, upar))
 
     def add_gw5_lfps_tx(self, gtr12, raw_width, half_period=12e-9):
         """LFPS square wave as raw TX words while idle or in LFPS bursts (tx clock domain):
