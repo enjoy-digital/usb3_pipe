@@ -149,10 +149,10 @@ for debug.
 
 With Yosys and nextpnr-xilinx (openXC7), pass `rx_rom_style="block"`: the code lookups of the
 8b/10b checker (`RX8b10bChecker`) then go to block ROMs instead of LUTs, with the same latency.
-Yosys maps them to 8 levels of LUTs, which keep the 250 MHz RX clock at about 160 MHz. The build
-script sets the attribute Yosys needs to put such small ROMs in block RAMs, on the memories named
-`rx_8b10b_checker_rom`: `setattr -set rom_style "block" m:*rx_8b10b_checker_rom*`. The default,
-`distributed`, is unchanged for Vivado. Validated on a LiteX-M2SDR (XC7A200T) built with openXC7.
+Yosys maps them to 8 levels of LUTs, which keep the 250 MHz RX clock at about 160 MHz. The ROMs
+carry the `rom_style = "block"` attribute Yosys needs to put such small memories in block RAMs
+(LiteX writes the attributes of a `Memory` on its declaration). The default, `distributed`, is
+unchanged for Vivado. Validated on a LiteX-M2SDR (XC7A200T) built with openXC7.
 
 **Kintex-7 GTX** (`K7USB3SerDes`). The channel PLL (`GTXChannelPLL`) runs at 5 Gbps. The CDR and
 equalizer settings are those of the Xilinx SATA (with SSC) and PCIe Gen2 wrappers, in LPM mode.

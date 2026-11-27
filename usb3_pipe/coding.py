@@ -105,11 +105,12 @@ class RX8b10bChecker(LiteXModule):
         lookups = []
         for decoder in decoders:
             if rom_style == "block":
-                # Block ROM (registered output, from the registered decoders input). Named: Yosys
-                # only maps such a small ROM to a block RAM with a rom_style attribute, to set on
-                # it from the build script (setattr -set rom_style "block" m:*rx_8b10b_checker_rom*).
+                # Block ROM (registered output, from the registered decoders input). Yosys only
+                # maps such a small ROM to a block RAM with the rom_style attribute (Memory attr:
+                # LiteX writes it on the declaration).
                 mem  = Memory(4, 1024, init=[rom[code] for code in range(1024)],
                     name="rx_8b10b_checker_rom")
+                mem.attr = {("rom_style", "block")}
                 port = mem.get_port()
                 self.specials += mem, port
                 self.comb += port.adr.eq(decoder.input)
