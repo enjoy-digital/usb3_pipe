@@ -326,6 +326,16 @@ Link Commands have their own queue. LGOOD, LCRD and LBAD go out before the buffe
 packet boundary, so acknowledgements and credits are not delayed behind Data Packets. The other
 Link Commands, such as LRTY, keep their place between the packets (`LinkCommandPacketsBuffer`).
 
+A Link Command that the link layer sends on `sink` is still behind the packet it is sending. A
+Data Packet Header with a 1024-byte payload takes about 2.1 µs at 5 Gbps. If the host sends a Header
+Packet (for example an ITP or the acknowledgement of the previous Data Packet) just after that
+packet has started, the LGOOD for it can only be written after the whole packet is stored, which is
+when the packet becomes ready, and it leaves after the packet: up to a payload later than the
+host's PENDING_HP_TIMER (3 µs) allows, and the host recovers the link. The `sink_lc` input of the
+PHY avoids this. The link layer sends LGOOD and LCRD there, with their own FIFO, concurrently with
+the packet. They are queued while the packet is still being stored, and go out before it or right
+after the packet that is already being output.
+
 ## Gen 1x2 lanes {#dp-lanes}
 
 Gen 1x2 runs two Gen 1 lanes in parallel, each with its own PIPE, 8b/10b, SKP handling and

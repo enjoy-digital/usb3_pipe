@@ -27,8 +27,8 @@
 The PHY is only accessed through its Link interface (see usb3_pipe.phy.USB3PHY): sink/source data/
 ctrl words, u0/u1/u2/polling_idle/hot_reset/rx_keep status, lgo_u1/lgo_u2/lgo_u3/tx_lau/tx_lxu/lpma
 PM handshake, exit_u1_req/exit_u2_req, u2_timeout, directed_recovery, link_activity and the
-capabilities/flow control attributes (USB3PHY_LINK_INTERFACE: ssp_capable/gen2_active/source_lc,
-with_u1u2, rx_throttle, rx_t2_credits).
+capabilities/flow control attributes (USB3PHY_LINK_INTERFACE: ssp_capable/gen2_active/source_lc/
+sink_lc, with_u1u2, rx_throttle, rx_t2_credits).
 """
 
 from migen import *
@@ -845,17 +845,22 @@ class USB3LinkLayer(LiteXModule):
         # LGOOD_n overtaken by the LBAD makes it retransmit an accepted Header Packet, received with
         # a Header Sequence Number error: Recovery; seen on hardware in full duplex, the Link
         # Commands waiting behind a transmitted DPP).
+        # With a dedicated Link Commands path (PHY sink_lc) the LGOOD_n/LCRD_x are sent by their
+        # own sender (below), concurrently with the packets: not by this selection. The LBAD still
+        # waits for the LGOOD_n to send.
+        has_lc_path = getattr(phy, "sink_lc", None) is not None
         self.comb += [
             If(~pm_block,
                 If(lrty_pending,
                     sel_lrty.eq(1), lc_sel.eq(LCMD_LRTY)
-                ).Elif(lgood_seq != rx_seq,
+                ).Elif((lgood_seq != rx_seq) & (not has_lc_path),
                     sel_lgood.eq(1), lc_sel.eq(LCMD_LGOOD | lgood_seq)
-                ).Elif(lbad_pending,
+                ).Elif(lbad_pending & (lgood_seq == rx_seq),
                     sel_lbad.eq(1), lc_sel.eq(LCMD_LBAD)
-                ).Elif((lcrd_pending != 0) & (~rx_throttle | (lcrd_adv != 0)),
+                ).Elif((lcrd_pending != 0) & (~rx_throttle | (lcrd_adv != 0)) & (not has_lc_path),
                     sel_lcrd.eq(1), lc_sel.eq(LCMD_LCRD | lcrd_idx)
-                ).Elif((lcrd2_pending != 0) & (~rx_throttle | (lcrd2_adv != 0)) & lcrd2_allowed,
+                ).Elif((lcrd2_pending != 0) & (~rx_throttle | (lcrd2_adv != 0)) & lcrd2_allowed &
+                    (not has_lc_path),
                     sel_lcrd2.eq(1), lc_sel.eq(LCMD_LCRD | 0b100 | lcrd2_idx)
                 ).Elif(lau_pending,
                     sel_lau.eq(1), lc_sel.eq(LCMD_LAU)
@@ -1034,10 +1039,73 @@ class USB3LinkLayer(LiteXModule):
             If(tx_ready, NextState("IDLE"))
         )
 
+        # Dedicated Link Commands sender (PHY sink_lc): LGOOD_n, LCRD_x and LCRD2_x, in this order,
+        # while the main TX stream sends a Header Packet or a DPP. Not while a LRTY, LAU or LXU is
+        # pending (their order with the LGOOD_n/LCRD_x is kept by the main stream: sent before, and
+        # a LBAD already waits for the LGOOD_n to send), nor LCRD_x while a LBAD is pending.
+        lc_sent      = Signal() # Link Command sent by the dedicated sender (pulse, as tx_sent_lc).
+        lc_sel_lgood = Signal()
+        lc_sel_lcrd  = Signal()
+        lc_sel_lcrd2 = Signal()
+        lc_path_sel  = Signal(11)
+        if has_lc_path:
+            lc_path_ok  = Signal()
+            lc_path_word = Signal(32, reset_less=True)
+            lc_path_valid = Signal()
+            lc_path_first = Signal()
+            lc_path_last  = Signal()
+            lc_path_data  = Signal(32)
+            self.crc5_lcpath = crc5_lcpath = CRC5()
+            self.lc_pipe = lc_pipe = stream.PipeValid([("data", 32), ("ctrl", 4)])
+            self.comb += [
+                crc5_lcpath.data.eq(lc_path_sel),
+                lc_pipe.sink.valid.eq(lc_path_valid),
+                lc_pipe.sink.first.eq(lc_path_first),
+                lc_pipe.sink.last.eq(lc_path_last),
+                lc_pipe.sink.data.eq(swap_data(lc_path_data)),
+                lc_pipe.sink.ctrl.eq(swap_ctrl(Mux(lc_path_first, 0b1111, 0b0000))),
+                lc_pipe.source.connect(phy.sink_lc),
+                # Not on the U0 entry cycle (as the main stream: Advertisement values updated with it).
+                lc_path_ok.eq(u0 & ~u0_rise & ~pm_block & ~lrty_pending & ~lau_pending & ~lxu_pending),
+                lc_sel_lgood.eq(lc_path_ok & (lgood_seq != rx_seq)),
+                lc_sel_lcrd.eq(lc_path_ok & ~lbad_pending & ~lc_sel_lgood & (lcrd_pending != 0) &
+                    (~rx_throttle | (lcrd_adv != 0))),
+                lc_sel_lcrd2.eq(lc_path_ok & ~lbad_pending & ~lc_sel_lgood & ~lc_sel_lcrd &
+                    (lcrd2_pending != 0) & (~rx_throttle | (lcrd2_adv != 0)) & lcrd2_allowed),
+                If(lc_sel_lgood,
+                    lc_path_sel.eq(LCMD_LGOOD | lgood_seq)
+                ).Elif(lc_sel_lcrd,
+                    lc_path_sel.eq(LCMD_LCRD | lcrd_idx)
+                ).Else(
+                    lc_path_sel.eq(LCMD_LCRD | 0b100 | lcrd2_idx)
+                ),
+            ]
+            self.lc_fsm = lc_fsm = FSM(reset_state="IDLE")
+            lc_fsm.act("IDLE",
+                If(lc_sel_lgood | lc_sel_lcrd | lc_sel_lcrd2,
+                    lc_sent.eq(1),
+                    NextValue(lc_path_word, Cat(lc_path_sel, crc5_lcpath.value,
+                        lc_path_sel, crc5_lcpath.value)),
+                    NextState("LC0")
+                )
+            )
+            lc_fsm.act("LC0",
+                lc_path_valid.eq(1),
+                lc_path_first.eq(1),
+                lc_path_data.eq(FRAMING_SLC),
+                If(lc_pipe.sink.ready, NextState("LC1"))
+            )
+            lc_fsm.act("LC1",
+                lc_path_valid.eq(1),
+                lc_path_last.eq(1),
+                lc_path_data.eq(lc_path_word),
+                If(lc_pipe.sink.ready, NextState("IDLE"))
+            )
+
         # Timers -----------------------------------------------------------------------------------
         # U0 keep-alive: LUP when nothing sent for 10us (7.5.6.1).
         self.t_lup = t_lup = WaitTimer(scaled(10e-6))
-        self.comb += t_lup.wait.eq(u0 & ~pm_block & ~tx_sent_lc & ~tx_sent_hp & ~lup_pending)
+        self.comb += t_lup.wait.eq(u0 & ~pm_block & ~tx_sent_lc & ~lc_sent & ~tx_sent_hp & ~lup_pending)
         # PENDING_HP_TIMER (10us, Table 7-7): Header Packets sent and not acknowledged,
         # Advertisement expected (the partner returns LGOOD_n within 3us/1.5us in
         # SuperSpeed/SuperSpeedPlus operation).
@@ -1087,8 +1155,8 @@ class USB3LinkLayer(LiteXModule):
         # Debug (USB3LinkTrace): Link Commands/Header Packets events, Recovery causes.
         self.dbg_rx_lc     = lc_check
         self.dbg_rx_lc_info = lc_info
-        self.dbg_tx_lc     = tx_sent_lc
-        self.dbg_tx_lc_sel = lc_sel
+        self.dbg_tx_lc     = tx_sent_lc | lc_sent
+        self.dbg_tx_lc_sel = Mux(lc_sent, lc_path_sel, lc_sel)
         self.dbg_rx_hp     = hp_check
         self.dbg_rx_hp_info = Cat(hp_w[0][0:5], hp_w[0][5:9],
             hp_seq[0:4] if sw == 4 else Cat(hp_seq, C(0, 1)), hp_ok, hp_accept, rx_hp_seqer)
@@ -1141,12 +1209,20 @@ class USB3LinkLayer(LiteXModule):
                 If(sel_lxu,   lxu_pending.eq(0)),
                 If(sel_lup,   lup_pending.eq(0)),
             ),
+            # Link Commands sent by the dedicated sender.
+            If(lc_sent,
+                If(lc_sel_lgood, lgood_seq.eq((lgood_seq + 1) & seq_mask)),
+                If(lc_sel_lcrd,  lcrd_idx.eq(lcrd_idx + 1),   If(lcrd_adv != 0,  lcrd_adv.eq(lcrd_adv - 1))),
+                If(lc_sel_lcrd2, lcrd2_idx.eq(lcrd2_idx + 1), If(lcrd2_adv != 0, lcrd2_adv.eq(lcrd2_adv - 1))),
+            ),
             If(t_lup.done & ~lup_pending, lup_pending.eq(1)), # done stays set 1 cycle after.
 
             # Local Rx Header Buffer credits (LCRD_x/LCRD1_x/LCRD2_x on each freed Rx Header
             # Buffer).
-            lcrd_pending.eq(lcrd_pending + (rx_pop & ~rx_pop_t2) - (tx_sent_lc & sel_lcrd)),
-            lcrd2_pending.eq(lcrd2_pending + rx_pop_t2 - (tx_sent_lc & sel_lcrd2)),
+            lcrd_pending.eq(lcrd_pending + (rx_pop & ~rx_pop_t2) -
+                ((tx_sent_lc & sel_lcrd) | (lc_sent & lc_sel_lcrd))),
+            lcrd2_pending.eq(lcrd2_pending + rx_pop_t2 -
+                ((tx_sent_lc & sel_lcrd2) | (lc_sent & lc_sel_lcrd2))),
 
             # LMPs received.
             If(lmp_pop,
