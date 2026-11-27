@@ -85,9 +85,10 @@ class USB3SerDes(LiteXModule):
         return refclk
 
     def add_transceiver(self, name, xcvr_cls, pll, tx_pads, rx_pads, sys_clk_freq, data_width=20,
-        **kwargs):
+        rx_rom_style="distributed", **kwargs):
         """Transceiver channel (added as name) with the TX/RX datapaths (data_width: 20 or 40 bits,
-        2 or 4 symbols per transceiver clock cycle, kwargs: extra transceiver parameters)."""
+        2 or 4 symbols per transceiver clock cycle, rx_rom_style: see add_xcvr_datapath, kwargs:
+        extra transceiver parameters)."""
         xcvr = xcvr_cls(pll, tx_pads, rx_pads, sys_clk_freq, **kwargs,
             data_width       = data_width,
             clock_aligner    = False,
@@ -101,7 +102,7 @@ class USB3SerDes(LiteXModule):
         # COM was received on an odd byte (ex: after a U3 exit), duplicating/dropping a symbol each
         # time: no TS1/TS2 detected. The bytes rotation is handled by the RXWordAligner.
         getattr(xcvr, name + "_params").update(p_ALIGN_COMMA_WORD=1)
-        return self.add_xcvr_datapath(name, xcvr, data_width)
+        return self.add_xcvr_datapath(name, xcvr, data_width, rx_rom_style=rx_rom_style)
 
     def add_xcvr_datapath(self, name, xcvr, data_width, rx_disparity_check=True, tx_cdc=True,
         tx_input_register=False, rx_rom_style="distributed"):
@@ -249,9 +250,11 @@ class A7USB3SerDes(USB3SerDes):
 
     rx_idle_min_burst: optional minimum RX non-idle period (s, ex: 40e-9, the shortest LFPS burst):
     shorter non-idle spikes from the RX electrical idle detector are rejected (RXIdleFilter).
+
+    rx_rom_style: 8b/10b checker ROM style ("block" with Yosys/nextpnr-xilinx: RX8b10bChecker).
     """
     def __init__(self, platform, sys_clk, sys_clk_freq, refclk_pads, refclk_freq, tx_pads, rx_pads,
-        rxcdr_cfg=None, pll=None, tx_clk=None, rx_idle_min_burst=None):
+        rxcdr_cfg=None, pll=None, tx_clk=None, rx_idle_min_burst=None, rx_rom_style="distributed"):
         USB3SerDes.__init__(self)
 
         # # #
@@ -268,8 +271,9 @@ class A7USB3SerDes(USB3SerDes):
                 refclk_from_fabric = refclk_from_fabric)
         self.pll = pll
         gtp = self.add_transceiver("gtp", GTP, pll, tx_pads, rx_pads, sys_clk_freq,
-            qpll_reset = not external_pll,
-            tx_clk     = tx_clk)
+            qpll_reset   = not external_pll,
+            tx_clk       = tx_clk,
+            rx_rom_style = rx_rom_style)
 
         # Override GTP RX settings for USB3 --------------------------------------------------------
         # USB3 links have independent clocks and the host uses SSC (0/-5000ppm, 33kHz):

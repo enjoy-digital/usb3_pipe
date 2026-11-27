@@ -64,12 +64,12 @@ class SerDesRX(LiteXModule):
             ]
         self.comb += self.source.valid.eq(1)
 
-def substitute(codes):
+def substitute(codes, rom_style="distributed"):
     """Return the received (data, ctrl) symbols after RXErrorSubstitution."""
     class DUT(LiteXModule):
         def __init__(self):
             self.serdes       = serdes       = SerDesRX()
-            self.substitution = substitution = RXErrorSubstitution(serdes, "sys")
+            self.substitution = substitution = RXErrorSubstitution(serdes, "sys", rom_style=rom_style)
             self.comb += serdes.source.connect(substitution.sink)
             self.comb += substitution.source.ready.eq(1)
     dut = DUT()
@@ -128,6 +128,17 @@ class Test8b10bErrors(unittest.TestCase):
         received = substitute(codes)
         self.assertEqual(received[:20], symbols[:20])
         self.assertIn((K28_4, 1), received[20:23])
+
+    def test_block_rom_style_same_substitutions(self):
+        # rom_style="block" (lookups in block ROMs: Yosys/nextpnr-xilinx at 250MHz): same symbols,
+        # on valid streams and with invalid codes/disparity errors.
+        rng     = random.Random(3)
+        symbols = random_symbols(2000, rng)
+        codes   = encode(symbols)
+        self.assertEqual(substitute(codes, rom_style="block"), symbols)
+        for _ in range(40):
+            codes[rng.randrange(len(codes))] = rng.getrandbits(10)
+        self.assertEqual(substitute(codes, rom_style="block"), substitute(codes))
 
 if __name__ == "__main__":
     unittest.main()
