@@ -83,7 +83,8 @@ class RX8b10bChecker(LiteXModule):
     errors (6.3.1.2: initial disparity is the disparity of the first received symbol).
 
     rom_style: code lookups ROM style ("distributed": Xilinx LUTs, "logic": Yosys/ECP5, no 1024
-    entries distributed RAM).
+    entries distributed RAM, "block": block RAMs, for the 250MHz RX clock of the 7-Series
+    transceivers with Yosys/nextpnr-xilinx, where the lookups in LUTs are 8 logic levels).
     """
     def __init__(self, decoders, lsb_first=True, rom_style="distributed"):
         n = len(decoders)
@@ -103,6 +104,17 @@ class RX8b10bChecker(LiteXModule):
         # the same address (decoders/checker) into wrong contents.
         lookups = []
         for decoder in decoders:
+            if rom_style == "block":
+                # Block ROM (registered output, from the registered decoders input). Named: Yosys
+                # only maps such a small ROM to a block RAM with a rom_style attribute, to set on
+                # it from the build script (setattr -set rom_style "block" m:*rx_8b10b_checker_rom*).
+                mem  = Memory(4, 1024, init=[rom[code] for code in range(1024)],
+                    name="rx_8b10b_checker_rom")
+                port = mem.get_port()
+                self.specials += mem, port
+                self.comb += port.adr.eq(decoder.input)
+                lookups.append(port.dat_r)
+                continue
             lookup_comb = Signal(4, attr={("rom_style", rom_style)})
             lookup      = Signal(4, attr={("syn_romstyle", "logic")})
             self.comb += Case(decoder.input, {code: lookup_comb.eq(v) for code, v in rom.items()})
