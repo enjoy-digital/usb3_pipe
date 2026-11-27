@@ -94,6 +94,14 @@ class LinkWordsCDC(LiteXModule):
     than the FIFO latency). The RX path has no back-pressure (received
     words at the line rate: the Link Layer reads its words at least at the received words rate).
 
+    sink_lc (link_words >= 2): a dedicated TX path for LGOOD/LCRD/LBAD Link Commands (sys, Gen 1
+    words: data, ctrl; the 2 words of a Link Command: framing, then payload, last on the payload),
+    through its own AsyncFIFO to the packets buffer (lc_sink). On sink a Link Command is behind the
+    DPH + DPP words the Link Layer is sending: it is stored after the whole packet, and output after
+    it (a DPP, ~2.1 us at 5 Gbps, later than the partner expects it, PENDING_HP_TIMER 3 us). From
+    sink_lc it is queued while the packet is still being stored, and output before it (or after the
+    packet being output, at most one DPP time later).
+
     gen2: Gen 2 capable PHY: deeper RX FIFO (the Link Layer, 64-bit at half the PIPE frequency,
     reads at about half the received rate and up to 8 Header Packets, Type 1/Type 2 credits, can be
     received after the throttling), throttling from a quarter. rx_depth: RX FIFO depth override
@@ -106,6 +114,7 @@ class LinkWordsCDC(LiteXModule):
         self.pipe_rx_sink   = pipe_rx_sink   = stream.Endpoint(layout) # i (pipe_cd).
         self.pipe_rx_source = pipe_rx_source = stream.Endpoint(layout) # o (pipe_cd).
         self.rx_throttle    = Signal()                                   # o
+        self.sink_lc        = None # i (sys): Link Commands words, link_words >= 2 (see above).
 
         # # #
 
@@ -120,7 +129,7 @@ class LinkWordsCDC(LiteXModule):
             ]
         else:
             self.tx_packets = tx_packets = ClockDomainsRenamer(pipe_cd)(
-                LinkCommandPacketsBuffer(layout))
+                LinkCommandPacketsBuffer(layout, with_lc_sink=True))
             to_words = ClockDomainsRenamer(pipe_cd)(PairsToWords())
             # Registered PIPE output (timings: framing aligner to the Logical Idle filter decoding).
             rx_pipe  = ClockDomainsRenamer(pipe_cd)(stream.Buffer([("data", 32), ("ctrl", 4)]))
@@ -165,6 +174,25 @@ class LinkWordsCDC(LiteXModule):
             self.comb += tx_narrower.source.connect(tx_buffer.sink)
             tx_sink = tx_narrower.sink
         self.sink = tx_sink # i (sys, ext_layout).
+
+        # TX Link Commands: sys -> pipe_cd (registered FIFO writes), words pairs entries of one word.
+        if link_words >= 2:
+            lc_layout = [("data", 32), ("ctrl", 4)]
+            self.tx_lc_buffer = tx_lc_buffer = Buffer(lc_layout, pipe_ready=True)
+            self.tx_lc_cdc    = tx_lc_cdc    = ClockDomainsRenamer({"write": "sys", "read": pipe_cd})(
+                AsyncFIFO(lc_layout, 8))
+            self.sink_lc = tx_lc_buffer.sink # i (sys, Gen 1 words).
+            lc_sink = tx_packets.lc_sink
+            self.comb += [
+                tx_lc_buffer.source.connect(tx_lc_cdc.sink),
+                lc_sink.valid.eq(tx_lc_cdc.source.valid),
+                lc_sink.first.eq(tx_lc_cdc.source.first),
+                lc_sink.last.eq(tx_lc_cdc.source.last),
+                lc_sink.data.eq(tx_lc_cdc.source.data),
+                lc_sink.ctrl.eq(tx_lc_cdc.source.ctrl),
+                lc_sink.words.eq(1),
+                tx_lc_cdc.source.ready.eq(lc_sink.ready),
+            ]
         self.comb += [
             tx_buffer.source.connect(tx_cdc.sink),
             tx_cdc.source.connect(pipe_sink),
@@ -246,6 +274,7 @@ USB3PHY_LINK_INTERFACE = [
     ("ssp_capable",   "Gen 2 operation possible (SuperSpeedPlus Link Layer rules on gen2_active)."),
     ("gen2_active",   "Gen 2 (10Gbps) operation (0 if not ssp_capable)."),
     ("source_lc",     "LGOOD_n/LCRD_x Link Commands words not behind the RX words, enabled by source_lc_enable (None without)."),
+    ("sink_lc",       "Dedicated TX path for LGOOD_n/LCRD_x/LBAD Link Commands words, not behind the Header Packets/DPPs of sink (None without)."),
     ("rx_throttle",   "RX words buffered (pipe_cd): Rx Header Buffer credits held (0 without)."),
     ("rx_t2_credits", "Type 2 credits the partner may hold: 4 (no limit) or a Signal (runtime)."),
 ]
@@ -299,8 +328,10 @@ class USB3PHY(LiteXModule):
       objects); undriven inputs keep their reset values.
     - Capabilities and flow control (see USB3PHY_LINK_INTERFACE), always defined: `link_words`,
       `with_u1u2`, `ssp_capable`/`gen2_active` (Gen 2 operation), `source_lc` (fast Link Commands
-      path with `source_lc_enable`, None without), `rx_throttle` (RX words buffered with pipe_cd:
-      Rx Header Buffer credits held), `rx_t2_credits` (Type 2 credits the partner may hold).
+      path with `source_lc_enable`, None without), `sink_lc` (dedicated TX path for the LGOOD_n/
+      LCRD_x/LBAD Link Commands, with pipe_cd and link_words >= 2 in Gen 1 operation, None without),
+      `rx_throttle` (RX words buffered with pipe_cd: Rx Header Buffer credits held), `rx_t2_credits`
+      (Type 2 credits the partner may hold).
     """
     def __init__(self, serdes, sys_clk_freq, role="device", with_endianness_swap=True,
         timer_scale=1, lanes=1, x2_capable=True, gen2_capable=False, deskew_depth=8, link_words=1,
@@ -329,6 +360,7 @@ class USB3PHY(LiteXModule):
         self.gen2_active   = Constant(0, 1)
         self.source_lc     = None
         self.rx_throttle   = Constant(0, 1)
+        self.sink_lc       = None # Dedicated Link Commands path (add_pipe_cd_datapath, Gen 1 words).
         self.rx_t2_credits = 4 # Type 2 credits (SuperSpeedPlus) the partner may hold, 4: no limit.
 
         # PIPE(s) / LTSSM --------------------------------------------------------------------------
@@ -731,6 +763,7 @@ class USB3PHY(LiteXModule):
         if not gen2:
             self.comb += link_cdc.pipe_rx_source.connect(link_cdc.pipe_rx_sink)
             self.sink        = link_cdc.sink
+            self.sink_lc     = link_cdc.sink_lc
             self.source      = link_cdc.source
             self.rx_throttle = link_cdc.rx_throttle
             return

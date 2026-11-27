@@ -161,6 +161,7 @@ feature is absent, so that a link layer can adapt at elaboration time (`USB3PHY_
 | `link_words`    | Words per cycle: 1 (32-bit), 2 (64-bit pairs) or 4 (128-bit quads)         |
 | `with_u1u2`     | U1 and U2 supported: LGO_U1 and LGO_U2 may be accepted                     |
 | `ssp_capable`   | Gen 2 possible: the link layer applies the SuperSpeedPlus rules            |
+| `sink_lc`       | With `pipe_cd` and word pairs or quads: a transmit path for LGOOD, LCRD and LBAD that does not wait behind the packets of `sink` |
 | `rx_throttle`   | With `pipe_cd`: received words buffered, receive credits held              |
 | `rx_t2_credits` | Type 2 credits the partner may hold: 4 (no limit) or a runtime signal      |
 

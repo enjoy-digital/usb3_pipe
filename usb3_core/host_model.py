@@ -1001,5 +1001,6 @@ class PHYStandIn:
         self.ssp_capable   = False
         self.gen2_active   = Constant(0, 1)
         self.source_lc     = None
+        self.sink_lc       = None
         self.rx_throttle   = Constant(0, 1)
         self.rx_t2_credits = 4
