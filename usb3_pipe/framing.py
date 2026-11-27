@@ -265,8 +265,17 @@ class LinkCommandPacketsBuffer(LiteXModule):
     Link Commands keep their order; the other ones (ex: LRTY, LGO_U, LUP) are fenced: output after
     the packets buffered before them, and before the next ones. A packet is never preempted once
     selected (even under back-pressure), a DPH stays contiguous with its DPP. depth: entries of the
-    largest packet, command_depth: Link Commands entries."""
-    def __init__(self, layout, depth=256, command_depth=8):
+    largest packet, command_depth: Link Commands entries.
+
+    with_lc_sink: lc_sink, a second input for LGOOD/LCRD/LBAD, written to the Link Commands buffer
+    concurrently with the packets of sink. On sink a Link Command is behind the packets before it:
+    one sent while a DPH + DPP is being written arrives after the whole packet is stored, which is
+    when its output can start, so the Link Command is output after it, a DPP later than the partner
+    expects it (PENDING_HP_TIMER). A Link Command of lc_sink is queued as soon as it is written and
+    is output before any packet that has not been selected yet. The commands of lc_sink and of sink
+    are written one at a time (a command in progress is never interleaved), lc_sink ones are never
+    fenced."""
+    def __init__(self, layout, depth=256, command_depth=8, with_lc_sink=False):
         assert 4 <= command_depth <= depth
         log2_int(command_depth)
         self.sink   = sink   = stream.Endpoint(layout)
@@ -310,17 +319,53 @@ class LinkCommandPacketsBuffer(LiteXModule):
         self.comb += [
             command.eq(Mux(in_packet, in_command, first_command)),
             valid.eq(sink.valid & (in_packet | sink.first) & ~self.drop),
-            sink.connect(data.sink,     omit={"valid", "ready"}),
-            sink.connect(commands.sink, omit={"valid", "ready"}),
+            sink.connect(data.sink, omit={"valid", "ready"}),
             data.sink.valid.eq(valid & ~command),
-            commands.sink.valid.eq(valid & command & desc.sink.ready),
-            sink.ready.eq(self.drop | (~in_packet & ~sink.first) |
-                Mux(command, commands.sink.ready & desc.sink.ready, data.sink.ready)),
             accepted.eq(valid & sink.ready),
-            desc.sink.valid.eq(accepted & command & sink.last),
             desc.sink.barrier.eq(data_in),
-            desc.sink.fence.eq(~fast),
         ]
+        lc_done = Signal() # lc_sink Link Command written (last entry).
+        if not with_lc_sink:
+            self.comb += [
+                sink.connect(commands.sink, omit={"valid", "ready"}),
+                commands.sink.valid.eq(valid & command & desc.sink.ready),
+                sink.ready.eq(self.drop | (~in_packet & ~sink.first) |
+                    Mux(command, commands.sink.ready & desc.sink.ready, data.sink.ready)),
+                desc.sink.valid.eq(accepted & command & sink.last),
+                desc.sink.fence.eq(~fast),
+            ]
+        else:
+            self.lc_sink = lc_sink = stream.Endpoint(layout)
+            side_busy  = Signal() # lc_sink Link Command in progress.
+            side_start = Signal()
+            side_sel   = Signal() # Link Commands buffer and descriptors written from lc_sink.
+            side_acc   = Signal()
+            main_cmd   = Signal() # sink Link Command in progress or starting: goes first.
+            self.comb += [
+                main_cmd.eq((in_packet & in_command) | (valid & ~in_packet & first_command)),
+                side_start.eq(lc_sink.valid & lc_sink.first & ~side_busy & ~main_cmd & ~self.drop),
+                side_sel.eq(side_busy | side_start),
+                lc_sink.ready.eq(self.drop | (side_sel & commands.sink.ready & desc.sink.ready)),
+                side_acc.eq(lc_sink.valid & ~self.drop & side_sel & commands.sink.ready &
+                    desc.sink.ready),
+                lc_done.eq(side_acc & lc_sink.last),
+                commands.sink.valid.eq(Mux(side_sel,
+                    lc_sink.valid & ~self.drop & desc.sink.ready,
+                    valid & command & desc.sink.ready)),
+                sink.ready.eq(self.drop | (~in_packet & ~sink.first) |
+                    Mux(command, commands.sink.ready & desc.sink.ready & ~side_sel,
+                        data.sink.ready)),
+                desc.sink.valid.eq((accepted & command & sink.last) | lc_done),
+                desc.sink.fence.eq(~side_sel & ~fast),
+            ]
+            for name in ["first", "last"] + [name for name, _ in layout]:
+                self.comb += getattr(commands.sink, name).eq(Mux(side_sel,
+                    getattr(lc_sink, name), getattr(sink, name)))
+            self.sync += If(self.drop,
+                side_busy.eq(0)
+            ).Elif(side_acc,
+                side_busy.eq(~lc_sink.last)
+            )
 
         # Output: Link Commands first (fenced ones after their barrier), packets otherwise.
         data_out        = Signal(cbits) # Packets read.
@@ -372,6 +417,7 @@ class LinkCommandPacketsBuffer(LiteXModule):
                         )
                     )
                 ),
+                *([If(lc_done, lc_in.eq(lc_in + 1))] if with_lc_sink else []),
                 # Output.
                 If(~busy,
                     If(command_ready,
